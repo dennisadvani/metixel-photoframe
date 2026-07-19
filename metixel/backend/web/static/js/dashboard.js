@@ -368,10 +368,6 @@
         setValue("cfg-transition", s.transition_style || "crossfade");
         setValue("cfg-fit", s.fit_mode || "contain");
         setChecked("cfg-smart-cover", s.smart_cover !== false);
-        var mc = s.matte_color || [0, 0, 0];
-        setValue("cfg-matte-r", mc[0] || 0);
-        setValue("cfg-matte-g", mc[1] || 0);
-        setValue("cfg-matte-b", mc[2] || 0);
         setChecked("cfg-shuffle", s.shuffle !== false);
         setChecked("cfg-video-enabled", s.video_playback_enabled === true);
         setValue("cfg-video-max-duration", s.video_max_duration_seconds || 0);
@@ -384,8 +380,18 @@
         setValue("cfg-display-height", d.height || 0);
         setValue("cfg-fps-limit", d.fps_limit || 30);
         setChecked("cfg-fullscreen", d.fullscreen !== false);
-        setChecked("cfg-hide-cursor", d.hide_cursor !== false);
         toggleResolutionFields(isAuto);
+
+        // Fetch detected display resolution from the frontend (async, non-blocking)
+        apiGet("/config/display/info").then(function (info) {
+            if (info && info.width > 0 && info.height > 0) {
+                var el = document.getElementById("display-detected-res");
+                if (el) {
+                    el.textContent = "Detected: " + info.width + " × " + info.height;
+                    el.style.color = "var(--text-muted)";
+                }
+            }
+        });
 
         // Event listeners — bind once
         if (!_settingsBound) {
@@ -405,11 +411,6 @@
                     transition_style: document.getElementById("cfg-transition").value,
                     fit_mode: document.getElementById("cfg-fit").value,
                     smart_cover: document.getElementById("cfg-smart-cover").checked,
-                    matte_color: [
-                        sanitizeInt(document.getElementById("cfg-matte-r").value, 0),
-                        sanitizeInt(document.getElementById("cfg-matte-g").value, 0),
-                        sanitizeInt(document.getElementById("cfg-matte-b").value, 0),
-                    ],
                     shuffle: document.getElementById("cfg-shuffle").checked,
                     video_playback_enabled: document.getElementById("cfg-video-enabled").checked,
                     video_max_duration_seconds: sanitizeInt(document.getElementById("cfg-video-max-duration")?.value, 120),
@@ -427,7 +428,6 @@
                     width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
                     height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
-                    hide_cursor: document.getElementById("cfg-hide-cursor").checked,
                 });
                 if (result) {
                     showToast("Display settings saved!", "success");
@@ -447,11 +447,73 @@
                 showToast(_displayOn ? "Display turned on" : "Display turned off", "info");
             });
         }
+    }
+
+    // -- Sync ---------------------------------------------------------------
+
+    var _syncBound = false;
+    var _syncPollTimer = null;
+
+    function startSyncPolling() {
+        if (_syncPollTimer) return;
+        _syncPollTimer = setInterval(async function () {
+            var data = await apiGet("/immich/status");
+            await refreshSyncStatus();
+
+            // Check if still syncing via the progress field
+            var stillSyncing = data && data.progress && data.progress.syncing;
+            if (!stillSyncing) {
+                stopSyncPolling();
+                var btn = document.getElementById("btn-sync-now");
+                if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
+            }
+        }, 1500);
+    }
+
+    function stopSyncPolling() {
+        if (_syncPollTimer) {
+            clearInterval(_syncPollTimer);
+            _syncPollTimer = null;
+        }
+        var cancelBtn = document.getElementById("btn-cancel-sync");
+        if (cancelBtn) cancelBtn.style.display = "none";
+        var progressDiv = document.getElementById("immich-progress");
+        if (progressDiv) progressDiv.style.display = "none";
+    }
+
+    async function loadSync() {
+        const config = await apiGet("/config");
+        if (!config) return;
+
         const imm = config.sync?.immich || {};
         setChecked("cfg-immich-enabled", imm.enabled || false);
         setValue("cfg-immich-url", imm.server_url || "");
         setValue("cfg-immich-key", imm.api_key || "");
-        setValue("cfg-immich-interval", imm.poll_interval_seconds || 300);
+        setValue("cfg-immich-sync-dir", imm.sync_dir || "cache/immich_sync/");
+        setValue("cfg-immich-interval", ((imm.poll_interval_seconds || 3600) / 3600).toFixed(1));
+        setChecked("cfg-immich-strict", imm.strict_sync === true);
+
+        // Preselect the configured album (if any) in the dropdown
+        var albumSelect = document.getElementById("cfg-immich-album");
+        var configuredAlbum = imm.album_name || "";
+        if (albumSelect && configuredAlbum) {
+            // Add a temporary option so the saved value is visible
+            var exists = false;
+            for (var i = 0; i < albumSelect.options.length; i++) {
+                if (albumSelect.options[i].value === configuredAlbum) {
+                    albumSelect.selectedIndex = i;
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists && configuredAlbum) {
+                var opt = document.createElement("option");
+                opt.value = configuredAlbum;
+                opt.textContent = configuredAlbum + " (saved)";
+                opt.selected = true;
+                albumSelect.appendChild(opt);
+            }
+        }
 
         // Local
         const local = config.sync?.local || {};
@@ -459,25 +521,123 @@
         setValue("cfg-local-paths", (local.watch_paths || ["media/"]).join(", "));
         setValue("cfg-local-interval", local.poll_interval_seconds || 30);
 
+        // Refresh sync status
+        await refreshSyncStatus();
+
+        // If a sync is already running (e.g. scheduled), start live polling
+        if (_syncPollTimer === null || _syncPollTimer === undefined) {
+            var statusData = await apiGet("/immich/status");
+            if (statusData && statusData.progress && statusData.progress.syncing) {
+                startSyncPolling();
+            }
+        }
+
         if (!_syncBound) {
             _syncBound = true;
 
+            // -- Test Connection --
+            document.getElementById("btn-test-immich")?.addEventListener("click", async () => {
+                var resultEl = document.getElementById("immich-test-result");
+                if (resultEl) resultEl.textContent = "Testing…";
+                var data = await apiPost("/immich/test-connection", {
+                    server_url: document.getElementById("cfg-immich-url").value,
+                    api_key: document.getElementById("cfg-immich-key").value,
+                });
+                if (!data) {
+                    if (resultEl) { resultEl.textContent = "❌ Request failed"; resultEl.style.color = "var(--danger)"; }
+                    return;
+                }
+                if (data.ok) {
+                    if (resultEl) { resultEl.textContent = "✅ " + data.message; resultEl.style.color = "var(--success)"; }
+                    showToast("Connection successful!", "success");
+                } else {
+                    if (resultEl) { resultEl.textContent = "❌ " + (data.error || "Unknown error"); resultEl.style.color = "var(--danger)"; }
+                    showToast("Connection failed: " + data.error, "error", 5000);
+                }
+            });
+
+            // -- Fetch Albums --
+            document.getElementById("btn-fetch-albums")?.addEventListener("click", async () => {
+                var select = document.getElementById("cfg-immich-album");
+                if (!select) return;
+                select.disabled = true;
+                select.innerHTML = '<option value="">Loading…</option>';
+
+                var data = await apiGet("/immich/albums");
+                if (!data || data.error) {
+                    select.innerHTML = '<option value="">— Failed to load —</option>';
+                    select.disabled = false;
+                    showToast("Failed to fetch albums: " + ((data && data.error) || "Network error"), "error", 5000);
+                    return;
+                }
+
+                var html = '<option value="">— Select an album —</option>';
+                var configuredAlbum = document.getElementById("cfg-immich-album").getAttribute("data-saved") || "";
+                data.forEach(function (album) {
+                    var selected = (album.name === configuredAlbum) ? " selected" : "";
+                    html += '<option value="' + escapeHtml(album.name) + '"' + selected + '>'
+                        + escapeHtml(album.name) + ' (' + album.assetCount + ' assets)</option>';
+                });
+                select.innerHTML = html;
+                select.disabled = false;
+                showToast("Loaded " + data.length + " album(s)", "info");
+            });
+
+            // -- Save Immich Settings --
             document.getElementById("btn-save-immich")?.addEventListener("click", async () => {
+                var albumSelect = document.getElementById("cfg-immich-album");
+                var albumName = albumSelect ? albumSelect.value : "";
                 var result = await apiPut("/config/sync", {
                     immich: {
                         enabled: document.getElementById("cfg-immich-enabled").checked,
                         server_url: document.getElementById("cfg-immich-url").value,
                         api_key: document.getElementById("cfg-immich-key").value,
-                        poll_interval_seconds: sanitizeInt(document.getElementById("cfg-immich-interval").value, 300),
+                        album_name: albumName,
+                        sync_dir: document.getElementById("cfg-immich-sync-dir").value,
+                        strict_sync: document.getElementById("cfg-immich-strict").checked,
+                        poll_interval_seconds: Math.round(parseFloat(document.getElementById("cfg-immich-interval").value) * 3600) || 3600,
                     },
                 });
                 if (result) {
                     showToast("Immich settings saved!", "success");
+                    // Remember the selected album for future fetches
+                    if (albumSelect) albumSelect.setAttribute("data-saved", albumName);
                 } else {
                     showToast("Failed to save Immich settings", "error");
                 }
             });
 
+            // -- Sync Now --
+            document.getElementById("btn-sync-now")?.addEventListener("click", async () => {
+                var btn = document.getElementById("btn-sync-now");
+                if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
+
+                // Optionally override album from the picker
+                var albumSelect = document.getElementById("cfg-immich-album");
+                var body = {};
+                if (albumSelect && albumSelect.value) {
+                    body.album_name = albumSelect.value;
+                }
+
+                var result = await apiPost("/immich/sync", body);
+                if (result && result.status === "started") {
+                    showToast("Sync started — check status below", "info");
+                    startSyncPolling();
+                } else {
+                    showToast("Failed to start sync", "error");
+                    if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
+                }
+            });
+
+            // -- Cancel Sync --
+            document.getElementById("btn-cancel-sync")?.addEventListener("click", async () => {
+                var result = await apiPost("/immich/cancel");
+                if (result && result.status === "ok") {
+                    showToast("Cancelling sync…", "info");
+                }
+            });
+
+            // -- Save Local Sync --
             document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
                 var result = await apiPut("/config/sync", {
                     local: {
@@ -492,6 +652,115 @@
                     showToast("Failed to save local sync settings", "error");
                 }
             });
+        }
+    }
+
+    /** Refresh the Immich sync status display. */
+    async function refreshSyncStatus() {
+        var statusEl = document.getElementById("immich-sync-status");
+        var textEl = document.getElementById("sync-status-text");
+        var detailEl = document.getElementById("sync-status-detail");
+        var errorsEl = document.getElementById("sync-errors");
+        var progressDiv = document.getElementById("immich-progress");
+        var cancelBtn = document.getElementById("btn-cancel-sync");
+        if (!statusEl || !textEl || !detailEl) return;
+
+        var data = await apiGet("/immich/status");
+        if (!data) return;
+
+        // ── Live progress ──────────────────────────────────────────
+        var prog = data.progress;
+        if (prog && prog.syncing) {
+            if (progressDiv) progressDiv.style.display = "block";
+            if (cancelBtn) cancelBtn.style.display = "inline-block";
+
+            var phaseLabel = prog.phase || "";
+            var phaseText = {
+                "starting": "Starting…",
+                "resolving_album": "Looking up album…",
+                "fetching_assets": "Fetching asset list…",
+                "downloading": "Downloading",
+                "cleaning": "Cleaning up…",
+                "cancelled": "Cancelled",
+                "error": "Error",
+            }[phaseLabel] || phaseLabel;
+
+            var phaseEl = document.getElementById("sync-progress-phase");
+            if (phaseEl) phaseEl.textContent = phaseText;
+
+            var countEl = document.getElementById("sync-progress-count");
+            if (countEl && prog.total > 0) {
+                countEl.textContent = prog.processed + " / " + prog.total;
+            } else if (countEl) {
+                countEl.textContent = "";
+            }
+
+            var barEl = document.getElementById("sync-progress-bar");
+            if (barEl && prog.total > 0) {
+                barEl.style.width = Math.round(prog.processed / prog.total * 100) + "%";
+            } else if (barEl) {
+                barEl.style.width = "0%";
+            }
+
+            var fileEl = document.getElementById("sync-current-file");
+            if (fileEl) fileEl.textContent = prog.current_file || "";
+        } else {
+            if (progressDiv) progressDiv.style.display = "none";
+            if (cancelBtn) cancelBtn.style.display = "none";
+        }
+
+        // ── Last result ───────────────────────────────────────────
+        statusEl.style.display = "block";
+
+        if (data.status === "never_run" || !data.last_sync) {
+            textEl.textContent = "Never run";
+            textEl.style.color = "var(--text-muted)";
+            detailEl.textContent = "";
+            if (errorsEl) { errorsEl.style.display = "none"; errorsEl.innerHTML = ""; }
+            return;
+        }
+
+        var s = data.last_sync;
+        var ago = "just now";
+        if (s.finished_at) {
+            var seconds = Math.max(0, Math.floor(Date.now() / 1000 - s.finished_at));
+            if (seconds < 60) ago = seconds + "s ago";
+            else if (seconds < 3600) ago = Math.floor(seconds / 60) + "m ago";
+            else ago = Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
+        }
+
+        var hasCancel = s.errors && s.errors.some(function (e) { return e.indexOf("Cancelled") >= 0; });
+
+        if (s.success) {
+            textEl.textContent = ago + " — ✅ Success";
+            textEl.style.color = "var(--success)";
+        } else if (hasCancel) {
+            textEl.textContent = ago + " — ⏹ Cancelled";
+            textEl.style.color = "var(--text-muted)";
+        } else {
+            textEl.textContent = ago + " — ⚠ Completed with errors";
+            textEl.style.color = "#f0a030";
+        }
+
+        // Summary line
+        var parts = [];
+        if (s.total_remote > 0) parts.push(s.total_remote + " assets in album");
+        if (s.downloaded > 0) parts.push(s.downloaded + " downloaded");
+        if (s.skipped > 0) parts.push(s.skipped + " skipped");
+        if (s.deleted > 0) parts.push(s.deleted + " deleted");
+        if (s.duration_seconds) parts.push("took " + s.duration_seconds + "s");
+        detailEl.textContent = parts.join(" · ");
+
+        // Error list (excluding Cancelled which is shown in the status line)
+        if (errorsEl) {
+            var realErrors = (s.errors || []).filter(function (e) { return e.indexOf("Cancelled") < 0; });
+            if (realErrors.length > 0) {
+                errorsEl.style.display = "block";
+                errorsEl.innerHTML = realErrors.map(function (e) { return "<li>" + escapeHtml(e) + "</li>"; }).join("");
+            } else {
+                errorsEl.style.display = "none";
+                errorsEl.innerHTML = "";
+            }
         }
     }
 
@@ -905,15 +1174,12 @@
         // System
         var sys = config.system || {};
         setValue("cfg-log-level", sys.log_level || "INFO");
-        setValue("cfg-media-folder", sys.media_folder || "media/");
         setValue("cfg-cache-dir", sys.cache_dir || "cache/");
 
         // Web
         var web = config.web || {};
         setValue("cfg-web-host", web.host || "0.0.0.0");
         setValue("cfg-web-port", web.port || 8080);
-        setChecked("cfg-web-debug", web.debug || false);
-
         if (!_advancedBound) {
             _advancedBound = true;
 
@@ -950,7 +1216,6 @@
                 var logLevel = document.getElementById("cfg-log-level").value;
                 var sysResult = await apiPut("/config/system", {
                     log_level: logLevel,
-                    media_folder: document.getElementById("cfg-media-folder").value,
                     cache_dir: document.getElementById("cfg-cache-dir").value,
                 });
                 // Also apply the file-handler log level immediately at runtime
@@ -968,7 +1233,6 @@
                 var result = await apiPut("/config/web", {
                     host: document.getElementById("cfg-web-host").value,
                     port: sanitizeInt(document.getElementById("cfg-web-port").value, 8080),
-                    debug: document.getElementById("cfg-web-debug").checked,
                 });
                 if (result) {
                     showToast("Web settings saved! Restart backend to apply.", "success");

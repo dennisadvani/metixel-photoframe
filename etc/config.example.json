@@ -20,11 +20,14 @@
       "enabled": false,
       "server_url": "https://immich.example.com",
       "api_key": "",
-      "poll_interval_seconds": 300
+      "album_name": "",
+      "strict_sync": false,
+      "sync_dir": "cache/immich_sync/",
+      "poll_interval_seconds": 3600
     },
     "local": {
       "enabled": true,
-      "watch_paths": ["media/"],
+      "watch_paths": ["media/", "cache/immich_sync/"],
       "poll_interval_seconds": 30
     }
   },
@@ -49,7 +52,6 @@
   "system": {
     "cache_dir": "cache/",
     "log_level": "INFO",
-    "db_path": "cache/metixel.db",
-    "media_folder": "media/"
+    "db_path": "cache/metixel.db"
   }
 }

@@ -44,7 +44,7 @@ class BackendDaemon:
         """Start all backend services. Blocks on the web server."""
         self._running = True
         logger.info(
-            "=" * 70 + "\n"
+            "\n" + "=" * 70 + "\n"
             "  METIXEL BACKEND STARTING  |  pid=%d  |  %s\n"
             + "=" * 70,
             os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -56,7 +56,7 @@ class BackendDaemon:
         self._start_web_server()
 
         logger.info(
-            "=" * 70 + "\n"
+            "\n" + "=" * 70 + "\n"
             "  METIXEL BACKEND STOPPING  |  pid=%d  |  %s\n"
             + "=" * 70,
             os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),

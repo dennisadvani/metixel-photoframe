@@ -83,7 +83,9 @@ def serve_thumbnail(filename: str):
 
     # 2. Try the media folder for video frame caches
     config = state.config
-    media_folder = Path(config.system.get("media_folder", "media"))
+    media_folder = Path(
+        config.sync.get("local", {}).get("watch_paths", ["media/"])[0]
+    )
     if not media_folder.is_absolute():
         media_folder = Path("/opt/metixel") / media_folder
 
@@ -125,7 +127,7 @@ def _serve_resized_frame(path: Path) -> Response:
 
 @media_bp.route("/list", methods=["GET"])
 def list_media():
-    """List media items with pagination.
+    """List media items with pagination across all configured watch paths.
 
     Query params:
         offset (int): 0-based start index (default 0)
@@ -140,9 +142,15 @@ def list_media():
     """
     state = current_app.config["METIXEL_STATE"]
     config = state.config
-    media_folder = Path(config.system.get("media_folder", "media"))
-    if not media_folder.is_absolute():
-        media_folder = Path("/opt/metixel") / media_folder
+
+    # Resolve all watch paths — multiple directories are supported
+    watch_paths_raw: list[str] = config.sync.get("local", {}).get("watch_paths", ["media/"])
+    watch_paths: list[Path] = []
+    for p in watch_paths_raw:
+        path = Path(p)
+        if not path.is_absolute():
+            path = Path("/opt/metixel") / path
+        watch_paths.append(path)
 
     # Parse pagination
     try:
@@ -158,7 +166,9 @@ def list_media():
     thumb_dir = cache_dir / "thumbnails"
 
     # ── Get or populate the file-list cache ──────────────────────────
-    cache_key = str(media_folder)
+    # Cache key is the sorted tuple of resolved paths — invalidates if
+    # the watch_paths config changes.
+    cache_key = str(tuple(sorted(str(p) for p in watch_paths)))
     cached = _file_list_cache.get(cache_key)
     now = time.monotonic()
 
@@ -168,7 +178,9 @@ def list_media():
         all_paths: list[Path] = []
         img_count = 0
         vid_count = 0
-        if media_folder.exists():
+        for media_folder in watch_paths:
+            if not media_folder.exists():
+                continue
             for entry in sorted(media_folder.rglob("*")):
                 if not entry.is_file():
                     continue
@@ -199,9 +211,12 @@ def list_media():
                 w, h = _probe_image(entry)
                 thumbnail_url = _lookup_thumbnail(entry, thumb_dir)
 
+            # Show path relative to the first matching watch path
+            rel_path = _relative_to_any(entry, watch_paths)
+
             items.append({
                 "name": entry.name,
-                "path": str(entry.relative_to(media_folder)),
+                "path": rel_path,
                 "width": w,
                 "height": h,
                 "size_kb": round(entry.stat().st_size / 1024, 1),
@@ -209,9 +224,10 @@ def list_media():
                 "thumbnail_url": thumbnail_url,
             })
         except Exception:
+            rel_path = _relative_to_any(entry, watch_paths)
             items.append({
                 "name": entry.name,
-                "path": str(entry.relative_to(media_folder)),
+                "path": rel_path,
                 "width": 0,
                 "height": 0,
                 "size_kb": round(entry.stat().st_size / 1024, 1),
@@ -268,6 +284,16 @@ def _lookup_thumbnail(path: Path, thumb_dir: Path) -> str | None:
     except OSError:
         pass
     return None
+
+
+def _relative_to_any(file_path: Path, roots: list[Path]) -> str:
+    """Return ``file_path`` relative to the first matching root, or its name."""
+    for root in roots:
+        try:
+            return str(file_path.relative_to(root))
+        except ValueError:
+            continue
+    return file_path.name
 
 
 @media_bp.route("/cache/clear", methods=["POST"])

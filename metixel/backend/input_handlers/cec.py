@@ -52,15 +52,26 @@ class CECHandler:
             logger.warning("python-cec not installed — CEC disabled")
             return
 
-        self._cec_config = cec.libcec_configuration()
-        self._cec_config.strDeviceName = "Metixel Frame"
-        self._cec_config.bActivateSource = 0
-        self._cec_config.deviceTypes.Add(cec.CEC_DEVICE_TYPE_PLAYBACK_DEVICE)
-        self._cec_config.clientVersion = cec.LIBCEC_VERSION_CURRENT
-        self._cec_config.SetLogCallback(self._cec_log_callback)
-        self._cec_config.SetKeyPressCallback(self._cec_key_callback)
+        try:
+            self._cec_config = cec.libcec_configuration()
+            self._cec_config.strDeviceName = "Metixel Frame"
+            self._cec_config.bActivateSource = 0
+            self._cec_config.deviceTypes.Add(cec.CEC_DEVICE_TYPE_PLAYBACK_DEVICE)
+            self._cec_config.clientVersion = cec.LIBCEC_VERSION_CURRENT
+            self._cec_config.SetLogCallback(self._cec_log_callback)
+            self._cec_config.SetKeyPressCallback(self._cec_key_callback)
 
-        self._cec_client = cec.ICECAdapter.Create(self._cec_config)
+            self._cec_client = cec.ICECAdapter.Create(self._cec_config)
+        except AttributeError:
+            logger.warning(
+                "CEC library API mismatch — CEC disabled. "
+                "The installed 'cec' package does not match the expected API. "
+                "Try: sudo apt install python3-libcec"
+            )
+            return
+        except Exception:
+            logger.warning("Failed to initialise CEC — CEC disabled", exc_info=True)
+            return
 
         try:
             adapters = self._cec_client.DetectAdapters()

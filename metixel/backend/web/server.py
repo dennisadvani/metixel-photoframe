@@ -45,10 +45,12 @@ def create_app(state: StateManager, ipc: IPCClient) -> Flask:
     from metixel.backend.web.routes.config import config_bp
     from metixel.backend.web.routes.media import media_bp
     from metixel.backend.web.routes.logs import logs_bp
+    from metixel.backend.web.routes.immich import immich_bp
 
     app.register_blueprint(config_bp, url_prefix="/api/config")
     app.register_blueprint(media_bp, url_prefix="/api/media")
     app.register_blueprint(logs_bp, url_prefix="/api/logs")
+    app.register_blueprint(immich_bp, url_prefix="/api/immich")
 
     # Serve the SPA — inject version into the root template
     @app.route("/")

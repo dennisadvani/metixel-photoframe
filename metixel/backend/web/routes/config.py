@@ -2,7 +2,9 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Configuration API endpoints."""
 
+import json
 import logging
+import os
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -115,6 +117,22 @@ def get_config_path():
     })
 
 
+@config_bp.route("/display/info", methods=["GET"])
+def get_display_info():
+    """Return the current display resolution detected by the frontend."""
+    info = _read_display_info()
+    if info is None:
+        state = current_app.config["METIXEL_STATE"]
+        dc = state.config.display
+        info = {
+            "width": dc.get("width", 0),
+            "height": dc.get("height", 0),
+            "backend": "unknown",
+            "stale": True,
+        }
+    return jsonify(info)
+
+
 def _read_current_media() -> dict | None:
     """Read the current media state file written by the frontend.
 
@@ -142,5 +160,17 @@ def _read_current_media() -> dict | None:
 
             return data
     except (OSError, ValueError):
+        pass
+    return None
+
+
+def _read_display_info() -> dict | None:
+    """Read the display info status file written by the frontend."""
+    try:
+        info_path = "/run/metixel/display_info.json"
+        if os.path.isfile(info_path):
+            with open(info_path, "r") as f:
+                return json.load(f)
+    except (OSError, ValueError, json.JSONDecodeError):
         pass
     return None

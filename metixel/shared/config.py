@@ -26,13 +26,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "hide_cursor": True,
     },
     "slideshow": {
-        "image_duration_seconds": 30,
+        "image_duration_seconds": 15,
         "video_playback_enabled": True,
         "video_player_backend": "auto",  # auto, vlc, ffmpeg
-        "video_max_duration_seconds": 120,
-        "transition_duration_ms": 1500,
+        "video_max_duration_seconds": 0,
+        "transition_duration_ms": 2500,
         "transition_style": "crossfade",  # crossfade, fade_through_black, none
-        "fit_mode": "contain",  # contain, cover, fill
+        "fit_mode": "cover",  # contain, cover, fill
         "smart_cover": True,  # use contain for square/opposite-orientation images in cover mode
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
@@ -42,11 +42,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": False,
             "server_url": "https://immich.example.com",
             "api_key": "",
-            "poll_interval_seconds": 300,  # 5 minutes
+            "album_name": "",
+            "strict_sync": False,
+            "sync_dir": "cache/immich_sync/",
+            "poll_interval_seconds": 3600,  # 60 minutes
         },
         "local": {
             "enabled": True,
-            "watch_paths": ["media/"],
+            "watch_paths": ["media/", "cache/immich_sync/"],
             "poll_interval_seconds": 30,
         },
     },
@@ -72,7 +75,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cache_dir": "cache/",
         "log_level": "INFO",
         "db_path": "cache/metixel.db",
-        "media_folder": "media/",
     },
 }
 

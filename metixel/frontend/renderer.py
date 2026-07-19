@@ -405,7 +405,7 @@ class FrontendRenderer:
     def run(self) -> None:
         """Initialize and start the main render loop. Blocks until shutdown."""
         logger.info(
-            "=" * 70 + "\n"
+            "\n" + "=" * 70 + "\n"
             "  METIXEL FRONTEND STARTING  |  pid=%d  |  %s\n"
             + "=" * 70,
             os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -444,6 +444,25 @@ class FrontendRenderer:
             display_cfg.get("fps_limit", 30),
         )
 
+        # Write detected resolution to a status file so the web UI
+        # can display it in the Display Settings card.
+        try:
+            run_dir = Path(os.environ.get("METIXEL_RUN_DIR", "/run/metixel"))
+            run_dir.mkdir(parents=True, exist_ok=True)
+            info_path = run_dir / "display_info.json"
+            info = {
+                "width": int(self._backend.width),
+                "height": int(self._backend.height),
+                "backend": type(self._backend).__name__,
+            }
+            tmp_path = info_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
+                json.dump(info, f)
+            os.replace(tmp_path, info_path)
+            logger.debug("Display info written to %s", info_path)
+        except Exception:
+            logger.warning("Could not write display info file", exc_info=True)
+
         # -- Hide the mouse cursor ----------------------------------------
         # pi3d's DISPLAY_CONFIG_HIDE_CURSOR hides the cursor within the
         # pi3d window, but on some setups (cage/XWayland) the SDL2 cursor
@@ -457,7 +476,9 @@ class FrontendRenderer:
         self._presentation = PresentationEngine(self._config, self._backend)
 
         # Scan media folder and populate the slideshow queue
-        media_folder = Path(self._config.system.get("media_folder", "media"))
+        media_folder = Path(
+            self._config.sync.get("local", {}).get("watch_paths", ["media/"])[0]
+        )
         if not media_folder.is_absolute():
             media_folder = self._config_path.parent.parent / media_folder
         logger.info("Scanning media folder: %s", media_folder)
