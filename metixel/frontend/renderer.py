@@ -19,6 +19,7 @@ from metixel.display.backend import DisplayBackend
 from metixel.frontend.presentation.engine import PresentationEngine
 from metixel.shared.config import Config
 from metixel.shared.ipc import IPCServer, ControlMessage
+from metixel.shared.models import MediaItem, MediaType
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ class FrontendRenderer:
         self._frame_count: int = 0
         self._last_config_check: float = 0.0
         self._config_mtime: float = 0.0
+        # Playlist hot-reload tracking
+        self._playlist_path: Path = Path("/run/metixel/playlist.json")
+        self._playlist_mtime: float = 0.0
+        self._last_playlist_check: float = 0.0
         # FPS tracking
         self._fps_last_time: float = 0.0
         self._fps_frame_snapshot: int = 0
@@ -475,19 +480,29 @@ class FrontendRenderer:
         # Initialize subsystems
         self._presentation = PresentationEngine(self._config, self._backend)
 
-        # Scan media folder and populate the slideshow queue
-        media_folder = Path(
-            self._config.sync.get("local", {}).get("watch_paths", ["media/"])[0]
+        # Scan ALL media folders and populate the slideshow queue
+        watch_paths_raw: list[str] = self._config.sync.get("local", {}).get(
+            "watch_paths", ["media/"],
         )
-        if not media_folder.is_absolute():
-            media_folder = self._config_path.parent.parent / media_folder
-        logger.info("Scanning media folder: %s", media_folder)
-        items = self._presentation.scan_folder(media_folder)
-        if items:
-            self._presentation.set_queue(items)
-            logger.info("Loaded %d images into slideshow queue", len(items))
+        all_items: list[MediaItem] = []
+        for p in watch_paths_raw:
+            folder = Path(p)
+            if not folder.is_absolute():
+                folder = self._config_path.parent.parent / folder
+            if folder.exists():
+                logger.info("Scanning media folder: %s", folder)
+                items = self._presentation.scan_folder(folder)
+                all_items.extend(items)
+                logger.info("Found %d items in %s", len(items), folder)
+            else:
+                logger.debug("Watch path not found (skipping): %s", folder)
+
+        if all_items:
+            self._presentation.set_queue(all_items)
+            logger.info("Loaded %d images into slideshow queue from %d watch path(s)",
+                         len(all_items), len(watch_paths_raw))
         else:
-            logger.warning("No images found in %s — slideshow will show empty screen", media_folder)
+            logger.warning("No images found in any watch path — slideshow will show empty screen")
 
         # Start IPC server (best-effort — may fail on dev machines without /run)
         try:
@@ -568,7 +583,7 @@ class FrontendRenderer:
     # -- Hot reload ----------------------------------------------------------
 
     def _check_config_changed(self) -> None:
-        """Check if the config file has been modified on disk.
+        """Check if the config file or playlist has been modified on disk.
 
         Uses file mtime comparison (works cross-platform, no inotify dependency).
         On Linux with inotify, we could use a more efficient approach.
@@ -579,6 +594,7 @@ class FrontendRenderer:
             return
         self._last_config_check = now
 
+        # -- Config hot reload --
         new_mtime = self._get_config_mtime()
         if new_mtime > self._config_mtime:
             logger.info("Config file changed — hot reloading")
@@ -587,6 +603,58 @@ class FrontendRenderer:
             # Re-initialize components that depend on config
             if self._presentation:
                 self._presentation.reload_config(self._config)
+
+        # -- Playlist hot reload (backend may add items from Immich sync) --
+        if now - self._last_playlist_check >= 3.0:  # Check every 3 seconds
+            self._last_playlist_check = now
+            self._check_playlist_changed()
+
+    def _check_playlist_changed(self) -> None:
+        """Reload the slideshow queue if the backend has updated the playlist.
+
+        Uses ``add_items()`` to append new items without restarting the
+        slideshow from the beginning.
+        """
+        try:
+            new_mtime = os.path.getmtime(self._playlist_path)
+        except OSError:
+            return  # Playlist file doesn't exist yet
+
+        if new_mtime <= self._playlist_mtime:
+            return  # No change
+
+        self._playlist_mtime = new_mtime
+        logger.info("Playlist updated by backend — loading new items")
+
+        try:
+            with open(self._playlist_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Failed to read playlist file — will retry")
+            return
+
+        items: list[MediaItem] = []
+        for entry in data:
+            try:
+                item = MediaItem(
+                    id=entry["id"],
+                    original_path=Path(entry["original_path"]),
+                    cached_path=Path(entry["cached_path"]),
+                    media_type=MediaType(entry["media_type"]),
+                    width=entry.get("width", 0),
+                    height=entry.get("height", 0),
+                    duration_seconds=entry.get("duration_seconds", 0.0),
+                    thumbnail_path=Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None,
+                    source=entry.get("source", "local"),
+                )
+                items.append(item)
+            except (KeyError, ValueError) as e:
+                logger.debug("Skipping malformed playlist entry: %s", e)
+
+        if items and self._presentation:
+            added = self._presentation.add_items(items)
+            if added:
+                logger.info("Added %d new items to slideshow (total playlist: %d)", added, len(items))
 
     def _get_config_mtime(self) -> float:
         """Get the modification time of the config file."""

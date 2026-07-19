@@ -537,6 +537,48 @@ class PresentationEngine:
         self._write_current_media()
         logger.info("Media queue set: %d items", len(self._queue))
 
+    def add_items(self, items: list[MediaItem]) -> int:
+        """Add new items to the existing queue (deduplicating by id).
+
+        Does NOT reset the current slideshow position — new items are
+        appended to the end.  This is designed for hot-reload from the
+        backend playlist without interrupting the currently displayed image.
+
+        Returns the number of items actually added.
+        """
+        existing_ids = {item.id for item in self._queue}
+        new_items = [item for item in items if item.id not in existing_ids]
+        if not new_items:
+            return 0
+
+        # Filter videos if playback is disabled
+        if not self._config.slideshow.get("video_playback_enabled", True):
+            vc = sum(1 for i in new_items if i.media_type == MediaType.VIDEO)
+            new_items = [i for i in new_items if i.media_type != MediaType.VIDEO]
+            if vc:
+                logger.info("Video playback disabled — filtered %d new videos", vc)
+            if not new_items:
+                return 0
+
+        self._queue.extend(new_items)
+        if self._config.slideshow.get("shuffle", True):
+            # Shuffle only the new items into existing positions — insert
+            # each at a random index after the current position.
+            for item in new_items:
+                if self._current_idx >= 0 and len(self._queue) > self._current_idx + 1:
+                    pos = random.randint(self._current_idx + 1, len(self._queue) - 1)
+                else:
+                    pos = len(self._queue) - 1
+                # Move the last element (the new item) to the random position
+                self._queue.pop()
+                self._queue.insert(pos, item)
+
+        logger.info(
+            "Added %d new items to queue (total: %d, current idx: %d)",
+            len(new_items), len(self._queue), self._current_idx,
+        )
+        return len(new_items)
+
     def _advance(self) -> None:
         """Move to the next item in the queue.
 
