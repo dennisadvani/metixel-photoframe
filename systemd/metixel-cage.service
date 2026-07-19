@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
+
+[Unit]
+Description=Metixel Photoframe — Digital Photo Frame (cage + Wayland)
+Documentation=https://github.com/denni/metixel-photoframe
+After=multi-user.target metixel-backend.service seatd.service
+Requires=metixel-backend.service
+Wants=seatd.service
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+SupplementaryGroups=video render input tty
+WorkingDirectory=/opt/metixel
+Environment=PYTHONPATH=/opt/metixel
+Environment=PYTHONUNBUFFERED=1
+Environment=METIXEL_DISPLAY_BACKEND=auto
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+# Ensure XDG_RUNTIME_DIR exists for cage's Wayland socket
+ExecStartPre=/bin/mkdir -p /run/user/1000
+ExecStartPre=/bin/chown pi:pi /run/user/1000
+ExecStartPre=/bin/chmod 0700 /run/user/1000
+
+# cage starts a Wayland session with XWayland, then runs metixel inside it.
+# This gives pi3d the X11 surface it needs on KMS-only systems (Trixie).
+ExecStart=/usr/bin/cage -- python3 -m metixel --mode frontend --config /opt/metixel/etc/config.json
+
+# Restart on failure or exit
+Restart=always
+RestartSec=5
+
+# Security (relaxed — cage needs GPU + input access)
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

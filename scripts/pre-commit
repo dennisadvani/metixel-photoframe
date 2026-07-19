@@ -1,0 +1,15 @@
+#!/bin/bash
+# Git pre-commit hook — auto-bumps the Metixel Photoframe patch version.
+#
+# Install:  ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+# Or copy:  cp scripts/pre-commit .git/hooks/pre-commit
+
+set -euo pipefail
+
+# Only bump if metixel/__init__.py is already staged (i.e., part of this commit)
+# or if there are other staged changes — avoids bumping on empty commits.
+if ! git diff --cached --quiet; then
+    python3 scripts/bump_version.py
+    git add metixel/__init__.py
+    echo "[pre-commit] Version bumped automatically."
+fi

@@ -1,0 +1,55 @@
+{
+  "display": {
+    "width": 0,
+    "height": 0,
+    "fullscreen": true,
+    "hide_cursor": true,
+    "fps_limit": 30
+  },
+  "slideshow": {
+    "image_duration_seconds": 5,
+    "video_playback_enabled": false,
+    "transition_duration_ms": 1500,
+    "transition_style": "crossfade",
+    "fit_mode": "contain",
+    "matte_color": [20, 20, 20],
+    "shuffle": true
+  },
+  "sync": {
+    "immich": {
+      "enabled": false,
+      "server_url": "https://immich.example.com",
+      "api_key": "",
+      "poll_interval_seconds": 300
+    },
+    "local": {
+      "enabled": true,
+      "watch_paths": ["media/"],
+      "poll_interval_seconds": 30
+    }
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "debug": false
+  },
+  "mqtt": {
+    "enabled": false,
+    "broker": "localhost",
+    "port": 1883,
+    "topic_prefix": "metixel",
+    "username": "",
+    "password": ""
+  },
+  "input": {
+    "cec_enabled": true,
+    "ir_enabled": false,
+    "ir_device": "/dev/lirc0"
+  },
+  "system": {
+    "cache_dir": "cache/",
+    "log_level": "INFO",
+    "db_path": "cache/metixel.db",
+    "media_folder": "media/"
+  }
+}

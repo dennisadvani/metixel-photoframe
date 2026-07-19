@@ -1,0 +1,85 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "metixel-photoframe"
+dynamic = ["version"]
+description = "Custom, open-source Digital Photo Frame OS and application suite"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Metixel Photoframe Contributors"}
+]
+keywords = ["digital-photo-frame", "raspberry-pi", "immich", "photo-frame"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Graphics :: Presentation",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "metixel.__version__"}
+
+[project.optional-dependencies]
+phase1 = [
+    "pi3d>=2.47",
+    "Pillow>=10.0",
+    "numpy>=1.24",
+    "Flask>=3.0",
+    "watchdog>=3.0",
+    "paho-mqtt>=1.6",
+    "requests>=2.31",
+]
+phase2 = [
+    "PyOpenGL>=3.1",
+    "Pillow>=10.0",
+    "numpy>=1.24",
+    "Flask>=3.0",
+    "watchdog>=3.0",
+    "paho-mqtt>=1.6",
+    "requests>=2.31",
+]
+dev = [
+    "pygame>=2.5",
+    "ruff>=0.3",
+    "mypy>=1.8",
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/denni/metixel-photoframe"
+Documentation = "https://github.com/denni/metixel-photoframe/blob/main/ARCHITECTURE.md"
+Repository = "https://github.com/denni/metixel-photoframe"
+
+[tool.setuptools.packages.find]
+include = ["metixel*"]
+
+[tool.setuptools.package-data]
+metixel = ["display/shaders/*.vs", "display/shaders/*.fs"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=metixel --cov-report=term-missing"

@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
+
+[Unit]
+Description=Metixel Photoframe Backend Daemon
+Documentation=https://github.com/denni/metixel-photoframe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/opt/metixel
+Environment=PYTHONPATH=/opt/metixel
+Environment=PYTHONUNBUFFERED=1
+Environment=METIXEL_DISPLAY_BACKEND=auto
+
+# systemd creates /run/metixel before namespace setup (avoids 226/NAMESPACE)
+RuntimeDirectory=metixel
+RuntimeDirectoryMode=0755
+
+ExecStartPre=/bin/mkdir -p /opt/metixel/logs /opt/metixel/cache
+ExecStart=/usr/bin/python3 -m metixel --mode backend --config /opt/metixel/etc/config.json
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/opt/metixel /tmp
+
+[Install]
+WantedBy=multi-user.target
