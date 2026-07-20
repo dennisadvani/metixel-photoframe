@@ -426,8 +426,16 @@
         } else {
             // Active processing
             var pct = total > 0 ? Math.round((processed / total) * 100) : 0;
-            phaseEl.textContent = phase;
-            phaseEl.className = "processing-phase is-active";
+
+            // Human-readable phase labels
+            var phaseLabels = {
+                "scanning": "Scanning files\u2026",
+                "processing": "Processing images",
+                "transcoding": "Transcoding video",
+            };
+            phaseEl.textContent = phaseLabels[phase] || phase;
+            phaseEl.className = "processing-phase is-active"
+                + (phase === "transcoding" ? " is-transcoding" : "");
 
             var detailParts = [];
             if (total > 0) {

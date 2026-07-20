@@ -15,6 +15,7 @@ at all times.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -77,10 +78,8 @@ def _video_frame_is_cached(video_path: str, frame: int) -> bool:
         return True
     except Exception:
         logger.warning("Cached frame is corrupt — will regenerate: %s", p)
-        try:
+        with contextlib.suppress(OSError):
             p.unlink()
-        except OSError:
-            pass
         return False
 
 
@@ -200,6 +199,14 @@ def _extract_frame_array_cpu(
             # then keep only the final frame.  This is robust against
             # keyframe placement: even if the nearest keyframe is several
             # seconds before EOF, we decode through to the actual end.
+            #
+            # MEMORY-SAFE: uses subprocess.Popen with incremental stdout
+            # reading and a rolling buffer containing only the last ~2
+            # frames.  On a Pi Zero 2 W (512 MB) a single 1080p raw-
+            # RGB24 frame is ~6 MB, so the buffer peaks at ~12 MB —
+            # compared to the previous capture_output=True approach which
+            # could hold **gigabytes** of raw video in RAM when the last
+            # keyframe was far from EOF.
             cmd = [
                 "ffmpeg", "-y",
                 "-sseof", f"-{seek_from_end}",
@@ -207,20 +214,36 @@ def _extract_frame_array_cpu(
                 "-f", "image2pipe",
                 "-pix_fmt", "rgb24", "-vcodec", "rawvideo", "-",
             ]
-            proc = subprocess.run(cmd, capture_output=True, timeout=30)
+            proc = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            )
+            frame_size = video_w * video_h * 3
+
+            # Read stdout incrementally, keeping only the last ~2 frames
+            # in a rolling byte buffer.  The rawvideo pipe has no framing
+            # — it's just a continuous RGB24 stream — but ffmpeg always
+            # writes complete frames, so the *end* of the stream is
+            # guaranteed to be frame-aligned.
+            buf = b''
+            max_buf = 2 * frame_size + 65536  # ~12 MB for 1080p
+            while True:
+                chunk = proc.stdout.read(65536)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > max_buf:
+                    # Drop oldest data; keep ~2 frames = safe margin
+                    buf = buf[-(2 * frame_size):]
+
+            proc.wait(timeout=30)
             if proc.returncode != 0:
                 logger.warning(
-                    "ffmpeg (sseof) returned %d for %s (stderr: %.200s)",
+                    "ffmpeg (sseof) returned %d for %s",
                     proc.returncode, video_path,
-                    proc.stderr.decode(errors="replace") if proc.stderr else "",
                 )
                 return None
 
-            # Split the pipe output into per-frame buffers (rawvideo
-            # without -vframes dumps ALL frames from the seek point to
-            # EOF).  Take the very last complete frame.
-            frame_size = video_w * video_h * 3
-            total = len(proc.stdout)
+            total = len(buf)
             if total < frame_size:
                 # Fewer bytes than one frame — maybe a partial frame.
                 # Try to salvage whatever we got.
@@ -233,15 +256,14 @@ def _extract_frame_array_cpu(
                 if w < 1 or h < 1:
                     return None
                 return np.frombuffer(
-                    proc.stdout[: w * h * 3], dtype=np.uint8,
+                    buf[: w * h * 3], dtype=np.uint8,
                 ).reshape((h, w, 3))
 
-            # Find the last complete frame in the buffer.
+            # The last frame_size bytes of buf are the last complete frame
+            # (the stream always ends on a frame boundary).
             num_frames = total // frame_size
-            last_offset = (num_frames - 1) * frame_size
             frame = np.frombuffer(
-                proc.stdout[last_offset: last_offset + frame_size],
-                dtype=np.uint8,
+                buf[-frame_size:], dtype=np.uint8,
             ).reshape((video_h, video_w, 3))
             logger.debug(
                 "Extracted last frame from %d frames (%.1fs of video) for %s",
@@ -348,18 +370,16 @@ def _get_or_create_video_frame(
         img = Image.fromarray(arr)
         if img.width > screen_w or img.height > screen_h:
             img.thumbnail((screen_w, screen_h), Image.LANCZOS)
-        tmp = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             suffix=".jpg", delete=False, dir=cache_path.parent,
-        )
-        try:
-            img.save(tmp.name, "JPEG", quality=92)
-            os.replace(tmp.name, cache_path)
-        except Exception:
+        ) as tmp:
             try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            raise
+                img.save(tmp.name, "JPEG", quality=92)
+                os.replace(tmp.name, cache_path)
+            except Exception:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp.name)
+                raise
 
         # Also generate a 320 px thumbnail for the web dashboard.
         # Use a hash of the video path as the thumbnail key, matching

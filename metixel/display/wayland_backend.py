@@ -13,10 +13,6 @@ becomes the primary target.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any
-
-import numpy as np
 
 from metixel.display.backend import DisplayBackend
 
@@ -55,7 +51,10 @@ class WaylandBackend(DisplayBackend):
     def is_running(self) -> bool:
         return self._running
 
-    def create(self, width=1920, height=1080, fullscreen=True, hide_cursor=True, fps_limit=30, **kwargs):
+    def create(
+        self, width=1920, height=1080, fullscreen=True,
+        hide_cursor=True, fps_limit=30, **kwargs,
+    ):
         raise NotImplementedError(
             "WaylandBackend is not yet implemented. "
             "Set METIXEL_DISPLAY_BACKEND=dev for desktop development."

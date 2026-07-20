@@ -3,7 +3,7 @@
 """Presentation engine — slideshow logic, transitions, layout."""
 
 from metixel.frontend.presentation.engine import PresentationEngine
-from metixel.frontend.presentation.transitions import TransitionEngine
 from metixel.frontend.presentation.layout import LayoutEngine
+from metixel.frontend.presentation.transitions import TransitionEngine
 
 __all__ = ["PresentationEngine", "TransitionEngine", "LayoutEngine"]

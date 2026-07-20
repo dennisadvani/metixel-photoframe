@@ -245,6 +245,10 @@ class FolderWatcher:
           MediaItem lets the presentation engine skip items that aren't
           ready to play yet.
         """
+        # Sort: images first, videos last — so the frontend gets photos
+        # into the playlist quickly before slow video transcodes begin.
+        paths.sort(key=lambda p: (0 if p.suffix.lower() in IMAGE_EXTENSIONS else 1, p))
+
         total = len(paths)
 
         # Flush items to the playlist every N files so the frontend can
@@ -270,8 +274,21 @@ class FolderWatcher:
                         deferred_paths.append(path)
                         continue
 
+                    # Report progress BEFORE transcoding begins — video
+                    # processing can take minutes and the dashboard needs
+                    # to show what's happening *during* the operation,
+                    # not only after it finishes.
+                    if is_initial:
+                        _write_progress("transcoding", total, idx + 1, path.name)
+
                     item = self._video_processor.process(path, source="local")
                 elif self._image_processor:
+                    # Report progress before image processing too, so the
+                    # dashboard updates immediately rather than after the
+                    # fact (small win for large images on slow storage).
+                    if is_initial:
+                        _write_progress("processing", total, idx + 1, path.name)
+
                     item = self._image_processor.process(path, source="local")
                 else:
                     continue
@@ -290,10 +307,6 @@ class FolderWatcher:
             if len(items) >= _FLUSH_EVERY:
                 self._state.add_playlist_items(items)
                 items.clear()
-
-            # Report progress during initial scan
-            if is_initial:
-                _write_progress("processing", total, idx + 1, path.name)
 
         # Final flush: write remaining items
         if items:

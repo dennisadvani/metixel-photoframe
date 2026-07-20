@@ -233,8 +233,17 @@ class VideoProcessor:
 
             timeout = max(60, self._transcode_timeout)
             try:
-                proc = subprocess.run(
-                    final_cmd, check=True, capture_output=True, timeout=timeout,
+                # MEMORY-SAFE: redirect stdout+stderr to DEVNULL instead
+                # of capturing them in RAM.  ffmpeg writes extensive
+                # progress lines (frame count, fps, bitrate, …) to stderr
+                # — for a long transcode (up to 2 hours) this could
+                # accumulate hundreds of MB in memory on a Pi with only
+                # 512 MB RAM.  The actual video output goes to a file, so
+                # nothing of value is lost.
+                subprocess.run(
+                    final_cmd, check=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=timeout,
                 )
                 logger.debug(
                     "Transcoded with %s (threads=%s, timeout=%ds): %s",
@@ -242,13 +251,9 @@ class VideoProcessor:
                 )
                 return  # Success — done
             except subprocess.CalledProcessError as e:
-                stderr_tail = (
-                    e.stderr.decode(errors="replace")[-200:]
-                    if e.stderr else "(no stderr)"
-                )
                 logger.warning(
-                    "Encoder %s failed for %s (rc=%d): %s",
-                    encoder, source.name, e.returncode, stderr_tail,
+                    "Encoder %s failed for %s (rc=%d)",
+                    encoder, source.name, e.returncode,
                 )
                 # Clean up partial output
                 if dest.exists():
@@ -352,7 +357,12 @@ class VideoProcessor:
             "-q:v", "2",
             str(dest),
         ]
-        subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+        # Output goes to a file; stdout/stderr are irrelevant.
+        subprocess.run(
+            cmd, check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=30,
+        )
 
     def _probe(self, path: Path) -> dict:
         """Probe video file for metadata using ffprobe."""

@@ -482,6 +482,10 @@ button:focus-visible {
     font-weight: 500;
 }
 
+.processing-phase.is-transcoding {
+    color: var(--warning, #e6a817);
+}
+
 .processing-phase.is-complete {
     color: var(--success);
 }
