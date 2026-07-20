@@ -482,6 +482,8 @@
                 transcode_max_width: 0,
                 transcode_max_height: 0,
                 transcode_quality: 23,
+                transcode_use_software_encoder: true,
+                transcode_timeout_seconds: 7200,
                 cpu_throttle_enabled: true,
                 cpu_throttle_percent: 50,
             };
@@ -498,6 +500,8 @@
             var qDesc = q <= 20 ? " (high quality)" : q <= 26 ? " (good balance)" : " (smaller files)";
             qLabel.textContent = q + qDesc;
         }
+        setChecked("cfg-transcode-software-encoder", v.transcode_use_software_encoder !== false);
+        setValue("cfg-transcode-timeout", v.transcode_timeout_seconds || 7200);
         setChecked("cfg-cpu-throttle-enabled", v.cpu_throttle_enabled !== false);
         setValue("cfg-cpu-throttle-pct", v.cpu_throttle_percent || 50);
         var cpLabel = document.getElementById("cfg-cpu-throttle-pct-label");
@@ -582,6 +586,8 @@
                     transcode_max_width: sanitizeInt(document.getElementById("cfg-transcode-max-width").value, 0),
                     transcode_max_height: sanitizeInt(document.getElementById("cfg-transcode-max-height").value, 0),
                     transcode_quality: sanitizeInt(document.getElementById("cfg-transcode-quality").value, 23),
+                    transcode_use_software_encoder: document.getElementById("cfg-transcode-software-encoder").checked,
+                    transcode_timeout_seconds: sanitizeInt(document.getElementById("cfg-transcode-timeout").value, 7200),
                     cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
                     cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 50),
                 });
@@ -1428,22 +1434,48 @@
             // Clear image cache
             var clearCacheBtn = document.getElementById("btn-clear-cache");
             clearCacheBtn?.addEventListener("click", async () => {
-                if (!confirm("Clear all cached and thumbnail images? The next slideshow cycle will re-process source images.")) {
+                if (!confirm("Clear all cached files and restart services?\n\n"
+                           + "This deletes transcoded videos, thumbnails, and processed images, "
+                           + "then restarts the backend and frontend to prevent missing-file errors. "
+                           + "Playback will be interrupted for ~10 seconds.")) {
                     return;
                 }
                 clearCacheBtn.disabled = true;
                 clearCacheBtn.textContent = "Clearing…";
                 var result = await apiPost("/media/cache/clear");
-                clearCacheBtn.disabled = false;
-                clearCacheBtn.textContent = "Clear Image Cache";
                 if (result && result.status === "ok") {
                     showToast(
-                        "Cache cleared: " + result.deleted_files + " files, " + result.freed_mb + " MB freed",
+                        "Cache cleared: " + result.deleted_files + " files, " + result.freed_mb + " MB freed. Restarting services…",
                         "success", 5000
                     );
+                    // Restart services to prevent stale cached-file errors
+                    try {
+                        await apiPost("/config/restart");
+                    } catch (_) {
+                        // Expected — the backend is restarting, so the request may fail
+                    }
                 } else {
+                    clearCacheBtn.disabled = false;
+                    clearCacheBtn.textContent = "Clear Image Cache";
                     showToast("Failed to clear image cache", "error");
                 }
+            });
+
+            // Restart all services
+            var restartBtn = document.getElementById("btn-restart-services");
+            restartBtn?.addEventListener("click", async () => {
+                if (!confirm("Restart all Metixel services? Playback will be interrupted for ~10 seconds.")) {
+                    return;
+                }
+                restartBtn.disabled = true;
+                restartBtn.textContent = "Restarting…";
+                showToast("Restarting services…", "info", 5000);
+                try {
+                    await apiPost("/config/restart");
+                } catch (_) {
+                    // Expected — the backend is restarting
+                }
+                // The button will re-enable when the page reloads after restart
             });
         }
     }

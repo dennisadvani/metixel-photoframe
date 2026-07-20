@@ -45,6 +45,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "transcode_max_width": 0,  # 0 = use display width
         "transcode_max_height": 0,  # 0 = use display height
         "transcode_quality": 23,  # CRF value (lower = better, 18-28 typical)
+        "transcode_use_software_encoder": True,  # libx264 (best quality); False = try hardware first
+        "transcode_timeout_seconds": 7200,  # max time per transcode (2 hours)
         "cpu_throttle_enabled": True,
         "cpu_throttle_percent": 50,  # 0-100, percentage of CPU to leave idle
     },
@@ -133,6 +135,8 @@ class Config:
                 "transcode_max_width": 0,
                 "transcode_max_height": 0,
                 "transcode_quality": 23,
+                "transcode_use_software_encoder": True,
+                "transcode_timeout_seconds": 7200,
                 "cpu_throttle_enabled": True,
                 "cpu_throttle_percent": 50,
             }

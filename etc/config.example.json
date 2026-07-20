@@ -22,6 +22,8 @@
     "transcode_max_width": 0,
     "transcode_max_height": 0,
     "transcode_quality": 23,
+    "transcode_use_software_encoder": true,
+    "transcode_timeout_seconds": 7200,
     "cpu_throttle_enabled": true,
     "cpu_throttle_percent": 50
   },

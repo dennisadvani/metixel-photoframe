@@ -5,6 +5,7 @@
 import json
 import logging
 import os
+import subprocess
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -68,6 +69,88 @@ def reload_config():
     state = current_app.config["METIXEL_STATE"]
     state.reload_config()
     return jsonify({"status": "ok"})
+
+
+@config_bp.route("/restart", methods=["POST"])
+def restart_services():
+    """Restart all Metixel systemd services.
+
+    Returns immediately with a success response, then schedules a
+    delayed restart in a background thread.  The 2-second delay ensures
+    the HTTP response is fully sent before the process is killed.
+
+    Tries several strategies in order:
+    1. ``sudo systemctl restart`` — requires a NOPASSWD sudoers entry
+    2. ``systemctl --user restart`` — works if services are user-scoped
+    3. ``os.kill(os.getpid(), SIGTERM)`` — exits the backend; systemd
+       ``Restart=always`` brings it back.  Cage must be restarted
+       separately.
+
+    This is typically called after clearing the media cache, since
+    stale cached-file references in the running frontend cause
+    missing-file errors until the services are restarted.
+    """
+    import os as _os
+    import signal as _signal
+    import threading
+    import time as _time
+
+    def _try_systemctl(args: list[str]) -> tuple[bool, str]:
+        """Run a systemctl command. Returns (success, output_summary)."""
+        try:
+            result = subprocess.run(
+                args, capture_output=True, text=True, timeout=15,
+            )
+            ok = result.returncode == 0
+            tail = (result.stderr or result.stdout or "").strip()[-300:]
+            return ok, tail
+        except subprocess.TimeoutExpired:
+            return False, "timed out after 15s"
+        except FileNotFoundError:
+            return False, "systemctl not found"
+        except Exception as exc:
+            return False, str(exc)
+
+    def _do_restart() -> None:
+        _time.sleep(2)
+
+        # -- Strategy 1: sudo systemctl (needs NOPASSWD sudoers) --------
+        ok, detail = _try_systemctl(
+            ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
+        )
+        if ok:
+            logger.info("Services restarted via sudo systemctl")
+            return
+        logger.warning("sudo systemctl restart failed: %s", detail)
+
+        # -- Strategy 2: systemctl --user (user-scoped services) --------
+        ok, detail = _try_systemctl(
+            ["systemctl", "--user", "restart", "metixel-backend", "metixel-cage"],
+        )
+        if ok:
+            logger.info("Services restarted via systemctl --user")
+            return
+        logger.warning("systemctl --user restart failed: %s", detail)
+
+        # -- Strategy 3: restart backend only by exiting self -----------
+        # systemd Restart=always will bring the backend back up.
+        # The cage must be restarted separately (via SSH or the
+        # dashboard's "Restart Services" button once the backend is
+        # back).
+        logger.warning(
+            "All systemctl methods failed — exiting backend process "
+            "so systemd restarts it (Restart=always). "
+            "Restart metixel-cage manually if needed."
+        )
+        # Ensure pending log messages are flushed before exit
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        _os.kill(_os.getpid(), _signal.SIGTERM)
+
+    thread = threading.Thread(target=_do_restart, daemon=True, name="svc-restart")
+    thread.start()
+    logger.info("Service restart scheduled (will execute in 2s)")
+    return jsonify({"status": "ok", "message": "Restarting services in 2 seconds…"})
 
 
 @config_bp.route("/control", methods=["POST"])

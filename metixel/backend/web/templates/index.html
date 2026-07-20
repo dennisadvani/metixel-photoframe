@@ -171,6 +171,17 @@
                         <p class="hint" style="margin-top:0">Lower = better quality / larger files. 18 = near-lossless, 23 = good balance, 28 = smaller files.</p>
 
                         <label class="checkbox-row">
+                            <input type="checkbox" id="cfg-transcode-software-encoder" checked> Use Software Encoder (libx264)
+                            <span style="font-size:0.78rem;color:var(--text-muted)">Best quality — uses CPU instead of Pi hardware encoder. Disable for faster (but lower quality) hardware encoding.</span>
+                        </label>
+
+                        <div class="form-group">
+                            <span class="form-label">Transcode Timeout</span>
+                            <input type="number" id="cfg-transcode-timeout" min="60" max="86400" step="60" value="7200">
+                            <span style="font-size:0.8rem;color:var(--text-muted)">seconds (default: 7200 = 2 hours)</span>
+                        </div>
+
+                        <label class="checkbox-row">
                             <input type="checkbox" id="cfg-cpu-throttle-enabled" checked> CPU Throttling
                             <span style="font-size:0.78rem;color:var(--text-muted)">Limit CPU usage so the photoframe stays responsive during transcoding</span>
                         </label>
@@ -377,6 +388,7 @@
                     </div>
                     <button id="btn-save-system">Save System Settings</button>
                     <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
+                    <button id="btn-restart-services" class="btn--secondary" style="margin-left:0.5rem">Restart Services</button>
                 </div>
 
                 <div class="card">

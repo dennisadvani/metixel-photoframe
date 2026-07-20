@@ -2,15 +2,18 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Video processor — ffmpeg-based transcoding and thumbnail extraction.
 
-Uses hardware-accelerated encoding (h264_v4l2m2m) on Raspberry Pi where
-available, with software fallback (libx264) on other platforms.
+Uses software encoding (libx264) by default for the best quality.
+Hardware-accelerated encoding (h264_v4l2m2m on Pi) is available as an
+opt-in alternative when speed is preferred over quality.
 
 Transcoding is configurable:
 - On/off toggle (when off, original file is used directly)
 - Target resolution (aspect-ratio-preserving scale-to-fit)
 - Quality (CRF for software, bitrate for hardware encoders)
+- Software vs hardware encoder selection
 - CPU throttling via ``cpulimit`` or ``nice`` to keep the photoframe
   responsive during transcoding
+- Transcode timeout (default 2 hours)
 """
 
 from __future__ import annotations
@@ -56,6 +59,8 @@ class VideoProcessor:
         self._transcode_max_w = self._cfg.get("transcode_max_width", 0) or self._screen_w
         self._transcode_max_h = self._cfg.get("transcode_max_height", 0) or self._screen_h
         self._transcode_quality = self._cfg.get("transcode_quality", 23)
+        self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
+        self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
         self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 50)
 
@@ -152,15 +157,18 @@ class VideoProcessor:
     def _transcode(self, source: Path, dest: Path) -> None:
         """Transcode video to H.264 at configured resolution and quality.
 
-        Tries hardware encoders first (e.g. h264_v4l2m2m on Pi), falls
-        back to software libx264.
+        Uses software libx264 by default for the best quality.  Hardware
+        encoders (h264_v4l2m2m on Pi) are available as an opt-in alternative
+        when speed is preferred over quality.
+
+        The source framerate is always preserved — no forced FPS conversion.
 
         CPU throttling uses a layered strategy:
         1. ``cpulimit`` — percentage-based limit (requires ``apt install cpulimit``)
         2. ``nice`` + ffmpeg ``-threads`` — priority + thread cap (no extra deps)
         3. ffmpeg ``-threads`` alone — limits decoder/encoder parallelism
         """
-        encoders = self._detect_encoders()
+        encoders = self._select_encoders()
 
         # Build scale filter: scale to fit within target dimensions,
         # preserve aspect ratio, pad to even dimensions.
@@ -204,17 +212,16 @@ class VideoProcessor:
                     cmd += ["-x264-params", f"threads={thread_limit}"]
             else:
                 # Map CRF-like quality to bitrate: lower CRF → higher bitrate
-                crf = self._transcode_quality
-                if crf <= 20:
+                q = self._transcode_quality
+                if q <= 20:
                     bitrate = "4M"
-                elif crf <= 24:
+                elif q <= 24:
                     bitrate = "2M"
                 else:
                     bitrate = "1M"
                 cmd += ["-b:v", bitrate]
 
             cmd += [
-                "-r", "30",
                 "-an",  # Strip audio (photo frame doesn't need it)
                 "-movflags", "+faststart",
                 "-pix_fmt", "yuv420p",
@@ -224,13 +231,14 @@ class VideoProcessor:
             # Apply CPU throttling wrapper (cpulimit or nice)
             final_cmd = self._wrap_with_throttle(cmd)
 
+            timeout = max(60, self._transcode_timeout)
             try:
                 proc = subprocess.run(
-                    final_cmd, check=True, capture_output=True, timeout=600,
+                    final_cmd, check=True, capture_output=True, timeout=timeout,
                 )
                 logger.debug(
-                    "Transcoded with %s (threads=%s): %s",
-                    encoder, thread_limit, source.name,
+                    "Transcoded with %s (threads=%s, timeout=%ds): %s",
+                    encoder, thread_limit, timeout, source.name,
                 )
                 return  # Success — done
             except subprocess.CalledProcessError as e:
@@ -251,8 +259,8 @@ class VideoProcessor:
                 # Continue to next encoder
             except subprocess.TimeoutExpired:
                 logger.warning(
-                    "Encoder %s timed out for %s (10 min limit)",
-                    encoder, source.name,
+                    "Encoder %s timed out for %s (%ds limit)",
+                    encoder, source.name, timeout,
                 )
                 if dest.exists():
                     try:
@@ -369,13 +377,22 @@ class VideoProcessor:
         info["duration"] = float(data.get("format", {}).get("duration", 0))
         return info
 
-    @staticmethod
-    def _detect_encoders() -> list[str]:
-        """Return available H.264 encoders in priority order.
+    def _select_encoders(self) -> list[str]:
+        """Return the H.264 encoder(s) to try, in priority order.
 
-        Hardware encoders first, with software ``libx264`` always last
-        as a guaranteed fallback.
+        When ``transcode_use_software_encoder`` is True (the default),
+        only libx264 is used — it produces far better quality at the same
+        bitrate than Pi hardware encoders.
+
+        When False, hardware encoders are tried first with libx264 as a
+        fallback.  This is useful when transcoding speed matters more
+        than quality (e.g. batch-processing many short clips).
         """
+        if self._force_software_encoder:
+            logger.debug("Software encoder forced — using libx264 only")
+            return ["libx264"]
+
+        # Detect available hardware encoders
         encoders: list[str] = []
         try:
             result = subprocess.run(
