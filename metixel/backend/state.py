@@ -152,7 +152,7 @@ class StateManager:
     def _get_uptime() -> float:
         """Get system uptime in seconds."""
         try:
-            with open("/proc/uptime", "r") as f:
+            with open("/proc/uptime") as f:
                 return float(f.readline().split()[0])
         except Exception:
             return 0.0

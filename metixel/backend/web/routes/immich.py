@@ -26,7 +26,6 @@ def list_albums():
     Uses the configured server URL and API key to fetch the album list.
     Returns a simplified list of ``{id, name, assetCount}`` objects.
     """
-    from metixel.backend.sync.immich import ImmichSyncer
 
     state = current_app.config["METIXEL_STATE"]
     syncer = _get_or_create_syncer(state)
@@ -65,7 +64,6 @@ def trigger_sync():
         ``{"album_name": "My Album"}`` — override the configured album for
         this one-time sync.
     """
-    from metixel.backend.sync.immich import ImmichSyncer
 
     state = current_app.config["METIXEL_STATE"]
     syncer = _get_or_create_syncer(state)
@@ -99,7 +97,6 @@ def sync_status():
 
     Returns ``null`` if no sync has ever been performed.
     """
-    from metixel.backend.sync.immich import ImmichSyncer  # noqa: PLC0415
 
     state = current_app.config["METIXEL_STATE"]
     syncer = _get_or_create_syncer(state)
@@ -128,7 +125,6 @@ def cancel_sync():
 
     The sync will finish the current file download, then abort.
     """
-    from metixel.backend.sync.immich import ImmichSyncer  # noqa: PLC0415
 
     state = current_app.config["METIXEL_STATE"]
     syncer = _get_or_create_syncer(state)
@@ -197,7 +193,7 @@ def test_connection():
 _syncer_cache: Any = None
 
 
-def _get_or_create_syncer(state) -> "ImmichSyncer":
+def _get_or_create_syncer(state) -> ImmichSyncer:
     """Return a cached ``ImmichSyncer`` for the current state manager.
 
     The syncer is lightweight — it just wraps API calls. We reuse it
@@ -222,7 +218,7 @@ def _read_progress() -> dict | None:
     try:
         path = "/run/metixel/immich_sync_progress.json"
         if _os.path.isfile(path):
-            with open(path, "r") as f:
+            with open(path) as f:
                 return _json.load(f)  # type: ignore[no-any-return]
     except (OSError, ValueError):
         pass

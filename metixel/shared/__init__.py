@@ -3,9 +3,9 @@
 """Shared types and utilities for Metixel Photoframe."""
 
 from metixel.shared.config import Config, load_config
+from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.log_buffer import LogRingBuffer
 from metixel.shared.models import Album, MediaItem, MediaType
-from metixel.shared.ipc import ControlMessage, IPCServer
 
 __all__ = [
     "Config",

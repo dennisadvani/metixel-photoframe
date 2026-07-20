@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def detect_backend() -> "DisplayBackend":
+def detect_backend() -> DisplayBackend:
     """Auto-detect the correct display backend for the current hardware.
 
     Detection order:
@@ -83,13 +83,13 @@ def detect_backend() -> "DisplayBackend":
 def _is_raspberry_pi() -> bool:
     """Check if running on a Raspberry Pi by reading /proc/device-tree/model."""
     try:
-        with open("/proc/device-tree/model", "r") as f:
+        with open("/proc/device-tree/model") as f:
             model = f.read().strip()
             is_pi = "Raspberry Pi" in model
             if is_pi:
                 logger.info("Pi model: %s", model)
             return is_pi
-    except (FileNotFoundError, IOError):
+    except (OSError, FileNotFoundError):
         pass
 
     # Fallback: check for /opt/vc/lib (legacy Broadcom path)
@@ -129,12 +129,12 @@ def _has_legacy_broadcom() -> bool:
             # KMS is available — but on Bullseye with legacy, vc4 may coexist
             # Check if dispmanx is actually available via vc_dispmanx helper
             try:
-                with open("/proc/device-tree/soc/firmwarekms@7e000000/status", "r") as f:
+                with open("/proc/device-tree/soc/firmwarekms@7e000000/status") as f:
                     status = f.read().strip()
                     if status == "okay":
                         logger.debug("firmwarekms is active — KMS in use")
                         return False
-            except (FileNotFoundError, IOError):
+            except (OSError, FileNotFoundError):
                 pass
             # On Bullseye with legacy, dispmanx should still be accessible
             return True

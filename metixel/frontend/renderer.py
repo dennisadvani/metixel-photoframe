@@ -18,7 +18,7 @@ from metixel.display import detect_backend
 from metixel.display.backend import DisplayBackend
 from metixel.frontend.presentation.engine import PresentationEngine
 from metixel.shared.config import Config
-from metixel.shared.ipc import IPCServer, ControlMessage
+from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.models import MediaItem, MediaType
 
 logger = logging.getLogger(__name__)
@@ -175,6 +175,28 @@ class FrontendRenderer:
             pygame.quit()
             return (0, 0)
         display_w, display_h = surface.get_size()
+
+        # When no monitor is connected, pygame/SDL2 may report 1×1 (or 0×0).
+        # Fall back to a safe 1080p default so the splash screen is visible.
+        if display_w <= 1 or display_h <= 1:
+            logger.warning(
+                "Boot splash detected %dx%d — likely no monitor connected. "
+                "Falling back to 1920x1080.",
+                display_w, display_h,
+            )
+            display_w, display_h = 1920, 1080
+            try:
+                pygame.display.set_mode(
+                    (display_w, display_h),
+                    pygame.FULLSCREEN | pygame.NOFRAME,
+                )
+            except pygame.error:
+                pygame.display.set_mode((display_w, display_h))
+            surface = pygame.display.get_surface()
+            if surface is None:
+                pygame.quit()
+                return (0, 0)
+
         logger.info("Boot splash: %dx%d (pygame)", display_w, display_h)
 
         # 4. Once more after the window exists
@@ -431,7 +453,7 @@ class FrontendRenderer:
     def _read_processing_status() -> dict | None:
         """Read the backend's processing status file. Returns None if not found."""
         try:
-            with open(FrontendRenderer._PROCESSING_STATUS_PATH, "r") as f:
+            with open(FrontendRenderer._PROCESSING_STATUS_PATH) as f:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return None
@@ -448,7 +470,7 @@ class FrontendRenderer:
             p = Path("/run/metixel/playlist.json")
             if not p.exists():
                 return 0
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 data = json.load(f)
             return len(data) if isinstance(data, list) else 0
         except (json.JSONDecodeError, OSError):
@@ -470,7 +492,7 @@ class FrontendRenderer:
             if not playlist_path.exists():
                 logger.debug("Backend playlist not yet available: %s", playlist_path)
                 return []
-            with open(playlist_path, "r", encoding="utf-8") as f:
+            with open(playlist_path, encoding="utf-8") as f:
                 data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Failed to read backend playlist: %s", e)
@@ -528,8 +550,14 @@ class FrontendRenderer:
 
         # Initialize display backend (pi3d)
         self._backend = detect_backend()
-        # Use splash-detected resolution if config is set to auto-detect
-        if splash_w > 0 and splash_h > 0 and display_cfg.get("width", 0) == 0:
+        # Use splash-detected resolution if config is set to auto-detect.
+        # Reject implausibly small resolutions (≤1 in either axis) —
+        # these indicate no monitor is connected and should fall through
+        # to the backend's own auto-detection + fallback logic.
+        if (
+            splash_w > 1 and splash_h > 1
+            and display_cfg.get("width", 0) == 0
+        ):
             display_cfg["width"] = splash_w
             display_cfg["height"] = splash_h
         self._backend.create(
@@ -743,7 +771,7 @@ class FrontendRenderer:
         logger.info("Playlist updated by backend — loading new items")
 
         try:
-            with open(self._playlist_path, "r", encoding="utf-8") as f:
+            with open(self._playlist_path, encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError):
             logger.warning("Failed to read playlist file — will retry")

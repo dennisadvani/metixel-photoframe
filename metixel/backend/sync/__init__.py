@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Sync engines for Metixel Photoframe."""
 
-from metixel.backend.sync.immich import ImmichSyncer
 from metixel.backend.sync.folder_watcher import FolderWatcher
+from metixel.backend.sync.immich import ImmichSyncer
 
 __all__ = ["ImmichSyncer", "FolderWatcher"]

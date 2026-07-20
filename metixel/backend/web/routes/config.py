@@ -229,7 +229,7 @@ def get_processing_status():
     try:
         if os.path.isfile(path):
             import json as _json
-            with open(path, "r") as f:
+            with open(path) as f:
                 data = _json.load(f)
             return jsonify(data)
     except (OSError, ValueError):
@@ -249,7 +249,7 @@ def _read_current_media() -> dict | None:
         if os.path.isfile(path):
             import json
 
-            with open(path, "r") as f:
+            with open(path) as f:
                 data = json.load(f)
 
             # Convert thumbnail_path → thumbnail_url
@@ -273,7 +273,7 @@ def _read_display_info() -> dict | None:
     try:
         info_path = "/run/metixel/display_info.json"
         if os.path.isfile(info_path):
-            with open(info_path, "r") as f:
+            with open(info_path) as f:
                 return json.load(f)
     except (OSError, ValueError, json.JSONDecodeError):
         pass

@@ -17,7 +17,7 @@ from pathlib import Path
 from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.video import VideoProcessor
 from metixel.backend.state import StateManager
-from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.models import MediaItem
 
 logger = logging.getLogger(__name__)
 

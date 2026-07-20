@@ -174,7 +174,7 @@ class ImmichSyncer:
         # Also try reading the persisted status file (survives restarts)
         try:
             if os.path.isfile(_SYNC_STATUS_FILE):
-                with open(_SYNC_STATUS_FILE, "r") as f:
+                with open(_SYNC_STATUS_FILE) as f:
                     data = json.load(f)
                 if self._last_result is None or data.get("finished_at", 0) > self._last_result.finished_at:
                     self._last_result = SyncResult(**{

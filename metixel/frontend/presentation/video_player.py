@@ -104,15 +104,15 @@ class VlcVideoPlayer:
     # ------------------------------------------------------------------
 
     def __init__(self) -> None:
-        self._window: "ctypes.c_void_p | None" = None
-        self._player: "vlc.MediaPlayer | None" = None  # type: ignore[name-defined]
-        self._instance: "vlc.Instance | None" = None   # type: ignore[name-defined]
+        self._window: ctypes.c_void_p | None = None
+        self._player: vlc.MediaPlayer | None = None  # type: ignore[name-defined]
+        self._instance: vlc.Instance | None = None   # type: ignore[name-defined]
         self._playing: bool = False
         self._finished: bool = False
         self._video_path: str = ""
         self._duration: float = 0.0
         self._start_time: float = 0.0
-        self._event: "sdl2.SDL_Event | None" = None    # type: ignore[name-defined]
+        self._event: sdl2.SDL_Event | None = None    # type: ignore[name-defined]
         self._screen_w: int = 1920
         self._screen_h: int = 1080
         self._hw_codecs: list[str] = []
@@ -206,7 +206,7 @@ class VlcVideoPlayer:
         *,
         block: bool = True,
         fit_mode: str = "contain",
-    ) -> int | "subprocess.Popen[bytes]" | None:
+    ) -> int | subprocess.Popen[bytes] | None:
         """Play video by spawning the ``vlc`` CLI as a subprocess.
 
         This is the approach that actually works on this Pi — running VLC
@@ -425,7 +425,7 @@ class VlcVideoPlayer:
         """
 
         import sdl2  # type: ignore
-        import vlc   # type: ignore
+        import vlc  # type: ignore
 
         # -- SDL2 setup ---------------------------------------------------
         if sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO) != 0:
@@ -687,7 +687,7 @@ class VlcVideoPlayer:
         except Exception:
             logger.warning("Failed to register VLC event callbacks")
 
-    def _on_vlc_playing(self, event: "vlc.Event") -> None:  # type: ignore[name-defined]
+    def _on_vlc_playing(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
         """VLC callback: MediaPlayerPlaying.
 
         Fired when VLC has started rendering frames.  This is the right
@@ -703,21 +703,21 @@ class VlcVideoPlayer:
         self._last_progress_time = time.time()
         self._startup = True
 
-    def _on_vlc_stopped(self, event: "vlc.Event") -> None:  # type: ignore[name-defined]
+    def _on_vlc_stopped(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
         """VLC callback: MediaPlayerStopped."""
         logger.debug("VLC event: MediaPlayerStopped")
         self._hide_window_request = True
         self._vlc_playing_event.clear()
         self._vlc_ended_event.set()
 
-    def _on_vlc_ended(self, event: "vlc.Event") -> None:  # type: ignore[name-defined]
+    def _on_vlc_ended(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
         """VLC callback: MediaPlayerEndReached."""
         logger.debug("VLC event: MediaPlayerEndReached")
         self._hide_window_request = True
         self._vlc_playing_event.clear()
         self._vlc_ended_event.set()
 
-    def _on_vlc_error(self, event: "vlc.Event") -> None:  # type: ignore[name-defined]
+    def _on_vlc_error(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
         """VLC callback: MediaPlayerEncounteredError."""
         logger.error("VLC event: MediaPlayerEncounteredError")
         self._hide_window_request = True
@@ -914,7 +914,7 @@ class VlcVideoPlayer:
             )
             return False
 
-    def _embed_linux(self, wm_info: "sdl2.SDL_SysWMinfo") -> bool:  # type: ignore[name-defined]
+    def _embed_linux(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]
         """Embed VLC in X11/KMSDRM window (Linux)."""
         import sdl2  # type: ignore
 
@@ -931,7 +931,7 @@ class VlcVideoPlayer:
             )
             return False
 
-    def _embed_macos(self, wm_info: "sdl2.SDL_SysWMinfo") -> bool:  # type: ignore[name-defined]
+    def _embed_macos(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]
         """Embed VLC in NSView (macOS)."""
         try:
             from rubicon.objc import ObjCInstance  # type: ignore

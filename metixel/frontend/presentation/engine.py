@@ -483,7 +483,7 @@ class PresentationEngine:
 
         # --- Non-blocking video state machine ---
         self._video_state: int = _VIDEO_IDLE
-        self._video_proc: "subprocess.Popen[bytes] | None" = None
+        self._video_proc: subprocess.Popen[bytes] | None = None
         self._video_swap_at: float = 0.0      # monotonic timestamp for last-frame swap
         self._video_item: MediaItem | None = None
         self._video_path: str = ""
@@ -1106,9 +1106,7 @@ class PresentationEngine:
                 bg = Image.new("RGB", img.size, (0, 0, 0))
                 bg.paste(img, mask=img.split()[3])
                 img = bg
-            elif img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            elif img.mode == "L":
+            elif img.mode not in ("RGB", "L") or img.mode == "L":
                 img = img.convert("RGB")
 
             if img.width > max_w or img.height > max_h:
@@ -1187,9 +1185,7 @@ class PresentationEngine:
                 bg = Image.new("RGB", img.size, (0, 0, 0))
                 bg.paste(img, mask=img.split()[3])
                 img = bg
-            elif img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            elif img.mode == "L":
+            elif img.mode not in ("RGB", "L") or img.mode == "L":
                 img = img.convert("RGB")
 
             max_w = int(self._backend.width * 1.2)

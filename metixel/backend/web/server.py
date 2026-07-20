@@ -9,7 +9,6 @@ endpoints for configuration, media management, and system monitoring.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from flask import Flask, render_template, request, send_from_directory
 
@@ -43,9 +42,9 @@ def create_app(state: StateManager, ipc: IPCClient) -> Flask:
 
     # Register route blueprints
     from metixel.backend.web.routes.config import config_bp
-    from metixel.backend.web.routes.media import media_bp
-    from metixel.backend.web.routes.logs import logs_bp
     from metixel.backend.web.routes.immich import immich_bp
+    from metixel.backend.web.routes.logs import logs_bp
+    from metixel.backend.web.routes.media import media_bp
 
     app.register_blueprint(config_bp, url_prefix="/api/config")
     app.register_blueprint(media_bp, url_prefix="/api/media")

@@ -170,6 +170,33 @@ class Pi3dBackend(DisplayBackend):
             frames_per_second=0,
         )
 
+        # When no monitor is connected, pi3d/DRM may report 1×1 (or 0×0).
+        # This causes pi3d Textures to fail with "height and width must be > 0"
+        # during resize.  Fall back to a safe 1080p default and warn loudly.
+        DISPLAY_FALLBACK_W = 1920
+        DISPLAY_FALLBACK_H = 1080
+        if self._display.width <= 1 or self._display.height <= 1:
+            logger.warning(
+                "Detected display resolution %dx%d — likely no monitor connected. "
+                "Falling back to %dx%d.",
+                self._display.width, self._display.height,
+                DISPLAY_FALLBACK_W, DISPLAY_FALLBACK_H,
+            )
+            # Destroy the bogus 1×1 display and recreate at 1080p.
+            try:
+                self._display.destroy()
+            except Exception:
+                pass
+            self._display = pi3d.Display.create(
+                x=0,
+                y=0,
+                w=DISPLAY_FALLBACK_W,
+                h=DISPLAY_FALLBACK_H,
+                background=self._bg_color,
+                display_config=display_config,
+                frames_per_second=0,
+            )
+
         # 2D orthographic camera — 1 unit = 1 pixel
         self._camera = pi3d.Camera(is_3d=False)
         # Simple flat shader for 2D texture rendering
@@ -766,9 +793,9 @@ class Pi3dBackend(DisplayBackend):
     def _is_pi() -> bool:
         """Check if running on a Raspberry Pi."""
         try:
-            with open("/proc/device-tree/model", "r") as f:
+            with open("/proc/device-tree/model") as f:
                 return "Raspberry Pi" in f.read()
-        except (FileNotFoundError, IOError):
+        except (OSError, FileNotFoundError):
             return os.path.exists("/opt/vc/lib/libEGL.so")
 
     @staticmethod

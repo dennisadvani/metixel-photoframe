@@ -5,11 +5,10 @@
 import hashlib
 import io
 import logging
-import shutil
 import time
 from pathlib import Path
 
-from flask import Blueprint, current_app, jsonify, request, Response, send_from_directory
+from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
 
 logger = logging.getLogger(__name__)
 

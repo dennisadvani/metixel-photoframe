@@ -211,10 +211,10 @@ class Config:
         logger.info("Config saved atomically to %s (%d bytes)", path, file_size)
 
     @classmethod
-    def load(cls, path: Path) -> "Config":
+    def load(cls, path: Path) -> Config:
         """Load configuration from disk, filling missing keys with defaults."""
         if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             # Merge loaded data over defaults so new keys are always present
             merged = deepcopy(DEFAULT_CONFIG)

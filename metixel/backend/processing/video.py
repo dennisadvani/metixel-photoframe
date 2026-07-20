@@ -334,7 +334,6 @@ class VideoProcessor:
         if pct >= 85:
             return None  # Let ffmpeg auto-detect
 
-        import os
         cores = os.cpu_count() or 4
 
         if pct <= 30:

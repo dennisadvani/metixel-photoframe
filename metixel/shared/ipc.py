@@ -13,7 +13,6 @@ import logging
 import os
 import socket
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,7 @@ class ControlMessage:
         return json.dumps({"cmd": self.cmd, "args": self.args})
 
     @classmethod
-    def from_json(cls, data: str) -> "ControlMessage":
+    def from_json(cls, data: str) -> ControlMessage:
         obj = json.loads(data)
         return cls(cmd=obj["cmd"], args=obj.get("args", {}))
 

@@ -13,7 +13,7 @@ import logging
 import time
 
 from metixel.backend.state import StateManager
-from metixel.shared.ipc import IPCClient, ControlMessage
+from metixel.shared.ipc import ControlMessage, IPCClient
 
 logger = logging.getLogger(__name__)
 
