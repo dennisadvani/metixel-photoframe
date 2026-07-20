@@ -133,6 +133,27 @@ def get_display_info():
     return jsonify(info)
 
 
+@config_bp.route("/processing", methods=["GET"])
+def get_processing_status():
+    """Return the current background processing status.
+
+    Reads from the same file the frontend uses for its splash screen
+    progress bar (``/run/metixel/processing_status.json``).
+    """
+    import os
+
+    path = "/run/metixel/processing_status.json"
+    try:
+        if os.path.isfile(path):
+            import json as _json
+            with open(path, "r") as f:
+                data = _json.load(f)
+            return jsonify(data)
+    except (OSError, ValueError):
+        pass
+    return jsonify({"phase": "unknown", "total": 0, "processed": 0, "current_file": ""})
+
+
 def _read_current_media() -> dict | None:
     """Read the current media state file written by the frontend.
 

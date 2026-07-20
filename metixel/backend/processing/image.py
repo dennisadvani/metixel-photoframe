@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from metixel.shared.models import MediaItem, MediaType
 
@@ -47,6 +47,8 @@ class ImageProcessor:
         """Process a single image file.
 
         Returns a MediaItem with paths to the cached version, or None on failure.
+        Corrupt/unreadable images are automatically deleted so they don't block
+        future scan cycles.
         """
         try:
             # Compute content hash for cache key
@@ -88,6 +90,21 @@ class ImageProcessor:
             logger.info("Image processed: %s → %s", source_path.name, file_hash)
             return self._build_item(source_path, cached_path, thumb_path, exif, source, file_hash)
 
+        except UnidentifiedImageError:
+            # File is corrupt, truncated, or not a valid image format.
+            # Remove it so it doesn't keep failing on every scan cycle.
+            logger.warning(
+                "Corrupt/unreadable image — deleting: %s (%d bytes)",
+                source_path.name, source_path.stat().st_size if source_path.exists() else 0,
+            )
+            self._safe_delete(source_path)
+            return None
+        except OSError as e:
+            logger.warning(
+                "Cannot read image file (permissions / I/O error): %s — %s",
+                source_path.name, e,
+            )
+            return None
         except Exception:
             logger.exception("Failed to process image: %s", source_path)
             return None
@@ -150,6 +167,19 @@ class ImageProcessor:
             f.seek(-1024, 2)  # Last 1KB
             sha.update(f.read(1024))
         return sha.hexdigest()[:16]
+
+    @staticmethod
+    def _safe_delete(path: Path) -> None:
+        """Delete a file, logging any errors instead of raising.
+
+        Used to clean up corrupt images so they don't block future scans.
+        """
+        try:
+            if path.exists():
+                path.unlink()
+                logger.info("Deleted corrupt file: %s", path.name)
+        except OSError as e:
+            logger.warning("Could not delete corrupt file %s: %s", path.name, e)
 
     def _build_item(
         self,

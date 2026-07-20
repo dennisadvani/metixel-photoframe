@@ -107,11 +107,21 @@ class FrontendRenderer:
 
     # How long to wait for the backend to start writing progress before
     # giving up and starting the slideshow anyway (seconds).
-    _PROCESSING_TIMEOUT = 60.0
+    # Increased from 60s → 300s: the backend writes playlist items
+    # incrementally now, so the frontend will have images to show even
+    # while processing is still ongoing.  Only abort if the backend
+    # hasn't started at all (crash / failed launch).
+    _PROCESSING_TIMEOUT = 300.0
 
     # Minimum time the progress screen stays visible so the user actually
     # sees it — even when all files are already cached from a previous run.
     _PROGRESS_MIN_DISPLAY = 2.0
+
+    # Minimum number of items in the backend playlist before the splash
+    # exits early.  Matches the backend's incremental flush batch size
+    # so the frontend can start showing images as soon as the first batch
+    # lands, without waiting for all 300+ files to finish processing.
+    _PLAYLIST_READY_MIN = 12
 
     def _wait_for_backend_processing(self) -> tuple[int, int]:
         """Show a pygame boot splash while the backend processes media.
@@ -272,10 +282,16 @@ class FrontendRenderer:
             phase = status.get("phase", "") if status else ""
             total = max(status.get("total", 0), 1) if status else 1
             processed = status.get("processed", 0) if status else 0
+            playlist_count = self._count_playlist_items()
 
             if phase == "complete":
                 target_pct = 1.0
-                display_pct = 1.0
+                processing_done = True
+            elif playlist_count >= self._PLAYLIST_READY_MIN:
+                # Enough images are ready — snap the bar to 100 % so the
+                # transition feels intentional.  The "hold for 2 s" logic
+                # below still runs, giving the bar time to animate smoothly.
+                target_pct = 1.0
                 processing_done = True
             elif status is not None:
                 target_pct = min(processed / total, 1.0)
@@ -366,14 +382,26 @@ class FrontendRenderer:
             pygame.display.flip()
 
             # ── Exit conditions ─────────────────────────────────────
-            # Once the bar hits 100 %, hold for _PROGRESS_MIN_DISPLAY
-            # seconds so the user can see the completed state.
+            # 1. Ready to start — bar is at 100 % (either all files
+            #    processed, or enough items in the playlist).  Hold for
+            #    _PROGRESS_MIN_DISPLAY so the 100 % animation is visible.
             if processing_done and display_pct >= 0.999:
                 if done_at == 0.0:
                     done_at = now
                 if now - done_at >= self._PROGRESS_MIN_DISPLAY:
+                    if phase == "complete":
+                        logger.info(
+                            "Boot splash finished — all %d files processed", total,
+                        )
+                    else:
+                        logger.info(
+                            "Boot splash finished — %d items in playlist "
+                            "(%d/%d files processed)",
+                            playlist_count, processed, total,
+                        )
                     break
 
+            # 2. Backend never started → timeout fallback.
             if status is None and elapsed > self._PROCESSING_TIMEOUT:
                 logger.warning(
                     "Backend processing did not start within %.0fs — "
@@ -381,6 +409,7 @@ class FrontendRenderer:
                 )
                 break
 
+            # 3. Absolute timeout safety net.
             if elapsed > self._PROCESSING_TIMEOUT:
                 logger.warning(
                     "Backend processing timed out — "
@@ -406,6 +435,76 @@ class FrontendRenderer:
                 return json.load(f)
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return None
+
+    @staticmethod
+    def _count_playlist_items() -> int:
+        """Count how many items the backend has written to playlist.json.
+
+        Returns 0 if the file doesn't exist or is unreadable.  Used by
+        the boot splash to decide when enough images are ready to start
+        the slideshow without waiting for all processing to finish.
+        """
+        try:
+            p = Path("/run/metixel/playlist.json")
+            if not p.exists():
+                return 0
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return len(data) if isinstance(data, list) else 0
+        except (json.JSONDecodeError, OSError):
+            return 0
+
+    @staticmethod
+    def _load_backend_playlist() -> list[MediaItem]:
+        """Load media items from the backend's playlist.json.
+
+        The backend writes this file incrementally during its initial
+        scan/processing phase.  Loading from it ensures the frontend
+        uses properly processed/cached files rather than raw source files.
+
+        Returns an empty list if the playlist file doesn't exist yet
+        (backend hasn't started) or is empty.
+        """
+        playlist_path = Path("/run/metixel/playlist.json")
+        try:
+            if not playlist_path.exists():
+                logger.debug("Backend playlist not yet available: %s", playlist_path)
+                return []
+            with open(playlist_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to read backend playlist: %s", e)
+            return []
+
+        items: list[MediaItem] = []
+        for entry in data:
+            try:
+                mt_str = entry.get("media_type", "image")
+                media_type = MediaType.VIDEO if mt_str == "video" else MediaType.IMAGE
+
+                original = Path(entry["original_path"])
+                cached = Path(entry["cached_path"])
+                thumb = Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None
+
+                items.append(MediaItem(
+                    id=entry["id"],
+                    original_path=original,
+                    cached_path=cached,
+                    media_type=media_type,
+                    width=entry.get("width", 0),
+                    height=entry.get("height", 0),
+                    duration_seconds=entry.get("duration_seconds", 0.0),
+                    thumbnail_path=thumb,
+                    source=entry.get("source", "local"),
+                ))
+            except (KeyError, TypeError) as e:
+                logger.debug("Skipping malformed playlist entry: %s", e)
+                continue
+
+        if items:
+            logger.info("Loaded %d items from backend playlist (%d bytes)",
+                         len(items), playlist_path.stat().st_size)
+        return items
 
     def run(self) -> None:
         """Initialize and start the main render loop. Blocks until shutdown."""
@@ -480,29 +579,44 @@ class FrontendRenderer:
         # Initialize subsystems
         self._presentation = PresentationEngine(self._config, self._backend)
 
-        # Scan ALL media folders and populate the slideshow queue
-        watch_paths_raw: list[str] = self._config.sync.get("local", {}).get(
-            "watch_paths", ["media/"],
-        )
-        all_items: list[MediaItem] = []
-        for p in watch_paths_raw:
-            folder = Path(p)
-            if not folder.is_absolute():
-                folder = self._config_path.parent.parent / folder
-            if folder.exists():
-                logger.info("Scanning media folder: %s", folder)
-                items = self._presentation.scan_folder(folder)
-                all_items.extend(items)
-                logger.info("Found %d items in %s", len(items), folder)
-            else:
-                logger.debug("Watch path not found (skipping): %s", folder)
+        # ── Load queue from the backend's playlist.json ───────────────
+        # The backend writes playlist.json incrementally during processing.
+        # Loading from it avoids the dual-scan problem: the frontend used
+        # to scan folders directly, bypassing the backend's cached files
+        # and starting with only a tiny subset of images.
+        playlist_items = self._load_backend_playlist()
 
-        if all_items:
-            self._presentation.set_queue(all_items)
-            logger.info("Loaded %d images into slideshow queue from %d watch path(s)",
-                         len(all_items), len(watch_paths_raw))
+        # ── Fallback: scan folders directly if playlist is empty ──────
+        # On first-ever boot or if the backend hasn't started yet, the
+        # playlist file won't exist.  Fall back to direct folder scanning.
+        if not playlist_items:
+            logger.info("Backend playlist is empty — falling back to direct folder scan")
+            watch_paths_raw: list[str] = self._config.sync.get("local", {}).get(
+                "watch_paths", ["media/"],
+            )
+            for p in watch_paths_raw:
+                folder = Path(p)
+                if not folder.is_absolute():
+                    folder = self._config_path.parent.parent / folder
+                if folder.exists():
+                    logger.info("Scanning media folder: %s", folder)
+                    items = self._presentation.scan_folder(folder)
+                    playlist_items.extend(items)
+                    logger.info("Found %d items in %s", len(items), folder)
+                else:
+                    logger.debug("Watch path not found (skipping): %s", folder)
+
+        if playlist_items:
+            self._presentation.set_queue(playlist_items)
+            logger.info(
+                "Loaded %d items into slideshow queue",
+                len(playlist_items),
+            )
         else:
-            logger.warning("No images found in any watch path — slideshow will show empty screen")
+            logger.warning(
+                "No images found — slideshow will show empty screen. "
+                "Waiting for backend to process media…",
+            )
 
         # Start IPC server (best-effort — may fail on dev machines without /run)
         try:
@@ -612,8 +726,10 @@ class FrontendRenderer:
     def _check_playlist_changed(self) -> None:
         """Reload the slideshow queue if the backend has updated the playlist.
 
-        Uses ``add_items()`` to append new items without restarting the
-        slideshow from the beginning.
+        If the playlist is empty (e.g. cache was cleared), the entire queue
+        is reset via ``set_queue([])`` so stale entries with dead cache paths
+        don't linger.  Otherwise new items are appended via ``add_items()``
+        to preserve the current slideshow position.
         """
         try:
             new_mtime = os.path.getmtime(self._playlist_path)
@@ -651,7 +767,23 @@ class FrontendRenderer:
             except (KeyError, ValueError) as e:
                 logger.debug("Skipping malformed playlist entry: %s", e)
 
-        if items and self._presentation:
+        if not self._presentation:
+            return
+
+        if not items:
+            # Playlist is empty — typically after a cache clear.
+            # Reset the queue completely so stale entries with dead
+            # cache paths don't cause FileNotFoundError in the engine.
+            logger.info("Backend playlist is empty — resetting slideshow queue")
+            self._presentation.set_queue([])
+        elif not self._presentation._queue:
+            # Queue was empty (e.g. after reset above, or cold start).
+            # Populate from scratch.
+            self._presentation.set_queue(items)
+            logger.info("Initialised slideshow queue with %d items", len(items))
+        else:
+            # Incremental addition — append new items without restarting
+            # the slideshow from the beginning.
             added = self._presentation.add_items(items)
             if added:
                 logger.info("Added %d new items to slideshow (total playlist: %d)", added, len(items))

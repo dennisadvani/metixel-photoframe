@@ -27,15 +27,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "slideshow": {
         "image_duration_seconds": 15,
-        "video_playback_enabled": True,
-        "video_player_backend": "auto",  # auto, vlc, ffmpeg
-        "video_max_duration_seconds": 0,
+        "video_playback_enabled": True,  # Legacy — prefer video.playback_enabled
+        "video_player_backend": "auto",  # Legacy — prefer video.player_backend
+        "video_max_duration_seconds": 0,  # Legacy — prefer video.max_duration_seconds
         "transition_duration_ms": 2500,
         "transition_style": "crossfade",  # crossfade, fade_through_black, none
         "fit_mode": "cover",  # contain, cover, fill
         "smart_cover": True,  # use contain for square/opposite-orientation images in cover mode
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
+    },
+    "video": {
+        "playback_enabled": True,
+        "player_backend": "auto",  # auto, vlc, ffmpeg
+        "max_duration_seconds": 0,  # 0 = unlimited
+        "transcoding_enabled": True,
+        "transcode_max_width": 0,  # 0 = use display width
+        "transcode_max_height": 0,  # 0 = use display height
+        "transcode_quality": 23,  # CRF value (lower = better, 18-28 typical)
+        "cpu_throttle_enabled": True,
+        "cpu_throttle_percent": 50,  # 0-100, percentage of CPU to leave idle
     },
     "sync": {
         "immich": {
@@ -99,6 +110,35 @@ class Config:
     @property
     def slideshow(self) -> dict[str, Any]:
         return self._data["slideshow"]
+
+    @property
+    def video(self) -> dict[str, Any]:
+        """Video settings with backward-compatible defaults.
+
+        If the ``video`` section is missing from the config (e.g. an older
+        config file), falls back to legacy keys in the ``slideshow`` section
+        for ``playback_enabled`` and ``max_duration_seconds``, then returns
+        the full merged dict.
+        """
+        v = self._data.get("video", {})
+        s = self._data.get("slideshow", {})
+
+        if not v:
+            # First access on an older config — synthesize from slideshow
+            v = {
+                "playback_enabled": s.get("video_playback_enabled", True),
+                "player_backend": s.get("video_player_backend", "auto"),
+                "max_duration_seconds": s.get("video_max_duration_seconds", 0),
+                "transcoding_enabled": True,
+                "transcode_max_width": 0,
+                "transcode_max_height": 0,
+                "transcode_quality": 23,
+                "cpu_throttle_enabled": True,
+                "cpu_throttle_percent": 50,
+            }
+            self._data["video"] = v
+
+        return v
 
     @property
     def sync(self) -> dict[str, Any]:

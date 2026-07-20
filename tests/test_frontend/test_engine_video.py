@@ -128,7 +128,9 @@ class TestEngineVideoIntegration:
         """Video duration should be capped at video_max_duration_seconds."""
         from metixel.frontend.presentation.engine import PresentationEngine
 
+        # Set max duration in both legacy slideshow and new video section
         config.update("slideshow", {"video_max_duration_seconds": 30})
+        config.update("video", {"max_duration_seconds": 30})
         engine = PresentationEngine(config, mock_backend)
 
         item = MediaItem(
@@ -148,6 +150,7 @@ class TestEngineVideoIntegration:
         from metixel.frontend.presentation.engine import PresentationEngine
 
         config.update("slideshow", {"video_max_duration_seconds": 0})
+        config.update("video", {"max_duration_seconds": 0})
         engine = PresentationEngine(config, mock_backend)
 
         item = MediaItem(

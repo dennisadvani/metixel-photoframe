@@ -33,11 +33,22 @@
                         <h2>Current Image</h2>
                         <div id="current-media">No media playing</div>
                     </div>
-                    <div class="card card--half">
-                        <h2>Controls</h2>
-                        <button id="btn-prev">◀ Previous</button>
-                        <button id="btn-pause-toggle">⏸ Pause</button>
-                        <button id="btn-next">▶ Next</button>
+                    <div class="card card--half card--split">
+                        <div class="card-split-top">
+                            <h2>Controls</h2>
+                            <div class="controls-row">
+                                <button id="btn-prev">◀ Previous</button>
+                                <button id="btn-pause-toggle">⏸ Pause</button>
+                                <button id="btn-next">▶ Next</button>
+                            </div>
+                        </div>
+                        <hr class="card-divider">
+                        <div class="card-split-bottom">
+                            <h2>Background Processing</h2>
+                            <div id="processing-status">
+                                <span class="processing-phase">Idle</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -116,6 +127,13 @@
                     <label class="checkbox-row">
                         <input type="checkbox" id="cfg-shuffle" checked> Shuffle Playback
                     </label>
+
+                    <button id="btn-save-slideshow">Save Slideshow Settings</button>
+                </div>
+
+                <div class="card">
+                    <h2>Video Settings</h2>
+
                     <label class="checkbox-row">
                         <input type="checkbox" id="cfg-video-enabled"> Video Playback
                     </label>
@@ -124,7 +142,47 @@
                         <input type="number" id="cfg-video-max-duration" min="0" max="3600" value="120">
                         <span style="font-size:0.8rem;color:var(--text-muted)">seconds (0 = unlimited)</span>
                     </div>
-                    <button id="btn-save-slideshow">Save Slideshow Settings</button>
+
+                    <hr style="border-color:var(--border);margin:0.8rem 0">
+
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-transcode-enabled" checked> Transcoding
+                        <span style="font-size:0.78rem;color:var(--text-muted)">Convert videos to an optimised format for smooth playback</span>
+                    </label>
+
+                    <div id="transcode-settings" style="margin-left:1.5rem;padding-left:0.5rem;border-left:3px solid var(--border)">
+                        <div class="form-group">
+                            <span class="form-label">Max Width</span>
+                            <input type="number" id="cfg-transcode-max-width" min="0" max="7680" value="0">
+                            <span style="font-size:0.8rem;color:var(--text-muted)">px (0 = use display width)</span>
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">Max Height</span>
+                            <input type="number" id="cfg-transcode-max-height" min="0" max="4320" value="0">
+                            <span style="font-size:0.8rem;color:var(--text-muted)">px (0 = use display height)</span>
+                        </div>
+                        <p class="hint" style="margin-top:0">Aspect ratio is always preserved — videos are scaled to fit within the specified dimensions without stretching.</p>
+
+                        <div class="form-group">
+                            <span class="form-label">Quality</span>
+                            <input type="range" id="cfg-transcode-quality" min="18" max="30" step="1" value="23">
+                            <span class="range-value" id="cfg-transcode-quality-label">23 (good balance)</span>
+                        </div>
+                        <p class="hint" style="margin-top:0">Lower = better quality / larger files. 18 = near-lossless, 23 = good balance, 28 = smaller files.</p>
+
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="cfg-cpu-throttle-enabled" checked> CPU Throttling
+                            <span style="font-size:0.78rem;color:var(--text-muted)">Limit CPU usage so the photoframe stays responsive during transcoding</span>
+                        </label>
+
+                        <div class="form-group" id="cpu-throttle-group">
+                            <span class="form-label">CPU Limit</span>
+                            <input type="range" id="cfg-cpu-throttle-pct" min="10" max="90" step="5" value="50">
+                            <span class="range-value" id="cfg-cpu-throttle-pct-label">50%</span>
+                        </div>
+                    </div>
+
+                    <button id="btn-save-video">Save Video Settings</button>
                 </div>
 
                 <div class="card">
@@ -345,6 +403,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script src="/static/js/dashboard.js?v=3"></script>
+    <script src="/static/js/dashboard.js?v=4"></script>
 </body>
 </html>

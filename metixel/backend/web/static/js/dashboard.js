@@ -87,11 +87,17 @@
         // Only update system-health if the element still exists
         var shEl = document.getElementById("system-health");
         if (shEl) {
+            var cacheMB = health.cache_size_mb != null ? health.cache_size_mb : 0;
+            var cacheLabel = cacheMB >= 1024
+                ? (cacheMB / 1024).toFixed(1) + " GB"
+                : cacheMB.toFixed(1) + " MB";
+
             shEl.innerHTML =
                 '<div class="stat-item"><div class="stat-label">Uptime</div><div class="stat-value">' + uptimeH + 'h ' + uptimeM + 'm</div></div>' +
                 '<div class="stat-item"><div class="stat-label">Disk Used</div><div class="stat-value">' + health.disk_used_gb + ' / ' + health.disk_total_gb + ' GB</div></div>' +
                 '<div class="stat-item"><div class="stat-label">Disk Free</div><div class="stat-value">' + health.disk_free_gb + ' GB</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Usage</div><div class="stat-value">' + health.disk_used_percent + '%</div></div>';
+                '<div class="stat-item"><div class="stat-label">Usage</div><div class="stat-value">' + health.disk_used_percent + '%</div></div>' +
+                '<div class="stat-item"><div class="stat-label">Cache Size</div><div class="stat-value">' + cacheLabel + '</div></div>';
         }
 
         // Current media — use a stable DOM so the card doesn't jump on each poll
@@ -184,6 +190,29 @@
             } else {
                 fields.classList.remove("is-disabled");
             }
+        }
+    }
+
+    /**
+     * Show or hide the transcode sub-settings based on the main toggle.
+     * @param {boolean} enabled - Whether transcoding is enabled.
+     */
+    function _toggleTranscodeSettings(enabled) {
+        var el = document.getElementById("transcode-settings");
+        if (el) {
+            el.style.display = enabled ? "" : "none";
+            el.style.opacity = enabled ? "1" : "0.5";
+        }
+    }
+
+    /**
+     * Show or hide the CPU throttle percentage slider.
+     * @param {boolean} enabled - Whether CPU throttling is enabled.
+     */
+    function _toggleCpuThrottleGroup(enabled) {
+        var el = document.getElementById("cpu-throttle-group");
+        if (el) {
+            el.style.display = enabled ? "" : "none";
         }
     }
 
@@ -281,6 +310,7 @@
 
         // Initial load
         await refreshDashboard();
+        await refreshProcessing();
         await refreshLogs();
 
         // Poll every 3 seconds for live updates
@@ -288,6 +318,7 @@
             // Only refresh if dashboard page is still active
             if (document.getElementById("page-dashboard").classList.contains("active")) {
                 await refreshDashboard();
+                await refreshProcessing();
                 await refreshLogs();
             } else if (_dashboardTimer) {
                 clearInterval(_dashboardTimer);
@@ -350,6 +381,76 @@
         }
     }
 
+    // -- Background Processing Status ---------------------------------------
+
+    /**
+     * Poll the backend's processing status file and update the
+     * "Background Processing" section of the controls card.
+     */
+    async function refreshProcessing() {
+        var status = await apiGet("/config/processing");
+        if (!status) return;
+
+        var el = document.getElementById("processing-status");
+        if (!el) return;
+
+        var phase = status.phase || "";
+        var total = status.total || 0;
+        var processed = status.processed || 0;
+        var currentFile = status.current_file || "";
+
+        // Build the inner HTML — keep it stable to avoid layout shift
+        // Use data attributes to detect when the DOM needs rebuilding
+        if (!el.dataset.stable) {
+            el.innerHTML =
+                '<div class="processing-phase" id="proc-phase">Idle</div>'
+                + '<div class="processing-detail" id="proc-detail"></div>'
+                + '<div class="processing-bar-wrap" id="proc-bar-wrap" style="display:none">'
+                + '<div class="processing-bar-fill" id="proc-bar-fill"></div>'
+                + '</div>';
+            el.dataset.stable = "1";
+        }
+
+        var phaseEl = document.getElementById("proc-phase");
+        var detailEl = document.getElementById("proc-detail");
+        var barWrap = document.getElementById("proc-bar-wrap");
+        var barFill = document.getElementById("proc-bar-fill");
+
+        // Determine the display state
+        if (!phase || phase === "complete" || phase === "unknown") {
+            // Idle or complete
+            phaseEl.textContent = (phase === "complete") ? "Processing complete" : "Idle";
+            phaseEl.className = "processing-phase" + (phase === "complete" ? " is-complete" : "");
+            if (detailEl) detailEl.textContent = "";
+            if (barWrap) barWrap.style.display = "none";
+        } else {
+            // Active processing
+            var pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+            phaseEl.textContent = phase;
+            phaseEl.className = "processing-phase is-active";
+
+            var detailParts = [];
+            if (total > 0) {
+                detailParts.push(processed + " / " + total + " files");
+            }
+            if (pct > 0) {
+                detailParts.push(pct + "%");
+            }
+            if (currentFile) {
+                // Show just the filename, not the full path
+                var fname = currentFile.replace(/^.*[\\/]/, "");
+                detailParts.push(fname);
+            }
+            if (detailEl) detailEl.textContent = detailParts.join(" — ");
+
+            if (barWrap && barFill) {
+                barWrap.style.display = "";
+                barFill.style.width = pct + "%";
+                barFill.className = "processing-bar-fill" + (pct >= 100 ? " is-complete" : "");
+            }
+        }
+    }
+
     // -- Settings -----------------------------------------------------------
 
     var _settingsBound = false;
@@ -369,8 +470,41 @@
         setValue("cfg-fit", s.fit_mode || "contain");
         setChecked("cfg-smart-cover", s.smart_cover !== false);
         setChecked("cfg-shuffle", s.shuffle !== false);
-        setChecked("cfg-video-enabled", s.video_playback_enabled === true);
-        setValue("cfg-video-max-duration", s.video_max_duration_seconds || 0);
+
+        // Video (new section — fall back to slideshow for legacy configs)
+        var v = config.video || {};
+        // Legacy fallback: if video section is empty/missing, use slideshow keys
+        if (!v || Object.keys(v).length === 0) {
+            v = {
+                playback_enabled: (s.video_playback_enabled !== undefined ? s.video_playback_enabled : true),
+                max_duration_seconds: s.video_max_duration_seconds || 0,
+                transcoding_enabled: true,
+                transcode_max_width: 0,
+                transcode_max_height: 0,
+                transcode_quality: 23,
+                cpu_throttle_enabled: true,
+                cpu_throttle_percent: 50,
+            };
+        }
+        setChecked("cfg-video-enabled", v.playback_enabled === true);
+        setValue("cfg-video-max-duration", v.max_duration_seconds || 0);
+        setChecked("cfg-transcode-enabled", v.transcoding_enabled !== false);
+        setValue("cfg-transcode-max-width", v.transcode_max_width || 0);
+        setValue("cfg-transcode-max-height", v.transcode_max_height || 0);
+        var q = v.transcode_quality !== undefined ? v.transcode_quality : 23;
+        setValue("cfg-transcode-quality", q);
+        var qLabel = document.getElementById("cfg-transcode-quality-label");
+        if (qLabel) {
+            var qDesc = q <= 20 ? " (high quality)" : q <= 26 ? " (good balance)" : " (smaller files)";
+            qLabel.textContent = q + qDesc;
+        }
+        setChecked("cfg-cpu-throttle-enabled", v.cpu_throttle_enabled !== false);
+        setValue("cfg-cpu-throttle-pct", v.cpu_throttle_percent || 50);
+        var cpLabel = document.getElementById("cfg-cpu-throttle-pct-label");
+        if (cpLabel) cpLabel.textContent = (v.cpu_throttle_percent || 50) + "%";
+        // Show/hide transcode sub-settings based on toggle
+        _toggleTranscodeSettings(v.transcoding_enabled !== false);
+        _toggleCpuThrottleGroup(v.cpu_throttle_enabled !== false);
 
         // Display
         const d = config.display || {};
@@ -412,13 +546,49 @@
                     fit_mode: document.getElementById("cfg-fit").value,
                     smart_cover: document.getElementById("cfg-smart-cover").checked,
                     shuffle: document.getElementById("cfg-shuffle").checked,
-                    video_playback_enabled: document.getElementById("cfg-video-enabled").checked,
-                    video_max_duration_seconds: sanitizeInt(document.getElementById("cfg-video-max-duration")?.value, 120),
                 });
                 if (result) {
                     showToast("Slideshow settings saved!", "success");
                 } else {
                     showToast("Failed to save slideshow settings — check server logs", "error");
+                }
+            });
+
+            // ── Video Settings card ─────────────────────────────────────
+            // Transcode toggle shows/hides sub-settings
+            document.getElementById("cfg-transcode-enabled")?.addEventListener("change", function () {
+                _toggleTranscodeSettings(this.checked);
+            });
+            document.getElementById("cfg-cpu-throttle-enabled")?.addEventListener("change", function () {
+                _toggleCpuThrottleGroup(this.checked);
+            });
+            document.getElementById("cfg-transcode-quality")?.addEventListener("input", function () {
+                var q = parseInt(this.value, 10);
+                var qDesc = q <= 20 ? " (high quality)" : q <= 26 ? " (good balance)" : " (smaller files)";
+                var lbl = document.getElementById("cfg-transcode-quality-label");
+                if (lbl) lbl.textContent = q + qDesc;
+            });
+            document.getElementById("cfg-cpu-throttle-pct")?.addEventListener("input", function () {
+                var lbl = document.getElementById("cfg-cpu-throttle-pct-label");
+                if (lbl) lbl.textContent = this.value + "%";
+            });
+
+            document.getElementById("btn-save-video")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/video", {
+                    playback_enabled: document.getElementById("cfg-video-enabled").checked,
+                    player_backend: "auto",
+                    max_duration_seconds: sanitizeInt(document.getElementById("cfg-video-max-duration").value, 0),
+                    transcoding_enabled: document.getElementById("cfg-transcode-enabled").checked,
+                    transcode_max_width: sanitizeInt(document.getElementById("cfg-transcode-max-width").value, 0),
+                    transcode_max_height: sanitizeInt(document.getElementById("cfg-transcode-max-height").value, 0),
+                    transcode_quality: sanitizeInt(document.getElementById("cfg-transcode-quality").value, 23),
+                    cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
+                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 50),
+                });
+                if (result) {
+                    showToast("Video settings saved!", "success");
+                } else {
+                    showToast("Failed to save video settings — check server logs", "error");
                 }
             });
 
@@ -453,20 +623,21 @@
 
     var _syncBound = false;
     var _syncPollTimer = null;
+    var _syncWasActive = false;  // Tracks if we've seen an active sync for auto-stop
 
     function startSyncPolling() {
         if (_syncPollTimer) return;
         _syncPollTimer = setInterval(async function () {
-            var data = await apiGet("/immich/status");
+            // Single API call per tick — refreshSyncStatus() renders
+            // both the progress bar AND the last-sync summary from
+            // the same response, avoiding a race where the progress
+            // file is deleted between two separate calls.
             await refreshSyncStatus();
 
-            // Check if still syncing via the progress field
-            var stillSyncing = data && data.progress && data.progress.syncing;
-            if (!stillSyncing) {
-                stopSyncPolling();
-                var btn = document.getElementById("btn-sync-now");
-                if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
-            }
+            // Check if sync has finished (progress bar hidden by
+            // refreshSyncStatus when syncing=false).  We can't use
+            // a separate call here because the progress file is
+            // atomically deleted after the sync completes.
         }, 1500);
     }
 
@@ -676,11 +847,11 @@
 
             var phaseLabel = prog.phase || "";
             var phaseText = {
-                "starting": "Starting…",
-                "resolving_album": "Looking up album…",
-                "fetching_assets": "Fetching asset list…",
+                "starting": "Starting\u2026",
+                "resolving_album": "Looking up album\u2026",
+                "fetching_assets": "Fetching asset list\u2026",
                 "downloading": "Downloading",
-                "cleaning": "Cleaning up…",
+                "cleaning": "Cleaning up\u2026",
                 "cancelled": "Cancelled",
                 "error": "Error",
             }[phaseLabel] || phaseLabel;
@@ -704,9 +875,22 @@
 
             var fileEl = document.getElementById("sync-current-file");
             if (fileEl) fileEl.textContent = prog.current_file || "";
+
+            // Mark that we've seen an active sync — used below to
+            // detect when it finishes and auto-stop polling.
+            _syncWasActive = true;
         } else {
             if (progressDiv) progressDiv.style.display = "none";
             if (cancelBtn) cancelBtn.style.display = "none";
+
+            // If a sync was running and now it's finished, stop the
+            // polling interval and re-enable the Sync Now button.
+            if (_syncWasActive) {
+                _syncWasActive = false;
+                stopSyncPolling();
+                var btn = document.getElementById("btn-sync-now");
+                if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
+            }
         }
 
         // ── Last result ───────────────────────────────────────────

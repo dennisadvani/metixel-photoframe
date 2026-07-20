@@ -422,6 +422,101 @@ button:focus-visible {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   Split Card (Controls + Background Processing)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.card--split {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+}
+
+.card-split-top,
+.card-split-bottom {
+    padding: 1.25rem 1.5rem;
+}
+
+.card-split-top {
+    padding-bottom: 0.75rem;
+}
+
+.card-split-bottom {
+    padding-top: 0.75rem;
+}
+
+.card-split-top h2,
+.card-split-bottom h2 {
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+
+.card-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0;
+}
+
+.controls-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.controls-row button {
+    margin-top: 0;
+    margin-right: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Background Processing Status
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.processing-phase {
+    font-size: 0.85rem;
+    color: var(--text);
+}
+
+.processing-phase.is-active {
+    color: var(--info);
+    font-weight: 500;
+}
+
+.processing-phase.is-complete {
+    color: var(--success);
+}
+
+.processing-phase.is-error {
+    color: var(--danger);
+}
+
+.processing-detail {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin-top: 0.4rem;
+}
+
+.processing-bar-wrap {
+    margin-top: 0.5rem;
+    background: var(--border);
+    border-radius: 4px;
+    height: 5px;
+    overflow: hidden;
+}
+
+.processing-bar-fill {
+    background: var(--primary);
+    height: 100%;
+    width: 0%;
+    transition: width 0.5s ease;
+    border-radius: 4px;
+}
+
+.processing-bar-fill.is-complete {
+    background: var(--success);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    Log Output
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -755,6 +850,20 @@ footer {
         width: 100%;
         justify-content: center;
         margin-right: 0;
+    }
+
+    .card-row {
+        flex-direction: column;
+    }
+
+    .card--half {
+        width: 100%;
+        flex: auto;
+    }
+
+    .card-split-top,
+    .card-split-bottom {
+        padding: 1rem 1.15rem;
     }
 }
 

@@ -113,13 +113,40 @@ class StateManager:
         import shutil
 
         disk = shutil.disk_usage("/")
+        cache_size = self._get_cache_size()
         return {
             "uptime_seconds": self._get_uptime(),
             "disk_total_gb": round(disk.total / (1024**3), 1),
             "disk_used_gb": round(disk.used / (1024**3), 1),
             "disk_free_gb": round(disk.free / (1024**3), 1),
             "disk_used_percent": round(disk.used / disk.total * 100, 1),
+            "cache_size_mb": round(cache_size / (1024**2), 1),
+            "cache_size_bytes": cache_size,
         }
+
+    def _get_cache_size(self) -> int:
+        """Calculate the total size of the cache directory in bytes.
+
+        Returns 0 if the directory does not exist or cannot be read.
+        """
+        try:
+            config = self.config
+            cache_dir = Path(config.system.get("cache_dir", "cache/"))
+            if not cache_dir.is_absolute():
+                cache_dir = Path("/opt/metixel") / cache_dir
+            if not cache_dir.is_dir():
+                return 0
+            total = 0
+            for entry in cache_dir.rglob("*"):
+                if entry.is_file():
+                    try:
+                        total += entry.stat().st_size
+                    except OSError:
+                        pass
+            return total
+        except Exception:
+            logger.debug("Could not compute cache size", exc_info=True)
+            return 0
 
     @staticmethod
     def _get_uptime() -> float:
@@ -166,6 +193,22 @@ class StateManager:
                 self._notify_playlist_change()
                 logger.info("Removed %d items from playlist (total: %d)", removed, len(self._playlist))
             return removed
+
+    def clear_playlist(self) -> None:
+        """Clear the entire playlist and notify the frontend.
+
+        Used after cache clear — all cached files are deleted, so the
+        playlist must be rebuilt from scratch on the next folder scan.
+        """
+        with self._playlist_lock:
+            count = len(self._playlist)
+            self._playlist.clear()
+            self._write_playlist_file()  # Writes empty JSON array
+            self._notify_playlist_change()
+            logger.info(
+                "Playlist cleared (%d items removed) — frontend will reset queue",
+                count,
+            )
 
     def _write_playlist_file(self) -> None:
         """Atomically write the playlist to a JSON file for the frontend."""

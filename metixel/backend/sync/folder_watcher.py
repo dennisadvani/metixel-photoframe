@@ -215,9 +215,18 @@ class FolderWatcher:
 
         cache_dir.mkdir(parents=True, exist_ok=True)
 
+        # Read video config for transcoding settings
+        video_config = self._config.video if hasattr(self._config, "video") else {}
+
         self._image_processor = ImageProcessor(cache_dir, screen_width=sw, screen_height=sh)
-        self._video_processor = VideoProcessor(cache_dir, screen_width=sw, screen_height=sh)
-        logger.info("Media processors initialised: cache=%s, screen=%dx%d", cache_dir, sw, sh)
+        self._video_processor = VideoProcessor(
+            cache_dir, screen_width=sw, screen_height=sh, video_config=video_config,
+        )
+        logger.info(
+            "Media processors initialised: cache=%s, screen=%dx%d, transcode=%s",
+            cache_dir, sw, sh,
+            "enabled" if video_config.get("transcoding_enabled", True) else "disabled",
+        )
 
     def _process_new(self, paths: list[Path], is_initial: bool = False) -> None:
         """Process newly discovered files and add them to the playlist.
@@ -229,14 +238,38 @@ class FolderWatcher:
         When *is_initial* is True, a progress status file is written after
         each file so the frontend can render a progress bar on screen while
         waiting for processing to complete.
+
+        Guardrails:
+        - Videos that are still transcoding are queued for later (re-scanned
+          on the next poll cycle).  The ``transcode_status`` on each
+          MediaItem lets the presentation engine skip items that aren't
+          ready to play yet.
         """
         total = len(paths)
 
+        # Flush items to the playlist every N files so the frontend can
+        # start showing images while the backend is still processing.
+        # Without this, all 342 files must finish before any image appears.
+        _FLUSH_EVERY = 12
+
         items: list[MediaItem] = []
+        deferred_paths: list[Path] = []  # Videos still transcoding — retry later
+
         for idx, path in enumerate(paths):
             suffix = path.suffix.lower()
             try:
                 if suffix in VIDEO_EXTENSIONS and self._video_processor:
+                    # Guardrail: do not add a video that is currently
+                    # being transcoded — defer to the next scan cycle.
+                    file_hash = self._video_processor._hash_file(path)
+                    if self._video_processor.is_transcoding(file_hash):
+                        logger.debug(
+                            "Deferring %s — transcode still in progress",
+                            path.name,
+                        )
+                        deferred_paths.append(path)
+                        continue
+
                     item = self._video_processor.process(path, source="local")
                 elif self._image_processor:
                     item = self._image_processor.process(path, source="local")
@@ -249,15 +282,47 @@ class FolderWatcher:
             except Exception:
                 logger.exception("Failed to process: %s", path)
 
+            # ── Incremental flush: write to playlist every N items ──
+            # This is critical for boot UX — the frontend loads from
+            # playlist.json and would otherwise see an empty playlist
+            # until ALL files are processed (which can take several
+            # minutes when videos need transcoding).
+            if len(items) >= _FLUSH_EVERY:
+                self._state.add_playlist_items(items)
+                items.clear()
+
             # Report progress during initial scan
             if is_initial:
                 _write_progress("processing", total, idx + 1, path.name)
 
+        # Final flush: write remaining items
         if items:
             self._state.add_playlist_items(items)
 
+        # Re-add deferred paths to known_files with their original metadata
+        # so they get re-detected on the next scan cycle.
+        for dp in deferred_paths:
+            try:
+                stat = dp.stat()
+                self._known_files[dp.resolve()] = (stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                pass
+
         if is_initial:
-            _write_progress("complete", total, total, "")
+            pending_msg = (
+                f" ({len(deferred_paths)} video(s) still transcoding)"
+                if deferred_paths else ""
+            )
+            _write_progress(
+                "complete", total, total,
+                current_file=deferred_paths[0].name if deferred_paths else "",
+            )
+            if deferred_paths:
+                logger.info(
+                    "Initial scan complete: %d items added, %d video(s) deferred "
+                    "(still transcoding — will retry on next scan)",
+                    len(items), len(deferred_paths),
+                )
 
     def _process_changed(self, paths: list[Path]) -> None:
         """Re-process files that have been modified.

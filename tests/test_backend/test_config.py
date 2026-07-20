@@ -142,3 +142,70 @@ def test_video_player_backend_persists(tmp_path):
 
     loaded2 = Config.load(config_path)
     assert loaded2.slideshow["video_player_backend"] == "ffmpeg"
+
+
+# ── New video config section tests ──────────────────────────────────────
+
+
+def test_video_section_defaults():
+    """Verify the new video section has sensible defaults."""
+    from metixel.shared.config import Config
+
+    config = Config()
+    v = config.video
+    assert v["playback_enabled"] is True
+    assert v["player_backend"] == "auto"
+    assert v["max_duration_seconds"] == 0  # unlimited
+    assert v["transcoding_enabled"] is True
+    assert v["transcode_max_width"] == 0  # use display width
+    assert v["transcode_max_height"] == 0  # use display height
+    assert v["transcode_quality"] == 23
+    assert v["cpu_throttle_enabled"] is True
+    assert v["cpu_throttle_percent"] == 50
+
+
+def test_video_section_save_load(tmp_path):
+    """Verify the video section persists atomically."""
+    from metixel.shared.config import Config
+
+    config = Config()
+    config_path = tmp_path / "config.json"
+
+    config.update("video", {
+        "playback_enabled": False,
+        "max_duration_seconds": 300,
+        "transcoding_enabled": False,
+        "transcode_quality": 18,
+        "cpu_throttle_percent": 30,
+    })
+    config.save(config_path)
+
+    loaded = Config.load(config_path)
+    v = loaded.video
+    assert v["playback_enabled"] is False
+    assert v["max_duration_seconds"] == 300
+    assert v["transcoding_enabled"] is False
+    assert v["transcode_quality"] == 18
+    assert v["cpu_throttle_percent"] == 30
+
+
+def test_video_section_legacy_fallback():
+    """Verify the video section synthesises values from legacy slideshow keys."""
+    from metixel.shared.config import DEFAULT_CONFIG, Config
+
+    # Simulate an older config without the "video" key
+    import copy
+    old_data = copy.deepcopy(DEFAULT_CONFIG)
+    old_data["slideshow"]["video_playback_enabled"] = False
+    old_data["slideshow"]["video_max_duration_seconds"] = 60
+    del old_data["video"]  # Remove the new section entirely
+
+    config = Config(old_data)
+    v = config.video
+    # Should have picked up legacy values
+    assert v["playback_enabled"] is False
+    assert v["player_backend"] == "auto"
+    assert v["max_duration_seconds"] == 60
+    # New keys should have defaults
+    assert v["transcoding_enabled"] is True
+    assert v["transcode_quality"] == 23

@@ -45,6 +45,7 @@ sudo apt-get install -y \
     seatd \
     ffmpeg \
     vlc-bin vlc-plugin-base vlc-plugin-video-output vlc-data \
+    cpulimit \
     git \
     samba
 

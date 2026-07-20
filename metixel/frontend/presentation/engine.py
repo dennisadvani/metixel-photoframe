@@ -36,7 +36,7 @@ from metixel.frontend.presentation.layout import LayoutEngine
 from metixel.frontend.presentation.transitions import TransitionEngine
 from metixel.frontend.presentation.video_player import VIDEO_EXTENSIONS
 from metixel.shared.config import Config
-from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -512,11 +512,81 @@ class PresentationEngine:
         if self._video_state != _VIDEO_IDLE:
             self._video_stop()
 
-        if not self._config.slideshow.get("video_playback_enabled", True):
-            vc = sum(1 for i in self._queue if i.media_type == MediaType.VIDEO)
-            self._queue = [i for i in self._queue if i.media_type != MediaType.VIDEO]
-            if vc:
-                logger.info("Video playback disabled — filtered %d videos", vc)
+        # ── Video guardrails ─────────────────────────────────────────
+        # Read video config (new section; fall back to slideshow legacy keys)
+        video_cfg = self._config.video if hasattr(self._config, "video") else {}
+        playback_enabled = video_cfg.get(
+            "playback_enabled",
+            self._config.slideshow.get("video_playback_enabled", True),
+        )
+        transcoding_enabled = video_cfg.get("transcoding_enabled", True)
+        max_duration = video_cfg.get(
+            "max_duration_seconds",
+            self._config.slideshow.get("video_max_duration_seconds", 0),
+        )
+
+        filtered: list[MediaItem] = []
+        skipped_playback: int = 0
+        skipped_transcode: int = 0
+        skipped_duration: int = 0
+        skipped_ready: int = 0
+
+        for item in self._queue:
+            if item.media_type != MediaType.VIDEO:
+                filtered.append(item)
+                continue
+
+            # 1. Video playback master switch
+            if not playback_enabled:
+                skipped_playback += 1
+                continue
+
+            # 2. Max duration filter
+            if max_duration > 0 and item.duration_seconds > max_duration:
+                skipped_duration += 1
+                continue
+
+            # 3. Transcoding guardrails
+            if transcoding_enabled:
+                # Only play transcoded videos (or failed ones that
+                # will be played as original)
+                if not item.is_ready_to_play:
+                    skipped_transcode += 1
+                    continue
+                # Also skip if the transcode status is FAILED but
+                # transcoding is explicitly requested (user wants
+                # optimised videos, not originals)
+                if item.transcode_status == TranscodeStatus.FAILED:
+                    logger.debug(
+                        "Skipping %s — transcode failed and transcoding is required",
+                        item.original_path.name,
+                    )
+                    skipped_transcode += 1
+                    continue
+
+            filtered.append(item)
+
+        if skipped_playback:
+            logger.info(
+                "Video playback disabled — filtered %d videos", skipped_playback,
+            )
+        if skipped_duration:
+            logger.info(
+                "Max video duration (%ds) — filtered %d videos",
+                max_duration, skipped_duration,
+            )
+        if skipped_transcode:
+            logger.info(
+                "Videos not yet transcoded — filtered %d videos "
+                "(transcoding is enabled; they will appear after processing)",
+                skipped_transcode,
+            )
+        if skipped_ready:
+            logger.info(
+                "Videos not ready to play — filtered %d videos", skipped_ready,
+            )
+
+        self._queue = filtered
 
         if self._config.slideshow.get("shuffle", True):
             random.shuffle(self._queue)
@@ -544,6 +614,10 @@ class PresentationEngine:
         appended to the end.  This is designed for hot-reload from the
         backend playlist without interrupting the currently displayed image.
 
+        Applies the same video guardrails as ``set_queue()``: respects
+        ``video.playback_enabled``, ``video.transcoding_enabled``, and
+        ``video.max_duration_seconds``.
+
         Returns the number of items actually added.
         """
         existing_ids = {item.id for item in self._queue}
@@ -551,20 +625,42 @@ class PresentationEngine:
         if not new_items:
             return 0
 
-        # Filter videos if playback is disabled
-        if not self._config.slideshow.get("video_playback_enabled", True):
-            vc = sum(1 for i in new_items if i.media_type == MediaType.VIDEO)
-            new_items = [i for i in new_items if i.media_type != MediaType.VIDEO]
-            if vc:
-                logger.info("Video playback disabled — filtered %d new videos", vc)
-            if not new_items:
-                return 0
+        # ── Video guardrails ─────────────────────────────────────────
+        video_cfg = self._config.video if hasattr(self._config, "video") else {}
+        playback_enabled = video_cfg.get(
+            "playback_enabled",
+            self._config.slideshow.get("video_playback_enabled", True),
+        )
+        transcoding_enabled = video_cfg.get("transcoding_enabled", True)
+        max_duration = video_cfg.get(
+            "max_duration_seconds",
+            self._config.slideshow.get("video_max_duration_seconds", 0),
+        )
 
-        self._queue.extend(new_items)
+        filtered: list[MediaItem] = []
+        for item in new_items:
+            if item.media_type != MediaType.VIDEO:
+                filtered.append(item)
+                continue
+            if not playback_enabled:
+                continue
+            if max_duration > 0 and item.duration_seconds > max_duration:
+                continue
+            if transcoding_enabled:
+                if not item.is_ready_to_play:
+                    continue
+                if item.transcode_status == TranscodeStatus.FAILED:
+                    continue
+            filtered.append(item)
+
+        if not filtered:
+            return 0
+
+        self._queue.extend(filtered)
         if self._config.slideshow.get("shuffle", True):
             # Shuffle only the new items into existing positions — insert
             # each at a random index after the current position.
-            for item in new_items:
+            for item in filtered:
                 if self._current_idx >= 0 and len(self._queue) > self._current_idx + 1:
                     pos = random.randint(self._current_idx + 1, len(self._queue) - 1)
                 else:
@@ -573,11 +669,20 @@ class PresentationEngine:
                 self._queue.pop()
                 self._queue.insert(pos, item)
 
-        logger.info(
-            "Added %d new items to queue (total: %d, current idx: %d)",
-            len(new_items), len(self._queue), self._current_idx,
-        )
-        return len(new_items)
+        added = len(filtered)
+        skipped = len(new_items) - added
+        if skipped:
+            logger.info(
+                "Added %d new items (filtered %d by video guardrails) — "
+                "total: %d, current idx: %d",
+                added, skipped, len(self._queue), self._current_idx,
+            )
+        else:
+            logger.info(
+                "Added %d new items to queue (total: %d, current idx: %d)",
+                added, len(self._queue), self._current_idx,
+            )
+        return added
 
     def _advance(self) -> None:
         """Move to the next item in the queue.
@@ -1168,8 +1273,15 @@ class PresentationEngine:
         last-frame under-swap and post-playback transition.
         """
         if not self._config.slideshow.get("video_playback_enabled", True):
-            logger.debug("Video playback disabled — skipping %s", item.original_path)
-            return
+            # Also check new video section
+            video_cfg = self._config.video if hasattr(self._config, "video") else {}
+            if video_cfg:
+                if not video_cfg.get("playback_enabled", True):
+                    logger.debug("Video playback disabled — skipping %s", item.original_path)
+                    return
+            else:
+                logger.debug("Video playback disabled — skipping %s", item.original_path)
+                return
 
         video_path = str(item.cached_path or item.original_path)
 
@@ -1485,7 +1597,12 @@ class PresentationEngine:
                 duration = item.duration_seconds
             else:
                 duration = self._config.slideshow.get("image_duration_seconds", 30)
-            max_video = self._config.slideshow.get("video_max_duration_seconds", 0)
+            # Read max duration from new video section, fall back to legacy slideshow key
+            video_cfg = self._config.video if hasattr(self._config, "video") else {}
+            max_video = video_cfg.get(
+                "max_duration_seconds",
+                self._config.slideshow.get("video_max_duration_seconds", 0),
+            )
             if max_video > 0 and duration > max_video:
                 duration = float(max_video)
             return duration
@@ -1649,8 +1766,15 @@ class PresentationEngine:
     # ------------------------------------------------------------------
 
     def reload_config(self, config: Config) -> None:
-        old_video = self._config.slideshow.get("video_playback_enabled", True)
-        new_video = config.slideshow.get("video_playback_enabled", True)
+        # Determine old/new video playback status from new video section
+        # with fallback to legacy slideshow keys
+        def _get_playback(cfg):
+            if hasattr(cfg, "video") and cfg.video:
+                return cfg.video.get("playback_enabled", True)
+            return cfg.slideshow.get("video_playback_enabled", True)
+
+        old_video = _get_playback(self._config)
+        new_video = _get_playback(config)
         self._config = config
         self._transitions.reload_config(config)
         self._fit_mode_cache = config.slideshow.get("fit_mode", "contain")

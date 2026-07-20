@@ -8,12 +8,22 @@
   },
   "slideshow": {
     "image_duration_seconds": 5,
-    "video_playback_enabled": false,
     "transition_duration_ms": 1500,
     "transition_style": "crossfade",
     "fit_mode": "contain",
     "matte_color": [20, 20, 20],
     "shuffle": true
+  },
+  "video": {
+    "playback_enabled": false,
+    "player_backend": "auto",
+    "max_duration_seconds": 120,
+    "transcoding_enabled": true,
+    "transcode_max_width": 0,
+    "transcode_max_height": 0,
+    "transcode_quality": 23,
+    "cpu_throttle_enabled": true,
+    "cpu_throttle_percent": 50
   },
   "sync": {
     "immich": {

@@ -298,10 +298,11 @@ def _relative_to_any(file_path: Path, roots: list[Path]) -> str:
 
 @media_bp.route("/cache/clear", methods=["POST"])
 def clear_image_cache():
-    """Clear the processed image cache.
+    """Clear all processed media caches.
 
-    Deletes all files in the cache/images and cache/thumbnails directories.
-    The next slideshow cycle will re-process source images on demand.
+    Deletes all files in cache/images, cache/thumbnails, and cache/videos.
+    Clears the backend playlist and signals the frontend to reset its queue.
+    The next folder scan will re-process source files from scratch.
 
     Returns:
         JSON: ``{"status": "ok", "deleted_files": N, "freed_bytes": B}``
@@ -312,13 +313,13 @@ def clear_image_cache():
     if not cache_dir.is_absolute():
         cache_dir = Path("/opt/metixel") / cache_dir
 
-    image_cache = cache_dir / "images"
-    thumb_cache = cache_dir / "thumbnails"
+    cache_subdirs = ["images", "thumbnails", "videos"]
 
     deleted_files = 0
     freed_bytes = 0
 
-    for cache_path in (image_cache, thumb_cache):
+    for subdir in cache_subdirs:
+        cache_path = cache_dir / subdir
         if cache_path.exists() and cache_path.is_dir():
             try:
                 for entry in cache_path.iterdir():
@@ -334,9 +335,25 @@ def clear_image_cache():
                 logger.warning("Failed to iterate cache dir: %s", cache_path)
 
     logger.info(
-        "Image cache cleared: %d files deleted, %d bytes freed",
-        deleted_files, freed_bytes,
+        "All caches cleared: %d files deleted, %d bytes freed "
+        "(%s, %s, %s)",
+        deleted_files, freed_bytes, *cache_subdirs,
     )
+
+    # ── Reset backend playlist ──────────────────────────────────────
+    # All MediaItems point to now-deleted cached files.  Clear the
+    # playlist so stale entries don't reach the frontend.
+    state.clear_playlist()
+
+    # ── Signal frontend to reset its queue ──────────────────────────
+    # The frontend watches playlist.json — an empty file triggers a
+    # full queue reset.  The next folder-watcher scan will re-discover
+    # source files, re-process them, and repopulate the playlist.
+    ipc = current_app.config.get("METIXEL_IPC")
+    if ipc is not None:
+        from metixel.shared.ipc import ControlMessage
+        ipc.send(ControlMessage(cmd="pause"))
+        logger.debug("Sent pause via IPC before cache clear — frontend will reset on empty playlist")
 
     # Also invalidate the file-list cache so the next list_media()
     # call re-scans the filesystem.

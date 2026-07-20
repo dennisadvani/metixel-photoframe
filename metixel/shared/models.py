@@ -15,6 +15,14 @@ class MediaType(enum.Enum):
     VIDEO = "video"
 
 
+class TranscodeStatus(enum.Enum):
+    """Transcoding state for a video media item."""
+    NOT_TRANSCODED = "not_transcoded"  # Original file, transcoding not attempted
+    TRANSCODING = "transcoding"       # Transcode in progress
+    TRANSCODED = "transcoded"         # Cached transcoded file ready
+    FAILED = "failed"                 # Transcode failed, use original
+
+
 @dataclass
 class MediaItem:
     """Represents a single media asset ready for display."""
@@ -29,12 +37,32 @@ class MediaItem:
     thumbnail_path: Path | None = None
     exif_data: dict[str, Any] = field(default_factory=dict)
     source: str = "local"  # "local" or "immich"
+    transcode_status: TranscodeStatus | None = None  # Only relevant for videos
 
     @property
     def aspect_ratio(self) -> float:
         if self.height > 0:
             return self.width / self.height
         return 1.0
+
+    @property
+    def is_ready_to_play(self) -> bool:
+        """Whether this item can be played in the slideshow.
+
+        Images are always ready.  Videos are ready if transcoding is
+        disabled (original file), or transcoding is enabled and the
+        cached file exists and is marked as transcoded.
+        """
+        if self.media_type == MediaType.IMAGE:
+            return True
+        # Video: ready if not transcoded (original file used when
+        # transcoding is off) OR transcoded successfully
+        if self.transcode_status is None:
+            return True  # Unknown status — allow playback
+        return self.transcode_status in (
+            TranscodeStatus.TRANSCODED,
+            TranscodeStatus.FAILED,
+        )
 
 
 @dataclass
