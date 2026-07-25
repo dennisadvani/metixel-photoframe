@@ -1394,15 +1394,19 @@
             }
 
             // Extract folder from relative path (e.g. "sub/folder/file.jpg" → "sub/folder/")
-            var folderPath = '';
+            // Prefer the API's `folder` field (watch folder name), then append subdirectory.
+            var folderParts = [];
+            if (item.folder) {
+                folderParts.push(item.folder);
+            }
             if (item.path) {
                 var lastSlash = item.path.lastIndexOf('/');
                 if (lastSlash > 0) {
-                    folderPath = item.path.substring(0, lastSlash + 1);
+                    folderParts.push(item.path.substring(0, lastSlash));
                 }
             }
-            var folderHtml = folderPath
-                ? '<div class="media-folder">' + escapeHtml(folderPath) + '</div>'
+            var folderHtml = folderParts.length
+                ? '<div class="media-folder">' + escapeHtml(folderParts.join(' › ')) + '</div>'
                 : '';
 
             var infoText;

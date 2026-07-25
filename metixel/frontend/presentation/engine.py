@@ -641,6 +641,68 @@ class PresentationEngine:
         self._preload_into_inactive()
         return added
 
+    def remove_items(self, item_ids: set[str]) -> int:
+        """Remove items from the queue by media item ID.
+
+        Does NOT reset the slideshow position — the currently displayed
+        item is preserved.  If the current item is removed, the slideshow
+        advances to the next item.  Items pending in the preload thread
+        are cancelled if they match a removed ID.
+
+        Returns the number of items actually removed.
+        """
+        if not item_ids:
+            return 0
+
+        before = len(self._queue)
+        removed_current = any(
+            self._queue[self._current_idx].id in item_ids
+            for _ in [0]
+        ) if 0 <= self._current_idx < len(self._queue) else False
+
+        self._queue = [item for item in self._queue if item.id not in item_ids]
+        removed = before - len(self._queue)
+
+        if removed == 0:
+            return 0
+
+        # If the current item was removed, advance or reset
+        if removed_current:
+            if self._queue:
+                # Stay at the same index (which now points to the next item
+                # that slid into this position) or wrap to 0.
+                if self._current_idx >= len(self._queue):
+                    self._current_idx = 0
+            else:
+                self._current_idx = -1
+            # Reset the texture slots so we don't keep displaying the
+            # removed item.
+            for i in (0, 1):
+                self._unload_texture(self._tex[i])
+                self._tex[i] = None
+                self._tex_item[i] = None
+            self._active = 0
+            self._item_start_time = time.monotonic()
+
+        # Cancel in-flight preload if it matches a removed item
+        with self._preload_lock:
+            pk = self._preload_cache_key
+            if pk:
+                for rid in item_ids:
+                    if rid in pk:
+                        self._preload_array = None
+                        self._preload_cache_key = ""
+                        break
+
+        # Restart preload for the correct next item
+        self._preload_into_inactive()
+
+        logger.info(
+            "Removed %d items from queue (total: %d, current idx: %d)",
+            removed, len(self._queue), self._current_idx,
+        )
+        return removed
+
     def _advance(self) -> None:
         """Move to the next item in the queue.
 
@@ -1715,10 +1777,14 @@ class PresentationEngine:
                 if item.thumbnail_path is not None:
                     thumb = str(item.thumbnail_path)
                 else:
-                    # Try hash-based thumbnail for any media type
+                    # Fall back to hash-based thumbnail lookup.
+                    # CRITICAL: use original_path (NOT cached_path) because
+                    # thumbnails are always named after the ORIGINAL file's
+                    # content hash.  cached_path may point to the optimised
+                    # cache file whose content differs from the original,
+                    # producing a different hash that won't match any thumbnail.
                     try:
-                        media_path = str(item.cached_path or item.original_path)
-                        file_hash = _hash_image_file(Path(media_path))
+                        file_hash = _hash_image_file(item.original_path)
                         hash_thumb = Path("/opt/metixel/cache/thumbnails") / f"{file_hash}.jpg"
                         if hash_thumb.exists():
                             thumb = str(hash_thumb)

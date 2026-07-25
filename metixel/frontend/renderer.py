@@ -771,10 +771,19 @@ class FrontendRenderer:
     def _check_playlist_changed(self) -> None:
         """Reload the slideshow queue if the backend has updated the playlist.
 
-        If the playlist is empty (e.g. cache was cleared), the entire queue
-        is reset via ``set_queue([])`` so stale entries with dead cache paths
-        don't linger.  Otherwise new items are appended via ``add_items()``
-        to preserve the current slideshow position.
+        Detects both additions and removals by comparing the backend
+        playlist IDs with the frontend's in-memory queue:
+
+        - Items in the backend playlist but NOT in the frontend queue
+          are added via ``add_items()`` (preserves current position).
+        - Items in the frontend queue but NOT in the backend playlist
+          are removed via ``remove_items()`` (e.g. deleted files or
+          disabled watch folders).
+        - If the playlist is empty, the entire queue is reset.
+
+        Uses ``set_queue()`` for the initial load and ``add_items()`` /
+        ``remove_items()`` for incremental updates to avoid restarting
+        the slideshow from the beginning on every Immich sync batch.
         """
         try:
             new_mtime = os.path.getmtime(self._playlist_path)
@@ -826,17 +835,47 @@ class FrontendRenderer:
             # cache paths don't cause FileNotFoundError in the engine.
             logger.info("Backend playlist is empty — resetting slideshow queue")
             self._presentation.set_queue([])
-        elif not self._presentation._queue:
+            return
+
+        if not self._presentation._queue:
             # Queue was empty (e.g. after reset above, or cold start).
             # Populate from scratch.
             self._presentation.set_queue(items)
             logger.info("Initialised slideshow queue with %d items", len(items))
-        else:
-            # Incremental addition — append new items without restarting
-            # the slideshow from the beginning.
-            added = self._presentation.add_items(items)
+            return
+
+        # ── Incremental diff: add new, remove stale ──────────────────
+        backend_ids = {item.id for item in items}
+        frontend_ids = {item.id for item in self._presentation._queue}
+
+        new_ids = backend_ids - frontend_ids
+        removed_ids = frontend_ids - backend_ids
+
+        if new_ids:
+            new_items = [item for item in items if item.id in new_ids]
+            added = self._presentation.add_items(new_items)
             if added:
-                logger.info("Added %d new items to slideshow (total playlist: %d)", added, len(items))
+                logger.info(
+                    "Added %d new items to slideshow "
+                    "(backend playlist: %d, frontend queue: %d)",
+                    added, len(items), len(self._presentation._queue),
+                )
+
+        if removed_ids:
+            removed = self._presentation.remove_items(removed_ids)
+            if removed:
+                logger.info(
+                    "Removed %d items from slideshow "
+                    "(backend playlist: %d, frontend queue: %d)",
+                    removed, len(items), len(self._presentation._queue),
+                )
+
+        if not new_ids and not removed_ids:
+            logger.debug(
+                "Playlist mtime changed but no items added or removed "
+                "(backend: %d, frontend: %d)",
+                len(items), len(self._presentation._queue),
+            )
 
     def _get_config_mtime(self) -> float:
         """Get the modification time of the config file."""

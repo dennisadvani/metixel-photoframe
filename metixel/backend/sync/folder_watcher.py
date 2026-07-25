@@ -22,13 +22,12 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from metixel.backend.state import StateManager
 from metixel.backend.processing.thumbnail import (
     generate_image_thumbnail,
     generate_video_thumbnail,
 )
-from metixel.shared.config import Config
-from metixel.shared.models import MediaItem, MediaType
+from metixel.backend.state import StateManager
+from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 if TYPE_CHECKING:
     from metixel.backend.processing.optimisation_queue import OptimisationQueue
@@ -78,7 +77,7 @@ class FolderWatcher:
     - **Deleted files**: removed from the playlist
     """
 
-    def __init__(self, state: StateManager, opt_queue: "OptimisationQueue | None" = None) -> None:
+    def __init__(self, state: StateManager, opt_queue: OptimisationQueue | None = None) -> None:
         self._state = state
         self._config = state.config
         self._opt_queue = opt_queue
@@ -341,13 +340,57 @@ class FolderWatcher:
             )
 
     def _enqueue_stubs(self, stubs: list[MediaItem]) -> None:
-        """Push metadata stubs to the OptimisationQueue."""
+        """Push metadata stubs to the OptimisationQueue — or directly to the playlist.
+
+        Items that don't need optimisation (``cached_path == original_path``,
+        i.e. PLAY_ORIGINAL) are added directly to the slideshow playlist so
+        they appear immediately — even if the optimisation queue worker is
+        blocked on a long video transcode.
+
+        * **Images**: PLAY_ORIGINAL images are always ready to play.
+        * **Videos**: PLAY_ORIGINAL videos have their ``transcode_status``
+          set to ``NOT_TRANSCODED`` here so they can bypass the queue.
+          (The optimisation queue would do the same thing, but it may be
+          blocked on a different transcode.)
+
+        Items that need optimisation (PLAY_CACHED) are sent to the
+        OptimisationQueue for processing.
+        """
         if self._opt_queue is not None:
-            logger.debug(
-                "[WATCHFOLDER] enqueue %d stub(s) → OptimisationQueue",
-                len(stubs),
-            )
-            self._opt_queue.enqueue(stubs)
+            ready: list[MediaItem] = []
+            needs_opt: list[MediaItem] = []
+
+            for item in stubs:
+                if item.cached_path == item.original_path:
+                    # PLAY_ORIGINAL — no optimisation needed
+                    if item.media_type == MediaType.VIDEO:
+                        # Mark as NOT_TRANSCODED so the frontend knows
+                        # this video is safe to play as-is.
+                        item.transcode_status = TranscodeStatus.NOT_TRANSCODED
+                    ready.append(item)
+                else:
+                    # PLAY_CACHED — needs resize / transcode
+                    needs_opt.append(item)
+
+            if ready:
+                logger.info(
+                    "[WATCHFOLDER] %d item(s) ready → playlist (bypass queue)",
+                    len(ready),
+                )
+                for item in ready:
+                    logger.debug(
+                        "[WATCHFOLDER]  ready | %-5s | %s",
+                        item.media_type.value,
+                        item.original_path.name,
+                    )
+                self._state.add_playlist_items(ready)
+
+            if needs_opt:
+                logger.debug(
+                    "[WATCHFOLDER] enqueue %d stub(s) → OptimisationQueue",
+                    len(needs_opt),
+                )
+                self._opt_queue.enqueue(needs_opt)
         else:
             # No optimisation queue available (e.g. dev mode) —
             # add items directly to the playlist as a fallback.
@@ -502,13 +545,7 @@ class FolderWatcher:
             # Check whether the video needs transcoding
             codec = (item.exif_data.get("codec_name") or "").lower()
             needs_transcode = False
-            if item.width <= 0 or item.height <= 0:
-                needs_transcode = True
-            elif max_w > 0 and item.width > max_w:
-                needs_transcode = True
-            elif max_h > 0 and item.height > max_h:
-                needs_transcode = True
-            elif codec and codec not in {"h264", "avc", "avc1", "h.264"}:
+            if item.width <= 0 or item.height <= 0 or max_w > 0 and item.width > max_w or max_h > 0 and item.height > max_h or codec and codec not in {"h264", "avc", "avc1", "h.264"}:
                 needs_transcode = True
             if needs_transcode:
                 # PLAY_CACHED — will be transcoded
@@ -533,32 +570,125 @@ class FolderWatcher:
             sha.update(str(path).encode())
         return sha.hexdigest()[:16]
 
+    def _lookup_ids_by_path(self, paths: set[Path]) -> set[str]:
+        """Find playlist item IDs matching a set of original file paths.
+
+        Matches by resolved absolute path so symlinks and relative-path
+        differences don't prevent matching deleted or changed files.
+        """
+        resolved = set()
+        for p in paths:
+            try:
+                resolved.add(p.resolve())
+            except OSError:
+                # File may already be gone — try resolving parent + name
+                try:
+                    resolved.add(p.parent.resolve() / p.name)
+                except OSError:
+                    resolved.add(p)
+
+        ids: set[str] = set()
+        for item in self._state.get_playlist():
+            try:
+                if item.original_path.resolve() in resolved:
+                    ids.add(item.id)
+            except OSError:
+                # Path no longer valid — compare the string form as
+                # a last resort (both may use the same unresolvable path).
+                if str(item.original_path) in {str(p) for p in resolved}:
+                    ids.add(item.id)
+        return ids
+
     def _process_changed(self, paths: list[Path]) -> None:
         """Re-process files that have been modified.
 
         Removes old playlist entries and re-gathers metadata for the
         changed files, pushing them to the OptimisationQueue.
         """
-        # Compute old IDs from known snapshot (before update)
-        old_ids: set[str] = set()
-        for p in paths:
-            old_id = self._hash_path(p)
-            if old_id:
-                old_ids.add(old_id)
+        path_set = set(paths)
 
+        # Remove old playlist entries by path (not by recomputed hash —
+        # the file content has changed so a recomputed hash won't match
+        # the original playlist entry ID).
+        old_ids = self._lookup_ids_by_path(path_set)
         if old_ids:
             self._state.remove_playlist_items(old_ids)
+
+        # Also remove from the optimisation queue (image/video queues)
+        # so we don't optimise stale versions of these files.
+        if self._opt_queue is not None:
+            self._opt_queue.remove_items(old_ids)
 
         # Re-gather metadata and push to optimisation queue
         self._gather_and_enqueue(paths)
 
     def _handle_deleted(self, paths: set[Path]) -> None:
-        """Remove deleted files from the playlist."""
-        ids_to_remove: set[str] = set()
-        for p in paths:
-            old_id = self._hash_path(p)
-            if old_id:
-                ids_to_remove.add(old_id)
+        """Remove deleted files from the playlist and optimisation queues.
+
+        Matches playlist entries by original file path — NOT by
+        recomputing the content hash, which would fail for files
+        that have already been deleted from disk.
+        """
+        ids_to_remove = self._lookup_ids_by_path(paths)
 
         if ids_to_remove:
             self._state.remove_playlist_items(ids_to_remove)
+
+            # Also remove from the optimisation queue so we don't waste
+            # time processing files that no longer exist.
+            if self._opt_queue is not None:
+                self._opt_queue.remove_items(ids_to_remove)
+
+        # Clean up cached files for deleted originals (use the resolved
+        # IDs to find cache files, not the path-based fallback hash).
+        self._cleanup_cached_for_deleted(ids_to_remove)
+
+    def _cleanup_cached_for_deleted(self, item_ids: set[str]) -> None:
+        """Remove cached thumbnails and optimised files for deleted originals.
+
+        Uses the resolved media item IDs (content hashes) to find cache
+        files.  When the original media file is deleted there's no reason
+        to keep its cached derivatives around — they just waste disk space
+        and could cause stale thumbnails in the web UI.
+        """
+        if not item_ids:
+            return
+
+        config = self._state.config
+        cache_dir = Path(config.system.get("cache_dir", "cache/"))
+        if not cache_dir.is_absolute():
+            cache_dir = Path("/opt/metixel") / cache_dir
+
+        for file_hash in item_ids:
+            # Remove thumbnail
+            thumb = cache_dir / "thumbnails" / f"{file_hash}.jpg"
+            if thumb.is_file():
+                try:
+                    thumb.unlink()
+                    logger.debug("Cleaned up thumbnail: %s", thumb.name)
+                except OSError:
+                    pass
+            # Remove cached image
+            img_cache = cache_dir / "images" / f"{file_hash}.jpg"
+            if img_cache.is_file():
+                try:
+                    img_cache.unlink()
+                    logger.debug("Cleaned up cached image: %s", img_cache.name)
+                except OSError:
+                    pass
+            # Remove cached video (and any partial transcodes)
+            vid_cache = cache_dir / "videos" / f"{file_hash}.mp4"
+            if vid_cache.is_file():
+                try:
+                    vid_cache.unlink()
+                    logger.debug("Cleaned up cached video: %s", vid_cache.name)
+                except OSError:
+                    pass
+            # Remove video frame caches
+            for frame in (1, 2):
+                frame_cache = cache_dir / "videos" / f"{file_hash}.{frame}.frame"
+                if frame_cache.is_file():
+                    try:
+                        frame_cache.unlink()
+                    except OSError:
+                        pass

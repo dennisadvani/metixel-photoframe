@@ -178,6 +178,49 @@ class OptimisationQueue:
         self._wake.set()
         logger.debug("OptimisationQueue: received %d item(s)", len(items))
 
+    def remove_items(self, item_ids: set[str]) -> int:
+        """Remove items from all internal queues by media item ID.
+
+        Called by the FolderWatcher when files are deleted or changed,
+        so we don't waste time optimising files that no longer exist
+        (or stale versions of changed files).
+
+        Thread-safe.  Returns the number of items removed.
+        """
+        removed = 0
+
+        # Drain incoming items
+        with self._incoming_lock:
+            before = len(self._incoming)
+            self._incoming = [
+                item for item in self._incoming if item.id not in item_ids
+            ]
+            removed += before - len(self._incoming)
+
+        # Drain image and video optimisation queues
+        with self._queue_lock:
+            before_img = len(self._image_queue)
+            before_vid = len(self._video_queue)
+            self._image_queue = [
+                item for item in self._image_queue if item.id not in item_ids
+            ]
+            self._video_queue = [
+                item for item in self._video_queue if item.id not in item_ids
+            ]
+            removed += (before_img - len(self._image_queue))
+            removed += (before_vid - len(self._video_queue))
+
+        if removed:
+            logger.info(
+                "[OPTQ] -%d item(s) removed from optimisation queues "
+                "(incoming=%d, image=%d, video=%d)",
+                removed,
+                len(self._incoming),
+                len(self._image_queue),
+                len(self._video_queue),
+            )
+        return removed
+
     def get_video_queue_status(self) -> dict[str, str]:
         """Return the current transcoding status of every known video.
 
