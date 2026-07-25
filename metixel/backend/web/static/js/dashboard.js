@@ -55,13 +55,38 @@
             e.preventDefault();
             const page = link.dataset.page;
             navigateTo(page);
+            closeDrawer();
         });
     });
 
+    // Burger menu toggle
+    var drawer = document.getElementById("nav-drawer");
+    var backdrop = document.getElementById("nav-backdrop");
+    document.getElementById("btn-burger")?.addEventListener("click", function () {
+        openDrawer();
+    });
+    document.getElementById("nav-close")?.addEventListener("click", function () {
+        closeDrawer();
+    });
+    backdrop?.addEventListener("click", function () {
+        closeDrawer();
+    });
+
+    function openDrawer() {
+        if (drawer) drawer.classList.add("open");
+        if (backdrop) backdrop.classList.add("open");
+    }
+
+    function closeDrawer() {
+        if (drawer) drawer.classList.remove("open");
+        if (backdrop) backdrop.classList.remove("open");
+    }
+
     function navigateTo(page) {
-        // Update nav active state
-        document.querySelectorAll("nav a").forEach((a) => a.classList.remove("active"));
-        document.querySelector(`nav a[data-page="${page}"]`)?.classList.add("active");
+        // Update nav drawer active state
+        document.querySelectorAll(".nav-drawer nav a").forEach((a) => a.classList.remove("active"));
+        var drawerLink = document.querySelector('.nav-drawer nav a[data-page="' + page + '"]');
+        if (drawerLink) drawerLink.classList.add("active");
 
         // Show the selected page
         document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
@@ -265,22 +290,16 @@
     var _apiLastErrorTime = 0;
 
     function _apiUpdateConnectionStatus(ok) {
-        var el = document.getElementById("connection-status");
-        if (!el) return;
+        var overlay = document.getElementById("connection-overlay");
+        if (!overlay) return;
         if (ok) {
-            el.style.display = "none";
-            el.textContent = "";
+            overlay.style.display = "none";
             _apiConnected = true;
             _apiErrorCount = 0;
         } else {
             _apiConnected = false;
             _apiErrorCount++;
-            var msg = "Reconnecting";
-            var dots = ".".repeat((_apiErrorCount % 4) + 1);
-            el.textContent = msg + dots;
-            el.style.display = "";
-            el.style.background = "#fff3cd";
-            el.style.color = "#856404";
+            overlay.style.display = "flex";
         }
     }
 
@@ -349,6 +368,7 @@
 
     var _dashboardBound = false;
     var _dashboardTimer = null;
+    var _advancedLogTimer = null;
 
     async function loadDashboard() {
         // Clear any existing polling timer
@@ -360,15 +380,12 @@
         // Initial load
         await refreshDashboard();
         await refreshProcessing();
-        await refreshLogs();
 
         // Poll every 3 seconds for live updates
         _dashboardTimer = setInterval(async function () {
-            // Only refresh if dashboard page is still active
             if (document.getElementById("page-dashboard").classList.contains("active")) {
                 await refreshDashboard();
                 await refreshProcessing();
-                await refreshLogs();
             } else if (_dashboardTimer) {
                 clearInterval(_dashboardTimer);
                 _dashboardTimer = null;
@@ -513,6 +530,16 @@
     var _settingsBound = false;
     var _syncBound = false;
 
+    /** Settings sub-tab navigation */
+    function switchSettingsTab(tabName) {
+        document.querySelectorAll(".settings-tab").forEach(function (t) { t.classList.remove("active"); });
+        document.querySelectorAll(".settings-section").forEach(function (s) { s.classList.remove("active"); });
+        var tabEl = document.querySelector('.settings-tab[data-stab="' + tabName + '"]');
+        if (tabEl) tabEl.classList.add("active");
+        var secEl = document.getElementById("ss-" + tabName);
+        if (secEl) secEl.classList.add("active");
+    }
+
     async function loadSettings() {
         const config = await apiGet("/config");
         if (!config) return;
@@ -537,9 +564,8 @@
         setValue("cfg-matte-color", matteHex);
         setValue("cfg-matte-color-hex", matteHex);
 
-        // Video (new section — fall back to slideshow for legacy configs)
+        // Video
         var v = config.video || {};
-        // Legacy fallback: if video section is empty/missing, use slideshow keys
         if (!v || Object.keys(v).length === 0) {
             v = {
                 playback_enabled: (s.video_playback_enabled !== undefined ? s.video_playback_enabled : true),
@@ -573,46 +599,38 @@
         setValue("cfg-cpu-throttle-pct", v.cpu_throttle_percent || 50);
         var cpLabel = document.getElementById("cfg-cpu-throttle-pct-label");
         if (cpLabel) cpLabel.textContent = (v.cpu_throttle_percent || 50) + "%";
-        // Show/hide transcode sub-settings based on toggle
         _toggleTranscodeSettings(v.transcoding_enabled !== false);
         _toggleCpuThrottleGroup(v.cpu_throttle_enabled !== false);
 
-        // Display
-        const d = config.display || {};
-        const isAuto = (d.width === 0 && d.height === 0);
-        setChecked("cfg-display-auto", isAuto);
-        setValue("cfg-display-width", d.width || 0);
-        setValue("cfg-display-height", d.height || 0);
-        setValue("cfg-fps-limit", d.fps_limit || 30);
-        setChecked("cfg-fullscreen", d.fullscreen !== false);
-        setChecked("cfg-hide-cursor", d.hide_cursor !== false);
-        setChecked("cfg-boot-splash", d.boot_splash !== false);
-        toggleResolutionFields(isAuto);
+        // Local folders (moved from Sync page)
+        const local = config.sync?.local || {};
+        setChecked("cfg-local-enabled", local.enabled !== false);
+        setValue("cfg-local-interval", local.poll_interval_seconds || 30);
+        renderWatchPaths(local.watch_paths || []);
 
-        // Fetch detected display resolution from the frontend (async, non-blocking)
-        apiGet("/config/display/info").then(function (info) {
-            if (info && info.width > 0 && info.height > 0) {
-                var el = document.getElementById("display-detected-res");
-                if (el) {
-                    el.textContent = "Detected: " + info.width + " × " + info.height;
-                    el.style.color = "var(--text-muted)";
-                }
-            }
-        });
+        // Image optimisation (moved from Sync page)
+        const imgCfg = config.image || {};
+        setChecked("cfg-image-opt-enabled", imgCfg.optimisation_enabled !== false);
+        setValue("cfg-image-max-width", imgCfg.optimise_max_width || 0);
+        setValue("cfg-image-max-height", imgCfg.optimise_max_height || 0);
+        _toggleImageOptSettings(imgCfg.optimisation_enabled !== false);
 
         // Event listeners — bind once
         if (!_settingsBound) {
             _settingsBound = true;
 
+            // Settings sub-tabs
+            document.querySelectorAll(".settings-tab").forEach(function (tab) {
+                tab.addEventListener("click", function () {
+                    switchSettingsTab(this.dataset.stab);
+                });
+            });
+
             document.getElementById("cfg-transition-duration")?.addEventListener("input", function () {
                 document.getElementById("cfg-transition-duration-label").textContent = this.value + " ms";
             });
-            document.getElementById("cfg-display-auto")?.addEventListener("change", function () {
-                toggleResolutionFields(this.checked);
-            });
 
             document.getElementById("btn-save-slideshow")?.addEventListener("click", async () => {
-                // Parse matte color hex to RGB array
                 var hexVal = (document.getElementById("cfg-matte-color-hex")?.value || "#141414").replace("#", "");
                 var r = parseInt(hexVal.substring(0, 2), 16) || 20;
                 var g = parseInt(hexVal.substring(2, 4), 16) || 20;
@@ -629,12 +647,11 @@
                 if (result) {
                     showToast("Slideshow settings saved!", "success");
                 } else {
-                    showToast("Failed to save slideshow settings — check server logs", "error");
+                    showToast("Failed to save slideshow settings", "error");
                 }
             });
 
             // ── Video Settings card ─────────────────────────────────────
-            // Transcode toggle shows/hides sub-settings
             document.getElementById("cfg-transcode-enabled")?.addEventListener("change", function () {
                 _toggleTranscodeSettings(this.checked);
             });
@@ -652,7 +669,7 @@
                 if (lbl) lbl.textContent = this.value + "%";
             });
 
-            // Matte color: sync the color picker ↔ hex input
+            // Matte color sync
             document.getElementById("cfg-matte-color")?.addEventListener("input", function () {
                 var hexInput = document.getElementById("cfg-matte-color-hex");
                 if (hexInput) hexInput.value = this.value;
@@ -682,36 +699,54 @@
                 if (result) {
                     showToast("Video settings saved!", "success");
                 } else {
-                    showToast("Failed to save video settings — check server logs", "error");
+                    showToast("Failed to save video settings", "error");
                 }
             });
 
-            document.getElementById("btn-save-display")?.addEventListener("click", async () => {
-                const isAutoSave = document.getElementById("cfg-display-auto").checked;
-                var result = await apiPut("/config/display", {
-                    width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
-                    height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
-                    fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
-                    fullscreen: document.getElementById("cfg-fullscreen").checked,
-                    hide_cursor: document.getElementById("cfg-hide-cursor").checked,
-                    boot_splash: document.getElementById("cfg-boot-splash").checked,
+            // ── Local Sync save ────────────────────────────────────────
+            document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/sync", {
+                    local: {
+                        enabled: document.getElementById("cfg-local-enabled").checked,
+                        watch_paths: collectWatchPaths(),
+                        poll_interval_seconds: sanitizeInt(document.getElementById("cfg-local-interval").value, 30),
+                    },
                 });
                 if (result) {
-                    showToast("Display settings saved!", "success");
+                    showToast("Local sync settings saved!", "success");
                 } else {
-                    showToast("Failed to save display settings", "error");
+                    showToast("Failed to save local sync settings", "error");
                 }
             });
 
-            // Display power toggle
-            var powerBtn = document.getElementById("btn-display-power");
-            var _displayOn = true;
-            powerBtn?.addEventListener("click", async () => {
-                _displayOn = !_displayOn;
-                await apiPost("/config/control", { cmd: _displayOn ? "power_on" : "power_off" });
-                powerBtn.innerHTML = _displayOn ? "⏻ Turn Display Off" : "⏻ Turn Display On";
-                powerBtn.classList.toggle("btn--danger", !_displayOn);
-                showToast(_displayOn ? "Display turned on" : "Display turned off", "info");
+            // ── Image Optimisation save ─────────────────────────────────
+            document.getElementById("btn-save-image-opt")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/image", {
+                    optimisation_enabled: document.getElementById("cfg-image-opt-enabled").checked,
+                    optimise_max_width: sanitizeInt(document.getElementById("cfg-image-max-width").value, 0),
+                    optimise_max_height: sanitizeInt(document.getElementById("cfg-image-max-height").value, 0),
+                });
+                if (result) {
+                    showToast("Image optimisation settings saved!", "success");
+                } else {
+                    showToast("Failed to save image optimisation settings", "error");
+                }
+            });
+
+            // Image optimisation toggle
+            document.getElementById("cfg-image-opt-enabled")?.addEventListener("change", function () {
+                _toggleImageOptSettings(this.checked);
+            });
+
+            // Add Watch Path button
+            document.getElementById("btn-add-watch-path")?.addEventListener("click", function () {
+                addWatchPathRow("", true, true);
+            });
+
+            // Folder Browser modal handlers
+            document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
+            document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
+                if (e.target === this) closeFolderBrowser();
             });
         }
     }
@@ -877,7 +912,7 @@
     function openFolderBrowser(inputEl) {
         _browserTargetInput = inputEl;
         var modal = document.getElementById("folder-browser-modal");
-        if (modal) modal.style.display = "flex";
+        if (modal) modal.classList.add("open");
         // Start browsing at the current input value or /opt/metixel/
         var startPath = inputEl.value.trim() || "/opt/metixel/";
         browseFolder(startPath);
@@ -885,7 +920,7 @@
 
     function closeFolderBrowser() {
         var modal = document.getElementById("folder-browser-modal");
-        if (modal) modal.style.display = "none";
+        if (modal) modal.classList.remove("open");
         _browserTargetInput = null;
     }
 
@@ -1003,23 +1038,10 @@
             }
         }
 
-        // Local — watch paths as individual rows
-        const local = config.sync?.local || {};
-        setChecked("cfg-local-enabled", local.enabled !== false);
-        setValue("cfg-local-interval", local.poll_interval_seconds || 30);
-        renderWatchPaths(local.watch_paths || []);
-
-        // Image optimisation
-        const imgCfg = config.image || {};
-        setChecked("cfg-image-opt-enabled", imgCfg.optimisation_enabled !== false);
-        setValue("cfg-image-max-width", imgCfg.optimise_max_width || 0);
-        setValue("cfg-image-max-height", imgCfg.optimise_max_height || 0);
-        _toggleImageOptSettings(imgCfg.optimisation_enabled !== false);
-
         // Refresh sync status
         await refreshSyncStatus();
 
-        // If a sync is already running (e.g. scheduled), start live polling
+        // If a sync is already running, start live polling
         if (_syncPollTimer === null || _syncPollTimer === undefined) {
             var statusData = await apiGet("/immich/status");
             if (statusData && statusData.progress && statusData.progress.syncing) {
@@ -1130,54 +1152,6 @@
                 if (result && result.status === "ok") {
                     showToast("Cancelling sync…", "info");
                 }
-            });
-
-            // -- Save Local Sync --
-            document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/sync", {
-                    local: {
-                        enabled: document.getElementById("cfg-local-enabled").checked,
-                        watch_paths: collectWatchPaths(),
-                        poll_interval_seconds: sanitizeInt(document.getElementById("cfg-local-interval").value, 30),
-                    },
-                });
-                if (result) {
-                    showToast("Local sync settings saved!", "success");
-                } else {
-                    showToast("Failed to save local sync settings", "error");
-                }
-            });
-
-            // -- Save Image Optimisation --
-            document.getElementById("btn-save-image-opt")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/image", {
-                    optimisation_enabled: document.getElementById("cfg-image-opt-enabled").checked,
-                    optimise_max_width: sanitizeInt(document.getElementById("cfg-image-max-width").value, 0),
-                    optimise_max_height: sanitizeInt(document.getElementById("cfg-image-max-height").value, 0),
-                });
-                if (result) {
-                    showToast("Image optimisation settings saved!", "success");
-                } else {
-                    showToast("Failed to save image optimisation settings", "error");
-                }
-            });
-
-            // -- Image optimisation toggle --
-            document.getElementById("cfg-image-opt-enabled")?.addEventListener("change", function () {
-                _toggleImageOptSettings(this.checked);
-            });
-
-            // -- Add Watch Path button --
-            document.getElementById("btn-add-watch-path")?.addEventListener("click", function () {
-                addWatchPathRow("", true, true);
-            });
-
-            // -- Folder Browser modal --
-            document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
-
-            // Close modal when clicking the backdrop
-            document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
-                if (e.target === this) closeFolderBrowser();
             });
         }
     }
@@ -1310,16 +1284,96 @@
     var _mediaLimit = 50;
     var _mediaHasMore = false;
     var _mediaLoading = false;
+    /** Full media items cache for client-side filtering */
+    var _allMediaItems = [];
+    /** Set of unique folders extracted from media paths */
+    var _mediaFolders = [];
 
     async function loadMedia() {
         _mediaOffset = 0;
         _mediaHasMore = false;
         _mediaLoading = false;
+        _allMediaItems = [];
+        _mediaFolders = [];
 
         var el = document.getElementById("media-list");
         el.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
 
+        // Populate folder filter dropdown from all watch paths
+        var config = await apiGet("/config");
+        if (config && config.sync && config.sync.local && config.sync.local.watch_paths) {
+            var paths = config.sync.local.watch_paths;
+            var sel = document.getElementById("media-filter-folder");
+            if (sel) {
+                // Keep the "All folders" option
+                sel.innerHTML = '<option value="">All folders</option>';
+                paths.forEach(function (p) {
+                    var pathVal = typeof p === "object" ? p.path : String(p);
+                    if (pathVal) {
+                        var opt = document.createElement("option");
+                        opt.value = pathVal;
+                        opt.textContent = pathVal;
+                        sel.appendChild(opt);
+                    }
+                });
+            }
+        }
+
         await _fetchMediaPage(0);
+    }
+
+    /** Apply client-side filters and re-render the media grid. */
+    function _applyMediaFilters() {
+        var nameFilter = (document.getElementById("media-filter-name")?.value || "").toLowerCase().trim();
+        var folderFilter = document.getElementById("media-filter-folder")?.value || "";
+        var typeFilter = document.getElementById("media-filter-type")?.value || "";
+
+        var filtered = _allMediaItems.filter(function (item) {
+            // Filename filter
+            if (nameFilter && item.name.toLowerCase().indexOf(nameFilter) === -1) return false;
+            // Folder filter — match watch path prefix
+            if (folderFilter) {
+                var itemPath = item.path || "";
+                var itemFolder = item.folder || "";
+                if (itemFolder.indexOf(folderFilter) !== 0 && itemPath.indexOf(folderFilter) !== 0) return false;
+            }
+            // Type filter
+            if (typeFilter && item.media_type !== typeFilter) return false;
+            return true;
+        });
+
+        var el = document.getElementById("media-list");
+        var grid = document.getElementById("media-grid");
+        if (!grid) {
+            el.innerHTML = '<div class="media-grid" id="media-grid"></div>';
+            grid = document.getElementById("media-grid");
+        } else {
+            grid.innerHTML = "";
+        }
+
+        if (filtered.length === 0) {
+            el.innerHTML = '<p style="color:var(--text-muted)">No media match the current filters.</p>';
+            // Rebuild summary with grid container
+            el.innerHTML = '<p class="media-summary">0 files</p>'
+                + '<div class="media-grid" id="media-grid"></div>';
+            return;
+        }
+
+        // Update summary
+        var summaryEl = el.querySelector(".media-summary");
+        if (!summaryEl) {
+            summaryEl = document.createElement("p");
+            summaryEl.className = "media-summary";
+            el.insertBefore(summaryEl, el.firstChild);
+        }
+        var imgCount = 0, vidCount = 0;
+        filtered.forEach(function (item) { if (item.media_type === "video") vidCount++; else imgCount++; });
+        var parts = [];
+        if (imgCount) parts.push(imgCount + " images");
+        if (vidCount) parts.push(vidCount + " videos");
+        summaryEl.textContent = parts.length ? parts.join(", ") : filtered.length + " files";
+
+        _renderMediaBatch(grid, filtered, 0);
     }
 
     async function _fetchMediaPage(offset) {
@@ -1340,13 +1394,20 @@
         _mediaOffset = data.offset + data.items.length;
         _mediaHasMore = data.has_more;
 
+        // Store all items for client-side filtering
+        if (offset === 0) {
+            _allMediaItems = data.items.slice();
+        } else {
+            _allMediaItems = _allMediaItems.concat(data.items);
+        }
+
         // Build summary on first page
         var html = '';
         if (offset === 0) {
             var summaryParts = [];
             if (data.images) summaryParts.push(data.images + " images");
             if (data.videos) summaryParts.push(data.videos + " videos");
-            html += '<p style="margin-bottom:0.5rem;font-size:0.85rem;color:var(--text-muted)">'
+            html += '<p class="media-summary">'
                 + (summaryParts.length ? summaryParts.join(", ") : data.total + " files") + '</p>'
                 + '<div class="media-grid" id="media-grid"></div>';
             el.innerHTML = html;
@@ -1354,17 +1415,34 @@
 
         var grid = document.getElementById("media-grid");
         if (!grid) {
-            // Rebuild if grid element missing (shouldn't happen)
             el.innerHTML = '<div class="media-grid" id="media-grid"></div>';
             grid = document.getElementById("media-grid");
         }
 
-        // Render items in small batches to avoid blocking the main thread
-        _renderMediaBatch(grid, data.items, 0);
+        // Apply current filters instead of raw render
+        _applyMediaFilters();
 
         // Show "Load more" button
         _updateLoadMoreButton(el);
         _mediaLoading = false;
+
+        // Wire filter event listeners once
+        _bindMediaFilters();
+    }
+
+    var _mediaFiltersBound = false;
+    function _bindMediaFilters() {
+        if (_mediaFiltersBound) return;
+        _mediaFiltersBound = true;
+        document.getElementById("media-filter-name")?.addEventListener("input", function () {
+            _applyMediaFilters();
+        });
+        document.getElementById("media-filter-folder")?.addEventListener("change", function () {
+            _applyMediaFilters();
+        });
+        document.getElementById("media-filter-type")?.addEventListener("change", function () {
+            _applyMediaFilters();
+        });
     }
 
     function _renderMediaBatch(grid, items, startIdx) {
@@ -1722,20 +1800,43 @@
         const config = await apiGet("/config");
         if (!config) return;
 
-        // MQTT
-        var mqtt = config.mqtt || {};
-        setChecked("cfg-mqtt-enabled", mqtt.enabled || false);
-        setValue("cfg-mqtt-broker", mqtt.broker || "localhost");
-        setValue("cfg-mqtt-port", mqtt.port || 1883);
-        setValue("cfg-mqtt-prefix", mqtt.topic_prefix || "metixel");
-        setValue("cfg-mqtt-user", mqtt.username || "");
-        setValue("cfg-mqtt-pass", mqtt.password || "");
+        // Start log polling (moved from Dashboard)
+        if (_advancedLogTimer) {
+            clearInterval(_advancedLogTimer);
+            _advancedLogTimer = null;
+        }
+        await refreshLogs();
+        _advancedLogTimer = setInterval(async function () {
+            if (document.getElementById("page-advanced").classList.contains("active")) {
+                await refreshLogs();
+            } else if (_advancedLogTimer) {
+                clearInterval(_advancedLogTimer);
+                _advancedLogTimer = null;
+            }
+        }, 3000);
 
-        // Input
-        var inp = config.input || {};
-        setChecked("cfg-cec-enabled", inp.cec_enabled !== false);
-        setChecked("cfg-ir-enabled", inp.ir_enabled || false);
-        setValue("cfg-ir-device", inp.ir_device || "/dev/lirc0");
+        // Display Settings (moved from Settings page)
+        const d = config.display || {};
+        const isAuto = (d.width === 0 && d.height === 0);
+        setChecked("cfg-display-auto", isAuto);
+        setValue("cfg-display-width", d.width || 0);
+        setValue("cfg-display-height", d.height || 0);
+        setValue("cfg-fps-limit", d.fps_limit || 30);
+        setChecked("cfg-fullscreen", d.fullscreen !== false);
+        setChecked("cfg-hide-cursor", d.hide_cursor !== false);
+        setChecked("cfg-boot-splash", d.boot_splash !== false);
+        toggleResolutionFields(isAuto);
+
+        // Fetch detected display resolution from the frontend
+        apiGet("/config/display/info").then(function (info) {
+            if (info && info.width > 0 && info.height > 0) {
+                var el = document.getElementById("display-detected-res");
+                if (el) {
+                    el.textContent = "Detected: " + info.width + " × " + info.height;
+                    el.style.color = "var(--text-muted)";
+                }
+            }
+        });
 
         // System
         var sys = config.system || {};
@@ -1749,33 +1850,37 @@
         if (!_advancedBound) {
             _advancedBound = true;
 
-            document.getElementById("btn-save-mqtt")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/mqtt", {
-                    enabled: document.getElementById("cfg-mqtt-enabled").checked,
-                    broker: document.getElementById("cfg-mqtt-broker").value,
-                    port: sanitizeInt(document.getElementById("cfg-mqtt-port").value, 1883),
-                    topic_prefix: document.getElementById("cfg-mqtt-prefix").value,
-                    username: document.getElementById("cfg-mqtt-user").value,
-                    password: document.getElementById("cfg-mqtt-pass").value,
+            // Display settings
+            document.getElementById("cfg-display-auto")?.addEventListener("change", function () {
+                toggleResolutionFields(this.checked);
+            });
+
+            document.getElementById("btn-save-display")?.addEventListener("click", async () => {
+                const isAutoSave = document.getElementById("cfg-display-auto").checked;
+                var result = await apiPut("/config/display", {
+                    width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
+                    height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
+                    fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
+                    fullscreen: document.getElementById("cfg-fullscreen").checked,
+                    hide_cursor: document.getElementById("cfg-hide-cursor").checked,
+                    boot_splash: document.getElementById("cfg-boot-splash").checked,
                 });
                 if (result) {
-                    showToast("MQTT settings saved!", "success");
+                    showToast("Display settings saved!", "success");
                 } else {
-                    showToast("Failed to save MQTT settings", "error");
+                    showToast("Failed to save display settings", "error");
                 }
             });
 
-            document.getElementById("btn-save-input")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/input", {
-                    cec_enabled: document.getElementById("cfg-cec-enabled").checked,
-                    ir_enabled: document.getElementById("cfg-ir-enabled").checked,
-                    ir_device: document.getElementById("cfg-ir-device").value,
-                });
-                if (result) {
-                    showToast("Input settings saved!", "success");
-                } else {
-                    showToast("Failed to save input settings", "error");
-                }
+            // Display power toggle
+            var powerBtn = document.getElementById("btn-display-power");
+            var _displayOn = true;
+            powerBtn?.addEventListener("click", async () => {
+                _displayOn = !_displayOn;
+                await apiPost("/config/control", { cmd: _displayOn ? "power_on" : "power_off" });
+                powerBtn.innerHTML = _displayOn ? "⏻ Turn Display Off" : "⏻ Turn Display On";
+                powerBtn.classList.toggle("btn--danger", !_displayOn);
+                showToast(_displayOn ? "Display turned on" : "Display turned off", "info");
             });
 
             document.getElementById("btn-save-system")?.addEventListener("click", async () => {
@@ -1784,7 +1889,6 @@
                     log_level: logLevel,
                     cache_dir: document.getElementById("cfg-cache-dir").value,
                 });
-                // Also apply the file-handler log level immediately at runtime
                 var logResult = await apiPost("/logs/level", { level: logLevel });
                 if (sysResult && logResult && logResult.status === "ok") {
                     showToast("System settings saved! File log level: " + logLevel, "success");
