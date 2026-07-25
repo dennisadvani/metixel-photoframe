@@ -169,9 +169,9 @@ header {
 }
 
 .nav-drawer-header {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr auto;
     align-items: center;
-    justify-content: space-between;
     margin-bottom: 1.25rem;
     padding-bottom: 0.75rem;
     border-bottom: 1px solid var(--border);
@@ -185,11 +185,13 @@ header {
 .nav-drawer-close {
     background: none;
     border: none;
-    font-size: 1.25rem;
+    font-size: 1.5rem;
     cursor: pointer;
     color: var(--text-muted);
     padding: 0.25rem;
     border-radius: var(--radius-sm);
+    line-height: 1;
+    justify-self: end;
 }
 
 .nav-drawer-close:hover {
@@ -476,7 +478,6 @@ input[type="range"] {
     color: var(--text-muted);
     font-size: 0.76rem;
     margin-bottom: 0.5rem;
-    max-width: var(--form-max-w);
     line-height: 1.5;
 }
 
@@ -1105,15 +1106,11 @@ footer {
         display: none;
     }
 
-    .nav-drawer-header {
-        justify-content: center;
-    }
-
     .nav-drawer-logo {
         height: 128px;
         width: auto;
-        margin: 0 auto;
         display: block;
+        margin: 0 auto;
     }
 }
 
@@ -1175,56 +1172,6 @@ footer {
 .watch-path-row input[type="checkbox"] {
     width: 0.85rem;
     height: 0.85rem;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   Settings Tabs (sub-sections within Settings page)
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-.settings-tabs {
-    display: flex;
-    gap: 0;
-    margin-bottom: 0.85rem;
-    border-bottom: 2px solid var(--border);
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-}
-
-.settings-tab {
-    padding: 0.5rem 0.85rem;
-    font-size: 0.82rem;
-    font-weight: 500;
-    color: var(--text-muted);
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -2px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    border-radius: 0;
-    margin-top: 0;
-    margin-right: 0;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-.settings-tab:hover {
-    color: var(--text);
-    background: none;
-    box-shadow: none;
-}
-
-.settings-tab.active {
-    color: var(--primary);
-    border-bottom-color: var(--primary);
-}
-
-.settings-section {
-    display: none;
-}
-
-.settings-section.active {
-    display: block;
 }
 
 /* ── List.js pagination (unused — we use custom controls) ── */

@@ -83,6 +83,11 @@
     }
 
     function navigateTo(page) {
+        // Persist page in URL hash so refreshes stay on the same tab
+        if (location.hash.substring(1) !== page) {
+            history.replaceState(null, "", "#" + page);
+        }
+
         // Update nav drawer active state
         document.querySelectorAll(".nav-drawer nav a").forEach((a) => a.classList.remove("active"));
         var drawerLink = document.querySelector('.nav-drawer nav a[data-page="' + page + '"]');
@@ -594,16 +599,6 @@
     var _settingsBound = false;
     var _syncBound = false;
 
-    /** Settings sub-tab navigation */
-    function switchSettingsTab(tabName) {
-        document.querySelectorAll(".settings-tab").forEach(function (t) { t.classList.remove("active"); });
-        document.querySelectorAll(".settings-section").forEach(function (s) { s.classList.remove("active"); });
-        var tabEl = document.querySelector('.settings-tab[data-stab="' + tabName + '"]');
-        if (tabEl) tabEl.classList.add("active");
-        var secEl = document.getElementById("ss-" + tabName);
-        if (secEl) secEl.classList.add("active");
-    }
-
     async function loadSettings() {
         const config = await apiGet("/config");
         if (!config) return;
@@ -683,13 +678,6 @@
         if (!_settingsBound) {
             _settingsBound = true;
 
-            // Settings sub-tabs
-            document.querySelectorAll(".settings-tab").forEach(function (tab) {
-                tab.addEventListener("click", function () {
-                    switchSettingsTab(this.dataset.stab);
-                });
-            });
-
             document.getElementById("cfg-transition-duration")?.addEventListener("input", function () {
                 document.getElementById("cfg-transition-duration-label").textContent = this.value + " ms";
             });
@@ -767,6 +755,28 @@
                 }
             });
 
+            // ── Video Optimisation save ────────────────────────────────
+            document.getElementById("btn-save-transcode")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/video", {
+                    playback_enabled: document.getElementById("cfg-video-enabled").checked,
+                    player_backend: document.getElementById("cfg-video-player-backend").value,
+                    max_duration_seconds: sanitizeInt(document.getElementById("cfg-video-max-duration").value, 0),
+                    transcoding_enabled: document.getElementById("cfg-transcode-enabled").checked,
+                    transcode_max_width: sanitizeInt(document.getElementById("cfg-transcode-max-width").value, 0),
+                    transcode_max_height: sanitizeInt(document.getElementById("cfg-transcode-max-height").value, 0),
+                    transcode_quality: sanitizeInt(document.getElementById("cfg-transcode-quality").value, 23),
+                    transcode_use_software_encoder: document.getElementById("cfg-transcode-software-encoder").checked,
+                    transcode_timeout_seconds: sanitizeInt(document.getElementById("cfg-transcode-timeout").value, 7200),
+                    cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
+                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 50),
+                });
+                if (result) {
+                    showToast("Video optimisation saved!", "success");
+                } else {
+                    showToast("Failed to save video optimisation", "error");
+                }
+            });
+
             // ── Local Sync save ────────────────────────────────────────
             document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
                 var result = await apiPut("/config/sync", {
@@ -819,7 +829,8 @@
 
     var _syncBound = false;
     var _syncPollTimer = null;
-    var _syncWasActive = false;  // Tracks if we've seen an active sync for auto-stop
+    var _syncWasActive = false;
+    var _albumData = null;  // Tracks if we've seen an active sync for auto-stop
 
     function startSyncPolling() {
         if (_syncPollTimer) return;
@@ -1069,6 +1080,33 @@
         }
     }
 
+    function _toggleImmichInterval(enabled) {
+        var el = document.getElementById("immich-interval-group");
+        if (el) {
+            el.style.display = enabled ? "" : "none";
+        }
+    }
+
+    function _populateAlbumSelect(albums, filter) {
+        var select = document.getElementById("cfg-immich-album");
+        if (!select) return;
+        var configuredAlbum = select.getAttribute("data-saved") || "";
+        var q = (filter || "").toLowerCase().trim();
+        var html = '<option value="">— Select an album —</option>';
+        var count = 0;
+        albums.forEach(function (album) {
+            if (q && album.name.toLowerCase().indexOf(q) === -1) return;
+            var selected = (album.name === configuredAlbum) ? " selected" : "";
+            html += '<option value="' + escapeHtml(album.name) + '"' + selected + '>'
+                + escapeHtml(album.name) + ' (' + album.assetCount + ' assets)</option>';
+            count++;
+        });
+        if (count === 0 && q) {
+            html += '<option value="" disabled>No matching albums</option>';
+        }
+        select.innerHTML = html;
+    }
+
     async function loadSync() {
         const config = await apiGet("/config");
         if (!config) return;
@@ -1080,6 +1118,7 @@
         setValue("cfg-immich-sync-dir", imm.sync_dir || "media/sync/immich/");
         setValue("cfg-immich-interval", ((imm.poll_interval_seconds || 3600) / 3600).toFixed(1));
         setChecked("cfg-immich-strict", imm.strict_sync === true);
+        _toggleImmichInterval(imm.enabled || false);
 
         // Preselect the configured album (if any) in the dropdown
         var albumSelect = document.getElementById("cfg-immich-album");
@@ -1115,6 +1154,11 @@
 
         if (!_syncBound) {
             _syncBound = true;
+
+            // Toggle poll interval visibility
+            document.getElementById("cfg-immich-enabled")?.addEventListener("change", function () {
+                _toggleImmichInterval(this.checked);
+            });
 
             // -- Test Connection --
             document.getElementById("btn-test-immich")?.addEventListener("click", async () => {
@@ -1152,16 +1196,20 @@
                     return;
                 }
 
-                var html = '<option value="">— Select an album —</option>';
-                var configuredAlbum = document.getElementById("cfg-immich-album").getAttribute("data-saved") || "";
-                data.forEach(function (album) {
-                    var selected = (album.name === configuredAlbum) ? " selected" : "";
-                    html += '<option value="' + escapeHtml(album.name) + '"' + selected + '>'
-                        + escapeHtml(album.name) + ' (' + album.assetCount + ' assets)</option>';
-                });
-                select.innerHTML = html;
+                // Store albums for search filtering
+                _albumData = data;
+                _populateAlbumSelect(data);
                 select.disabled = false;
+
+                // Show search input
+                var searchInput = document.getElementById("album-search");
+                if (searchInput) { searchInput.style.display = ""; searchInput.value = ""; }
                 showToast("Loaded " + data.length + " album(s)", "info");
+            });
+
+            // Album search filter
+            document.getElementById("album-search")?.addEventListener("input", function () {
+                if (_albumData) _populateAlbumSelect(_albumData, this.value);
             });
 
             // -- Save Immich Settings --
@@ -2026,5 +2074,8 @@
 
     // -- Init ----------------------------------------------------------------
 
-    loadDashboard();
+    var hash = location.hash.substring(1);
+    var validPages = ["dashboard", "media", "settings", "sync", "advanced"];
+    var startPage = validPages.indexOf(hash) >= 0 ? hash : "dashboard";
+    navigateTo(startPage);
 })();
