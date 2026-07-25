@@ -23,6 +23,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from metixel.backend.state import StateManager
+from metixel.backend.processing.thumbnail import (
+    generate_image_thumbnail,
+    generate_video_thumbnail,
+)
 from metixel.shared.config import Config
 from metixel.shared.models import MediaItem, MediaType
 
@@ -90,13 +94,21 @@ class FolderWatcher:
         # Track whether the initial full scan has completed
         self._initial_scan_done: bool = False
 
+        # Periodic config refresh (so new watch paths added via the web UI
+        # are picked up without a backend restart).
+        self._last_config_refresh: float = 0.0
+
     def _resolve_watch_paths(self) -> list[Path]:
         """Resolve the watch_paths config to a list of enabled Path objects.
 
         Handles both the new object format (``[{"path": "...", "enabled": true}]``)
         and the legacy flat-list format (``["media/", ...]``).
+
+        Always reads from the **live** ``self._state.config`` so that
+        watch paths added via the web UI are picked up on the next
+        periodic refresh.
         """
-        raw = self._config.sync["local"].get("watch_paths", [])
+        raw = self._state.config.sync["local"].get("watch_paths", [])
         paths: list[Path] = []
         for entry in raw:
             if isinstance(entry, dict):
@@ -124,10 +136,46 @@ class FolderWatcher:
 
         while self._running:
             try:
+                # Refresh config periodically so new watch paths added via
+                # the web UI are picked up without a backend restart.
+                now = time.monotonic()
+                if now - self._last_config_refresh >= 30.0:
+                    self._refresh_watch_config()
+                    self._last_config_refresh = now
+
                 self._scan()
             except Exception:
                 logger.exception("Folder watcher error")
             time.sleep(self._poll_interval)
+
+    def _refresh_watch_config(self) -> None:
+        """Re-read the live config and update watch paths if they changed.
+
+        Called periodically so that watch paths added/removed via the web
+        UI take effect without restarting the backend.  Also updates the
+        poll interval to match any config changes.
+        """
+        config = self._state.config
+        old_paths = [str(p) for p in self._watch_paths]
+        new_paths = self._resolve_watch_paths()
+        new_interval = config.sync["local"]["poll_interval_seconds"]
+
+        if [str(p) for p in new_paths] != old_paths:
+            logger.info(
+                "Watch paths changed — was %s, now %s",
+                old_paths, [str(p) for p in new_paths],
+            )
+            self._watch_paths = new_paths
+            self._config = config
+
+            # New watch paths need an immediate scan to discover their
+            # files and generate thumbnails.  We don't reset
+            # _initial_scan_done — the normal diff logic in _scan()
+            # will detect files in the new paths as "new".
+        elif new_interval != self._poll_interval:
+            logger.debug("Poll interval changed: %d → %d", self._poll_interval, new_interval)
+            self._poll_interval = new_interval
+            self._config = config
 
     def stop(self) -> None:
         """Signal the watch loop to stop."""
@@ -236,11 +284,17 @@ class FolderWatcher:
         - Media type (image vs video) by extension
         - Pixel dimensions (PIL for images, ffprobe for videos)
         - Video codec name (for threshold gating)
+        - **Thumbnail** — generated here (Phase 1) so the web UI can
+          display previews immediately, regardless of whether the file
+          later needs optimisation.
 
         Items are pushed to the ``OptimisationQueue`` for Phase 2/3.
         The queue decides whether each item needs optimisation or is
         ready-to-play.
         """
+        # Resolve cache directory from live config (for thumbnail output)
+        cache_dir = Path(self._state.config.system.get("cache_dir", "cache/"))
+
         # Sort: images first so the optimisation queue can prioritise them.
         paths.sort(key=lambda p: (0 if p.suffix.lower() in IMAGE_EXTENSIONS else 1, p))
 
@@ -254,9 +308,9 @@ class FolderWatcher:
                     _write_progress("scanning", total, idx + 1, path.name)
 
                 if suffix in IMAGE_EXTENSIONS:
-                    stub = self._gather_image_metadata(path)
+                    stub = self._gather_image_metadata(path, cache_dir)
                 elif suffix in VIDEO_EXTENSIONS:
-                    stub = self._gather_video_metadata(path)
+                    stub = self._gather_video_metadata(path, cache_dir)
                 else:
                     continue
 
@@ -304,12 +358,14 @@ class FolderWatcher:
             )
             self._state.add_playlist_items(stubs)
 
-    @staticmethod
-    def _gather_image_metadata(path: Path) -> MediaItem | None:
-        """Quickly extract image dimensions without full processing.
+    def _gather_image_metadata(self, path: Path, cache_dir: Path) -> MediaItem | None:
+        """Quickly extract image dimensions and generate a thumbnail.
 
         Uses PIL to read the image header only (does not decode pixel data).
-        Returns a MediaItem stub with minimal metadata, or None on failure.
+        Generates a 320 px thumbnail in ``<cache_dir>/thumbnails/`` so the
+        web UI can show previews immediately.
+
+        Returns a MediaItem stub with metadata + thumbnail, or None on failure.
         """
         try:
             from PIL import Image
@@ -318,6 +374,10 @@ class FolderWatcher:
                 w, h = img.size
 
             file_hash = FolderWatcher._hash_path(path)
+
+            # Generate thumbnail during Phase 1 (folder watch)
+            thumb_path = generate_image_thumbnail(path, cache_dir)
+
             logger.debug(
                 "[WATCHFOLDER] image  | %4dx%-4d | %s",
                 w, h, path.name,
@@ -329,18 +389,21 @@ class FolderWatcher:
                 media_type=MediaType.IMAGE,
                 width=w,
                 height=h,
+                thumbnail_path=thumb_path,
                 source="local",
             )
         except Exception:
             logger.debug("Cannot read image metadata: %s", path.name)
             return None
 
-    @staticmethod
-    def _gather_video_metadata(path: Path) -> MediaItem | None:
+    def _gather_video_metadata(self, path: Path, cache_dir: Path) -> MediaItem | None:
         """Quickly probe a video for dimensions, codec, and duration.
 
-        Uses ffprobe for metadata extraction.  Returns a MediaItem stub
-        with codec info in exif_data, or None on failure.
+        Uses ffprobe for metadata extraction.  Also generates a thumbnail
+        frame (2 s in) so the web UI can show previews immediately, before
+        any transcoding decisions are made.
+
+        Returns a MediaItem stub with codec info in exif_data, or None on failure.
         """
         try:
             result = subprocess.run(
@@ -373,6 +436,10 @@ class FolderWatcher:
             codec = s.get("codec_name", "") or ""
 
             file_hash = FolderWatcher._hash_path(path)
+
+            # Generate thumbnail during Phase 1 (folder watch)
+            thumb_path = generate_video_thumbnail(path, cache_dir)
+
             logger.debug(
                 "[WATCHFOLDER] video  | %4dx%-4d | %-6s | %5.1fs | %s",
                 w, h, codec or "?", duration, path.name,
@@ -385,6 +452,7 @@ class FolderWatcher:
                 width=w,
                 height=h,
                 duration_seconds=duration,
+                thumbnail_path=thumb_path,
                 exif_data={"codec_name": codec},
                 source="local",
             )
@@ -404,7 +472,7 @@ class FolderWatcher:
             *expected* cache location (the file may not exist yet —
             the OptimisationQueue creates it).
         """
-        config = self._config
+        config = self._state.config
         cache_dir = Path(config.system.get("cache_dir", "cache/"))
         if not cache_dir.is_absolute():
             cache_dir = Path("/opt/metixel") / cache_dir

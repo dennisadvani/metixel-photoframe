@@ -19,12 +19,14 @@ from metixel.shared.ipc import IPCClient
 logger = logging.getLogger(__name__)
 
 
-def create_app(state: StateManager, ipc: IPCClient) -> Flask:
+def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = None) -> Flask:
     """Create and configure the Flask application.
 
     Args:
         state: The shared StateManager instance.
         ipc: IPC client for sending commands to the frontend.
+        opt_queue: The OptimisationQueue instance (optional — used by the
+            media library API to report per-video transcode status).
 
     Returns:
         A configured Flask application instance.
@@ -36,6 +38,7 @@ def create_app(state: StateManager, ipc: IPCClient) -> Flask:
     )
     app.config["METIXEL_STATE"] = state
     app.config["METIXEL_IPC"] = ipc
+    app.config["METIXEL_OPT_QUEUE"] = opt_queue
 
     # Silence Flask's HTTP access logs (they flood the log output)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)

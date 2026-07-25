@@ -178,6 +178,31 @@ class OptimisationQueue:
         self._wake.set()
         logger.debug("OptimisationQueue: received %d item(s)", len(items))
 
+    def get_video_queue_status(self) -> dict[str, str]:
+        """Return the current transcoding status of every known video.
+
+        Thread-safe snapshot for the web UI media library.  Keys are
+        content hashes (``MediaItem.id``); values are one of:
+
+        * ``"queued"`` — waiting in the video queue
+        * ``"transcoding"`` — actively being transcoded right now
+
+        Videos not in either state are omitted from the dict entirely.
+        """
+        result: dict[str, str] = {}
+
+        # Snapshot the queue under lock
+        with self._queue_lock:
+            for item in self._video_queue:
+                result[item.id] = "queued"
+
+        # Snapshot active transcodes (VideoProcessor has its own lock-free set)
+        if self._video_processor is not None:
+            for file_hash in self._video_processor.active_transcodes():
+                result[file_hash] = "transcoding"
+
+        return result
+
     def reload_config(self) -> None:
         """Refresh optimisation thresholds from the current config.
 

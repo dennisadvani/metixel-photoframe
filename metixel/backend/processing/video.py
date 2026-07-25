@@ -111,6 +111,14 @@ class VideoProcessor:
         """Check if a specific video is currently being transcoded."""
         return file_hash in self._transcoding
 
+    def active_transcodes(self) -> set[str]:
+        """Return the set of file hashes currently being transcoded.
+
+        Returns a **copy** so callers can iterate safely without holding
+        any internal locks.
+        """
+        return set(self._transcoding)
+
     @property
     def transcoding_enabled(self) -> bool:
         return self._transcoding_enabled

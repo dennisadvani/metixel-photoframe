@@ -672,6 +672,34 @@ button:focus-visible {
     border: 1px solid rgba(116, 185, 255, 0.25);
 }
 
+.media-badge--queued {
+    background: rgba(253, 203, 110, 0.15);
+    color: #fdcb6e;
+    border: 1px solid rgba(253, 203, 110, 0.25);
+}
+
+.media-badge--transcoding {
+    background: rgba(108, 92, 231, 0.15);
+    color: #a29bfe;
+    border: 1px solid rgba(108, 92, 231, 0.25);
+    animation: badge-pulse 2s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Folder path under media name */
+.media-folder {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-bottom: 0.15rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* Thumbnail preview inside media grid items */
 .media-thumb {
     width: 100%;

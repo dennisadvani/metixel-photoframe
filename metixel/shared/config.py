@@ -239,7 +239,13 @@ class Config:
 
     @classmethod
     def load(cls, path: Path) -> Config:
-        """Load configuration from disk, filling missing keys with defaults."""
+        """Load configuration from disk, filling missing keys with defaults.
+
+        If the config file does not exist, a default configuration is
+        created AND immediately saved to *path* so that other subsystems
+        (e.g. logging setup) can read ``system.log_level`` from it on
+        the very first start.
+        """
         if path.exists():
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -249,8 +255,12 @@ class Config:
             logger.info("Config loaded from %s", path)
             return cls(merged)
         else:
-            logger.warning("Config not found at %s, using defaults", path)
-            return cls()
+            logger.info(
+                "Config not found at %s — creating with defaults", path,
+            )
+            config = cls()
+            config.save(path)
+            return config
 
 
 # ---------------------------------------------------------------------------

@@ -189,10 +189,29 @@ def list_media():
 
     total = len(all_paths)
 
+    # ── Snapshot video transcode queue status ─────────────────────────
+    # Cross-reference file hashes so the web UI can show "Queued" /
+    # "Transcoding" tags on video items.
+    video_status: dict[str, str] = {}
+    opt_queue = current_app.config.get("METIXEL_OPT_QUEUE")
+    if opt_queue is not None:
+        try:
+            video_status = opt_queue.get_video_queue_status()
+        except Exception:
+            logger.debug("Could not query video queue status", exc_info=True)
+
     # ── Slice the requested page ─────────────────────────────────────
     page_paths = all_paths[offset: offset + limit]
 
     # ── Process only the page items ──────────────────────────────────
+    # Import thumbnail generators so missing thumbnails can be created
+    # on-the-fly (e.g. when a new watch folder was just added and the
+    # FolderWatcher hasn't scanned it yet).
+    from metixel.backend.processing.thumbnail import (
+        generate_image_thumbnail,
+        generate_video_thumbnail,
+    )
+
     items = []
     for entry in page_paths:
         suffix = entry.suffix.lower()
@@ -200,28 +219,54 @@ def list_media():
         try:
             if is_video:
                 w, h = _probe_video(entry)
-                thumbnail_url = _lookup_thumbnail(entry, thumb_dir)
             else:
                 w, h = _probe_image(entry)
-                thumbnail_url = _lookup_thumbnail(entry, thumb_dir)
+
+            # Look up (or generate) the thumbnail
+            thumbnail_url = _lookup_thumbnail(entry, thumb_dir)
+
+            # Generate missing thumbnail on-the-fly so the web UI shows
+            # it immediately — no need to wait for the FolderWatcher scan.
+            if thumbnail_url is None:
+                if is_video:
+                    gen_path = generate_video_thumbnail(entry, cache_dir)
+                else:
+                    gen_path = generate_image_thumbnail(entry, cache_dir)
+                if gen_path is not None and gen_path.exists():
+                    thumbnail_url = f"/api/media/thumbnail/{gen_path.name}"
+
+            # Determine the containing watch folder
+            folder = _watch_folder_name(entry, watch_paths)
 
             # Show path relative to the first matching watch path
             rel_path = _relative_to_any(entry, watch_paths)
 
-            items.append({
+            item_data: dict = {
                 "name": entry.name,
                 "path": rel_path,
+                "folder": folder,
                 "width": w,
                 "height": h,
                 "size_kb": round(entry.stat().st_size / 1024, 1),
                 "media_type": "video" if is_video else "image",
                 "thumbnail_url": thumbnail_url,
-            })
+            }
+
+            # Attach transcode queue status for videos
+            if is_video and video_status:
+                file_hash = _hash_file(entry)
+                status = video_status.get(file_hash)
+                if status:
+                    item_data["transcode_status"] = status
+
+            items.append(item_data)
         except Exception:
+            folder = _watch_folder_name(entry, watch_paths)
             rel_path = _relative_to_any(entry, watch_paths)
             items.append({
                 "name": entry.name,
                 "path": rel_path,
+                "folder": folder,
                 "width": 0,
                 "height": 0,
                 "size_kb": round(entry.stat().st_size / 1024, 1),
@@ -292,6 +337,22 @@ def _relative_to_any(file_path: Path, roots: list[Path]) -> str:
         except ValueError:
             continue
     return file_path.name
+
+
+def _watch_folder_name(file_path: Path, roots: list[Path]) -> str:
+    """Return the name of the watch folder that contains ``file_path``.
+
+    Falls back to the parent directory name if no watch root matches.
+    """
+    resolved = file_path.resolve()
+    for root in roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return root.name
+        except ValueError:
+            continue
+    # Not inside any watch root — use immediate parent directory name
+    return file_path.parent.name
 
 
 @media_bp.route("/cache/clear", methods=["POST"])

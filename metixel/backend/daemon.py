@@ -158,7 +158,8 @@ class BackendDaemon:
         """Start the Flask web server — this BLOCKS the main thread."""
         from metixel.backend.web.server import create_app
 
-        app = create_app(self._state, self._ipc)
+        opt_queue = getattr(self, "_opt_queue", None)
+        app = create_app(self._state, self._ipc, opt_queue=opt_queue)
         web_config = self._state.config.web
 
         logger.info("Web server starting on %s:%d", web_config["host"], web_config["port"])

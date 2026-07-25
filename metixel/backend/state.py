@@ -114,6 +114,8 @@ class StateManager:
 
         disk = shutil.disk_usage("/")
         cache_size = self._get_cache_size()
+        media_size = self._get_media_folder_size()
+        img_count, vid_count = self._get_media_counts()
         return {
             "uptime_seconds": self._get_uptime(),
             "disk_total_gb": round(disk.total / (1024**3), 1),
@@ -122,6 +124,9 @@ class StateManager:
             "disk_used_percent": round(disk.used / disk.total * 100, 1),
             "cache_size_mb": round(cache_size / (1024**2), 1),
             "cache_size_bytes": cache_size,
+            "media_size_bytes": media_size,
+            "media_image_count": img_count,
+            "media_video_count": vid_count,
         }
 
     def _get_cache_size(self) -> int:
@@ -147,6 +152,68 @@ class StateManager:
         except Exception:
             logger.debug("Could not compute cache size", exc_info=True)
             return 0
+
+    def _get_media_folder_size(self) -> int:
+        """Calculate the total size of all enabled media watch folders in bytes.
+
+        Skips the cache directory (already tracked separately) and the
+        Immich sync directory (which is a subset of watch_paths).
+        Returns 0 if no watch paths exist or cannot be read.
+        """
+        try:
+            from metixel.shared.config import resolve_watch_paths
+
+            watch_paths = resolve_watch_paths(self.config)
+            total = 0
+            seen: set[int] = set()  # deduplicate inodes
+            for media_folder in watch_paths:
+                if not media_folder.is_dir():
+                    continue
+                for entry in media_folder.rglob("*"):
+                    if not entry.is_file():
+                        continue
+                    try:
+                        st = entry.stat()
+                        if st.st_ino in seen:
+                            continue
+                        seen.add(st.st_ino)
+                        total += st.st_size
+                    except OSError:
+                        pass
+            return total
+        except Exception:
+            logger.debug("Could not compute media folder size", exc_info=True)
+            return 0
+
+    def _get_media_counts(self) -> tuple[int, int]:
+        """Count images and videos across all enabled media watch folders.
+
+        Returns:
+            A tuple of ``(image_count, video_count)``.
+        """
+        IMG_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
+        VID_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
+        try:
+            from metixel.shared.config import resolve_watch_paths
+
+            watch_paths = resolve_watch_paths(self.config)
+            img_count = 0
+            vid_count = 0
+            for media_folder in watch_paths:
+                if not media_folder.is_dir():
+                    continue
+                for entry in media_folder.rglob("*"):
+                    if not entry.is_file():
+                        continue
+                    suffix = entry.suffix.lower()
+                    if suffix in IMG_EXT:
+                        img_count += 1
+                    elif suffix in VID_EXT:
+                        vid_count += 1
+            return img_count, vid_count
+        except Exception:
+            logger.debug("Could not count media files", exc_info=True)
+            return 0, 0
 
     @staticmethod
     def _get_uptime() -> float:
