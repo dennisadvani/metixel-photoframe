@@ -68,9 +68,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "local": {
             "enabled": True,
             "watch_paths": [
-                {"path": "media/my_media/", "enabled": True},
                 {"path": "media/sample_media/", "enabled": True},
                 {"path": "media/sync/immich/", "enabled": True},
+                {"path": "media/my_media/", "enabled": True},
             ],
             "poll_interval_seconds": 30,
         },

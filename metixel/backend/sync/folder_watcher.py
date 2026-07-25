@@ -285,7 +285,7 @@ class FolderWatcher:
         """Push metadata stubs to the OptimisationQueue."""
         if self._opt_queue is not None:
             logger.debug(
-                "[WATCH] enqueue %d stub(s) → OptimisationQueue",
+                "[WATCHFOLDER] enqueue %d stub(s) → OptimisationQueue",
                 len(stubs),
             )
             self._opt_queue.enqueue(stubs)
@@ -314,7 +314,7 @@ class FolderWatcher:
 
             file_hash = FolderWatcher._hash_path(path)
             logger.debug(
-                "[WATCH] image  | %4dx%-4d | %s",
+                "[WATCHFOLDER] image  | %4dx%-4d | %s",
                 w, h, path.name,
             )
             return MediaItem(
@@ -360,7 +360,7 @@ class FolderWatcher:
 
             file_hash = FolderWatcher._hash_path(path)
             logger.debug(
-                "[WATCH] video  | %4dx%-4d | %-6s | %5.1fs | %s",
+                "[WATCHFOLDER] video  | %4dx%-4d | %-6s | %5.1fs | %s",
                 w, h, codec or "?", duration, path.name,
             )
             return MediaItem(

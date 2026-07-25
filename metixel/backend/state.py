@@ -181,18 +181,18 @@ class StateManager:
                 self._write_playlist_file()
                 self._notify_playlist_change()
                 logger.info(
-                    "[LIST] +%d items (total: %d)",
+                    "[SLIDESHOWQ] +%d items (total: %d)",
                     len(new_items), len(self._playlist),
                 )
                 for item in new_items:
                     logger.debug(
-                        "[LIST]  add  | %-5s | %s",
+                        "[SLIDESHOWQ]  add  | %-5s | %s",
                         item.media_type.value,
                         item.original_path.name,
                     )
             else:
                 logger.debug(
-                    "[LIST] no-op | %d item(s) already in playlist",
+                    "[SLIDESHOWQ] no-op | %d item(s) already in playlist",
                     len(items),
                 )
 
@@ -206,7 +206,7 @@ class StateManager:
                 self._write_playlist_file()
                 self._notify_playlist_change()
                 logger.info(
-                    "[LIST] -%d items (total: %d)", removed, len(self._playlist),
+                    "[SLIDESHOWQ] -%d items (total: %d)", removed, len(self._playlist),
                 )
             return removed
 
