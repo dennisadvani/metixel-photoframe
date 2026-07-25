@@ -4,7 +4,8 @@
     "height": 0,
     "fullscreen": true,
     "hide_cursor": true,
-    "fps_limit": 30
+    "fps_limit": 30,
+    "boot_splash": true
   },
   "slideshow": {
     "image_duration_seconds": 5,

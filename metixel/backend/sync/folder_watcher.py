@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from metixel.backend.state import StateManager
+from metixel.shared.config import Config
 from metixel.shared.models import MediaItem, MediaType
 
 if TYPE_CHECKING:
@@ -260,6 +261,10 @@ class FolderWatcher:
                     continue
 
                 if stub is not None:
+                    # ── Set play strategy at watch stage ────────────
+                    # PLAY_ORIGINAL → cached_path = original_path
+                    # PLAY_CACHED   → cached_path = expected cache file
+                    stub.cached_path = self._resolve_cached_path(stub)
                     stubs.append(stub)
             except Exception:
                 logger.exception("Failed to gather metadata: %s", path)
@@ -343,7 +348,7 @@ class FolderWatcher:
                     "ffprobe", "-v", "error",
                     "-select_streams", "v:0",
                     "-show_entries", "stream=width,height,duration,codec_name",
-                    "-of", "csv=p=0",
+                    "-of", "json",
                     str(path),
                 ],
                 capture_output=True, text=True, timeout=10,
@@ -352,11 +357,20 @@ class FolderWatcher:
                 logger.debug("ffprobe failed for %s", path.name)
                 return None
 
-            parts = result.stdout.strip().split(",")
-            w = int(parts[0]) if len(parts) > 0 and parts[0] else 0
-            h = int(parts[1]) if len(parts) > 1 and parts[1] else 0
-            duration = float(parts[2]) if len(parts) > 2 and parts[2] else 0.0
-            codec = parts[3].strip() if len(parts) > 3 else ""
+            # ffprobe -of json is field-name–based, immune to column-order
+            # variations across ffmpeg versions.
+            import json
+
+            probe = json.loads(result.stdout)
+            streams = probe.get("streams", [])
+            if not streams:
+                logger.debug("No video stream in %s", path.name)
+                return None
+            s = streams[0]
+            w = s.get("width", 0) or 0
+            h = s.get("height", 0) or 0
+            duration = float(s.get("duration", 0) or 0)
+            codec = s.get("codec_name", "") or ""
 
             file_hash = FolderWatcher._hash_path(path)
             logger.debug(
@@ -377,6 +391,65 @@ class FolderWatcher:
         except Exception:
             logger.debug("Cannot read video metadata: %s", path.name)
             return None
+
+    def _resolve_cached_path(self, item: MediaItem) -> Path:
+        """Determine the play path for a media item at the watch stage.
+
+        PLAY_ORIGINAL: The file already meets thresholds or
+            optimisation/transcoding is disabled.  ``cached_path``
+            stays as the original file path.
+
+        PLAY_CACHED: The file exceeds thresholds AND optimisation/
+            transcoding is enabled.  ``cached_path`` points to the
+            *expected* cache location (the file may not exist yet —
+            the OptimisationQueue creates it).
+        """
+        config = self._config
+        cache_dir = Path(config.system.get("cache_dir", "cache/"))
+        if not cache_dir.is_absolute():
+            cache_dir = Path("/opt/metixel") / cache_dir
+        display = config.display
+        screen_w = display.get("width") or 1920
+        screen_h = display.get("height") or 1080
+
+        if item.media_type == MediaType.IMAGE:
+            img_cfg = config.image
+            opt_enabled = img_cfg.get("optimisation_enabled", True)
+            max_w = img_cfg.get("optimise_max_width", 0) or screen_w
+            max_h = img_cfg.get("optimise_max_height", 0) or screen_h
+            if opt_enabled and (item.width > max_w or item.height > max_h):
+                # PLAY_CACHED — will be optimised
+                return cache_dir / "images" / f"{item.id}.jpg"
+            # PLAY_ORIGINAL
+            return item.original_path
+
+        elif item.media_type == MediaType.VIDEO:
+            video_cfg = config.video
+            transcode_enabled = video_cfg.get("transcoding_enabled", True)
+            max_w = video_cfg.get("transcode_max_width", 0) or screen_w
+            max_h = video_cfg.get("transcode_max_height", 0) or screen_h
+            if not transcode_enabled:
+                # PLAY_ORIGINAL — transcoding is off
+                return item.original_path
+            # Check whether the video needs transcoding
+            codec = (item.exif_data.get("codec_name") or "").lower()
+            needs_transcode = False
+            if item.width <= 0 or item.height <= 0:
+                needs_transcode = True
+            elif max_w > 0 and item.width > max_w:
+                needs_transcode = True
+            elif max_h > 0 and item.height > max_h:
+                needs_transcode = True
+            elif codec and codec not in {"h264", "avc", "avc1", "h.264"}:
+                needs_transcode = True
+            if needs_transcode:
+                # PLAY_CACHED — will be transcoded
+                return cache_dir / "videos" / f"{item.id}.mp4"
+            # PLAY_ORIGINAL
+            return item.original_path
+
+        # Unknown media type — play original
+        return item.original_path
 
     @staticmethod
     def _hash_path(path: Path) -> str:

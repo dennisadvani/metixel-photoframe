@@ -122,7 +122,17 @@ class OptimisationQueue:
         self._cleanup_partial_transcodes()
         logger.info("OptimisationQueue worker started")
 
+        # Track when we last refreshed config thresholds
+        _last_config_refresh = 0.0
+
         while self._running:
+            # Refresh config thresholds periodically (every 30s) so
+            # web UI changes take effect without a backend restart.
+            now = time.monotonic()
+            if now - _last_config_refresh >= 30.0:
+                self.reload_config()
+                _last_config_refresh = now
+
             # Drain incoming items into the appropriate queues
             self._classify_incoming()
 
@@ -139,8 +149,9 @@ class OptimisationQueue:
             if pending == 0:
                 if not self._initial_done:
                     self._initial_done = True
-                    _write_progress("complete", 0, 0, "")
                     logger.info("OptimisationQueue: initial processing complete")
+                # Always write completion so the UI reflects the current state.
+                _write_progress("complete", 0, 0, "")
                 # Wait for wake event (with timeout to allow clean shutdown)
                 self._wake.wait(timeout=5.0)
                 self._wake.clear()
@@ -166,6 +177,53 @@ class OptimisationQueue:
             self._incoming.extend(items)
         self._wake.set()
         logger.debug("OptimisationQueue: received %d item(s)", len(items))
+
+    def reload_config(self) -> None:
+        """Refresh optimisation thresholds from the current config.
+
+        Called when the user changes image/video settings via the web UI.
+        Re-reads thresholds from ``self._state.config`` without recreating
+        the processor objects.  Takes effect on the next classification cycle.
+        """
+        config = self._state.config
+        display = config.display
+        sw = display.get("width") or 1920
+        sh = display.get("height") or 1080
+
+        # Image threshold config
+        image_cfg = config.image
+        old_img_enabled = self._image_opt_enabled
+        old_img_w = self._image_max_w
+        old_img_h = self._image_max_h
+        self._image_opt_enabled = image_cfg.get("optimisation_enabled", True)
+        self._image_max_w = image_cfg.get("optimise_max_width", 0) or sw
+        self._image_max_h = image_cfg.get("optimise_max_height", 0) or sh
+
+        # Video threshold config
+        video_cfg = config.video
+        old_vid_enabled = self._video_transcode_enabled
+        old_vid_w = self._video_max_w
+        old_vid_h = self._video_max_h
+        self._video_transcode_enabled = video_cfg.get("transcoding_enabled", True)
+        self._video_max_w = video_cfg.get("transcode_max_width", 0) or sw
+        self._video_max_h = video_cfg.get("transcode_max_height", 0) or sh
+
+        # Update the VideoProcessor's config if it exists
+        if self._video_processor is not None:
+            self._video_processor.update_config(video_cfg)
+
+        # Log changes for debugging
+        changes: list[str] = []
+        if old_img_enabled != self._image_opt_enabled:
+            changes.append(f"image_opt_enabled: {old_img_enabled}→{self._image_opt_enabled}")
+        if old_img_w != self._image_max_w or old_img_h != self._image_max_h:
+            changes.append(f"image_threshold: {old_img_w}x{old_img_h}→{self._image_max_w}x{self._image_max_h}")
+        if old_vid_enabled != self._video_transcode_enabled:
+            changes.append(f"video_transcode: {old_vid_enabled}→{self._video_transcode_enabled}")
+        if old_vid_w != self._video_max_w or old_vid_h != self._video_max_h:
+            changes.append(f"video_threshold: {old_vid_w}x{old_vid_h}→{self._video_max_w}x{self._video_max_h}")
+        if changes:
+            logger.info("OptimisationQueue config reloaded: %s", "; ".join(changes))
 
     # -- Internal: initialisation --------------------------------------------
 
@@ -339,32 +397,32 @@ class OptimisationQueue:
     # -- Internal: threshold checks ------------------------------------------
 
     def _image_needs_optimisation(self, item: MediaItem) -> bool:
-        """Check whether an image exceeds the optimisation threshold.
+        """Check whether an image needs optimisation.
 
-        Delegates to ``ImageProcessor.needs_optimisation()``.
+        Respects the play strategy set by the folder watcher:
+        if ``cached_path != original_path`` the item is marked
+        PLAY_CACHED and needs processing — but only if optimisation
+        is actually enabled.
         """
         if not self._image_opt_enabled:
             return False
-        return ImageProcessor.needs_optimisation(
-            item.width, item.height,
-            max_width=self._image_max_w,
-            max_height=self._image_max_h,
-        )
+        if item.cached_path != item.original_path:
+            return True
+        return False
 
     def _video_needs_optimisation(self, item: MediaItem) -> bool:
         """Check whether a video needs transcoding.
 
-        Delegates to ``VideoProcessor.needs_optimisation()``.
+        Respects the play strategy set by the folder watcher:
+        if ``cached_path != original_path`` the item is marked
+        PLAY_CACHED and needs processing — but only if transcoding
+        is actually enabled.
         """
         if not self._video_transcode_enabled:
             return False
-        codec = (item.exif_data.get("codec_name") or "")
-        return VideoProcessor.needs_optimisation(
-            item.width, item.height,
-            codec_name=codec,
-            max_width=self._video_max_w,
-            max_height=self._video_max_h,
-        )
+        if item.cached_path != item.original_path:
+            return True
+        return False
 
     # -- Internal: processing ------------------------------------------------
 
@@ -416,7 +474,7 @@ class OptimisationQueue:
                 )
             _write_progress(
                 "optimising_images",
-                total_remaining + len(optimised),
+                total_remaining,
                 idx + 1,
                 item.original_path.name,
             )
@@ -476,12 +534,26 @@ class OptimisationQueue:
             )
             result = processor.process(item.original_path, source=item.source)
             if result is not None:
-                self._state.add_playlist_items([result])
-                logger.info(
-                    "[OPTQ] VID done | %4dx%-4d → cached | %s",
-                    result.width, result.height,
-                    item.original_path.name,
-                )
+                # Guard: only add to playlist if the cached file is real.
+                # This prevents empty/corrupt stub files (from failed or
+                # partial transcodes) from entering the slideshow.
+                cached = result.cached_path
+                if cached == result.original_path or (
+                    cached.is_file() and cached.stat().st_size >= 1024
+                ):
+                    self._state.add_playlist_items([result])
+                    logger.info(
+                        "[OPTQ] VID done | %4dx%-4d → cached | %s",
+                        result.width, result.height,
+                        item.original_path.name,
+                    )
+                else:
+                    logger.warning(
+                        "[OPTQ] VID skip | cached file missing or too small "
+                        "(%s: %d bytes) — not adding to playlist",
+                        cached.name,
+                        cached.stat().st_size if cached.is_file() else 0,
+                    )
             _write_progress("transcoding", 1, 1, "")
         except Exception:
             logger.exception(
@@ -511,6 +583,7 @@ class OptimisationQueue:
         Returns a dict with keys ``width``, ``height``, ``duration``,
         ``codec_name``.  Values are 0/empty on failure.
         """
+        import json
         import subprocess
 
         try:
@@ -520,19 +593,22 @@ class OptimisationQueue:
                     "-select_streams", "v:0",
                     "-show_entries",
                     "stream=width,height,duration,codec_name",
-                    "-of", "csv=p=0",
+                    "-of", "json",
                     str(path),
                 ],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode == 0:
-                parts = result.stdout.strip().split(",")
-                return {
-                    "width": int(parts[0]) if len(parts) > 0 and parts[0] else 0,
-                    "height": int(parts[1]) if len(parts) > 1 and parts[1] else 0,
-                    "duration": float(parts[2]) if len(parts) > 2 and parts[2] else 0.0,
-                    "codec_name": parts[3].strip() if len(parts) > 3 else "",
-                }
+                probe = json.loads(result.stdout)
+                streams = probe.get("streams", [])
+                if streams:
+                    s = streams[0]
+                    return {
+                        "width": s.get("width", 0) or 0,
+                        "height": s.get("height", 0) or 0,
+                        "duration": float(s.get("duration", 0) or 0),
+                        "codec_name": s.get("codec_name", "") or "",
+                    }
         except Exception:
             pass
         return {"width": 0, "height": 0, "duration": 0.0, "codec_name": ""}

@@ -24,6 +24,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fullscreen": True,
         "fps_limit": 30,
         "hide_cursor": True,
+        "boot_splash": True,
     },
     "slideshow": {
         "image_duration_seconds": 15,
@@ -250,6 +251,47 @@ class Config:
         else:
             logger.warning("Config not found at %s, using defaults", path)
             return cls()
+
+
+# ---------------------------------------------------------------------------
+# Shared utility: resolve watch_paths to a list of Path objects
+# ---------------------------------------------------------------------------
+
+def resolve_watch_paths(
+    config: Config,
+    base_dir: Path | str | None = None,
+) -> list[Path]:
+    """Resolve ``sync.local.watch_paths`` to a list of enabled :class:`Path` objects.
+
+    Handles both the new object format (``[{"path": "...", "enabled": true}]``)
+    and the legacy flat-list format (``["media/", ...]``).
+
+    Args:
+        config: The application :class:`Config`.
+        base_dir: Directory that relative paths are resolved against.
+                  Defaults to ``/opt/metixel`` on Linux, ``Path.cwd()`` otherwise.
+    """
+    if base_dir is None:
+        base_dir = Path("/opt/metixel") if os.name == "posix" else Path.cwd()
+    else:
+        base_dir = Path(base_dir)
+
+    raw = config.sync.get("local", {}).get("watch_paths", [])
+    paths: list[Path] = []
+    for entry in raw:
+        if isinstance(entry, dict):
+            if entry.get("enabled", True):
+                p = Path(entry["path"])
+                if not p.is_absolute():
+                    p = base_dir / p
+                paths.append(p)
+        elif isinstance(entry, str):
+            # Legacy flat-list format — treat as enabled
+            p = Path(entry)
+            if not p.is_absolute():
+                p = base_dir / p
+            paths.append(p)
+    return paths
 
 
 # ---------------------------------------------------------------------------

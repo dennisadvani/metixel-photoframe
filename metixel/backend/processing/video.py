@@ -31,6 +31,24 @@ from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 logger = logging.getLogger(__name__)
 
 
+def _get_available_ram_bytes() -> int | None:
+    """Read available system RAM from ``/proc/meminfo``.
+
+    Returns ``MemAvailable`` in bytes, or ``None`` if the file cannot
+    be read (e.g. on a non-Linux dev machine).
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        return int(parts[1]) * 1024  # kB → bytes
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 class VideoProcessor:
     """Processes video files for display: transcode, extract thumbnail.
 
@@ -95,6 +113,31 @@ class VideoProcessor:
     @property
     def transcoding_enabled(self) -> bool:
         return self._transcoding_enabled
+
+    def update_config(self, video_config: dict[str, Any]) -> None:
+        """Update transcoding settings at runtime without recreating the processor.
+
+        Called by the ``OptimisationQueue`` when the user changes video
+        settings via the web UI.  Only the config-derived fields are
+        updated — the cache directories and screen dimensions are
+        immutable after construction.
+        """
+        self._cfg = video_config
+        self._transcoding_enabled = self._cfg.get("transcoding_enabled", True)
+        self._transcode_max_w = self._cfg.get("transcode_max_width", 0) or self._screen_w
+        self._transcode_max_h = self._cfg.get("transcode_max_height", 0) or self._screen_h
+        self._transcode_quality = self._cfg.get("transcode_quality", 23)
+        self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
+        self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
+        self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
+        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 50)
+        logger.debug(
+            "VideoProcessor config updated: transcode=%s, max=%dx%d, quality=%d, "
+            "sw_encoder=%s, cpu_throttle=%s (%d%%)",
+            self._transcoding_enabled, self._transcode_max_w, self._transcode_max_h,
+            self._transcode_quality, self._force_software_encoder,
+            self._cpu_throttle_enabled, self._cpu_throttle_pct,
+        )
 
     @staticmethod
     def needs_optimisation(
@@ -206,6 +249,12 @@ class VideoProcessor:
 
     # -- Helpers -------------------------------------------------------------
 
+    # Minimum free RAM (bytes) required before attempting a transcode.
+    # On a Pi 3 (1 GB) or Pi Zero 2 W (512 MB), a single ffmpeg process
+    # with libx264 can consume 400–800 MB for a 4K source.  If less than
+    # this is available, skip transcoding and fall back to the original file.
+    _MIN_FREE_RAM_FOR_TRANSCODE: int = 192 * 1024 * 1024  # 192 MB
+
     def _transcode(self, source: Path, dest: Path) -> None:
         """Transcode video to H.264 at configured resolution and quality.
 
@@ -220,6 +269,15 @@ class VideoProcessor:
         2. ``nice`` + ffmpeg ``-threads`` — priority + thread cap (no extra deps)
         3. ffmpeg ``-threads`` alone — limits decoder/encoder parallelism
         """
+        # ── Pre-flight memory check ───────────────────────────────
+        avail = _get_available_ram_bytes()
+        if avail is not None and avail < self._MIN_FREE_RAM_FOR_TRANSCODE:
+            raise RuntimeError(
+                f"Insufficient free RAM for transcode "
+                f"(available: {avail // (1024*1024)} MB, "
+                f"need: {self._MIN_FREE_RAM_FOR_TRANSCODE // (1024*1024)} MB)"
+            )
+
         encoders = self._select_encoders()
 
         # Build scale filter: scale to fit within target dimensions,
@@ -240,15 +298,6 @@ class VideoProcessor:
             cmd = [
                 "ffmpeg",
                 "-y",
-            ]
-
-            # -- Decoder thread limit (applies to ALL encoders) ---------
-            # Limits CPU used for decoding + scaling, which is the main
-            # CPU cost on Pi (hardware encoder handles the actual encode).
-            if thread_limit is not None and thread_limit > 0:
-                cmd += ["-threads", str(thread_limit)]
-
-            cmd += [
                 "-i", str(source),
                 "-c:v", encoder,
                 "-vf", scale_filter,
@@ -258,9 +307,8 @@ class VideoProcessor:
             if encoder == "libx264":
                 crf = max(0, min(51, self._transcode_quality))
                 cmd += ["-preset", "fast", "-crf", str(crf)]
-                # Software encoder: also limit encoding threads
+                # Apply thread limit to x264 encoder if throttling is active.
                 if thread_limit is not None and thread_limit > 0:
-                    # libx264 uses a separate -threads after the codec
                     cmd += ["-x264-params", f"threads={thread_limit}"]
             else:
                 # Map CRF-like quality to bitrate: lower CRF → higher bitrate
@@ -353,6 +401,7 @@ class VideoProcessor:
             return [
                 "cpulimit",
                 "-l", str(limit),
+                "-f",  # foreground: wait for child to exit (CRITICAL!)
                 "--"] + cmd
 
         # Strategy 2: nice — lowest scheduling priority

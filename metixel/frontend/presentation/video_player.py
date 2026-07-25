@@ -1392,8 +1392,9 @@ class VideoPlayer:
 
     @staticmethod
     def _probe(video_path: str) -> dict | None:
-        """Probe video metadata using ffprobe."""
+        """Probe video metadata using ffprobe (JSON format — field-order safe)."""
         try:
+            import json
             result = subprocess.run(
                 [
                     "ffprobe",
@@ -1401,7 +1402,7 @@ class VideoPlayer:
                     "-select_streams", "v:0",
                     "-show_entries",
                     "stream=width,height,r_frame_rate,duration",
-                    "-of", "csv=p=0",
+                    "-of", "json",
                     str(video_path),
                 ],
                 capture_output=True,
@@ -1411,21 +1412,23 @@ class VideoPlayer:
             if result.returncode != 0 or not result.stdout.strip():
                 return None
 
-            parts = result.stdout.strip().split(",")
-            if len(parts) < 3:
+            probe = json.loads(result.stdout)
+            streams = probe.get("streams", [])
+            if not streams:
                 return None
 
-            w = int(parts[0]) if parts[0] else 0
-            h = int(parts[1]) if parts[1] else 0
+            s = streams[0]
+            w = s.get("width", 0) or 0
+            h = s.get("height", 0) or 0
 
-            fps_str = parts[2] if len(parts) > 2 else "30/1"
+            fps_str = s.get("r_frame_rate", "30/1") or "30/1"
             fps = 30.0
             if "/" in fps_str:
                 num, den = fps_str.split("/")
                 if int(den) != 0:
                     fps = float(num) / float(den)
 
-            dur = float(parts[3]) if len(parts) > 3 and parts[3] else 0.0
+            dur = float(s.get("duration", 0) or 0)
 
             return {"width": w, "height": h, "fps": fps, "duration": dur}
         except Exception:

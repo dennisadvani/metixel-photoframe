@@ -27,6 +27,11 @@ RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
+# Limit total process memory — the kernel will OOM-kill the backend
+# (and all its children, including ffmpeg) before the whole system
+# runs out of swap.  On a Pi 3 (1 GB) this leaves ~256 MB for the OS.
+MemoryMax=768M
+
 # Security hardening
 NoNewPrivileges=yes
 PrivateTmp=yes

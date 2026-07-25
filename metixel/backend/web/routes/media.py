@@ -81,12 +81,11 @@ def serve_thumbnail(filename: str):
         return send_from_directory(str(thumb_dir), safe_name, mimetype="image/jpeg")
 
     # 2. Try the media folder for video frame caches
+    from metixel.shared.config import resolve_watch_paths
+
     config = state.config
-    media_folder = Path(
-        config.sync.get("local", {}).get("watch_paths", ["media/"])[0]
-    )
-    if not media_folder.is_absolute():
-        media_folder = Path("/opt/metixel") / media_folder
+    watch_paths = resolve_watch_paths(config)
+    media_folder = watch_paths[0] if watch_paths else Path("/opt/metixel/media/")
 
     if media_folder.exists():
         for candidate in media_folder.rglob(safe_name):
@@ -143,13 +142,9 @@ def list_media():
     config = state.config
 
     # Resolve all watch paths — multiple directories are supported
-    watch_paths_raw: list[str] = config.sync.get("local", {}).get("watch_paths", ["media/"])
-    watch_paths: list[Path] = []
-    for p in watch_paths_raw:
-        path = Path(p)
-        if not path.is_absolute():
-            path = Path("/opt/metixel") / path
-        watch_paths.append(path)
+    from metixel.shared.config import resolve_watch_paths
+
+    watch_paths: list[Path] = resolve_watch_paths(config)
 
     # Parse pagination
     try:
@@ -256,18 +251,22 @@ def _probe_image(path: Path) -> tuple[int, int]:
 
 
 def _probe_video(path: Path) -> tuple[int, int]:
-    """Get video dimensions via ffprobe."""
+    """Get video dimensions via ffprobe (JSON format — field-order safe)."""
     try:
+        import json
         import subprocess
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height",
-             "-of", "csv=p=0", str(path)],
+             "-of", "json", str(path)],
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0 and result.stdout.strip():
-            parts = result.stdout.strip().split(",")
-            return (int(parts[0]), int(parts[1]))
+            probe = json.loads(result.stdout)
+            streams = probe.get("streams", [])
+            if streams:
+                s = streams[0]
+                return (s.get("width", 0) or 0, s.get("height", 0) or 0)
     except Exception:
         pass
     return (0, 0)

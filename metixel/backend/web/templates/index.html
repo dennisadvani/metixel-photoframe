@@ -128,6 +128,15 @@
                         <input type="checkbox" id="cfg-shuffle" checked> Shuffle Playback
                     </label>
 
+                    <div class="form-group">
+                        <span class="form-label">Matte Color</span>
+                        <div style="display:flex;gap:0.35rem;align-items:center">
+                            <input type="color" id="cfg-matte-color" value="#141414" style="width:40px;height:32px;padding:2px;border:1px solid var(--border);border-radius:4px;cursor:pointer">
+                            <input type="text" id="cfg-matte-color-hex" value="#141414" maxlength="7" style="width:80px;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem;font-family:monospace" placeholder="#141414">
+                            <span style="font-size:0.78rem;color:var(--text-muted)">RGB hex for letterbox/pillarbox bars</span>
+                        </div>
+                    </div>
+
                     <button id="btn-save-slideshow">Save Slideshow Settings</button>
                 </div>
 
@@ -137,6 +146,15 @@
                     <label class="checkbox-row">
                         <input type="checkbox" id="cfg-video-enabled"> Video Playback
                     </label>
+                    <div class="form-group">
+                        <span class="form-label">Player Backend</span>
+                        <select id="cfg-video-player-backend">
+                            <option value="auto">Auto (VLC preferred)</option>
+                            <option value="vlc">VLC (subprocess)</option>
+                            <option value="ffmpeg">ffmpeg (GPU textures)</option>
+                        </select>
+                        <p class="hint" style="margin:0.2rem 0 0 0">VLC is recommended for Pi. ffmpeg pipeline is experimental — uses more CPU/GPU memory.</p>
+                    </div>
                     <div class="form-group">
                         <span class="form-label">Max Video Duration</span>
                         <input type="number" id="cfg-video-max-duration" min="0" max="3600" value="120">
@@ -218,6 +236,16 @@
                         <span class="form-label">FPS Limit</span>
                         <input type="number" id="cfg-fps-limit" min="10" max="60" value="30">
                     </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-fullscreen" checked> Fullscreen
+                    </label>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-hide-cursor" checked> Hide Mouse Cursor
+                    </label>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-boot-splash" checked> Boot Splash Screen
+                        <span style="font-size:0.78rem;color:var(--text-muted)">Show progress bar during startup media processing</span>
+                    </label>
                     <button id="btn-save-display">Save Display Settings</button>
                     <button id="btn-display-power" class="btn--secondary">⏻ Turn Display Off</button>
                 </div>

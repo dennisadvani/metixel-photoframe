@@ -479,6 +479,15 @@
         setChecked("cfg-smart-cover", s.smart_cover !== false);
         setChecked("cfg-shuffle", s.shuffle !== false);
 
+        // Matte color — parse RGB array to hex
+        var matte = s.matte_color || [20, 20, 20];
+        var matteHex = "#" + matte.map(function (c) {
+            var h = c.toString(16);
+            return h.length === 1 ? "0" + h : h;
+        }).join("");
+        setValue("cfg-matte-color", matteHex);
+        setValue("cfg-matte-color-hex", matteHex);
+
         // Video (new section — fall back to slideshow for legacy configs)
         var v = config.video || {};
         // Legacy fallback: if video section is empty/missing, use slideshow keys
@@ -497,6 +506,7 @@
             };
         }
         setChecked("cfg-video-enabled", v.playback_enabled === true);
+        setValue("cfg-video-player-backend", v.player_backend || "auto");
         setValue("cfg-video-max-duration", v.max_duration_seconds || 0);
         setChecked("cfg-transcode-enabled", v.transcoding_enabled !== false);
         setValue("cfg-transcode-max-width", v.transcode_max_width || 0);
@@ -526,6 +536,8 @@
         setValue("cfg-display-height", d.height || 0);
         setValue("cfg-fps-limit", d.fps_limit || 30);
         setChecked("cfg-fullscreen", d.fullscreen !== false);
+        setChecked("cfg-hide-cursor", d.hide_cursor !== false);
+        setChecked("cfg-boot-splash", d.boot_splash !== false);
         toggleResolutionFields(isAuto);
 
         // Fetch detected display resolution from the frontend (async, non-blocking)
@@ -551,6 +563,11 @@
             });
 
             document.getElementById("btn-save-slideshow")?.addEventListener("click", async () => {
+                // Parse matte color hex to RGB array
+                var hexVal = (document.getElementById("cfg-matte-color-hex")?.value || "#141414").replace("#", "");
+                var r = parseInt(hexVal.substring(0, 2), 16) || 20;
+                var g = parseInt(hexVal.substring(2, 4), 16) || 20;
+                var b = parseInt(hexVal.substring(4, 6), 16) || 20;
                 var result = await apiPut("/config/slideshow", {
                     image_duration_seconds: sanitizeInt(document.getElementById("cfg-duration").value, 30),
                     transition_duration_ms: sanitizeInt(document.getElementById("cfg-transition-duration").value, 1500),
@@ -558,6 +575,7 @@
                     fit_mode: document.getElementById("cfg-fit").value,
                     smart_cover: document.getElementById("cfg-smart-cover").checked,
                     shuffle: document.getElementById("cfg-shuffle").checked,
+                    matte_color: [r, g, b],
                 });
                 if (result) {
                     showToast("Slideshow settings saved!", "success");
@@ -585,10 +603,23 @@
                 if (lbl) lbl.textContent = this.value + "%";
             });
 
+            // Matte color: sync the color picker ↔ hex input
+            document.getElementById("cfg-matte-color")?.addEventListener("input", function () {
+                var hexInput = document.getElementById("cfg-matte-color-hex");
+                if (hexInput) hexInput.value = this.value;
+            });
+            document.getElementById("cfg-matte-color-hex")?.addEventListener("input", function () {
+                var val = this.value.trim();
+                if (/^#[0-9a-fA-F]{6}$/.test(val)) {
+                    var picker = document.getElementById("cfg-matte-color");
+                    if (picker) picker.value = val;
+                }
+            });
+
             document.getElementById("btn-save-video")?.addEventListener("click", async () => {
                 var result = await apiPut("/config/video", {
                     playback_enabled: document.getElementById("cfg-video-enabled").checked,
-                    player_backend: "auto",
+                    player_backend: document.getElementById("cfg-video-player-backend").value,
                     max_duration_seconds: sanitizeInt(document.getElementById("cfg-video-max-duration").value, 0),
                     transcoding_enabled: document.getElementById("cfg-transcode-enabled").checked,
                     transcode_max_width: sanitizeInt(document.getElementById("cfg-transcode-max-width").value, 0),
@@ -612,6 +643,9 @@
                     width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
                     height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
+                    fullscreen: document.getElementById("cfg-fullscreen").checked,
+                    hide_cursor: document.getElementById("cfg-hide-cursor").checked,
+                    boot_splash: document.getElementById("cfg-boot-splash").checked,
                 });
                 if (result) {
                     showToast("Display settings saved!", "success");

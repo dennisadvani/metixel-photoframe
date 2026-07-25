@@ -508,6 +508,17 @@ class FrontendRenderer:
                 cached = Path(entry["cached_path"])
                 thumb = Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None
 
+                # Guard: skip items whose cached file doesn't exist yet
+                # (e.g. transcoding still in progress from a previous run).
+                # PLAY_ORIGINAL items (cached == original) always pass.
+                if cached != original:
+                    if not cached.is_file() or cached.stat().st_size < 1024:
+                        logger.debug(
+                            "Skipping playlist entry — cached file not ready: %s",
+                            cached.name,
+                        )
+                        continue
+
                 items.append(MediaItem(
                     id=entry["id"],
                     original_path=original,
@@ -543,10 +554,13 @@ class FrontendRenderer:
         # images and rectangles reliably.  It quits cleanly before pi3d
         # takes over, avoiding SDL2 conflicts.
         splash_w, splash_h = 0, 0
-        try:
-            splash_w, splash_h = self._wait_for_backend_processing()
-        except Exception:
-            logger.exception("Progress screen failed — starting slideshow anyway")
+        if self._config.display.get("boot_splash", True):
+            try:
+                splash_w, splash_h = self._wait_for_backend_processing()
+            except Exception:
+                logger.exception("Progress screen failed — starting slideshow anyway")
+        else:
+            logger.info("Boot splash disabled by config — starting directly")
 
         # Initialize display backend (pi3d)
         self._backend = detect_backend()
@@ -619,13 +633,11 @@ class FrontendRenderer:
         # playlist file won't exist.  Fall back to direct folder scanning.
         if not playlist_items:
             logger.info("Backend playlist is empty — falling back to direct folder scan")
-            watch_paths_raw: list[str] = self._config.sync.get("local", {}).get(
-                "watch_paths", ["media/"],
-            )
-            for p in watch_paths_raw:
-                folder = Path(p)
-                if not folder.is_absolute():
-                    folder = self._config_path.parent.parent / folder
+            from metixel.shared.config import resolve_watch_paths
+
+            base_dir = self._config_path.parent.parent
+            watch_paths = resolve_watch_paths(self._config, base_dir=base_dir)
+            for folder in watch_paths:
                 if folder.exists():
                     logger.info("Scanning media folder: %s", folder)
                     items = self._presentation.scan_folder(folder)

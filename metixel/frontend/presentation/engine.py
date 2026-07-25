@@ -56,18 +56,21 @@ _VIDEO_SWAPPED = 2
 # Video frame cache helpers (module-level — no GPU/OpenGL dependency)
 # ---------------------------------------------------------------------------
 
-def _video_frame_cache_path(video_path: str, frame: int) -> Path:
+def _video_frame_cache_path(video_path: str, frame: int, *, cache_base: str = "cache") -> Path:
     """Return the cache path for a video frame.
 
     ``frame=1`` → first frame, ``frame=2`` → last frame.
-    Files are stored next to the video, e.g. ``video.mp4.1.frame``.
+    Files are stored in ``{cache_base}/videos/{hash}.{frame}.frame``
+    using a SHA-256 hash of the video path to avoid polluting the
+    source media directory.
     """
-    return Path(f"{video_path}.{frame}.frame")
+    file_hash = hashlib.sha256(video_path.encode()).hexdigest()[:16]
+    return Path(cache_base) / "videos" / f"{file_hash}.{frame}.frame"
 
 
-def _video_frame_is_cached(video_path: str, frame: int) -> bool:
+def _video_frame_is_cached(video_path: str, frame: int, *, cache_base: str = "cache") -> bool:
     """Check whether a cached frame file exists and is a valid JPEG."""
-    p = _video_frame_cache_path(video_path, frame)
+    p = _video_frame_cache_path(video_path, frame, cache_base=cache_base)
     if not p.exists() or p.stat().st_size == 0:
         return False
     # Validate that it's actually a readable JPEG — stale/corrupt
@@ -251,6 +254,7 @@ def _get_or_create_video_frame(
     *,
     screen_w: int = 1920,
     screen_h: int = 1080,
+    cache_base: str = "cache",
 ) -> Path | None:
     """Return the path to a cached video frame JPEG, creating it if needed.
 
@@ -262,11 +266,12 @@ def _get_or_create_video_frame(
     is kept.  Falls back to ``-ss duration-1.0`` if ``-sseof`` is
     unavailable (older ffmpeg).
 
-    The JPEG is downscaled to *screen_w* × *screen_h* and saved next to
-    the video file.  Returns ``None`` if extraction fails.
+    The JPEG is downscaled to *screen_w* × *screen_h* and saved to
+    ``{cache_base}/videos/{hash}.{frame}.frame``.  Returns ``None``
+    if extraction fails.
     """
-    cache_path = _video_frame_cache_path(video_path, frame)
-    if _video_frame_is_cached(video_path, frame):
+    cache_path = _video_frame_cache_path(video_path, frame, cache_base=cache_base)
+    if _video_frame_is_cached(video_path, frame, cache_base=cache_base):
         return cache_path
 
     if frame == 1:
@@ -295,6 +300,7 @@ def _get_or_create_video_frame(
         img = Image.fromarray(arr)
         if img.width > screen_w or img.height > screen_h:
             img.thumbnail((screen_w, screen_h), Image.LANCZOS)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             suffix=".jpg", delete=False, dir=cache_path.parent,
         ) as tmp:
@@ -393,6 +399,15 @@ class PresentationEngine:
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def _cache_base(self) -> str:
+        """Resolved cache directory from config (always absolute)."""
+        cache_dir = self._config.system.get("cache_dir", "cache/")
+        path = Path(cache_dir)
+        if not path.is_absolute():
+            path = Path("/opt/metixel") / path
+        return str(path)
 
     @property
     def _inactive(self) -> int:
@@ -1113,18 +1128,36 @@ class PresentationEngine:
         Called from the preload worker thread — CPU-only, no GPU.
         """
         video_path = str(item.cached_path or item.original_path)
+
+        # Guard: if cached path != original and the file doesn't exist
+        # (e.g. transcoding not yet complete), don't attempt to play it.
+        from pathlib import Path as _Path
+        _cached = _Path(video_path)
+        if str(item.cached_path) != str(item.original_path):
+            if not _cached.is_file() or _cached.stat().st_size < 1024:
+                logger.warning(
+                    "Video cached file not ready — skipping: %s", video_path,
+                )
+                return None
+
         try:
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-select_streams", "v:0",
                  "-show_entries", "stream=width,height,duration",
-                 "-of", "csv=p=0", video_path],
+                 "-of", "json", video_path],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
                 return None
-            parts = result.stdout.strip().split(",")
-            vw, vh = int(parts[0]), int(parts[1])
-            duration = float(parts[2]) if len(parts) > 2 else 0.0
+            import json
+            probe = json.loads(result.stdout)
+            streams = probe.get("streams", [])
+            if not streams:
+                return None
+            s = streams[0]
+            vw = s.get("width", 0) or 0
+            vh = s.get("height", 0) or 0
+            duration = float(s.get("duration", 0) or 0)
         except Exception:
             logger.warning("ffprobe failed for %s", video_path, exc_info=True)
             return None
@@ -1134,6 +1167,7 @@ class PresentationEngine:
         return _get_or_create_video_frame(
             video_path, 1, vw, vh, duration,
             screen_w=screen_w, screen_h=screen_h,
+            cache_base=self._cache_base,
         )
 
     def _upload_pending_preload(self) -> None:
@@ -1178,16 +1212,29 @@ class PresentationEngine:
     # ------------------------------------------------------------------
 
     def _video_launch(self, item: MediaItem) -> None:
-        """Launch VLC for a video item without blocking the render loop.
+        """Launch the video player for a video item without blocking the render loop.
 
         The first frame should already be in the active texture slot
-        (loaded via the normal preload → advance flow).  VLC plays on
-        top.  The state machine in :meth:`_video_tick` handles the
+        (loaded via the normal preload → advance flow).  The player runs
+        on top.  The state machine in :meth:`_video_tick` handles the
         last-frame under-swap and post-playback transition.
+
+        Player backend selection (``video.player_backend`` config):
+        - ``"auto"`` (default): tries VLC subprocess first, falls back to ffmpeg.
+        - ``"vlc"``: uses VLC as a subprocess (borderless window overlay).
+          Recommended for Pi — zero Python heap memory during playback.
+        - ``"ffmpeg"``: uses ffmpeg to decode frames into GPU textures.
+          Currently experimental — falls back to VLC on Pi targets.
         """
+        # ── Resolve player backend ────────────────────────────────────
+        video_cfg = self._config.video if hasattr(self._config, "video") else {}
+        player_backend = video_cfg.get("player_backend", "auto")
+        # Fallback to legacy slideshow key if video section not present
+        if not video_cfg:
+            player_backend = self._config.slideshow.get("video_player_backend", "auto")
+
         if not self._config.slideshow.get("video_playback_enabled", True):
             # Also check new video section
-            video_cfg = self._config.video if hasattr(self._config, "video") else {}
             if video_cfg:
                 if not video_cfg.get("playback_enabled", True):
                     logger.debug("Video playback disabled — skipping %s", item.original_path)
@@ -1203,14 +1250,20 @@ class PresentationEngine:
             result = subprocess.run(
                 ["ffprobe", "-v", "error", "-select_streams", "v:0",
                  "-show_entries", "stream=width,height,duration",
-                 "-of", "csv=p=0", video_path],
+                 "-of", "json", video_path],
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
                 raise RuntimeError("ffprobe failed")
-            parts = result.stdout.strip().split(",")
-            vw, vh = int(parts[0]), int(parts[1])
-            duration = float(parts[2]) if len(parts) > 2 else 0.0
+            import json
+            probe = json.loads(result.stdout)
+            streams = probe.get("streams", [])
+            if not streams:
+                raise RuntimeError("no video stream")
+            s = streams[0]
+            vw = s.get("width", 0) or 0
+            vh = s.get("height", 0) or 0
+            duration = float(s.get("duration", 0) or 0)
         except Exception:
             logger.warning("Cannot probe video: %s — skipping", video_path)
             self._advance()
@@ -1224,6 +1277,7 @@ class PresentationEngine:
             first_cache = _get_or_create_video_frame(
                 video_path, 1, vw, vh, duration,
                 screen_w=screen_w, screen_h=screen_h,
+                cache_base=self._cache_base,
             )
             if first_cache is not None:
                 self._tex[self._active] = self._backend.load_texture(first_cache)
@@ -1232,6 +1286,32 @@ class PresentationEngine:
         # --- Compute layout (needed for both the pre-VLC draw and VLC) ---
         resolved_fit = self._resolve_fit_mode(item)
 
+        # ── Select and launch player backend ───────────────────────────
+        if player_backend == "ffmpeg":
+            # ffmpeg GPU-texture pipeline (experimental — Phase 2)
+            logger.warning(
+                "ffmpeg player backend selected but not yet integrated — "
+                "falling back to VLC for %s", video_path,
+            )
+            player_backend = "vlc"  # Fall through to VLC path below
+
+        if player_backend in ("auto", "vlc"):
+            self._video_launch_vlc(
+                item, video_path, vw, vh, duration,
+                screen_w, screen_h, resolved_fit,
+            )
+
+    def _video_launch_vlc(
+        self, item: MediaItem, video_path: str,
+        vw: int, vh: int, duration: float,
+        screen_w: int, screen_h: int, resolved_fit: str,
+    ) -> None:
+        """Launch VLC as a subprocess for video playback.
+
+        VLC creates its own borderless window on top of the pi3d display.
+        The state machine in :meth:`_video_tick` polls the subprocess and
+        handles the last-frame under-swap.
+        """
         # --- Draw first frame to both buffers before VLC starts ----------
         # VLC creates its own window on top of the pi3d display.  The
         # first frame must be visible in BOTH pi3d buffers before VLC
@@ -1336,6 +1416,7 @@ class PresentationEngine:
             video_path, 2,
             video_vw, video_vh, video_duration,
             screen_w=screen_w, screen_h=screen_h,
+            cache_base=self._cache_base,
         )
         if last_cache is None:
             logger.warning(
@@ -1571,7 +1652,7 @@ class PresentationEngine:
                         pass
                     # Fall back to the raw first-frame cache
                     if thumb is None:
-                        first_frame = _video_frame_cache_path(video_path, 1)
+                        first_frame = _video_frame_cache_path(video_path, 1, cache_base=self._cache_base)
                         if first_frame.exists():
                             thumb = str(first_frame)
                 data = {
@@ -1688,13 +1769,12 @@ class PresentationEngine:
                 "Video playback toggled (%s → %s) — regenerating queue",
                 old_video, new_video,
             )
-            media_folder = config.sync.get("local", {}).get(
-                "watch_paths", ["media/"],
-            )[0]
-            folder_path = Path(media_folder)
-            if not folder_path.is_absolute():
-                folder_path = Path.cwd() / folder_path
-            items = self.scan_folder(folder_path)
-            self.set_queue(items)
+            from metixel.shared.config import resolve_watch_paths
+
+            watch_paths = resolve_watch_paths(config)
+            if watch_paths:
+                folder_path = watch_paths[0]
+                items = self.scan_folder(folder_path)
+                self.set_queue(items)
 
         logger.debug("Presentation engine config reloaded")
