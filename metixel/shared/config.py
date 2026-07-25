@@ -37,6 +37,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
     },
+    "image": {
+        "optimisation_enabled": True,
+        "optimise_max_width": 0,  # 0 = use display width; images wider than this get resized
+        "optimise_max_height": 0,  # 0 = use display height; images taller than this get resized
+    },
     "video": {
         "playback_enabled": True,
         "player_backend": "auto",  # auto, vlc, ffmpeg
@@ -57,12 +62,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "api_key": "",
             "album_name": "",
             "strict_sync": False,
-            "sync_dir": "cache/immich_sync/",
+            "sync_dir": "media/sync/immich/",
             "poll_interval_seconds": 3600,  # 60 minutes
         },
         "local": {
             "enabled": True,
-            "watch_paths": ["media/", "cache/immich_sync/"],
+            "watch_paths": [
+                {"path": "media/my_media/", "enabled": True},
+                {"path": "media/sample_media/", "enabled": True},
+                {"path": "media/sync/immich/", "enabled": True},
+            ],
             "poll_interval_seconds": 30,
         },
     },
@@ -112,6 +121,23 @@ class Config:
     @property
     def slideshow(self) -> dict[str, Any]:
         return self._data["slideshow"]
+
+    @property
+    def image(self) -> dict[str, Any]:
+        """Image optimisation settings with backward-compatible defaults.
+
+        If the ``image`` section is missing from the config (e.g. an older
+        config file), returns sensible defaults.
+        """
+        img = self._data.get("image", {})
+        if not img:
+            img = {
+                "optimisation_enabled": True,
+                "optimise_max_width": 0,
+                "optimise_max_height": 0,
+            }
+            self._data["image"] = img
+        return img
 
     @property
     def video(self) -> dict[str, Any]:

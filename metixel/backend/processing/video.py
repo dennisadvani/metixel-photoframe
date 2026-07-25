@@ -34,9 +34,28 @@ logger = logging.getLogger(__name__)
 class VideoProcessor:
     """Processes video files for display: transcode, extract thumbnail.
 
-    Phase 1: Uses ``h264_v4l2m2m`` hardware encoder on Raspberry Pi.
-    Phase 2: Uses VA-API or software encoding depending on platform.
+    Phase 1: Uses software libx264 by default for the best quality.
+    Hardware-accelerated encoding (h264_v4l2m2m on Pi) is available as an
+    opt-in alternative when speed is preferred over quality.
+
+    Transcoding is configurable:
+    - On/off toggle (when off, original file is used directly)
+    - Target resolution (aspect-ratio-preserving scale-to-fit)
+    - Quality (CRF for software, bitrate for hardware encoders)
+    - Software vs hardware encoder selection
+    - CPU throttling via ``cpulimit`` or ``nice`` to keep the photoframe
+      responsive during transcoding
+    - Transcode timeout (default 2 hours)
+
+    Threshold gating:
+    - Use :meth:`needs_optimisation` to check whether a video needs
+      transcoding BEFORE calling :meth:`process`.
+    - Videos already in H.264 within the resolution limits skip transcoding
+      and can go directly to the slideshow playlist.
     """
+
+    #: Known H.264 codec names that skip transcoding when within limits.
+    H264_CODECS = {"h264", "avc", "avc1", "h.264", "avc1."}
 
     def __init__(
         self,
@@ -76,6 +95,39 @@ class VideoProcessor:
     @property
     def transcoding_enabled(self) -> bool:
         return self._transcoding_enabled
+
+    @staticmethod
+    def needs_optimisation(
+        width: int, height: int,
+        codec_name: str = "",
+        max_width: int = 0, max_height: int = 0,
+    ) -> bool:
+        """Check whether a video needs transcoding.
+
+        Args:
+            width: Video pixel width.
+            height: Video pixel height.
+            codec_name: Video codec (e.g. "h264", "hevc").  Videos already
+                in H.264 skip transcoding when within resolution limits.
+            max_width: Threshold width (0 = use display width).
+            max_height: Threshold height (0 = use display height).
+
+        Returns:
+            True if the video should be transcoded, False if it's already
+            in a compatible format within limits.
+        """
+        if width <= 0 or height <= 0:
+            return True  # Unknown dimensions — transcode to be safe
+        if max_width > 0 and width > max_width:
+            return True
+        if max_height > 0 and height > max_height:
+            return True
+        # If the codec is already H.264, no need to transcode
+        codec_lower = codec_name.lower()
+        if codec_lower and codec_lower not in VideoProcessor.H264_CODECS:
+            return True
+        # Within limits AND H.264 — no optimisation needed
+        return False
 
     def process(self, source_path: Path, source: str = "local") -> MediaItem | None:
         """Process a single video file. Returns MediaItem or None on failure.
@@ -346,21 +398,31 @@ class VideoProcessor:
             return None
 
     def _extract_thumbnail(self, source: Path, dest: Path) -> None:
-        """Extract a thumbnail frame at 2 seconds into the video."""
+        """Extract a thumbnail frame at 2 seconds into the video.
+
+        Uses fast (keyframe) seeking with ``-ss`` before ``-i`` plus
+        ``-noaccurate_seek`` to avoid decoding from the start.  A
+        generous timeout accommodates heavy 4K sources on a Pi 2/3
+        where software decode of a single frame can take >30 seconds.
+        """
         cmd = [
             "ffmpeg",
             "-y",
+            "-noaccurate_seek",
             "-ss", "2",
             "-i", str(source),
             "-vframes", "1",
             "-q:v", "2",
             str(dest),
         ]
-        # Output goes to a file; stdout/stderr are irrelevant.
+        # Use the same timeout as probing (both are one-shot ffmpeg
+        # invocations that shouldn't take minutes, but 4K on a Pi 3
+        # can legitimately need over 30 seconds to initialise the
+        # decoder and seek to the first keyframe).
         subprocess.run(
             cmd, check=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=30,
+            timeout=120,
         )
 
     def _probe(self, path: Path) -> dict:

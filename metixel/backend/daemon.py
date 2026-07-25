@@ -25,7 +25,8 @@ class BackendDaemon:
 
     Services managed:
     - Web server (Flask) — foreground thread
-    - Sync engine (Immich + folder watcher) — background thread
+    - Sync engine (Immich + folder watcher) — background threads
+    - OptimisationQueue — background thread (image/video processing)
     - MQTT client — background thread
     - Input handlers (CEC, IR) — background threads
     """
@@ -50,6 +51,7 @@ class BackendDaemon:
             os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),
         )
 
+        self._start_optimisation_queue()
         self._start_sync_engine()
         self._start_mqtt_client()
         self._start_input_handlers()
@@ -71,10 +73,30 @@ class BackendDaemon:
 
     # -- Service starters ----------------------------------------------------
 
+    def _start_optimisation_queue(self) -> None:
+        """Start the media optimisation queue in a background thread.
+
+        Runs between the folder watcher (which feeds it metadata stubs)
+        and the slideshow playlist (which consumes optimised items).
+        Must be started BEFORE the folder watcher so the queue is
+        available to receive items.
+        """
+        from metixel.backend.processing.optimisation_queue import OptimisationQueue
+
+        self._opt_queue = OptimisationQueue(self._state)
+        t = threading.Thread(
+            target=self._opt_queue.run, name="optimisation-queue", daemon=True,
+        )
+        t.start()
+        self._threads.append(t)
+        logger.info("Optimisation queue started")
+
     def _start_sync_engine(self) -> None:
         """Start the media sync engine in a background thread.
 
         Handles both Immich API sync and local folder watching.
+        The folder watcher is connected to the OptimisationQueue so
+        discovered items flow through the complete pipeline.
         """
         config = self._state.config
 
@@ -91,7 +113,10 @@ class BackendDaemon:
             logger.info("Local folder sync enabled — starting folder watcher")
             from metixel.backend.sync.folder_watcher import FolderWatcher
 
-            watcher = FolderWatcher(self._state)
+            watcher = FolderWatcher(
+                self._state,
+                opt_queue=getattr(self, "_opt_queue", None),
+            )
             t = threading.Thread(target=watcher.run, name="folder-watcher", daemon=True)
             t.start()
             self._threads.append(t)

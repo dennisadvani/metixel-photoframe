@@ -28,6 +28,12 @@ class ImageProcessor:
     - Releases PIL Image objects immediately after use
     - Saves EXIF data separately to avoid keeping it in memory
     - Target cache format: JPEG quality 85 (good balance of size/quality)
+
+    Threshold gating:
+    - Use :meth:`needs_optimisation` to check whether an image exceeds
+      the optimisation threshold BEFORE calling :meth:`process`.
+    - Images at or below the threshold don't need processing and can go
+      directly to the slideshow playlist.
     """
 
     JPEG_QUALITY = 85
@@ -41,6 +47,31 @@ class ImageProcessor:
         self._screen_h = screen_height
         self._image_cache.mkdir(parents=True, exist_ok=True)
         self._thumb_cache.mkdir(parents=True, exist_ok=True)
+
+    @staticmethod
+    def needs_optimisation(
+        width: int, height: int,
+        max_width: int = 0, max_height: int = 0,
+    ) -> bool:
+        """Check whether an image exceeds the optimisation threshold.
+
+        Args:
+            width: Image pixel width.
+            height: Image pixel height.
+            max_width: Threshold width (0 = use display width).
+            max_height: Threshold height (0 = use display height).
+
+        Returns:
+            True if the image should be resized, False if it's already
+            within limits.
+        """
+        if width <= 0 or height <= 0:
+            return True  # Unknown dimensions — optimise to be safe
+        if max_width > 0 and width > max_width:
+            return True
+        if max_height > 0 and height > max_height:
+            return True
+        return False
 
     def process(self, source_path: Path, source: str = "local") -> MediaItem | None:
         """Process a single image file.

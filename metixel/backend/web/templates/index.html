@@ -230,21 +230,65 @@
             <section id="page-sync" class="page">
                 <div class="card">
                     <h2>Local Folders</h2>
-                    <p class="hint">Watch local folders for new media files.</p>
+                    <p class="hint">Watch local folders for new media files. Each path can be individually enabled or disabled.</p>
                     <label class="checkbox-row">
                         <input type="checkbox" id="cfg-local-enabled" checked> Enable Local Sync
                     </label>
-                    <div class="form-group">
-                        <span class="form-label">Watch Paths</span>
-                        <input type="text" id="cfg-local-paths" value="media/, cache/immich_sync/" placeholder="media/, cache/immich_sync/">
-                        <p class="hint" style="margin:0.2rem 0 0 0">Comma-separated list of folders to watch. The Immich sync directory is included by default so synced assets appear automatically.</p>
+
+                    <!-- Watch Paths (per-row) -->
+                    <div style="margin-top:0.8rem">
+                        <span class="form-label" style="margin-bottom:0.3rem;display:block">Watch Paths</span>
+                        <div id="watch-paths-list" style="margin-bottom:0.5rem">
+                            <!-- Dynamically populated by dashboard.js -->
+                        </div>
+                        <button id="btn-add-watch-path" class="btn--secondary" style="font-size:0.82rem">+ Add Path</button>
                     </div>
-                    <div class="form-group">
+
+                    <div class="form-group" style="margin-top:0.8rem">
                         <span class="form-label">Poll Interval</span>
                         <input type="number" id="cfg-local-interval" min="10" max="600" value="30">
                         <span style="font-size:0.8rem;color:var(--text-muted)">seconds</span>
                     </div>
                     <button id="btn-save-local-sync">Save Local Sync Settings</button>
+                </div>
+
+                <!-- Folder Browser Modal -->
+                <div id="folder-browser-modal" class="modal" style="display:none">
+                    <div class="modal-content" style="max-width:500px">
+                        <h3>Browse Folders</h3>
+                        <div style="margin-bottom:0.5rem;font-size:0.82rem;word-break:break-all">
+                            <span id="browser-current-path">/opt/metixel/</span>
+                        </div>
+                        <ul id="browser-entries" style="list-style:none;padding:0;margin:0 0 0.8rem 0;max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">
+                            <li style="padding:0.5rem;color:var(--text-muted)">Loading…</li>
+                        </ul>
+                        <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+                            <button id="btn-browser-parent" class="btn--secondary">⬆ Parent</button>
+                            <button id="btn-browser-select" class="btn--primary">Select</button>
+                            <button id="btn-browser-cancel" class="btn--secondary">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <h2>Image Optimisation</h2>
+                    <p class="hint">Control when images are resized. Images at or below the threshold are used as-is (faster startup).</p>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-image-opt-enabled" checked> Enable Image Optimisation
+                    </label>
+                    <div id="image-opt-settings" style="margin-left:1.5rem;padding-left:0.5rem;border-left:3px solid var(--border)">
+                        <div class="form-group">
+                            <span class="form-label">Max Width</span>
+                            <input type="number" id="cfg-image-max-width" min="0" max="7680" value="0" placeholder="1920">
+                            <span style="font-size:0.8rem;color:var(--text-muted)">px (0 = use display width)</span>
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">Max Height</span>
+                            <input type="number" id="cfg-image-max-height" min="0" max="4320" value="0" placeholder="1080">
+                            <span style="font-size:0.8rem;color:var(--text-muted)">px (0 = use display height)</span>
+                        </div>
+                    </div>
+                    <button id="btn-save-image-opt">Save Image Optimisation</button>
                 </div>
 
                 <div class="card">
@@ -281,7 +325,7 @@
 
                     <div class="form-group">
                         <span class="form-label">Sync Directory</span>
-                        <input type="text" id="cfg-immich-sync-dir" placeholder="cache/immich_sync/">
+                        <input type="text" id="cfg-immich-sync-dir" placeholder="media/sync/immich/">
                         <p class="hint" style="margin:0.2rem 0 0 0">Where downloaded assets are stored. Relative paths are under <code>/opt/metixel/</code>.</p>
                     </div>
 

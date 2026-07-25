@@ -180,7 +180,21 @@ class StateManager:
                 self._playlist.extend(new_items)
                 self._write_playlist_file()
                 self._notify_playlist_change()
-                logger.info("Added %d items to playlist (total: %d)", len(new_items), len(self._playlist))
+                logger.info(
+                    "[LIST] +%d items (total: %d)",
+                    len(new_items), len(self._playlist),
+                )
+                for item in new_items:
+                    logger.debug(
+                        "[LIST]  add  | %-5s | %s",
+                        item.media_type.value,
+                        item.original_path.name,
+                    )
+            else:
+                logger.debug(
+                    "[LIST] no-op | %d item(s) already in playlist",
+                    len(items),
+                )
 
     def remove_playlist_items(self, item_ids: set[str]) -> int:
         """Remove items from the playlist by id. Returns count removed."""
@@ -191,7 +205,9 @@ class StateManager:
             if removed > 0:
                 self._write_playlist_file()
                 self._notify_playlist_change()
-                logger.info("Removed %d items from playlist (total: %d)", removed, len(self._playlist))
+                logger.info(
+                    "[LIST] -%d items (total: %d)", removed, len(self._playlist),
+                )
             return removed
 
     def clear_playlist(self) -> None:

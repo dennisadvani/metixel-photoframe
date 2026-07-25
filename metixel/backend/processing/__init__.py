@@ -4,6 +4,7 @@
 
 from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.matte import MatteGenerator
+from metixel.backend.processing.optimisation_queue import OptimisationQueue
 from metixel.backend.processing.video import VideoProcessor
 
-__all__ = ["ImageProcessor", "VideoProcessor", "MatteGenerator"]
+__all__ = ["ImageProcessor", "OptimisationQueue", "VideoProcessor", "MatteGenerator"]

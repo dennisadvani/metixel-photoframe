@@ -197,7 +197,7 @@ class ImmichSyncer:
         self._strict_sync: bool = immich_cfg.get("strict_sync", False)
         self._poll_interval: int = immich_cfg.get("poll_interval_seconds", 3600)
 
-        sync_dir = immich_cfg.get("sync_dir", "cache/immich_sync/")
+        sync_dir = immich_cfg.get("sync_dir", "media/sync/immich/")
         self._sync_dir: Path = Path(sync_dir)
         if not self._sync_dir.is_absolute():
             self._sync_dir = Path("/opt/metixel") / self._sync_dir

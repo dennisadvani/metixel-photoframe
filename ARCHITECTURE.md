@@ -1,8 +1,8 @@
 # Metixel Photoframe — Architecture & Implementation Plan
 
-> **Version:** 1.0.0  
-> **Status:** Implementation Phase 0  
-> **Target Hardware Phase 1:** Raspberry Pi 2, 3, Zero 2 W (512MB–1GB RAM, VideoCore IV)  
+> **Version:** 1.1.0
+> **Status:** Implementation Phase 1
+> **Target Hardware Phase 1:** Raspberry Pi 2, 3, Zero 2 W (512MB–1GB RAM, VideoCore IV)
 > **Target Hardware Phase 2:** Raspberry Pi 4, 5, Radxa Zero 3W (1GB–8GB RAM, VideoCore VI/VII, Mali G52)
 
 ---
@@ -102,6 +102,7 @@ graph TB
     subgraph "Metixel Photoframe — Core System"
         subgraph "Backend Daemon (Python)"
             SYNC[Sync Engine<br/>Immich + Folder Watcher]
+            OPTQ[Optimisation Queue<br/>Image resize + Video transcode]
             PROC[Media Processor<br/>Resize/Transcode/EXIF]
             STATE[State Manager<br/>JSON Config + inotify]
             HTTP[Web Server<br/>Flask on :8080]
@@ -139,8 +140,9 @@ graph TB
     HA <-->|MQTT| MQTT
     NAS -->|File Watch| SYNC
     USB -->|File Watch| SYNC
-    SYNC --> PROC
-    PROC --> CACHE
+    SYNC -->|Metadata stubs| OPTQ
+    OPTQ -->|Optimised items| CACHE
+    OPTQ -->|Ready-to-play| STATE
     STATE <--> CONFIG
     HTTP --> WEBUI
     STATE -->|inotify event| ENGINE
@@ -199,6 +201,7 @@ metixel-photoframe/                           # Repository root
 │   │   │   ├── __init__.py
 │   │   │   ├── image.py              # EXIF parse, resize, downsample, rotate
 │   │   │   ├── video.py              # ffmpeg transcode, thumbnail
+│   │   │   ├── optimisation_queue.py # 4-phase pipeline orchestrator
 │   │   │   └── matte.py              # Virtual matte board generation
 │   │   ├── web/
 │   │   │   ├── __init__.py
@@ -434,28 +437,63 @@ Next frame reflects change
 
 ## 6. Detailed Subsystem Design
 
-### 6.1 Media Processing Pipeline
+### 6.1 Media Processing Pipeline (4-Phase)
 
 ```
-Original File (16MP JPEG / 4K video)
-    │
-    ▼
-MediaProcessor.ingest(file_path)
-    │
-    ├─ Compute SHA-256 hash → skip if cached
-    │
-    ├─ [Image] Pillow.open()
-    │   ├─ Read EXIF: orientation, date taken, GPS
-    │   ├─ Auto-rotate via EXIF Orientation
-    │   ├─ Resize to screen resolution (LANCZOS)
-    │   ├─ Aspect ratio mismatch → virtual matte
-    │   └─ Save cached JPEG + thumbnail
-    │
-    └─ [Video] ffmpeg subprocess
-        ├─ Probe resolution, codec, duration
-        ├─ Transcode: h264_v4l2m2m (HW) or libx264 (SW)
-        ├─ Extract thumbnail at t=2s
-        └─ Save cached MP4 + thumbnail
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 1: WATCH (FolderWatcher)                              │
+│                                                             │
+│  Scan enabled watch paths → gather minimal metadata only:   │
+│  • File type (image/video by extension)                     │
+│  • Pixel dimensions (PIL header for images, ffprobe for     │
+│    videos)                                                  │
+│  • Video codec name (for threshold gating)                  │
+│                                                             │
+│  Does NOT resize, transcode, or add to playlist.            │
+│  Pushes metadata stubs to the OptimisationQueue.            │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ list of MediaItem stubs
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 2: OPTIMISE (OptimisationQueue — background thread)   │
+│                                                             │
+│  Classifies each item against thresholds:                   │
+│  ┌─────────────────────┐  ┌─────────────────────┐           │
+│  │ Image threshold     │  │ Video threshold     │           │
+│  │ Default: display    │  │ Default: display    │           │
+│  │ resolution.         │  │ resolution + must   │           │
+│  │ Skip if ≤ threshold │  │ be H.264 codec.     │           │
+│  │ (UI overridable).   │  │ Skip if both met.   │           │
+│  └────────┬────────────┘  └────────┬────────────┘           │
+│           │                        │                        │
+│  Priority: Images first → Videos second.                    │
+│  Current job finishes before switching.                     │
+│  Cleanup partial transcodes on startup.                     │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ Optimised MediaItems
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 3: QUEUE (StateManager playlist → PresentationEngine) │
+│                                                             │
+│  Slideshow playlist contains ONLY ready-to-play items:      │
+│  • Images ≤ threshold (no opt needed)                       │
+│  • Optimised images (post-resize)                           │
+│  • Videos ≤ threshold + H.264 codec                         │
+│  • Optimised videos (post-transcode)                        │
+│                                                             │
+│  Playlist persisted to /run/metixel/playlist.json.          │
+│  Frontend reads via polling + inotify.                      │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+                       ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 4: SYNC (Immich Syncer → feeds into Phase 1)         │
+│                                                             │
+│  Downloads to media/sync/immich/ (default).                 │
+│  This directory is a watch path — picked up by Phase 1     │
+│  on the next poll cycle.                                    │
+│  Schedule-based or manually triggered.                      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 **RAM budget for Phase 1 (512MB Pi Zero W):**

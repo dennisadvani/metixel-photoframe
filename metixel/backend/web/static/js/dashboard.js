@@ -666,6 +666,227 @@
         if (progressDiv) progressDiv.style.display = "none";
     }
 
+    // -- Watch Paths (per-row) ----------------------------------------------
+
+    /**
+     * Render all watch path rows from the config array.
+     * @param {Array} paths - Array of {path, enabled} objects.
+     */
+    function renderWatchPaths(paths) {
+        var list = document.getElementById("watch-paths-list");
+        if (!list) return;
+        list.innerHTML = "";
+
+        // Ensure we have at least the defaults if config is empty
+        if (!paths || paths.length === 0) {
+            paths = [
+                { path: "media/my_media/", enabled: true },
+                { path: "media/sample_media/", enabled: true },
+                { path: "media/sync/immich/", enabled: true }
+            ];
+        }
+
+        paths.forEach(function (entry) {
+            // Support both new object format and legacy string format
+            var pathVal, enabled;
+            if (typeof entry === "object" && entry !== null) {
+                pathVal = entry.path || "";
+                enabled = entry.enabled !== false;
+            } else {
+                pathVal = String(entry);
+                enabled = true;
+            }
+            addWatchPathRow(pathVal, enabled);
+        });
+    }
+
+    /**
+     * Add a single watch path row to the DOM.
+     * @param {string} pathVal - The folder path.
+     * @param {boolean} enabled - Whether the path is enabled.
+     * @param {boolean} focus - Whether to focus the input (for new rows).
+     */
+    function addWatchPathRow(pathVal, enabled, focus) {
+        var list = document.getElementById("watch-paths-list");
+        if (!list) return;
+
+        var row = document.createElement("div");
+        row.className = "watch-path-row";
+        row.style.cssText = "display:flex;gap:0.35rem;align-items:center;margin-bottom:0.35rem";
+
+        // Enable toggle
+        var toggle = document.createElement("input");
+        toggle.type = "checkbox";
+        toggle.checked = enabled !== false;
+        toggle.title = "Enable/disable this watch path";
+        toggle.style.cssText = "flex-shrink:0;margin:0";
+
+        // Path input
+        var input = document.createElement("input");
+        input.type = "text";
+        input.value = pathVal;
+        input.placeholder = "media/my_media/";
+        input.style.cssText = "flex:1;min-width:140px;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem";
+
+        // Browse button
+        var browseBtn = document.createElement("button");
+        browseBtn.type = "button";
+        browseBtn.textContent = "📁";
+        browseBtn.title = "Browse folders";
+        browseBtn.className = "btn--secondary";
+        browseBtn.style.cssText = "flex-shrink:0;padding:0.3rem 0.5rem;font-size:0.9rem";
+        browseBtn.addEventListener("click", function () {
+            openFolderBrowser(input);
+        });
+
+        // Remove button
+        var removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "✕";
+        removeBtn.title = "Remove this watch path";
+        removeBtn.className = "btn--danger";
+        removeBtn.style.cssText = "flex-shrink:0;padding:0.3rem 0.5rem;font-size:0.82rem";
+        removeBtn.addEventListener("click", function () {
+            row.remove();
+        });
+
+        row.appendChild(toggle);
+        row.appendChild(input);
+        row.appendChild(browseBtn);
+        row.appendChild(removeBtn);
+        list.appendChild(row);
+
+        if (focus) {
+            input.focus();
+            input.select();
+        }
+    }
+
+    /**
+     * Collect all watch path rows into the config array format.
+     * @returns {Array} Array of {path, enabled} objects.
+     */
+    function collectWatchPaths() {
+        var rows = document.querySelectorAll("#watch-paths-list .watch-path-row");
+        var paths = [];
+        rows.forEach(function (row) {
+            var inputs = row.querySelectorAll("input");
+            if (inputs.length >= 2) {
+                var enabled = inputs[0].checked;
+                var pathVal = inputs[1].value.trim();
+                if (pathVal) {
+                    paths.push({ path: pathVal, enabled: enabled });
+                }
+            }
+        });
+        return paths;
+    }
+
+    // -- Folder Browser ------------------------------------------------------
+
+    /** @type {HTMLInputElement|null} The input element to fill when a folder is selected. */
+    var _browserTargetInput = null;
+
+    /**
+     * Open the folder browser modal for a watch path input.
+     * @param {HTMLInputElement} inputEl - The input to fill on selection.
+     */
+    function openFolderBrowser(inputEl) {
+        _browserTargetInput = inputEl;
+        var modal = document.getElementById("folder-browser-modal");
+        if (modal) modal.style.display = "flex";
+        // Start browsing at the current input value or /opt/metixel/
+        var startPath = inputEl.value.trim() || "/opt/metixel/";
+        browseFolder(startPath);
+    }
+
+    function closeFolderBrowser() {
+        var modal = document.getElementById("folder-browser-modal");
+        if (modal) modal.style.display = "none";
+        _browserTargetInput = null;
+    }
+
+    /**
+     * Browse a folder via the API and populate the modal list.
+     * @param {string} folderPath - The path to browse.
+     */
+    async function browseFolder(folderPath) {
+        var pathEl = document.getElementById("browser-current-path");
+        var listEl = document.getElementById("browser-entries");
+        if (!listEl) return;
+
+        listEl.innerHTML = '<li style="padding:0.5rem;color:var(--text-muted)">Loading…</li>';
+
+        var data = await apiGet("/config/browse?path=" + encodeURIComponent(folderPath));
+        if (!data || data.error) {
+            listEl.innerHTML = '<li style="padding:0.5rem;color:var(--danger)">' + escapeHtml((data && data.error) || "Cannot browse folder") + '</li>';
+            return;
+        }
+
+        if (pathEl) pathEl.textContent = data.current_path || folderPath;
+
+        // Parent directory button state
+        var parentBtn = document.getElementById("btn-browser-parent");
+        if (parentBtn) {
+            parentBtn.disabled = !data.parent_path;
+            parentBtn.onclick = function () {
+                if (data.parent_path) browseFolder(data.parent_path);
+            };
+        }
+
+        // Build entry list
+        var html = "";
+        if (!data.entries || data.entries.length === 0) {
+            html = '<li style="padding:0.5rem;color:var(--text-muted)">No subdirectories</li>';
+        } else {
+            data.entries.forEach(function (entry) {
+                html += '<li class="browser-entry" data-path="' + escapeHtml(entry.path) + '" style="padding:0.4rem 0.5rem;cursor:pointer;border-bottom:1px solid var(--border);font-size:0.82rem">📁 ' + escapeHtml(entry.name) + '</li>';
+            });
+        }
+        listEl.innerHTML = html;
+
+        // Click handlers for entries (navigate into subdir)
+        listEl.querySelectorAll(".browser-entry").forEach(function (li) {
+            li.addEventListener("click", function () {
+                browseFolder(li.getAttribute("data-path"));
+            });
+            li.addEventListener("mouseenter", function () {
+                this.style.background = "var(--accent-bg)";
+            });
+            li.addEventListener("mouseleave", function () {
+                this.style.background = "";
+            });
+        });
+
+        // Select button: use the currently browsed folder
+        var selectBtn = document.getElementById("btn-browser-select");
+        if (selectBtn) {
+            selectBtn.onclick = function () {
+                if (_browserTargetInput && data.current_path) {
+                    // Make path relative to /opt/metixel/ if possible
+                    var relPath = data.current_path;
+                    var basePrefix = "/opt/metixel/";
+                    if (relPath.indexOf(basePrefix) === 0) {
+                        relPath = relPath.substring(basePrefix.length);
+                        if (!relPath.endsWith("/")) relPath += "/";
+                    }
+                    _browserTargetInput.value = relPath;
+                }
+                closeFolderBrowser();
+            };
+        }
+    }
+
+    // -- Image Optimisation helpers ------------------------------------------
+
+    function _toggleImageOptSettings(enabled) {
+        var el = document.getElementById("image-opt-settings");
+        if (el) {
+            el.style.display = enabled ? "" : "none";
+            el.style.opacity = enabled ? "1" : "0.5";
+        }
+    }
+
     async function loadSync() {
         const config = await apiGet("/config");
         if (!config) return;
@@ -674,7 +895,7 @@
         setChecked("cfg-immich-enabled", imm.enabled || false);
         setValue("cfg-immich-url", imm.server_url || "");
         setValue("cfg-immich-key", imm.api_key || "");
-        setValue("cfg-immich-sync-dir", imm.sync_dir || "cache/immich_sync/");
+        setValue("cfg-immich-sync-dir", imm.sync_dir || "media/sync/immich/");
         setValue("cfg-immich-interval", ((imm.poll_interval_seconds || 3600) / 3600).toFixed(1));
         setChecked("cfg-immich-strict", imm.strict_sync === true);
 
@@ -682,7 +903,6 @@
         var albumSelect = document.getElementById("cfg-immich-album");
         var configuredAlbum = imm.album_name || "";
         if (albumSelect && configuredAlbum) {
-            // Add a temporary option so the saved value is visible
             var exists = false;
             for (var i = 0; i < albumSelect.options.length; i++) {
                 if (albumSelect.options[i].value === configuredAlbum) {
@@ -700,11 +920,18 @@
             }
         }
 
-        // Local
+        // Local — watch paths as individual rows
         const local = config.sync?.local || {};
         setChecked("cfg-local-enabled", local.enabled !== false);
-        setValue("cfg-local-paths", (local.watch_paths || ["media/"]).join(", "));
         setValue("cfg-local-interval", local.poll_interval_seconds || 30);
+        renderWatchPaths(local.watch_paths || []);
+
+        // Image optimisation
+        const imgCfg = config.image || {};
+        setChecked("cfg-image-opt-enabled", imgCfg.optimisation_enabled !== false);
+        setValue("cfg-image-max-width", imgCfg.optimise_max_width || 0);
+        setValue("cfg-image-max-height", imgCfg.optimise_max_height || 0);
+        _toggleImageOptSettings(imgCfg.optimisation_enabled !== false);
 
         // Refresh sync status
         await refreshSyncStatus();
@@ -827,7 +1054,7 @@
                 var result = await apiPut("/config/sync", {
                     local: {
                         enabled: document.getElementById("cfg-local-enabled").checked,
-                        watch_paths: document.getElementById("cfg-local-paths").value.split(",").map(function (s) { return s.trim(); }),
+                        watch_paths: collectWatchPaths(),
                         poll_interval_seconds: sanitizeInt(document.getElementById("cfg-local-interval").value, 30),
                     },
                 });
@@ -836,6 +1063,38 @@
                 } else {
                     showToast("Failed to save local sync settings", "error");
                 }
+            });
+
+            // -- Save Image Optimisation --
+            document.getElementById("btn-save-image-opt")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/image", {
+                    optimisation_enabled: document.getElementById("cfg-image-opt-enabled").checked,
+                    optimise_max_width: sanitizeInt(document.getElementById("cfg-image-max-width").value, 0),
+                    optimise_max_height: sanitizeInt(document.getElementById("cfg-image-max-height").value, 0),
+                });
+                if (result) {
+                    showToast("Image optimisation settings saved!", "success");
+                } else {
+                    showToast("Failed to save image optimisation settings", "error");
+                }
+            });
+
+            // -- Image optimisation toggle --
+            document.getElementById("cfg-image-opt-enabled")?.addEventListener("change", function () {
+                _toggleImageOptSettings(this.checked);
+            });
+
+            // -- Add Watch Path button --
+            document.getElementById("btn-add-watch-path")?.addEventListener("click", function () {
+                addWatchPathRow("", true, true);
+            });
+
+            // -- Folder Browser modal --
+            document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
+
+            // Close modal when clicking the backdrop
+            document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
+                if (e.target === this) closeFolderBrowser();
             });
         }
     }

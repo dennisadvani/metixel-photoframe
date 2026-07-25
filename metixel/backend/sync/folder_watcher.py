@@ -4,20 +4,29 @@
 
 Monitors configured directories for new/changed media files using inotify
 (via the watchdog library) with a polling fallback for network mounts.
+
+**Phase 1 (Watch)**: Gathers minimal metadata (file type, pixel dimensions,
+video codec) but does NOT process, resize, or transcode.  Discovered items
+are pushed to the ``OptimisationQueue`` which handles Phase 2 (optimise)
+and Phase 3 (queue to slideshow playlist).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import subprocess
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from metixel.backend.processing.image import ImageProcessor
-from metixel.backend.processing.video import VideoProcessor
 from metixel.backend.state import StateManager
-from metixel.shared.models import MediaItem
+from metixel.shared.models import MediaItem, MediaType
+
+if TYPE_CHECKING:
+    from metixel.backend.processing.optimisation_queue import OptimisationQueue
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +35,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
 MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
-# Progress file written during initial processing — read by the frontend
+# Progress file written during initial scan — read by the frontend
 # so it can show a progress bar before the slideshow starts.
 PROCESSING_STATUS_PATH = "/run/metixel/processing_status.json"
 
@@ -52,34 +61,56 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
 class FolderWatcher:
     """Watches local directories for new, changed, and deleted media files.
 
+    **Phase 1 only** — gathers minimal metadata (type, dimensions, codec)
+    and pushes items to the ``OptimisationQueue`` for the rest of the
+    pipeline.  Does NOT resize, transcode, or add items to the playlist
+    directly.
+
     Maintains a snapshot of known files (path → mtime/size) and compares
     each scan against the previous state to detect:
-    - **New files**: processed and added to the playlist
-    - **Modified files**: re-processed (cache invalidated)
+    - **New files**: metadata gathered, pushed to OptimisationQueue
+    - **Modified files**: old playlist entries removed, re-scanned
     - **Deleted files**: removed from the playlist
-
-    Uses the ``watchdog`` library for inotify-based monitoring on local
-    filesystems, with a configurable polling fallback for NFS/SMB mounts.
     """
 
-    def __init__(self, state: StateManager) -> None:
+    def __init__(self, state: StateManager, opt_queue: "OptimisationQueue | None" = None) -> None:
         self._state = state
         self._config = state.config
-        self._watch_paths: list[Path] = [
-            Path(p) for p in self._config.sync["local"].get("watch_paths", ["media/"])
-        ]
-        self._poll_interval: int = self._config.sync["local"]["poll_interval_seconds"]
+        self._opt_queue = opt_queue
         self._running: bool = False
+
+        # Resolve watch paths from config (new object format with enabled flag).
+        self._watch_paths: list[Path] = self._resolve_watch_paths()
+        self._poll_interval: int = self._config.sync["local"]["poll_interval_seconds"]
 
         # File state snapshot: {absolute_path: (mtime_ns, size_bytes)}
         self._known_files: dict[Path, tuple[int, int]] = {}
 
-        # Media processors (lazy init — needs config resolution)
-        self._image_processor: ImageProcessor | None = None
-        self._video_processor: VideoProcessor | None = None
-
         # Track whether the initial full scan has completed
         self._initial_scan_done: bool = False
+
+    def _resolve_watch_paths(self) -> list[Path]:
+        """Resolve the watch_paths config to a list of enabled Path objects.
+
+        Handles both the new object format (``[{"path": "...", "enabled": true}]``)
+        and the legacy flat-list format (``["media/", ...]``).
+        """
+        raw = self._config.sync["local"].get("watch_paths", [])
+        paths: list[Path] = []
+        for entry in raw:
+            if isinstance(entry, dict):
+                if entry.get("enabled", True):
+                    p = Path(entry["path"])
+                    if not p.is_absolute():
+                        p = Path("/opt/metixel") / p
+                    paths.append(p)
+            elif isinstance(entry, str):
+                # Legacy flat-list format — treat as enabled
+                p = Path(entry)
+                if not p.is_absolute():
+                    p = Path("/opt/metixel") / p
+                paths.append(p)
+        return paths
 
     def run(self) -> None:
         """Main watch loop."""
@@ -107,14 +138,10 @@ class FolderWatcher:
         """Scan watch directories for new, changed, or deleted files.
 
         On the first scan (initial_scan_done=False), builds the baseline
-        snapshot and processes all discovered files as "new."  Subsequent
+        snapshot and gathers metadata for all discovered files.  Subsequent
         scans diff against the snapshot to detect incremental changes.
         """
-        # Lazy-init processors on first scan
-        if self._image_processor is None:
-            self._init_processors()
-
-        # 1. Walk all watch paths and discover current files
+        # 1. Walk all enabled watch paths and discover current files
         current_files: dict[Path, tuple[int, int]] = {}
         for watch_path in self._watch_paths:
             if not watch_path.exists():
@@ -122,25 +149,22 @@ class FolderWatcher:
                 continue
             self._walk_path(watch_path, current_files)
 
-        # 2. If this is the initial scan, process everything as new
+        # 2. If this is the initial scan, gather metadata for everything
         if not self._initial_scan_done:
             self._initial_scan_done = True
             self._known_files = dict(current_files)
 
-            # Write initial progress (phase=scanning, show we discovered files)
             total = len(current_files)
             if total > 0:
                 _write_progress("scanning", total, 0, "")
+                logger.info(
+                    "Initial scan: discovered %d media files across %d watch paths",
+                    total, len(self._watch_paths),
+                )
+                self._gather_and_enqueue(list(current_files.keys()), is_initial=True)
             else:
                 _write_progress("complete", 0, 0, "")
                 logger.info("Initial scan: no media files found")
-                return
-
-            logger.info(
-                "Initial scan: discovered %d media files across %d watch paths",
-                total, len(self._watch_paths),
-            )
-            self._process_new(list(current_files.keys()), is_initial=True)
             return
 
         # 3. Diff: detect new, changed, and deleted files
@@ -161,7 +185,7 @@ class FolderWatcher:
         if new_paths:
             logger.info("Detected %d new file(s): %s", len(new_paths),
                         ", ".join(str(p.name) for p in list(new_paths)[:5]))
-            self._process_new(list(new_paths))
+            self._gather_and_enqueue(list(new_paths))
 
         if changed_paths:
             logger.info("Detected %d changed file(s): %s", len(changed_paths),
@@ -179,7 +203,7 @@ class FolderWatcher:
     def _walk_path(
         self, root: Path, out: dict[Path, tuple[int, int]]
     ) -> None:
-        """Recursively walk a directory, collecting media files with metadata.
+        """Recursively walk a directory, collecting media files with stat metadata.
 
         Args:
             root: Directory to walk.
@@ -200,188 +224,200 @@ class FolderWatcher:
         except OSError:
             logger.debug("Cannot walk directory: %s", root)
 
-    # -- Media processing ----------------------------------------------------
+    # -- Metadata gathering --------------------------------------------------
 
-    def _init_processors(self) -> None:
-        """Lazy-initialize media processors with screen resolution from config."""
-        display = self._config.display
-        sw = display.get("width") or 1920
-        sh = display.get("height") or 1080
+    def _gather_and_enqueue(
+        self, paths: list[Path], is_initial: bool = False,
+    ) -> None:
+        """Gather minimal metadata for each file and push to the OptimisationQueue.
 
-        cache_dir = Path(self._config.system.get("cache_dir", "cache/"))
-        if not cache_dir.is_absolute():
-            # Relative to config file location — resolve
-            cache_dir = self._state.config_path.parent.parent / cache_dir
+        Does NOT process/resize/transcode — just determines:
+        - Media type (image vs video) by extension
+        - Pixel dimensions (PIL for images, ffprobe for videos)
+        - Video codec name (for threshold gating)
 
-        cache_dir.mkdir(parents=True, exist_ok=True)
-
-        # Read video config for transcoding settings
-        video_config = self._config.video if hasattr(self._config, "video") else {}
-
-        self._image_processor = ImageProcessor(cache_dir, screen_width=sw, screen_height=sh)
-        self._video_processor = VideoProcessor(
-            cache_dir, screen_width=sw, screen_height=sh, video_config=video_config,
-        )
-        logger.info(
-            "Media processors initialised: cache=%s, screen=%dx%d, transcode=%s",
-            cache_dir, sw, sh,
-            "enabled" if video_config.get("transcoding_enabled", True) else "disabled",
-        )
-
-    def _process_new(self, paths: list[Path], is_initial: bool = False) -> None:
-        """Process newly discovered files and add them to the playlist.
-
-        Delegates to ImageProcessor or VideoProcessor based on file extension.
-        On success, the returned MediaItem is added to the playlist via
-        ``StateManager.add_playlist_items()``.
-
-        When *is_initial* is True, a progress status file is written after
-        each file so the frontend can render a progress bar on screen while
-        waiting for processing to complete.
-
-        Guardrails:
-        - Videos that are still transcoding are queued for later (re-scanned
-          on the next poll cycle).  The ``transcode_status`` on each
-          MediaItem lets the presentation engine skip items that aren't
-          ready to play yet.
+        Items are pushed to the ``OptimisationQueue`` for Phase 2/3.
+        The queue decides whether each item needs optimisation or is
+        ready-to-play.
         """
-        # Sort: images first, videos last — so the frontend gets photos
-        # into the playlist quickly before slow video transcodes begin.
+        # Sort: images first so the optimisation queue can prioritise them.
         paths.sort(key=lambda p: (0 if p.suffix.lower() in IMAGE_EXTENSIONS else 1, p))
 
         total = len(paths)
-
-        # Flush items to the playlist every N files so the frontend can
-        # start showing images while the backend is still processing.
-        # Without this, all 342 files must finish before any image appears.
-        _FLUSH_EVERY = 12
-
-        items: list[MediaItem] = []
-        deferred_paths: list[Path] = []  # Videos still transcoding — retry later
+        stubs: list[MediaItem] = []
 
         for idx, path in enumerate(paths):
             suffix = path.suffix.lower()
             try:
-                if suffix in VIDEO_EXTENSIONS and self._video_processor:
-                    # Guardrail: do not add a video that is currently
-                    # being transcoded — defer to the next scan cycle.
-                    file_hash = self._video_processor._hash_file(path)
-                    if self._video_processor.is_transcoding(file_hash):
-                        logger.debug(
-                            "Deferring %s — transcode still in progress",
-                            path.name,
-                        )
-                        deferred_paths.append(path)
-                        continue
+                if is_initial:
+                    _write_progress("scanning", total, idx + 1, path.name)
 
-                    # Report progress BEFORE transcoding begins — video
-                    # processing can take minutes and the dashboard needs
-                    # to show what's happening *during* the operation,
-                    # not only after it finishes.
-                    if is_initial:
-                        _write_progress("transcoding", total, idx + 1, path.name)
-
-                    item = self._video_processor.process(path, source="local")
-                elif self._image_processor:
-                    # Report progress before image processing too, so the
-                    # dashboard updates immediately rather than after the
-                    # fact (small win for large images on slow storage).
-                    if is_initial:
-                        _write_progress("processing", total, idx + 1, path.name)
-
-                    item = self._image_processor.process(path, source="local")
+                if suffix in IMAGE_EXTENSIONS:
+                    stub = self._gather_image_metadata(path)
+                elif suffix in VIDEO_EXTENSIONS:
+                    stub = self._gather_video_metadata(path)
                 else:
                     continue
 
-                if item is not None:
-                    items.append(item)
-                    logger.debug("Processed: %s → %s", path.name, item.id)
+                if stub is not None:
+                    stubs.append(stub)
             except Exception:
-                logger.exception("Failed to process: %s", path)
+                logger.exception("Failed to gather metadata: %s", path)
 
-            # ── Incremental flush: write to playlist every N items ──
-            # This is critical for boot UX — the frontend loads from
-            # playlist.json and would otherwise see an empty playlist
-            # until ALL files are processed (which can take several
-            # minutes when videos need transcoding).
-            if len(items) >= _FLUSH_EVERY:
-                self._state.add_playlist_items(items)
-                items.clear()
+            # Push to optimisation queue in batches to avoid holding
+            # too many items in memory at once.
+            if len(stubs) >= 24:
+                self._enqueue_stubs(stubs)
+                stubs.clear()
 
-        # Final flush: write remaining items
-        if items:
-            self._state.add_playlist_items(items)
-
-        # Re-add deferred paths to known_files with their original metadata
-        # so they get re-detected on the next scan cycle.
-        for dp in deferred_paths:
-            try:
-                stat = dp.stat()
-                self._known_files[dp.resolve()] = (stat.st_mtime_ns, stat.st_size)
-            except OSError:
-                pass
+        # Final push
+        if stubs:
+            self._enqueue_stubs(stubs)
 
         if is_initial:
-            pending_msg = (
-                f" ({len(deferred_paths)} video(s) still transcoding)"
-                if deferred_paths else ""
+            _write_progress("complete", total, total, "")
+            logger.info(
+                "Initial metadata scan complete: %d files discovered",
+                total,
             )
-            _write_progress(
-                "complete", total, total,
-                current_file=deferred_paths[0].name if deferred_paths else "",
+
+    def _enqueue_stubs(self, stubs: list[MediaItem]) -> None:
+        """Push metadata stubs to the OptimisationQueue."""
+        if self._opt_queue is not None:
+            logger.debug(
+                "[WATCH] enqueue %d stub(s) → OptimisationQueue",
+                len(stubs),
             )
-            if deferred_paths:
-                logger.info(
-                    "Initial scan complete: %d items added, %d video(s) deferred "
-                    "(still transcoding — will retry on next scan)",
-                    len(items), len(deferred_paths),
-                )
+            self._opt_queue.enqueue(stubs)
+        else:
+            # No optimisation queue available (e.g. dev mode) —
+            # add items directly to the playlist as a fallback.
+            logger.warning(
+                "OptimisationQueue not available — adding %d item(s) "
+                "directly to playlist (unoptimised)",
+                len(stubs),
+            )
+            self._state.add_playlist_items(stubs)
+
+    @staticmethod
+    def _gather_image_metadata(path: Path) -> MediaItem | None:
+        """Quickly extract image dimensions without full processing.
+
+        Uses PIL to read the image header only (does not decode pixel data).
+        Returns a MediaItem stub with minimal metadata, or None on failure.
+        """
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                w, h = img.size
+
+            file_hash = FolderWatcher._hash_path(path)
+            logger.debug(
+                "[WATCH] image  | %4dx%-4d | %s",
+                w, h, path.name,
+            )
+            return MediaItem(
+                id=file_hash,
+                original_path=path,
+                cached_path=path,  # Will be updated by OptimisationQueue if processed
+                media_type=MediaType.IMAGE,
+                width=w,
+                height=h,
+                source="local",
+            )
+        except Exception:
+            logger.debug("Cannot read image metadata: %s", path.name)
+            return None
+
+    @staticmethod
+    def _gather_video_metadata(path: Path) -> MediaItem | None:
+        """Quickly probe a video for dimensions, codec, and duration.
+
+        Uses ffprobe for metadata extraction.  Returns a MediaItem stub
+        with codec info in exif_data, or None on failure.
+        """
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe", "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=width,height,duration,codec_name",
+                    "-of", "csv=p=0",
+                    str(path),
+                ],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                logger.debug("ffprobe failed for %s", path.name)
+                return None
+
+            parts = result.stdout.strip().split(",")
+            w = int(parts[0]) if len(parts) > 0 and parts[0] else 0
+            h = int(parts[1]) if len(parts) > 1 and parts[1] else 0
+            duration = float(parts[2]) if len(parts) > 2 and parts[2] else 0.0
+            codec = parts[3].strip() if len(parts) > 3 else ""
+
+            file_hash = FolderWatcher._hash_path(path)
+            logger.debug(
+                "[WATCH] video  | %4dx%-4d | %-6s | %5.1fs | %s",
+                w, h, codec or "?", duration, path.name,
+            )
+            return MediaItem(
+                id=file_hash,
+                original_path=path,
+                cached_path=path,  # Will be updated by OptimisationQueue if transcoded
+                media_type=MediaType.VIDEO,
+                width=w,
+                height=h,
+                duration_seconds=duration,
+                exif_data={"codec_name": codec},
+                source="local",
+            )
+        except Exception:
+            logger.debug("Cannot read video metadata: %s", path.name)
+            return None
+
+    @staticmethod
+    def _hash_path(path: Path) -> str:
+        """Compute a short content hash for a file (first 1MB + last 1KB)."""
+        sha = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                sha.update(f.read(1024 * 1024))
+                f.seek(-1024, 2)
+                sha.update(f.read(1024))
+        except OSError:
+            # Fall back to path-based hash if file can't be read
+            sha.update(str(path).encode())
+        return sha.hexdigest()[:16]
 
     def _process_changed(self, paths: list[Path]) -> None:
         """Re-process files that have been modified.
 
-        Removes old playlist entries (by computing the old hash from the
-        removed snapshot) and re-adds the re-processed versions.
+        Removes old playlist entries and re-gathers metadata for the
+        changed files, pushing them to the OptimisationQueue.
         """
         # Compute old IDs from known snapshot (before update)
         old_ids: set[str] = set()
         for p in paths:
-            old_id = self._hash_path_for_id(p)
+            old_id = self._hash_path(p)
             if old_id:
                 old_ids.add(old_id)
 
         if old_ids:
             self._state.remove_playlist_items(old_ids)
 
-        # Re-process as new
-        self._process_new(paths)
+        # Re-gather metadata and push to optimisation queue
+        self._gather_and_enqueue(paths)
 
     def _handle_deleted(self, paths: set[Path]) -> None:
         """Remove deleted files from the playlist."""
         ids_to_remove: set[str] = set()
         for p in paths:
-            old_id = self._hash_path_for_id(p)
+            old_id = self._hash_path(p)
             if old_id:
                 ids_to_remove.add(old_id)
 
         if ids_to_remove:
             self._state.remove_playlist_items(ids_to_remove)
-
-    @staticmethod
-    def _hash_path_for_id(path: Path) -> str | None:
-        """Compute an id for a file path that matches the processor's hash.
-
-        Uses the same algorithm as ImageProcessor._hash_file(): SHA-256 of
-        first 1MB + last 1KB, truncated to 16 hex chars.
-        """
-        import hashlib
-
-        try:
-            sha = hashlib.sha256()
-            with open(path, "rb") as f:
-                sha.update(f.read(1024 * 1024))
-                f.seek(-1024, 2)
-                sha.update(f.read(1024))
-            return sha.hexdigest()[:16]
-        except OSError:
-            return None

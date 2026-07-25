@@ -99,81 +99,6 @@ def _hash_image_file(path: Path) -> str:
     return sha.hexdigest()[:16]
 
 
-_THUMBNAIL_SIZE = 320
-_THUMBNAIL_QUALITY = 70
-
-
-def _generate_image_thumbnail(source: Path, thumb_dir: Path) -> Path | None:
-    """Create a 320 px thumbnail for an image, saving it to *thumb_dir*.
-
-    Returns the path to the thumbnail, or ``None`` on failure.
-    Skips if the thumbnail already exists.
-    """
-    file_hash = _hash_image_file(source)
-    thumb_path = thumb_dir / f"{file_hash}.jpg"
-    if thumb_path.exists():
-        return thumb_path
-
-    try:
-        img = Image.open(source)
-        img = ImageOps.exif_transpose(img)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        img.thumbnail((_THUMBNAIL_SIZE, _THUMBNAIL_SIZE), Image.LANCZOS)
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = thumb_dir / f".{file_hash}.tmp"
-        img.save(tmp_path, "JPEG", quality=_THUMBNAIL_QUALITY)
-        os.replace(tmp_path, thumb_path)
-        img.close()
-        logger.debug("Generated image thumbnail: %s", thumb_path)
-        return thumb_path
-    except Exception:
-        logger.debug(
-            "Failed to generate image thumbnail for %s", source, exc_info=True,
-        )
-        return None
-
-
-def _generate_video_thumbnail(
-    video_path: str, video_w: int, video_h: int, thumb_dir: Path,
-) -> Path | None:
-    """Extract a frame at t=2s and create a 320 px thumbnail for a video.
-
-    Returns the path to the thumbnail, or ``None`` on failure.
-    Skips if the thumbnail already exists.
-    """
-    # Use a hash of the video path as the thumbnail key
-    file_hash = _hash_image_file(Path(video_path))
-    thumb_path = thumb_dir / f"{file_hash}.jpg"
-    if thumb_path.exists():
-        return thumb_path
-
-    arr = _extract_frame_array_cpu(video_path, video_w, video_h, seek_time=2.0)
-    if arr is None:
-        # Fallback: try t=0
-        arr = _extract_frame_array_cpu(video_path, video_w, video_h, seek_time=0.0)
-    if arr is None:
-        return None
-
-    try:
-        img = Image.fromarray(arr)
-        if img.mode not in ("RGB", "L"):
-            img = img.convert("RGB")
-        img.thumbnail((_THUMBNAIL_SIZE, _THUMBNAIL_SIZE), Image.LANCZOS)
-        thumb_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = thumb_dir / f".{file_hash}.tmp"
-        img.save(tmp_path, "JPEG", quality=_THUMBNAIL_QUALITY)
-        os.replace(tmp_path, thumb_path)
-        img.close()
-        logger.debug("Generated video thumbnail: %s", thumb_path)
-        return thumb_path
-    except Exception:
-        logger.debug(
-            "Failed to generate video thumbnail for %s", video_path, exc_info=True,
-        )
-        return None
-
-
 def _extract_frame_array_cpu(
     video_path: str,
     video_w: int,
@@ -380,34 +305,6 @@ def _get_or_create_video_frame(
                 with contextlib.suppress(OSError):
                     os.unlink(tmp.name)
                 raise
-
-        # Also generate a 320 px thumbnail for the web dashboard.
-        # Use a hash of the video path as the thumbnail key, matching
-        # _generate_video_thumbnail() and VideoProcessor conventions.
-        try:
-            file_hash = _hash_image_file(Path(video_path))
-            # Resolve cache/thumbnails/ relative to the video's directory
-            # tree — fall back to a sibling thumbnails/ directory.
-            thumb_dir = cache_path.parent.parent / "thumbnails"
-            if not thumb_dir.exists():
-                # Try /opt/metixel/cache/thumbnails/ as a convention
-                thumb_dir = Path("/opt/metixel/cache/thumbnails")
-            thumb_path = thumb_dir / f"{file_hash}.jpg"
-            if not thumb_path.exists():
-                thumb_img = img.copy()
-                thumb_img.thumbnail(
-                    (_THUMBNAIL_SIZE, _THUMBNAIL_SIZE), Image.LANCZOS,
-                )
-                thumb_dir.mkdir(parents=True, exist_ok=True)
-                thumb_tmp = thumb_dir / f".{file_hash}.tmp"
-                thumb_img.save(thumb_tmp, "JPEG", quality=_THUMBNAIL_QUALITY)
-                os.replace(thumb_tmp, thumb_path)
-                thumb_img.close()
-                logger.debug("Generated video thumbnail: %s", thumb_path)
-        except Exception:
-            logger.debug(
-                "Failed to generate thumbnail for %s", video_path, exc_info=True,
-            )
 
         logger.debug("Cached video frame %d: %s", frame, cache_path)
         return cache_path
@@ -1700,18 +1597,17 @@ class PresentationEngine:
     # ------------------------------------------------------------------
 
     def scan_folder(self, folder_path: Path) -> list[MediaItem]:
+        """Scan a folder and build MediaItem stubs from its contents.
+
+        This is a dev/debug fallback — in normal operation the backend
+        ``OptimisationQueue`` handles media discovery and processing.
+        Only minimal metadata is gathered; no optimisation or thumbnail
+        generation is performed.
+        """
         items: list[MediaItem] = []
         if not folder_path.exists():
             logger.warning("Media folder not found: %s", folder_path)
             return items
-
-        # Resolve the thumbnail cache directory
-        cache_dir = Path(
-            self._config.system.get("cache_dir", "cache/"),
-        )
-        if not cache_dir.is_absolute():
-            cache_dir = Path("/opt/metixel") / cache_dir
-        thumb_dir = cache_dir / "thumbnails"
 
         all_extensions = self.IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
         for entry in sorted(folder_path.rglob("*")):
@@ -1726,15 +1622,11 @@ class PresentationEngine:
                     else MediaType.IMAGE
                 )
 
-                # Resolve or generate a thumbnail
-                thumbnail: Path | None = None
+                # Gather minimal metadata (dimensions only)
                 if media_type == MediaType.IMAGE:
                     with Image.open(entry) as img:
                         w, h = img.size
                     duration = 0.0
-
-                    # Generate thumbnail if missing
-                    thumbnail = _generate_image_thumbnail(entry, thumb_dir)
                 else:
                     w, h = 0, 0
                     duration = 0.0
@@ -1750,13 +1642,8 @@ class PresentationEngine:
                     except Exception:
                         pass
 
-                    # Generate thumbnail if missing (uses hash-based key
-                    # in cache/thumbnails/ rather than .frame file)
-                    if w > 0 and h > 0:
-                        thumbnail = _generate_video_thumbnail(
-                            str(entry), w, h, thumb_dir,
-                        )
-
+                # Thumbnails are generated by the backend OptimisationQueue —
+                # not here.  The frontend only displays what the backend provides.
                 items.append(MediaItem(
                     id=str(entry),
                     original_path=entry,
@@ -1764,7 +1651,7 @@ class PresentationEngine:
                     media_type=media_type,
                     width=w, height=h,
                     duration_seconds=duration,
-                    thumbnail_path=thumbnail,
+                    thumbnail_path=None,
                     source="local",
                 ))
             except Exception:
@@ -1772,7 +1659,7 @@ class PresentationEngine:
 
         vc = sum(1 for i in items if i.media_type == MediaType.VIDEO)
         logger.info(
-            "Folder scan: %d images + %d videos in %s",
+            "Folder scan (dev fallback): %d images + %d videos in %s",
             len(items) - vc, vc, folder_path,
         )
         return items

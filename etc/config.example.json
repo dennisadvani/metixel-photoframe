@@ -27,6 +27,11 @@
     "cpu_throttle_enabled": true,
     "cpu_throttle_percent": 50
   },
+  "image": {
+    "optimisation_enabled": true,
+    "optimise_max_width": 0,
+    "optimise_max_height": 0
+  },
   "sync": {
     "immich": {
       "enabled": false,
@@ -34,12 +39,16 @@
       "api_key": "",
       "album_name": "",
       "strict_sync": false,
-      "sync_dir": "cache/immich_sync/",
+      "sync_dir": "media/sync/immich/",
       "poll_interval_seconds": 3600
     },
     "local": {
       "enabled": true,
-      "watch_paths": ["media/", "cache/immich_sync/"],
+      "watch_paths": [
+        {"path": "media/my_media/", "enabled": true},
+        {"path": "media/sample_media/", "enabled": true},
+        {"path": "media/sync/immich/", "enabled": true}
+      ],
       "poll_interval_seconds": 30
     }
   },
