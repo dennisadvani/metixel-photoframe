@@ -49,6 +49,18 @@ def update_config_section(section: str):
         logger.info("PUT /%s: updating with keys=%s", section, list(data.keys()))
         state.update_config(section, data)
         logger.info("Config section '%s' updated via API — saved to %s", section, state.config_path)
+
+        # Immediately notify the OptimisationQueue of config changes
+        # so queued items are re-classified without waiting for the
+        # 30-second periodic reload cycle.  This is especially important
+        # when the user toggles transcoding on/off.
+        opt_queue = current_app.config.get("METIXEL_OPT_QUEUE")
+        if opt_queue is not None and section in ("video", "image"):
+            try:
+                opt_queue.reload_config()
+            except Exception:
+                logger.debug("OptimisationQueue reload failed", exc_info=True)
+
         return jsonify({
             "status": "ok",
             "section": section,

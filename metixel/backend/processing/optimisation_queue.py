@@ -35,7 +35,7 @@ from typing import Any
 from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.video import VideoProcessor
 from metixel.backend.state import StateManager
-from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +280,14 @@ class OptimisationQueue:
         if self._video_processor is not None:
             self._video_processor.update_config(video_cfg)
 
+        # When transcoding is turned OFF, drain the video queue and
+        # push those items directly to the slideshow playlist.  Otherwise
+        # they would sit in the queue and still get transcoded (the
+        # VideoProcessor checks its own cached flag, but queued items
+        # need to be re-classified immediately).
+        if old_vid_enabled and not self._video_transcode_enabled:
+            self._drain_video_queue_to_playlist()
+
         # Log changes for debugging
         changes: list[str] = []
         if old_img_enabled != self._image_opt_enabled:
@@ -491,6 +499,35 @@ class OptimisationQueue:
         if item.cached_path != item.original_path:
             return True
         return False
+
+    def _drain_video_queue_to_playlist(self) -> None:
+        """Move all queued videos directly to the slideshow playlist.
+
+        Called when the user disables transcoding at runtime.  Videos
+        waiting in the queue are marked ``NOT_TRANSCODED`` and pushed
+        to the playlist so they can play immediately at original quality.
+        """
+        with self._queue_lock:
+            if not self._video_queue:
+                return
+            drained = self._video_queue
+            self._video_queue = []
+            count = len(drained)
+
+        # Mark each video as NOT_TRANSCODED so the frontend knows it's
+        # safe to play the original file.
+        for item in drained:
+            item.transcode_status = TranscodeStatus.NOT_TRANSCODED
+            # Reset cached_path to original so the frontend doesn't
+            # try to read a non-existent cache file.
+            item.cached_path = item.original_path
+
+        self._state.add_playlist_items(drained)
+        logger.info(
+            "[OPTQ] Transcoding disabled — %d video(s) moved from "
+            "optimisation queue → playlist (play original)",
+            count,
+        )
 
     # -- Internal: processing ------------------------------------------------
 
