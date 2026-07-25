@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from metixel.backend.processing.image import ImageProcessor
+from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.processing.video import VideoProcessor
 from metixel.backend.state import StateManager
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
@@ -177,6 +178,20 @@ class OptimisationQueue:
             self._incoming.extend(items)
         self._wake.set()
         logger.debug("OptimisationQueue: received %d item(s)", len(items))
+
+    @property
+    def is_busy(self) -> bool:
+        """Check whether the optimiser is actively processing or has pending work.
+
+        The folder watcher uses this to throttle its own scan rate:
+        when the optimiser is busy, the watcher adds extra delay between
+        scans so the two threads don't compete for CPU.
+        """
+        with self._queue_lock:
+            pending = len(self._image_queue) + len(self._video_queue)
+        with self._incoming_lock:
+            pending += len(self._incoming)
+        return pending > 0
 
     def remove_items(self, item_ids: set[str]) -> int:
         """Remove items from all internal queues by media item ID.
@@ -577,6 +592,9 @@ class OptimisationQueue:
                 logger.exception(
                     "Failed to optimise image: %s", item.original_path,
                 )
+            # Yield briefly between items so the folder watcher and
+            # frontend get CPU time — PIL resize can saturate a core.
+            time.sleep(0.05)
             _write_progress(
                 "optimising_images",
                 total_remaining,
@@ -699,14 +717,14 @@ class OptimisationQueue:
 
         try:
             result = subprocess.run(
-                [
+                nice_cmd([
                     "ffprobe", "-v", "error",
                     "-select_streams", "v:0",
                     "-show_entries",
                     "stream=width,height,duration,codec_name",
                     "-of", "json",
                     str(path),
-                ],
+                ]),
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode == 0:

@@ -85,6 +85,24 @@
                         <span class="processing-phase">Idle</span>
                     </div>
                 </div>
+
+                <div class="card">
+                    <h2>Sync Status</h2>
+                    <div id="dash-sync-progress" style="display:none">
+                        <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem;font-size:0.82rem">
+                            <span id="dash-sync-phase">Syncing…</span>
+                            <span id="dash-sync-count"></span>
+                        </div>
+                        <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                            <div id="dash-sync-bar" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
+                        </div>
+                        <div id="dash-sync-file" style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem;word-break:break-all"></div>
+                    </div>
+                    <div id="dash-sync-status" style="font-size:0.82rem">
+                        <strong>Last Sync:</strong> <span id="dash-sync-text">—</span>
+                        <div id="dash-sync-detail" style="margin-top:0.3rem;color:var(--text-muted)"></div>
+                    </div>
+                </div>
             </section>
 
             <!-- ═══════════════ Media Page ═══════════════ -->

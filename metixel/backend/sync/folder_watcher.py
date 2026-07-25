@@ -26,6 +26,7 @@ from metixel.backend.processing.thumbnail import (
     generate_image_thumbnail,
     generate_video_thumbnail,
 )
+from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.state import StateManager
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
@@ -141,6 +142,23 @@ class FolderWatcher:
                 if now - self._last_config_refresh >= 30.0:
                     self._refresh_watch_config()
                     self._last_config_refresh = now
+
+                # ── Coordination with the optimisation queue ──────────
+                # When the optimiser is actively processing images or
+                # videos, add extra delay between folder scans so the
+                # two threads don't compete for CPU.  The optimiser
+                # always has priority — scanning can wait.
+                if (
+                    self._opt_queue is not None
+                    and self._opt_queue.is_busy
+                ):
+                    logger.debug(
+                        "FolderWatcher: optimiser busy — delaying scan "
+                        "by %ds",
+                        self._poll_interval,
+                    )
+                    time.sleep(self._poll_interval)
+                    continue
 
                 self._scan()
             except Exception:
@@ -450,13 +468,13 @@ class FolderWatcher:
         """
         try:
             result = subprocess.run(
-                [
+                nice_cmd([
                     "ffprobe", "-v", "error",
                     "-select_streams", "v:0",
                     "-show_entries", "stream=width,height,duration,codec_name",
                     "-of", "json",
                     str(path),
-                ],
+                ]),
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:

@@ -22,6 +22,8 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
+from metixel.backend.processing.utils import nice_cmd
+
 logger = logging.getLogger(__name__)
 
 THUMBNAIL_SIZE = 320
@@ -159,7 +161,7 @@ def generate_video_thumbnail(
             with contextlib.suppress(OSError):
                 thumb_path.unlink()
 
-        cmd = [
+        cmd = nice_cmd([
             "ffmpeg",
             "-y",
             "-noaccurate_seek",
@@ -168,7 +170,7 @@ def generate_video_thumbnail(
             "-vframes", "1",
             "-q:v", "2",
             str(thumb_path),
-        ]
+        ])
         subprocess.run(
             cmd, check=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

@@ -380,12 +380,14 @@
         // Initial load
         await refreshDashboard();
         await refreshProcessing();
+        _refreshDashSyncStatus();
 
         // Poll every 3 seconds for live updates
         _dashboardTimer = setInterval(async function () {
             if (document.getElementById("page-dashboard").classList.contains("active")) {
                 await refreshDashboard();
                 await refreshProcessing();
+                _refreshDashSyncStatus();
             } else if (_dashboardTimer) {
                 clearInterval(_dashboardTimer);
                 _dashboardTimer = null;
@@ -496,7 +498,7 @@
             // Human-readable phase labels
             var phaseLabels = {
                 "scanning": "Scanning files\u2026",
-                "processing": "Processing images",
+                "optimising_images": "Image Optimisation",
                 "transcoding": "Transcoding video",
             };
             phaseEl.textContent = phaseLabels[phase] || phase;
@@ -523,6 +525,68 @@
                 barFill.className = "processing-bar-fill" + (pct >= 100 ? " is-complete" : "");
             }
         }
+    }
+
+    /** Refresh the Sync Status card on the Dashboard. */
+    async function _refreshDashSyncStatus() {
+        var data = await apiGet("/immich/status");
+        if (!data) return;
+
+        // ── Progress bar ─────────────────────────────────────────
+        var progEl = document.getElementById("dash-sync-progress");
+        var prog = data.progress;
+        if (prog && prog.syncing && progEl) {
+            progEl.style.display = "block";
+            var phaseLabels = { "starting": "Starting\u2026", "resolving_album": "Looking up album\u2026", "fetching_assets": "Fetching assets\u2026", "downloading": "Downloading", "cleaning": "Cleaning up\u2026", "cancelled": "Cancelled", "error": "Error" };
+            var phaseEl = document.getElementById("dash-sync-phase");
+            if (phaseEl) phaseEl.textContent = phaseLabels[prog.phase] || prog.phase || "Syncing\u2026";
+            var countEl = document.getElementById("dash-sync-count");
+            if (countEl) countEl.textContent = prog.total > 0 ? prog.processed + " / " + prog.total : "";
+            var barEl = document.getElementById("dash-sync-bar");
+            if (barEl) barEl.style.width = prog.total > 0 ? Math.round(prog.processed / prog.total * 100) + "%" : "0%";
+            var fileEl = document.getElementById("dash-sync-file");
+            if (fileEl) fileEl.textContent = prog.current_file || "";
+        } else if (progEl) {
+            progEl.style.display = "none";
+        }
+
+        // ── Last sync status ─────────────────────────────────────
+        var textEl = document.getElementById("dash-sync-text");
+        var detailEl = document.getElementById("dash-sync-detail");
+        if (!textEl) return;
+
+        if (data.status === "never_run" || !data.last_sync) {
+            textEl.textContent = "Never run";
+            textEl.style.color = "var(--text-muted)";
+            if (detailEl) detailEl.textContent = "";
+            return;
+        }
+
+        var s = data.last_sync;
+        var ago = "just now";
+        if (s.finished_at) {
+            var seconds = Math.max(0, Math.floor(Date.now() / 1000 - s.finished_at));
+            if (seconds < 60) ago = seconds + "s ago";
+            else if (seconds < 3600) ago = Math.floor(seconds / 60) + "m ago";
+            else ago = Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
+        }
+
+        if (s.success) {
+            textEl.textContent = ago + " — ✅ Success";
+            textEl.style.color = "var(--success)";
+        } else {
+            var hasCancel = s.errors && s.errors.some(function (e) { return e.indexOf("Cancelled") >= 0; });
+            textEl.textContent = ago + (hasCancel ? " — ⏹ Cancelled" : " — ⚠ Errors");
+            textEl.style.color = hasCancel ? "var(--text-muted)" : "#f0a030";
+        }
+
+        var parts = [];
+        if (s.total_remote > 0) parts.push(s.total_remote + " assets");
+        if (s.downloaded > 0) parts.push(s.downloaded + " downloaded");
+        if (s.skipped > 0) parts.push(s.skipped + " skipped");
+        if (s.deleted > 0) parts.push(s.deleted + " deleted");
+        if (s.duration_seconds) parts.push("took " + s.duration_seconds + "s");
+        if (detailEl) detailEl.textContent = parts.join(" · ") || "—";
     }
 
     // -- Settings -----------------------------------------------------------

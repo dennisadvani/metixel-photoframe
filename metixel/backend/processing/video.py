@@ -27,6 +27,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from metixel.backend.processing.utils import nice_cmd
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 logger = logging.getLogger(__name__)
@@ -416,14 +417,11 @@ class VideoProcessor:
         The ``-threads`` limit is applied directly to ffmpeg args in
         :meth:`_transcode` when throttling is enabled.
         """
-        # Strategy 1: nice — ALWAYS apply if available, even when
-        # throttling is "disabled".  This ensures the frontend slideshow
-        # always gets CPU priority over transcoding.  It costs nothing
-        # and prevents stutter without any hard CPU cap.
-        if shutil.which("nice"):
-            cmd = ["nice", "-n", "19"] + cmd
-        else:
-            logger.debug("nice not available — transcoding may impact frontend")
+        # Strategy 1: nice — ALWAYS apply via the shared utility.
+        # This ensures the frontend slideshow always gets CPU priority
+        # over transcoding.  It costs nothing and prevents stutter
+        # without any hard CPU cap.
+        cmd = nice_cmd(cmd)
 
         if not self._cpu_throttle_enabled:
             return cmd
@@ -476,7 +474,7 @@ class VideoProcessor:
         generous timeout accommodates heavy 4K sources on a Pi 2/3
         where software decode of a single frame can take >30 seconds.
         """
-        cmd = [
+        cmd = nice_cmd([
             "ffmpeg",
             "-y",
             "-noaccurate_seek",
@@ -485,7 +483,7 @@ class VideoProcessor:
             "-vframes", "1",
             "-q:v", "2",
             str(dest),
-        ]
+        ])
         # Use the same timeout as probing (both are one-shot ffmpeg
         # invocations that shouldn't take minutes, but 4K on a Pi 3
         # can legitimately need over 30 seconds to initialise the
@@ -498,14 +496,14 @@ class VideoProcessor:
 
     def _probe(self, path: Path) -> dict:
         """Probe video file for metadata using ffprobe."""
-        cmd = [
+        cmd = nice_cmd([
             "ffprobe",
             "-v", "quiet",
             "-print_format", "json",
             "-show_format",
             "-show_streams",
             str(path),
-        ]
+        ])
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         import json
 
@@ -563,10 +561,10 @@ class VideoProcessor:
         """
         try:
             result = subprocess.run(
-                ["ffprobe", "-v", "error",
+                nice_cmd(["ffprobe", "-v", "error",
                  "-show_entries", "stream=codec_type",
                  "-of", "csv=p=0",
-                 str(path)],
+                 str(path)]),
                 capture_output=True, text=True, timeout=15,
             )
             return result.returncode == 0 and "video" in result.stdout.lower()
