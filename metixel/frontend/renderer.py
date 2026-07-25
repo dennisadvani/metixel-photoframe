@@ -19,7 +19,7 @@ from metixel.display.backend import DisplayBackend
 from metixel.frontend.presentation.engine import PresentationEngine
 from metixel.shared.config import Config
 from metixel.shared.ipc import ControlMessage, IPCServer
-from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -529,6 +529,11 @@ class FrontendRenderer:
                     duration_seconds=entry.get("duration_seconds", 0.0),
                     thumbnail_path=thumb,
                     source=entry.get("source", "local"),
+                    transcode_status=(
+                        TranscodeStatus(entry["transcode_status"])
+                        if entry.get("transcode_status")
+                        else None
+                    ),
                 ))
             except (KeyError, TypeError) as e:
                 logger.debug("Skipping malformed playlist entry: %s", e)
@@ -802,6 +807,11 @@ class FrontendRenderer:
                     duration_seconds=entry.get("duration_seconds", 0.0),
                     thumbnail_path=Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None,
                     source=entry.get("source", "local"),
+                    transcode_status=(
+                        TranscodeStatus(entry["transcode_status"])
+                        if entry.get("transcode_status")
+                        else None
+                    ),
                 )
                 items.append(item)
             except (KeyError, ValueError) as e:

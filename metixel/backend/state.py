@@ -241,6 +241,7 @@ class StateManager:
                     "duration_seconds": item.duration_seconds,
                     "thumbnail_path": str(item.thumbnail_path) if item.thumbnail_path else None,
                     "source": item.source,
+                    "transcode_status": item.transcode_status.value if item.transcode_status else None,
                 }
                 for item in self._playlist
             ]

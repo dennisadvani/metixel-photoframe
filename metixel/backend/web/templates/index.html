@@ -19,6 +19,7 @@
                 <a href="#" data-page="sync">Image Sync</a>
                 <a href="#" data-page="advanced">Advanced</a>
             </nav>
+            <div id="connection-status" style="display:none;font-size:0.75rem;padding:0.15rem 0.5rem;border-radius:4px"></div>
         </header>
 
         <main>
@@ -200,13 +201,13 @@
                         </div>
 
                         <label class="checkbox-row">
-                            <input type="checkbox" id="cfg-cpu-throttle-enabled" checked> CPU Throttling
-                            <span style="font-size:0.78rem;color:var(--text-muted)">Limit CPU usage so the photoframe stays responsive during transcoding</span>
+                            <input type="checkbox" id="cfg-cpu-throttle-enabled" checked> Hard CPU Cap (cpulimit)
+                            <span style="font-size:0.78rem;color:var(--text-muted)">Limits ffmpeg to a fixed % of CPU. Safe to disable — the kernel always prioritises the slideshow over transcoding via nice.</span>
                         </label>
 
                         <div class="form-group" id="cpu-throttle-group">
                             <span class="form-label">CPU Limit</span>
-                            <input type="range" id="cfg-cpu-throttle-pct" min="10" max="90" step="5" value="50">
+                            <input type="range" id="cfg-cpu-throttle-pct" min="10" max="400" step="10" value="50">
                             <span class="range-value" id="cfg-cpu-throttle-pct-label">50%</span>
                         </div>
                     </div>

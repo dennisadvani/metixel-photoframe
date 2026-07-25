@@ -546,6 +546,10 @@ class PresentationEngine:
         appended to the end.  This is designed for hot-reload from the
         backend playlist without interrupting the currently displayed image.
 
+        Also updates existing items' ``thumbnail_path`` if the backend
+        provides one and the current item doesn't have one (e.g. items
+        from the dev fallback scan lack thumbnails).
+
         Applies the same video guardrails as ``set_queue()``: respects
         ``video.playback_enabled``, ``video.transcoding_enabled``, and
         ``video.max_duration_seconds``.
@@ -553,6 +557,22 @@ class PresentationEngine:
         Returns the number of items actually added.
         """
         existing_ids = {item.id for item in self._queue}
+
+        # Update existing items with richer backend data (e.g. thumbnail_path
+        # and cached_path that the dev fallback scan couldn't provide).
+        backend_by_id = {item.id: item for item in items}
+        for existing in self._queue:
+            backend_item = backend_by_id.get(existing.id)
+            if backend_item is None:
+                continue
+            # Thumbnail from backend
+            if existing.thumbnail_path is None and backend_item.thumbnail_path is not None:
+                existing.thumbnail_path = backend_item.thumbnail_path
+            # Optimised cache path from backend (avoids loading 4K originals)
+            if str(existing.cached_path) == str(existing.original_path):
+                if str(backend_item.cached_path) != str(backend_item.original_path):
+                    existing.cached_path = backend_item.cached_path
+
         new_items = [item for item in items if item.id not in existing_ids]
         if not new_items:
             return 0
@@ -588,16 +608,18 @@ class PresentationEngine:
         if not filtered:
             return 0
 
+        # Cancel any in-progress preload BEFORE modifying the queue.
+        # New items (especially videos via shuffle) may land at the next
+        # position, making the in-flight preload stale.
+        self._cancel_preload()
+
         self._queue.extend(filtered)
         if self._config.slideshow.get("shuffle", True):
-            # Shuffle only the new items into existing positions — insert
-            # each at a random index after the current position.
             for item in filtered:
                 if self._current_idx >= 0 and len(self._queue) > self._current_idx + 1:
                     pos = random.randint(self._current_idx + 1, len(self._queue) - 1)
                 else:
                     pos = len(self._queue) - 1
-                # Move the last element (the new item) to the random position
                 self._queue.pop()
                 self._queue.insert(pos, item)
 
@@ -614,6 +636,9 @@ class PresentationEngine:
                 "Added %d new items to queue (total: %d, current idx: %d)",
                 added, len(self._queue), self._current_idx,
             )
+
+        # Restart preload for the correct next item after queue change.
+        self._preload_into_inactive()
         return added
 
     def _advance(self) -> None:
@@ -793,7 +818,43 @@ class PresentationEngine:
             self._render_item(current_item, 1.0)
             return
 
+        # If the inactive slot finally got its texture after a stall,
+        # give the crossfade transition time to run from this point.
+        next_tex = self._tex[self._inactive]
+        if elapsed >= duration and next_tex is not None and self._transition_stall_logged:
+            # Reset the clock so the crossfade gets its full duration
+            # instead of jump-cutting.
+            self._item_start_time = time.monotonic() - duration
+            elapsed = duration  # transition starts now
+            self._transition_stall_logged = False
+            logger.debug(
+                "Transition unstalled — crossfading to %s",
+                getattr(self._queue[(self._current_idx + 1) % len(self._queue)]
+                        if self._queue else None, 'original_path', '?'),
+            )
+
         if elapsed >= (duration + transition_s):
+            # If the inactive slot has no texture and the preload thread
+            # is still running (e.g. video first-frame extraction), don't
+            # jump-cut — wait for the preload to finish.  Cap at 30s to
+            # prevent infinite stall on genuinely broken files.
+            if next_tex is None and self._preload_thread is not None and self._preload_thread.is_alive():
+                stall_elapsed = elapsed - (duration + transition_s)
+                if stall_elapsed < 30.0:
+                    if not self._transition_stall_logged:
+                        self._transition_stall_logged = True
+                        logger.warning(
+                            "Transition stalled: waiting for preload "
+                            "(%.1fs past deadline) — holding current slide.",
+                            stall_elapsed,
+                        )
+                    self._render_item(current_item, 1.0)
+                    return
+                else:
+                    logger.warning(
+                        "Preload timed out after %.1fs — advancing anyway",
+                        stall_elapsed,
+                    )
             self._advance()
             if self._current_idx >= 0:
                 new_item = self._queue[self._current_idx]
@@ -1052,6 +1113,14 @@ class PresentationEngine:
     # Preload system (CPU worker → GPU upload on main thread)
     # ------------------------------------------------------------------
 
+    def _cancel_preload(self) -> None:
+        """Cancel any in-progress preload and discard its result."""
+        if self._preload_thread is not None and self._preload_thread.is_alive():
+            logger.debug("Cancelling stale preload")
+        with self._preload_lock:
+            self._preload_array = None
+            self._preload_cache_key = ""
+
     def _preload_into_inactive(self) -> None:
         """Start preloading the next queue item into the inactive slot."""
         if not self._queue or self._current_idx < 0:
@@ -1145,21 +1214,23 @@ class PresentationEngine:
                 ["ffprobe", "-v", "error", "-select_streams", "v:0",
                  "-show_entries", "stream=width,height,duration",
                  "-of", "json", video_path],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0:
+                logger.warning("ffprobe failed for %s (rc=%d)", video_path, result.returncode)
                 return None
             import json
             probe = json.loads(result.stdout)
             streams = probe.get("streams", [])
             if not streams:
+                logger.warning("No video stream in %s", video_path)
                 return None
             s = streams[0]
             vw = s.get("width", 0) or 0
             vh = s.get("height", 0) or 0
             duration = float(s.get("duration", 0) or 0)
         except Exception:
-            logger.warning("ffprobe failed for %s", video_path, exc_info=True)
+            logger.warning("ffprobe timed out or failed for %s — skipping preload", video_path)
             return None
 
         screen_w = int(self._backend.width)
@@ -1251,15 +1322,19 @@ class PresentationEngine:
                 ["ffprobe", "-v", "error", "-select_streams", "v:0",
                  "-show_entries", "stream=width,height,duration",
                  "-of", "json", video_path],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=30,
             )
             if result.returncode != 0:
-                raise RuntimeError("ffprobe failed")
+                logger.warning("Cannot probe video (rc=%d): %s — skipping", result.returncode, video_path)
+                self._advance()
+                return
             import json
             probe = json.loads(result.stdout)
             streams = probe.get("streams", [])
             if not streams:
-                raise RuntimeError("no video stream")
+                logger.warning("No video stream in %s — skipping", video_path)
+                self._advance()
+                return
             s = streams[0]
             vw = s.get("width", 0) or 0
             vh = s.get("height", 0) or 0
@@ -1633,28 +1708,28 @@ class PresentationEngine:
                 item = self._queue[self._current_idx]
                 # Resolve the thumbnail path:
                 # 1. Use the item's thumbnail_path (set by ImageProcessor
-                #    or scan_folder with hash-based key).
-                # 2. For videos, fall back to the hash-based thumbnail
-                #    in cache/thumbnails/.
-                # 3. Last resort: the raw first-frame cache (.1.frame).
+                #    or merged from backend playlist).
+                # 2. Fall back to the hash-based thumbnail in cache/thumbnails/.
+                # 3. For videos: last resort is the raw first-frame cache (.1.frame).
                 thumb = None
                 if item.thumbnail_path is not None:
                     thumb = str(item.thumbnail_path)
-                elif item.media_type == MediaType.VIDEO:
-                    video_path = str(item.cached_path or item.original_path)
-                    # Try the hash-based thumbnail first (320 px)
+                else:
+                    # Try hash-based thumbnail for any media type
                     try:
-                        file_hash = _hash_image_file(Path(video_path))
+                        media_path = str(item.cached_path or item.original_path)
+                        file_hash = _hash_image_file(Path(media_path))
                         hash_thumb = Path("/opt/metixel/cache/thumbnails") / f"{file_hash}.jpg"
                         if hash_thumb.exists():
                             thumb = str(hash_thumb)
                     except OSError:
                         pass
-                    # Fall back to the raw first-frame cache
-                    if thumb is None:
-                        first_frame = _video_frame_cache_path(video_path, 1, cache_base=self._cache_base)
-                        if first_frame.exists():
-                            thumb = str(first_frame)
+                # Video-only: fall back to first-frame cache
+                if thumb is None and item.media_type == MediaType.VIDEO:
+                    video_path = str(item.cached_path or item.original_path)
+                    first_frame = _video_frame_cache_path(video_path, 1, cache_base=self._cache_base)
+                    if first_frame.exists():
+                        thumb = str(first_frame)
                 data = {
                     "file": str(item.original_path.name) if item.original_path else "unknown",
                     "index": self._current_idx,
@@ -1684,64 +1759,57 @@ class PresentationEngine:
         ``OptimisationQueue`` handles media discovery and processing.
         Only minimal metadata is gathered; no optimisation or thumbnail
         generation is performed.
+
+        Videos are intentionally excluded — they must come through the
+        backend pipeline so transcoding, guardrails, and playlist gating
+        are applied before playback.
         """
         items: list[MediaItem] = []
         if not folder_path.exists():
             logger.warning("Media folder not found: %s", folder_path)
             return items
 
-        all_extensions = self.IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
         for entry in sorted(folder_path.rglob("*")):
             if not entry.is_file():
                 continue
             suffix = entry.suffix.lower()
-            if suffix not in all_extensions:
+            if suffix not in self.IMAGE_EXTENSIONS:
                 continue
             try:
-                media_type = (
-                    MediaType.VIDEO if suffix in VIDEO_EXTENSIONS
-                    else MediaType.IMAGE
-                )
+                with Image.open(entry) as img:
+                    w, h = img.size
 
-                # Gather minimal metadata (dimensions only)
-                if media_type == MediaType.IMAGE:
-                    with Image.open(entry) as img:
-                        w, h = img.size
-                    duration = 0.0
-                else:
-                    w, h = 0, 0
-                    duration = 0.0
-                    try:
-                        from metixel.frontend.presentation.video_player import (
-                            VideoPlayer as VP,
-                        )
-                        info = VP._probe(str(entry))
-                        if info:
-                            w = info.get("width", 0)
-                            h = info.get("height", 0)
-                            duration = info.get("duration", 0.0)
-                    except Exception:
-                        pass
+                # Use content-hash ID (matching ImageProcessor) so the
+                # backend's playlist items deduplicate correctly when
+                # merged via hot-reload.
+                file_id = _hash_image_file(entry)
+
+                # Check if an optimised cached version already exists
+                # (e.g. from a previous run).  This avoids loading and
+                # downscaling the original 4K file on every cycle.
+                cache_base = Path(self._cache_base)
+                cached = cache_base / "images" / f"{file_id}.jpg"
+                if not cached.is_file() or cached.stat().st_size < 1024:
+                    cached = entry  # fall back to original if cache is missing/corrupt
 
                 # Thumbnails are generated by the backend OptimisationQueue —
                 # not here.  The frontend only displays what the backend provides.
                 items.append(MediaItem(
-                    id=str(entry),
+                    id=file_id,
                     original_path=entry,
-                    cached_path=entry,
-                    media_type=media_type,
+                    cached_path=cached,
+                    media_type=MediaType.IMAGE,
                     width=w, height=h,
-                    duration_seconds=duration,
+                    duration_seconds=0.0,
                     thumbnail_path=None,
                     source="local",
                 ))
             except Exception:
                 logger.warning("Skipping unreadable file: %s", entry)
 
-        vc = sum(1 for i in items if i.media_type == MediaType.VIDEO)
         logger.info(
-            "Folder scan (dev fallback): %d images + %d videos in %s",
-            len(items) - vc, vc, folder_path,
+            "Folder scan (dev fallback): %d images in %s",
+            len(items), folder_path,
         )
         return items
 

@@ -8,6 +8,7 @@ Critical for memory-constrained Phase 1 hardware (Pi Zero 2 W: 512MB).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 from pathlib import Path
@@ -89,10 +90,22 @@ class ImageProcessor:
             thumb_path = self._thumb_cache / f"{file_hash}.jpg"
 
             if cached_path.exists():
-                logger.debug("Image already cached: %s", file_hash)
-                # Still return the MediaItem with basic EXIF
-                exif = self._read_exif(source_path)
-                return self._build_item(source_path, cached_path, thumb_path, exif, source, file_hash)
+                # Validate the cached file isn't corrupt (e.g. partial write
+                # from a killed process).  Re-process if it's broken.
+                if cached_path.stat().st_size < 1024 or not self._validate_cached_image(cached_path):
+                    logger.warning(
+                        "Cached image is corrupt — will re-process: %s",
+                        cached_path.name,
+                    )
+                    with contextlib.suppress(OSError):
+                        cached_path.unlink()
+                else:
+                    logger.debug("Image already cached: %s", file_hash)
+                    # Regenerate thumbnail if missing (e.g. cache was cleared)
+                    if not thumb_path.exists():
+                        self._regenerate_thumbnail(cached_path, thumb_path)
+                    exif = self._read_exif(source_path)
+                    return self._build_item(source_path, cached_path, thumb_path, exif, source, file_hash)
 
             # Open and process
             with Image.open(source_path) as img:
@@ -149,6 +162,38 @@ class ImageProcessor:
 
         img.thumbnail((max_w, max_h), Image.LANCZOS)
         return img
+
+    def _regenerate_thumbnail(self, cached_path: Path, thumb_path: Path) -> None:
+        """Generate a thumbnail from an already-cached image.
+
+        Called when the cached image exists but the thumbnail was deleted
+        (e.g. after a cache clear).
+        """
+        try:
+            with Image.open(cached_path) as img:
+                thumb = img.copy()
+                thumb.thumbnail((self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE), Image.LANCZOS)
+                thumb.save(thumb_path, "JPEG", quality=70)
+            logger.debug("Thumbnail regenerated: %s", thumb_path.name)
+        except Exception:
+            logger.warning(
+                "Failed to regenerate thumbnail for %s", cached_path.name, exc_info=True,
+            )
+
+    @staticmethod
+    def _validate_cached_image(path: Path) -> bool:
+        """Check that a cached JPEG is readable (not corrupt/truncated).
+
+        Uses PIL's ``.verify()`` which checks the file structure without
+        fully decoding pixel data — fast enough for a startup check.
+        """
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(path) as img:
+                img.verify()
+            return True
+        except Exception:
+            return False
 
     def _extract_exif(self, img: Image.Image) -> dict[str, Any]:
         """Extract relevant EXIF tags from a PIL Image."""

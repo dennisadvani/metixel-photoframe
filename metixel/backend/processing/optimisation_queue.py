@@ -521,6 +521,10 @@ class OptimisationQueue:
                 self._video_queue.append(item)
             return
 
+        # Count remaining videos (including this one) for progress reporting
+        with self._queue_lock:
+            remaining = len(self._video_queue) + 1  # +1 for the one we just popped
+
         logger.debug(
             "[OPTQ] VID opt  | %4dx%-4d | %-6s | %5.1fs | %s",
             item.width, item.height,
@@ -530,7 +534,7 @@ class OptimisationQueue:
         )
         try:
             _write_progress(
-                "transcoding", 1, 0, item.original_path.name,
+                "transcoding", remaining, 0, item.original_path.name,
             )
             result = processor.process(item.original_path, source=item.source)
             if result is not None:
@@ -554,7 +558,9 @@ class OptimisationQueue:
                         cached.name,
                         cached.stat().st_size if cached.is_file() else 0,
                     )
-            _write_progress("transcoding", 1, 1, "")
+            with self._queue_lock:
+                still_remaining = len(self._video_queue)
+            _write_progress("transcoding", remaining, remaining - still_remaining, "")
         except Exception:
             logger.exception(
                 "Failed to optimise video: %s", item.original_path,

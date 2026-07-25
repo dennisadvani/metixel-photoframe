@@ -18,6 +18,7 @@ Transcoding is configurable:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
@@ -210,13 +211,23 @@ class VideoProcessor:
                     status=TranscodeStatus.NOT_TRANSCODED,
                 )
 
-            # If cached file already exists, it's already transcoded
+            # If cached file already exists, validate and use it
             if cached_path.exists():
-                logger.debug("Video already cached (transcoded): %s", file_hash)
-                return self._build_item(
-                    source_path, cached_path, thumb_path, info, source, file_hash,
-                    status=TranscodeStatus.TRANSCODED,
-                )
+                if self._validate_cached_video(cached_path):
+                    logger.debug("Video already cached (transcoded): %s", file_hash)
+                    return self._build_item(
+                        source_path, cached_path, thumb_path, info, source, file_hash,
+                        status=TranscodeStatus.TRANSCODED,
+                    )
+                else:
+                    logger.warning(
+                        "Cached video is corrupt — will re-transcode: %s",
+                        cached_path.name,
+                    )
+                    # Delete the corrupt video AND its stale frame files /
+                    # thumbnail so they don't show the wrong content after
+                    # re-transcode.
+                    self._cleanup_cached_video(cached_path, thumb_path)
 
             # Mark as transcoding, then transcode
             self._transcoding.add(file_hash)
@@ -383,20 +394,35 @@ class VideoProcessor:
         raise RuntimeError(f"All encoders failed for: {source.name}")
 
     def _wrap_with_throttle(self, cmd: list[str]) -> list[str]:
-        """Wrap an ffmpeg command with CPU throttling if enabled.
+        """Wrap an ffmpeg command with CPU throttling.
 
         Layered strategy:
-        1. ``cpulimit -l N%`` — precise percentage-based (requires install)
-        2. ``nice -n 19`` — lowest scheduling priority (always available)
+        1. ``nice -n 19`` — lowest scheduling priority (ALWAYS applied
+           when available, regardless of throttle settings).  The kernel
+           gives the frontend render loop priority, so the slideshow
+           never stutters — even at 100% CPU with throttling disabled.
+        2. ``cpulimit -l N%`` — hard percentage cap (only when
+           ``cpu_throttle_enabled`` is true).  Adds a ceiling when you
+           want guaranteed headroom beyond what nice provides.
+
         The ``-threads`` limit is applied directly to ffmpeg args in
-        :meth:`_transcode`, so it works even without external tools.
+        :meth:`_transcode` when throttling is enabled.
         """
+        # Strategy 1: nice — ALWAYS apply if available, even when
+        # throttling is "disabled".  This ensures the frontend slideshow
+        # always gets CPU priority over transcoding.  It costs nothing
+        # and prevents stutter without any hard CPU cap.
+        if shutil.which("nice"):
+            cmd = ["nice", "-n", "19"] + cmd
+        else:
+            logger.debug("nice not available — transcoding may impact frontend")
+
         if not self._cpu_throttle_enabled:
             return cmd
 
-        # Strategy 1: cpulimit — precise percentage-based throttling
+        # Strategy 2: cpulimit — hard CPU ceiling (only when enabled).
         if shutil.which("cpulimit"):
-            limit = max(5, min(100, self._cpu_throttle_pct))
+            limit = max(5, min(1000, self._cpu_throttle_pct))
             logger.debug("Throttling transcode to %d%% CPU via cpulimit", limit)
             return [
                 "cpulimit",
@@ -404,47 +430,35 @@ class VideoProcessor:
                 "-f",  # foreground: wait for child to exit (CRITICAL!)
                 "--"] + cmd
 
-        # Strategy 2: nice — lowest scheduling priority
-        if shutil.which("nice"):
-            logger.debug("Throttling transcode via nice -n 19 (lowest priority) + ffmpeg -threads")
-            return ["nice", "-n", "19"] + cmd
-
-        # Neither available — -threads alone provides some limiting
-        logger.debug(
-            "CPU throttling: using ffmpeg -threads limit only "
-            "(cpulimit not installed, nice not found)"
-        )
+        logger.debug("cpulimit not installed — using nice + -threads only")
         return cmd
 
     def _compute_thread_limit(self) -> int | None:
         """Compute ffmpeg thread limit from the throttle percentage.
 
-        Maps the user-facing 0-100% slider to a concrete thread count.
-        Returns ``None`` if no limit should be applied (100% or disabled).
+        Maps the user-facing percentage (0-1000, representing percentage
+        of a single core) to a concrete thread count.  Returns ``None``
+        if no limit should be applied (throttle disabled or > 4 cores).
 
-        Mapping (for a 4-core Pi):
-        - 10-25%  → 1 thread  (light load)
-        - 30-50%  → 2 threads (half cores)
-        - 55-75%  → 3 threads
-        - 80-100% → None (auto, use all cores)
+        Mapping:
+        -   1–100  → 1 thread  (up to 1 core)
+        - 101–200  → 2 threads (up to 2 cores)
+        - 201–300  → 3 threads (up to 3 cores)
+        - 301–400  → 4 threads (up to 4 cores)
+        - 401+     → None (auto, use all cores)
         """
         if not self._cpu_throttle_enabled:
             return None
 
-        pct = max(5, min(100, self._cpu_throttle_pct))
-        if pct >= 85:
-            return None  # Let ffmpeg auto-detect
-
+        pct = max(1, min(1000, self._cpu_throttle_pct))
         cores = os.cpu_count() or 4
 
-        if pct <= 30:
-            return 1
-        elif pct <= 55:
-            return max(1, cores // 2)
-        elif pct <= 80:
-            return max(1, (cores * 3) // 4)
-        else:
-            return None
+        if pct >= 401:
+            return None  # Let ffmpeg auto-detect (4+ cores worth)
+
+        # Each 100 = 1 core worth of CPU
+        threads = (pct + 99) // 100  # ceil division
+        return min(threads, cores)
 
     def _extract_thumbnail(self, source: Path, dest: Path) -> None:
         """Extract a thumbnail frame at 2 seconds into the video.
@@ -531,6 +545,50 @@ class VideoProcessor:
         encoders.append("libx264")
         logger.debug("Available video encoders: %s", encoders)
         return encoders
+
+    @staticmethod
+    def _validate_cached_video(path: Path) -> bool:
+        """Check that a cached video file is valid (not corrupt/partial).
+
+        Runs a quick ``ffprobe`` to verify the file has a readable video
+        stream.  Returns ``True`` if the file is valid.
+        """
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error",
+                 "-show_entries", "stream=codec_type",
+                 "-of", "csv=p=0",
+                 str(path)],
+                capture_output=True, text=True, timeout=15,
+            )
+            return result.returncode == 0 and "video" in result.stdout.lower()
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+
+    @staticmethod
+    def _cleanup_cached_video(cached_path: Path, thumb_path: Path) -> None:
+        """Delete a corrupt cached video and all associated artifacts.
+
+        Removes the video file, its thumbnail, and any frame cache files
+        (``.1.frame`` / ``.2.frame``) so stale frames don't appear after
+        re-transcode.
+        """
+        # Delete the corrupt video
+        with contextlib.suppress(OSError):
+            cached_path.unlink()
+        # Delete the thumbnail
+        with contextlib.suppress(OSError):
+            thumb_path.unlink()
+        # Delete frame files (stored in the same directory with a
+        # path-based hash that differs from the content hash).
+        frame_dir = cached_path.parent
+        path_hash = hashlib.sha256(str(cached_path).encode()).hexdigest()[:16]
+        for frame_num in (1, 2):
+            frame_file = frame_dir / f"{path_hash}.{frame_num}.frame"
+            if frame_file.exists():
+                with contextlib.suppress(OSError):
+                    frame_file.unlink()
+                    logger.debug("Cleaned up stale frame file: %s", frame_file.name)
 
     @staticmethod
     def _hash_file(path: Path) -> str:

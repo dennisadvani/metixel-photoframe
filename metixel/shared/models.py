@@ -49,19 +49,22 @@ class MediaItem:
     def is_ready_to_play(self) -> bool:
         """Whether this item can be played in the slideshow.
 
-        Images are always ready.  Videos are ready if transcoding is
-        disabled (original file), or transcoding is enabled and the
-        cached file exists and is marked as transcoded.
+        Images are always ready.  Videos are only ready if transcoding
+        completed successfully, failed (use original as fallback), or
+        transcoding is disabled (NOT_TRANSCODED status).
+        A ``None`` status (e.g. from a dev fallback folder scan) means
+        the item has not been through the optimisation pipeline — do NOT
+        play it.
         """
         if self.media_type == MediaType.IMAGE:
             return True
-        # Video: ready if not transcoded (original file used when
-        # transcoding is off) OR transcoded successfully
+        # Video: only play if the backend has explicitly set a status
         if self.transcode_status is None:
-            return True  # Unknown status — allow playback
+            return False  # Unknown — hasn't been through the pipeline
         return self.transcode_status in (
             TranscodeStatus.TRANSCODED,
             TranscodeStatus.FAILED,
+            TranscodeStatus.NOT_TRANSCODED,
         )
 
 

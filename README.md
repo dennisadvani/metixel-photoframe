@@ -40,8 +40,7 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 | Phase | Models | RAM | GPU | Status |
 |---|---|---|---|---|
-| **Phase 1** | Pi 3 | 512MB–1GB | VideoCore IV | ✅ Active |
-G52 | 📋 Planned |
+| **Phase 1** | Pi 3 | 1GB+ & 1GB+ of Swap | VideoCore IV | ✅ Active |
 
 **Tested on:** Raspberry Pi 3 (1GB RAM) running Debian Trixie (13) Lite.
 

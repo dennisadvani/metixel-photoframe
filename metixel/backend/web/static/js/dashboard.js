@@ -250,16 +250,49 @@
 
     // -- API Helper ---------------------------------------------------------
 
+    // Track connection state to avoid console spam during restarts.
+    var _apiConnected = true;
+    var _apiErrorCount = 0;
+    var _apiLastErrorTime = 0;
+
+    function _apiUpdateConnectionStatus(ok) {
+        var el = document.getElementById("connection-status");
+        if (!el) return;
+        if (ok) {
+            el.style.display = "none";
+            el.textContent = "";
+            _apiConnected = true;
+            _apiErrorCount = 0;
+        } else {
+            _apiConnected = false;
+            _apiErrorCount++;
+            var msg = "Reconnecting";
+            var dots = ".".repeat((_apiErrorCount % 4) + 1);
+            el.textContent = msg + dots;
+            el.style.display = "";
+            el.style.background = "#fff3cd";
+            el.style.color = "#856404";
+        }
+    }
+
     async function apiGet(path) {
         try {
             const res = await fetch(`/api${path}`);
             if (!res.ok) {
                 console.error("API GET %s failed: %s %s", path, res.status, res.statusText);
+                _apiUpdateConnectionStatus(false);
                 return null;
             }
+            _apiUpdateConnectionStatus(true);
             return await res.json();
         } catch (err) {
-            console.error("API error:", err);
+            // Suppress console spam during restarts — only log every 30s
+            var now = Date.now();
+            if (now - _apiLastErrorTime > 30000) {
+                console.warn("API unreachable (backend may be restarting):", err.message);
+                _apiLastErrorTime = now;
+            }
+            _apiUpdateConnectionStatus(false);
             return null;
         }
     }
@@ -273,11 +306,18 @@
             });
             if (!res.ok) {
                 console.error("API PUT %s failed: %s %s", path, res.status, res.statusText);
+                _apiUpdateConnectionStatus(false);
                 return null;
             }
+            _apiUpdateConnectionStatus(true);
             return await res.json();
         } catch (err) {
-            console.error("API error:", err);
+            var now = Date.now();
+            if (now - _apiLastErrorTime > 30000) {
+                console.warn("API unreachable (backend may be restarting):", err.message);
+                _apiLastErrorTime = now;
+            }
+            _apiUpdateConnectionStatus(false);
             return null;
         }
     }
