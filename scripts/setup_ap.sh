@@ -46,7 +46,11 @@ ignore_broadcast_ssid=0
 wpa=0
 EOF
 
-sudo sed -i 's|^#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+sudo tee /etc/default/hostapd > /dev/null <<'HOSTAPDDEF'
+# Defaults for hostapd — managed by Metixel Photoframe
+DAEMON_CONF=/etc/hostapd/hostapd.conf
+DAEMON_OPTS=
+HOSTAPDDEF
 
 # Disable auto-start — the Metixel NetworkMonitor controls these services
 sudo systemctl disable hostapd dnsmasq 2>/dev/null || true

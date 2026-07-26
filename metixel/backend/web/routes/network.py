@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from metixel.backend.network_manager import (
     connect_to_network,
     forget_network,
     get_connection_status,
     is_ap_mode_active,
-    is_pin_required,
     scan_networks,
     start_ap_mode,
     stop_ap_mode,
@@ -42,10 +41,14 @@ def network_status():
 def network_scan():
     """Scan for visible Wi-Fi networks.
 
-    Returns a list of networks sorted by signal strength (strongest first).
+    By default serves cached results from a pre-AP scan (the Pi's WiFi
+    chip can't scan while in AP mode).  Pass ``?force=1`` to perform a
+    live scan — this will briefly drop the AP, disconnecting captive
+    portal clients.  Use with a warning to the user.
     """
-    networks = scan_networks()
-    return jsonify({"networks": networks})
+    force = request.args.get("force", "0") == "1"
+    networks = scan_networks(force_live=force)
+    return jsonify({"networks": networks, "cached": not force and is_ap_mode_active()})
 
 
 @network_bp.route("/network/connect", methods=["POST"])
@@ -64,6 +67,17 @@ def network_connect():
 
     success, message = connect_to_network(ssid, password)
     if success:
+        # Immediately clear the PIN gate so the dashboard is accessible
+        from metixel.backend.network_manager import clear_ap_pin
+        clear_ap_pin()
+        # Tell the frontend to dismiss the PIN message
+        ipc = current_app.config.get("METIXEL_IPC")
+        if ipc is not None:
+            try:
+                from metixel.shared.ipc import ControlMessage
+                ipc.send(ControlMessage(cmd="dismiss_all_messages"))
+            except Exception:
+                pass
         return jsonify({"status": "ok", "message": message})
     else:
         return jsonify({"status": "error", "message": message}), 400

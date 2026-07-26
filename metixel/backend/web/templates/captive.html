@@ -33,10 +33,7 @@
         }
         .logo {
             margin: 32px 0 8px;
-            font-size: 1.6rem;
-            font-weight: 700;
-            color: var(--primary);
-            letter-spacing: -0.5px;
+            height: 48px;
         }
         .subtitle {
             color: var(--text-muted);
@@ -168,7 +165,7 @@
     </style>
 </head>
 <body>
-    <div class="logo">📷 Metixel</div>
+    <img class="logo" src="/static/metixel_logo_red_white.png" alt="Metixel" height="48">
     <p class="subtitle">WiFi Setup</p>
 
     <!-- Step 0: PIN entry (security gate) -->
@@ -184,15 +181,12 @@
         <div id="pin-status" class="status-msg"></div>
     </div>
 
-    <!-- Step 1: Scan -->
+    <!-- Step 1: Networks (auto-loaded from pre-AP scan) -->
     <div class="card" id="step-scan" style="display:none">
         <h2>Connect to WiFi</h2>
         <p style="color:var(--text-muted);font-size:0.88rem;margin-bottom:12px">
             Select your network to get started.
         </p>
-        <button class="btn btn--primary" id="btn-scan" onclick="doScan()">
-            <span class="material-icons">wifi_find</span> Scan for Networks
-        </button>
         <div class="network-list" id="network-list"></div>
         <div id="scan-status" class="status-msg"></div>
     </div>
@@ -290,6 +284,7 @@
                     status.className = "";
                     document.getElementById("step-pin").style.display = "none";
                     document.getElementById("step-scan").style.display = "";
+                    loadNetworks();
                 } else {
                     status.className = "status-msg error";
                     status.textContent = data.message || "Incorrect PIN";
@@ -306,39 +301,32 @@
             }
         }
 
-        async function doScan() {
-            var btn = document.getElementById("btn-scan");
+        // ── Auto-load networks on PIN success ─────────────────────
+        async function loadNetworks() {
             var status = document.getElementById("scan-status");
             var list = document.getElementById("network-list");
 
-            btn.disabled = true;
-            btn.innerHTML = '<span class="spinner"></span> Scanning…';
             status.className = "status-msg loading";
-            status.textContent = "Scanning for networks…";
+            status.textContent = "Loading networks…";
             list.innerHTML = "";
 
             try {
                 var resp = await fetch("/api/network/scan");
                 var data = await resp.json();
-                status.className = "status-msg";
+                status.className = "";
                 status.textContent = "";
 
                 if (!data.networks || data.networks.length === 0) {
                     status.className = "status-msg error";
-                    status.textContent = "No networks found. Try again or move closer to your router.";
-                    btn.disabled = false;
-                    btn.innerHTML = '<span class="material-icons">wifi_find</span> Scan for Networks';
+                    status.textContent = "No networks found. Move closer to your router and refresh the page.";
                     return;
                 }
 
                 renderNetworkList(data.networks);
             } catch (e) {
                 status.className = "status-msg error";
-                status.textContent = "Scan failed — is the backend running?";
+                status.textContent = "Failed to load networks — please refresh the page.";
             }
-
-            btn.disabled = false;
-            btn.innerHTML = '<span class="material-icons">wifi_find</span> Scan Again';
         }
 
         function renderNetworkList(networks) {

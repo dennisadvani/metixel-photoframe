@@ -75,15 +75,7 @@
     "enabled": true,
     "default_duration": 5.0,
     "max_visible": 5,
-    "persistent": [
-      {
-        "id": "welcome_wifi",
-        "title": "Welcome to Metixel!",
-        "body": "To set up Wi-Fi, connect to the 'Metixel-Setup' network from your phone or visit http://metixel.local",
-        "severity": "info",
-        "icon": "i"
-      }
-    ]
+    "persistent": []
   },
   "network": {
     "wifi_country": "",

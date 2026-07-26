@@ -34,6 +34,14 @@ CONNECT_TIMEOUT = 30
 DEFAULT_CONNECTIVITY_URL = "http://connectivity-check.ubuntu.com"
 
 # ---------------------------------------------------------------------------
+# Scan cache — populated before AP activation to avoid disconnecting clients
+# ---------------------------------------------------------------------------
+
+_cached_scan: list[dict[str, Any]] = []
+_cached_scan_time: float = 0.0
+SCAN_CACHE_TTL = 300  # 5 minutes
+
+# ---------------------------------------------------------------------------
 # PIN-based security for AP re-activation
 # ---------------------------------------------------------------------------
 
@@ -176,11 +184,11 @@ def validate_ap_pin(candidate: str) -> tuple[bool, str]:
 
 
 def is_connected() -> bool:
-    """Quick check: do we have an IP address on wlan0?
+    """Quick check: do we have a real network connection?
 
-    Returns True if wlan0 has a non-link-local IPv4 address, meaning
-    we're connected to a Wi-Fi network (or Ethernet, if that's wired).
-    Also returns True if any interface other than lo has a routable IP.
+    Returns True if any non-loopback interface is connected AND has an IP
+    that is NOT on the AP subnet (192.168.42.x).  The AP's own static IP
+    is not a real upstream connection.
     """
     try:
         result = subprocess.run(
@@ -192,69 +200,158 @@ def is_connected() -> bool:
             if len(parts) >= 2:
                 dev, state = parts[0], parts[1]
                 if dev != "lo" and state == "connected":
-                    return True
+                    # Exclude the AP's own IP — 192.168.42.x is the
+                    # captive portal subnet, not a real upstream link.
+                    if _interface_has_real_ip(dev):
+                        return True
         return False
     except Exception:
         logger.debug("is_connected() check failed", exc_info=True)
         return False
 
 
-def scan_networks() -> list[dict[str, Any]]:
-    """Scan for visible Wi-Fi networks.
-
-    Returns a list of dicts with keys:
-        ssid, signal (0-100), security (e.g. "WPA2"), freq (MHz)
-    """
+def _interface_has_real_ip(device: str) -> bool:
+    """Check whether *device* has an IP outside the AP captive-portal subnet."""
     try:
-        # Trigger a fresh scan first
+        ip_result = subprocess.run(
+            ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", device],
+            capture_output=True, text=True, timeout=5,
+        )
+        for line in ip_result.stdout.strip().splitlines():
+            if line.startswith("IP4.ADDRESS["):
+                val = line.split(":", 1)[-1].split("/")[0].strip()
+                if val and not val.startswith("192.168.42."):
+                    return True
+        return False
+    except Exception:
+        return True  # If we can't check, assume it's real (don't block)
+
+
+def pre_scan_for_ap() -> None:
+    """Scan for networks BEFORE activating AP mode.
+
+    Call this while wlan0 is still in managed mode (before hostapd
+    takes over).  Results are cached for 5 minutes and served to the
+    captive portal without dropping connected clients.
+    """
+    global _cached_scan, _cached_scan_time
+    try:
         subprocess.run(
             ["nmcli", "device", "wifi", "rescan"],
             capture_output=True, timeout=10,
         )
-        time.sleep(1.0)  # Wait for scan results
+        time.sleep(10.0)
+        networks = _parse_scan_results()
+        if networks:
+            _cached_scan = networks
+            _cached_scan_time = time.monotonic()
+            logger.info("Pre-scan cached %d network(s) for captive portal", len(networks))
+    except Exception:
+        logger.warning("Pre-scan for AP failed", exc_info=True)
 
-        result = subprocess.run(
-            ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ", "device", "wifi", "list"],
-            capture_output=True, text=True, timeout=10,
+
+def scan_networks(force_live: bool = False) -> list[dict[str, Any]]:
+    """Scan for visible Wi-Fi networks.
+
+    Uses a pre-AP cached scan when available (the Pi's WiFi chip can't
+    scan while in AP mode).  Set ``force_live=True`` to bypass the cache
+    — this will briefly drop the AP, disconnecting captive portal clients.
+
+    Returns a list of dicts with keys:
+        ssid, signal (0-100), security (e.g. "WPA2"), freq (MHz)
+    """
+    global _cached_scan, _cached_scan_time
+
+    # Serve cached results when AP is active (avoid disconnecting clients)
+    if not force_live and is_ap_mode_active():
+        if _cached_scan and (time.monotonic() - _cached_scan_time) < SCAN_CACHE_TTL:
+            logger.debug("Serving %d cached scan result(s)", len(_cached_scan))
+            return list(_cached_scan)
+        # Cache expired or empty — do a live scan (will briefly drop AP)
+        logger.info("Scan cache expired — performing live scan (AP will drop briefly)")
+
+    # If AP is running and we need a live scan, stop it temporarily
+    ap_was_active = is_ap_mode_active()
+    if ap_was_active:
+        subprocess.run(
+            ["sudo", "systemctl", "stop", HOSTAPD_UNIT],
+            capture_output=True, timeout=5,
         )
-        networks: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for line in result.stdout.strip().splitlines():
-            if not line:
-                continue
-            parts = line.split(":")
-            if len(parts) < 2:
-                continue
-            ssid = parts[0].strip()
-            if not ssid or ssid in seen:
-                continue
-            seen.add(ssid)
-            try:
-                signal = int(parts[1]) if len(parts) > 1 else 0
-            except (ValueError, IndexError):
-                signal = 0
-            security = parts[2].strip() if len(parts) > 2 else ""
-            try:
-                freq = int(parts[3]) if len(parts) > 3 else 0
-            except (ValueError, IndexError):
-                freq = 0
-            networks.append({
-                "ssid": ssid,
-                "signal": signal,
-                "security": security,
-                "freq": freq,
-            })
-        # Sort by signal strength (strongest first)
-        networks.sort(key=lambda n: n["signal"], reverse=True)
-        logger.debug("Wi-Fi scan found %d network(s)", len(networks))
+        subprocess.run(
+            ["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"],
+            capture_output=True, timeout=5,
+        )
+        time.sleep(1.0)
+
+    try:
+        subprocess.run(
+            ["nmcli", "device", "wifi", "rescan"],
+            capture_output=True, timeout=10,
+        )
+        time.sleep(10.0)
+        networks = _parse_scan_results()
+        # Update cache
+        if networks:
+            _cached_scan = networks
+            _cached_scan_time = time.monotonic()
         return networks
     except Exception:
         logger.warning("Wi-Fi scan failed", exc_info=True)
-        return []
+        return list(_cached_scan) if _cached_scan else []
+    finally:
+        if ap_was_active:
+            subprocess.run(
+                ["sudo", "nmcli", "device", "set", "wlan0", "managed", "no"],
+                capture_output=True, timeout=5,
+            )
+            subprocess.run(
+                ["sudo", "systemctl", "start", HOSTAPD_UNIT],
+                capture_output=True, timeout=5,
+            )
+
+
+def _parse_scan_results() -> list[dict[str, Any]]:
+    """Parse nmcli wifi list output into a list of network dicts."""
+    result = subprocess.run(
+        ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ", "device", "wifi", "list"],
+        capture_output=True, text=True, timeout=10,
+    )
+    networks: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in result.stdout.strip().splitlines():
+        if not line:
+            continue
+        parts = line.split(":")
+        if len(parts) < 2:
+            continue
+        ssid = parts[0].strip()
+        if not ssid or ssid in seen:
+            continue
+        seen.add(ssid)
+        try:
+            signal = int(parts[1]) if len(parts) > 1 else 0
+        except (ValueError, IndexError):
+            signal = 0
+        security = parts[2].strip() if len(parts) > 2 else ""
+        try:
+            freq = int(parts[3]) if len(parts) > 3 else 0
+        except (ValueError, IndexError):
+            freq = 0
+        networks.append({
+            "ssid": ssid,
+            "signal": signal,
+            "security": security,
+            "freq": freq,
+        })
+    networks.sort(key=lambda n: n["signal"], reverse=True)
+    return networks
 
 
 def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
     """Connect to a Wi-Fi network.
+
+    If the AP is active, stops it and returns wlan0 to NetworkManager
+    control before attempting the connection.
 
     Args:
         ssid: The network SSID.
@@ -266,11 +363,16 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
     if not ssid:
         return False, "SSID is required"
 
+    # If AP is running, stop it so wlan0 can be used for client connection
+    ap_was_active = is_ap_mode_active()
+    if ap_was_active:
+        stop_ap_mode()
+        time.sleep(1.0)
+
     try:
-        cmd = ["nmcli", "device", "wifi", "connect", ssid]
+        cmd = ["sudo", "nmcli", "-w", str(CONNECT_TIMEOUT), "device", "wifi", "connect", ssid]
         if password:
             cmd += ["password", password]
-        cmd += ["timeout", str(CONNECT_TIMEOUT)]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=CONNECT_TIMEOUT + 10)
         if result.returncode == 0:
@@ -290,7 +392,7 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
 
 
 def forget_network(ssid: str) -> bool:
-    """Remove a saved Wi-Fi network from NetworkManager."""
+    """Remove a saved Wi-Fi network from NetworkManager and disconnect."""
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "NAME,UUID", "connection", "show"],
@@ -304,7 +406,12 @@ def forget_network(ssid: str) -> bool:
                 break
         if uuid:
             subprocess.run(
-                ["nmcli", "connection", "delete", uuid],
+                ["sudo", "nmcli", "connection", "delete", uuid],
+                capture_output=True, timeout=10,
+            )
+            # Also disconnect wlan0 to trigger AP fallback
+            subprocess.run(
+                ["sudo", "nmcli", "device", "disconnect", "wlan0"],
                 capture_output=True, timeout=10,
             )
             logger.info("Forgot Wi-Fi network: %s", ssid)
@@ -447,25 +554,91 @@ def _fill_ip_address(status: dict[str, Any], device: str) -> None:
 def start_ap_mode() -> bool:
     """Start the access point (hostapd + dnsmasq).
 
-    Configures the static IP for wlan0 and starts the AP services.
-    Requires hostapd and dnsmasq to be installed and configured
-    (see ``scripts/setup_ap.sh``).
+    Releases wlan0 from NetworkManager control, starts hostapd to create
+    the AP, then starts dnsmasq for DHCP/DNS.  The services must be
+    installed and configured (see ``scripts/setup_ap.sh``).
+
+    Returns False if the services are not installed or fail to start.
     """
     try:
-        # Set static IP for the AP
+        # Verify services are installed before trying to start them
+        for unit in (HOSTAPD_UNIT, DNSMASQ_UNIT):
+            check = subprocess.run(
+                ["systemctl", "list-unit-files", unit],
+                capture_output=True, text=True, timeout=5,
+            )
+            # systemctl list-unit-files outputs "unit.service enabled" or
+            # "unit.service masked" etc.  If the unit isn't found it prints
+            # nothing for that line.
+            if unit not in check.stdout:
+                logger.error(
+                    "%s not found — AP mode unavailable. "
+                    "Run: sudo bash /opt/metixel/scripts/setup_ap.sh",
+                    unit,
+                )
+                return False
+
+        # Release wlan0 from NetworkManager so hostapd can take control.
+        # Without this, NM keeps the interface in managed mode and
+        # hostapd's AP-ENABLED has no effect (beacons aren't sent).
         subprocess.run(
-            ["ip", "addr", "add", "192.168.42.1/24", "dev", "wlan0"],
+            ["sudo", "nmcli", "device", "set", "wlan0", "managed", "no"],
             capture_output=True, timeout=5,
         )
         subprocess.run(
-            ["ip", "link", "set", "wlan0", "up"],
+            ["sudo", "ip", "link", "set", "wlan0", "down"],
             capture_output=True, timeout=5,
         )
-        # Start services
+
+        # Start hostapd first — it creates the AP (sets interface to AP mode)
         subprocess.run(
-            ["systemctl", "start", HOSTAPD_UNIT, DNSMASQ_UNIT],
+            ["sudo", "systemctl", "start", HOSTAPD_UNIT],
             capture_output=True, timeout=10,
         )
+        time.sleep(0.5)
+
+        # Verify hostapd started
+        result = subprocess.run(
+            ["systemctl", "is-active", HOSTAPD_UNIT],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip() != "active":
+            logger.error("hostapd failed to start — AP mode unavailable")
+            subprocess.run(
+                ["sudo", "systemctl", "stop", HOSTAPD_UNIT],
+                capture_output=True, timeout=5,
+            )
+            return False
+
+        # Bring up wlan0 with the AP static IP
+        subprocess.run(
+            ["sudo", "ip", "addr", "add", "192.168.42.1/24", "dev", "wlan0"],
+            capture_output=True, timeout=5,
+        )
+        subprocess.run(
+            ["sudo", "ip", "link", "set", "wlan0", "up"],
+            capture_output=True, timeout=5,
+        )
+
+        # Start dnsmasq after wlan0 is up (avoids "interface does not exist")
+        subprocess.run(
+            ["sudo", "systemctl", "start", DNSMASQ_UNIT],
+            capture_output=True, timeout=10,
+        )
+        time.sleep(0.5)
+
+        result = subprocess.run(
+            ["systemctl", "is-active", DNSMASQ_UNIT],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip() != "active":
+            logger.error("dnsmasq failed to start — AP mode unavailable")
+            subprocess.run(
+                ["sudo", "systemctl", "stop", HOSTAPD_UNIT, DNSMASQ_UNIT],
+                capture_output=True, timeout=5,
+            )
+            return False
+
         logger.info("AP mode activated: SSID=Metixel-Setup, IP=192.168.42.1")
         return True
     except Exception:
@@ -477,12 +650,17 @@ def stop_ap_mode() -> bool:
     """Stop the access point and restore normal Wi-Fi operation."""
     try:
         subprocess.run(
-            ["systemctl", "stop", HOSTAPD_UNIT, DNSMASQ_UNIT],
+            ["sudo", "systemctl", "stop", HOSTAPD_UNIT, DNSMASQ_UNIT],
             capture_output=True, timeout=10,
         )
         # Remove static IP
         subprocess.run(
-            ["ip", "addr", "del", "192.168.42.1/24", "dev", "wlan0"],
+            ["sudo", "ip", "addr", "del", "192.168.42.1/24", "dev", "wlan0"],
+            capture_output=True, timeout=5,
+        )
+        # Return wlan0 to NetworkManager control
+        subprocess.run(
+            ["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"],
             capture_output=True, timeout=5,
         )
         logger.info("AP mode deactivated")

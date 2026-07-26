@@ -48,7 +48,9 @@ sudo apt-get install -y \
     cpulimit \
     git \
     samba \
-    iptables-persistent
+    iptables-persistent \
+    hostapd \
+    dnsmasq
 
 # Redirect port 80 → 8080 so the web dashboard is reachable without a port
 # number and the captive portal detection works on port 80.
@@ -95,8 +97,46 @@ sudo systemctl enable metixel-cage
 # Required for cage (Wayland compositor) to start on headless boots.
 sudo loginctl enable-linger pi
 
+# -- Captive Portal (AP mode) -----------------------------------------------
+echo "[6/8] Configuring Wi-Fi captive portal (AP fallback)..."
+# Configure hostapd (open network "Metixel-Setup")
+sudo tee /etc/hostapd/hostapd.conf > /dev/null <<'HOSTAPDEOF'
+interface=wlan0
+driver=nl80211
+ssid=Metixel-Setup
+hw_mode=g
+channel=6
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=0
+HOSTAPDEOF
+sudo sed -i 's|^#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd 2>/dev/null || true
+# Replace the entire file with a clean version to avoid quoting issues
+sudo tee /etc/default/hostapd > /dev/null <<'HOSTAPDDEF'
+# Defaults for hostapd — managed by Metixel Photoframe
+DAEMON_CONF=/etc/hostapd/hostapd.conf
+DAEMON_OPTS=
+HOSTAPDDEF
+
+# Configure dnsmasq (DHCP + captive DNS)
+sudo tee /etc/dnsmasq.conf > /dev/null <<'DNSMASQEOF'
+interface=wlan0
+dhcp-range=192.168.42.10,192.168.42.100,12h
+dhcp-option=3,192.168.42.1
+dhcp-option=6,192.168.42.1
+address=/#/192.168.42.1
+no-resolv
+DNSMASQEOF
+
+# Disable auto-start — the Metixel NetworkMonitor controls these services
+sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
+sudo systemctl unmask hostapd dnsmasq 2>/dev/null || true
+
 # -- Samba share -------------------------------------------------------------
-echo "[6/7] Configuring Samba share (/opt/metixel as 'metixel')..."
+echo "[7/8] Configuring Samba share (/opt/metixel as 'metixel')..."
+echo "[7/8] Configuring Samba share (/opt/metixel as 'metixel')..."
 
 # Add 'invalid users = nobody' to the [homes] section so the system
 # 'nobody' user doesn't get an auto-share (don't comment out [homes]
@@ -140,7 +180,7 @@ sudo systemctl enable smbd
 sudo systemctl restart smbd
 
 # -- Boot config -------------------------------------------------------------
-echo "[7/7] Configuring boot..."
+echo "[8/8] Configuring boot..."
 
 BOOT_CONFIG="/boot/firmware/config.txt"
 if [ -f "${BOOT_CONFIG}" ]; then

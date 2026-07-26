@@ -640,11 +640,40 @@
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
                 + '<span style="font-size:2rem">🟢</span>'
-                + '<div>'
+                + '<div style="flex:1">'
                 + '<strong>' + escapeHtml(status.ssid || "Unknown") + '</strong><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">' + signalBars + '</span>'
-                + '</div></div>';
+                + '</div>';
+
+            // Add Forget button for WiFi connections
+            if (status.interface_type === "wifi" && status.ssid) {
+                el.innerHTML +=
+                    '<button id="btn-forget-wifi" style="font-size:0.78rem;padding:4px 10px;background:var(--danger);color:#fff;border:none;border-radius:4px;cursor:pointer;white-space:nowrap">Forget</button>';
+            }
+
+            el.innerHTML += '</div>';
+
+            // Bind forget handler after DOM update
+            setTimeout(function () {
+                var forgetBtn = document.getElementById("btn-forget-wifi");
+                if (forgetBtn) {
+                    forgetBtn.addEventListener("click", async function () {
+                        if (!confirm("Forget the '" + escapeHtml(status.ssid) + "' network and disconnect? The AP will reactivate if no other network is available.")) return;
+                        forgetBtn.disabled = true;
+                        forgetBtn.textContent = "…";
+                        var result = await apiPost("/network/forget", { ssid: status.ssid });
+                        if (result && result.status === "ok") {
+                            showToast("Network forgotten", "info");
+                            _refreshNetworkStatus();
+                        } else {
+                            showToast("Failed to forget network", "error");
+                            forgetBtn.disabled = false;
+                            forgetBtn.textContent = "Forget";
+                        }
+                    });
+                }
+            }, 0);
         } else {
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
@@ -664,6 +693,10 @@
         list.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">Scanning…</span>';
         if (statusEl) { statusEl.style.display = "none"; }
 
+        // Get current connection to mark the active network
+        var netStatus = await apiGet("/network/status");
+        var currentSSID = (netStatus && netStatus.interface_type === "wifi") ? netStatus.ssid : "";
+
         var data = await apiGet("/network/scan");
         if (!data || !data.networks) {
             list.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">Scan failed — is Wi-Fi available?</span>';
@@ -678,36 +711,44 @@
         list.innerHTML = "";
         data.networks.forEach(function (n) {
             var row = document.createElement("div");
-            row.style.cssText = "display:flex;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:4px;gap:8px";
+            var isConnected = currentSSID && n.ssid === currentSSID;
+            row.style.cssText = "display:flex;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:4px;gap:8px"
+                + (isConnected ? ";border-color:var(--success);background:rgba(46,204,113,0.08)" : "");
 
             var hasLock = n.security && n.security !== "--";
+            var btnHTML = isConnected
+                ? '<button disabled style="font-size:0.78rem;padding:4px 10px;background:var(--success);color:#fff;border:none;border-radius:4px;cursor:default;opacity:0.8">Connected</button>'
+                : '<button style="font-size:0.78rem;padding:4px 10px;background:var(--primary);color:#fff;border:none;border-radius:4px;cursor:pointer">Connect</button>';
+
             row.innerHTML =
                 '<span style="flex:1;font-size:0.9rem;font-weight:500">' + escapeHtml(n.ssid) + '</span>'
                 + (hasLock ? '<span style="font-size:0.8rem">🔒 ' + escapeHtml(n.security) + '</span>' : '<span style="font-size:0.75rem;color:var(--text-muted)">Open</span>')
                 + '<span style="font-size:0.8rem;color:var(--text-muted);min-width:45px;text-align:right">' + n.signal + '%</span>'
-                + '<button style="font-size:0.78rem;padding:4px 10px;background:var(--primary);color:#fff;border:none;border-radius:4px;cursor:pointer">Connect</button>';
+                + btnHTML;
 
-            row.querySelector("button").addEventListener("click", async function () {
-                if (hasLock) {
-                    var pw = prompt("Enter password for " + n.ssid);
-                    if (pw === null) return; // cancelled
-                    var result = await apiPost("/network/connect", { ssid: n.ssid, password: pw });
-                    if (result && result.status === "ok") {
-                        showToast("Connected to " + n.ssid, "success");
-                        _refreshNetworkStatus();
+            if (!isConnected) {
+                row.querySelector("button").addEventListener("click", async function () {
+                    if (hasLock) {
+                        var pw = prompt("Enter password for " + n.ssid);
+                        if (pw === null) return;
+                        var result = await apiPost("/network/connect", { ssid: n.ssid, password: pw });
+                        if (result && result.status === "ok") {
+                            showToast("Connected to " + n.ssid, "success");
+                            _refreshNetworkStatus();
+                        } else {
+                            showToast((result && result.message) || "Connection failed", "error");
+                        }
                     } else {
-                        showToast((result && result.message) || "Connection failed", "error");
+                        var result = await apiPost("/network/connect", { ssid: n.ssid, password: "" });
+                        if (result && result.status === "ok") {
+                            showToast("Connected to " + n.ssid, "success");
+                            _refreshNetworkStatus();
+                        } else {
+                            showToast((result && result.message) || "Connection failed", "error");
+                        }
                     }
-                } else {
-                    var result = await apiPost("/network/connect", { ssid: n.ssid, password: "" });
-                    if (result && result.status === "ok") {
-                        showToast("Connected to " + n.ssid, "success");
-                        _refreshNetworkStatus();
-                    } else {
-                        showToast((result && result.message) || "Connection failed", "error");
-                    }
-                }
-            });
+                });
+            }
 
             list.appendChild(row);
         });
@@ -2349,7 +2390,7 @@
     // -- Init ----------------------------------------------------------------
 
     var hash = location.hash.substring(1);
-    var validPages = ["dashboard", "media", "settings", "sync", "advanced"];
+    var validPages = ["dashboard", "media", "settings", "sync", "network", "advanced"];
     var startPage = validPages.indexOf(hash) >= 0 ? hash : "dashboard";
     navigateTo(startPage);
 })();

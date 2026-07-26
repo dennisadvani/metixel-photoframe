@@ -211,6 +211,25 @@ class MessageLayer(OverlayLayer):
                     continue
                 self._draw_one(backend, m, idx, bw, target_x, margin)
 
+    @staticmethod
+    def _msg_height(m: _Message) -> int:
+        """Compute the pixel height needed for a message based on its content."""
+        # Base padding (top + bottom)
+        h = MSG_PADDING * 2
+        # Title
+        if m.title:
+            h += MSG_TITLE_SIZE + 4
+        # Body — count wrapped lines, cap at 5
+        if m.body:
+            char_w = MSG_BODY_SIZE * 0.55
+            avail_w = MSG_WIDTH - MSG_ACCENT - MSG_PADDING - MSG_ICON_SIZE - MSG_PADDING - 10
+            chars_per = max(20, int(avail_w / char_w))
+            lines = _wrap_text(m.body, chars_per)
+            body_lines = min(len(lines), 5)
+            h += body_lines * (MSG_BODY_SIZE + 4)
+        # Ensure minimum height
+        return max(h, 60)
+
     def _draw_one(self, backend, m, idx, bw, target_x, margin):
         # Compute message x position (animated)
         if m.state == "sliding_in":
@@ -224,8 +243,8 @@ class MessageLayer(OverlayLayer):
         else:
             m._x = target_x
 
-        # Stack position
-        mh = 80  # ~60% of previous
+        # Stack position — compute message height from content
+        mh = self._msg_height(m)
         m._y = margin + idx * (mh + MSG_GAP)
 
         x, y, alpha = m._x, m._y, m._alpha
@@ -267,7 +286,7 @@ class MessageLayer(OverlayLayer):
             avail_w = MSG_WIDTH - MSG_ACCENT - MSG_PADDING - MSG_ICON_SIZE - MSG_PADDING - 10
             chars_per = max(20, int(avail_w / char_w))
             lines = _wrap_text(m.body, chars_per)
-            for li, line in enumerate(lines[:3]):  # max 3 lines
+            for li, line in enumerate(lines[:5]):  # max 5 lines
                 backend.draw_text(line, text_x,
                                   body_start_y + li * (MSG_BODY_SIZE + 4),
                                   font_size=MSG_BODY_SIZE,

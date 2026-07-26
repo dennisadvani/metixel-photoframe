@@ -194,6 +194,7 @@ class BackendDaemon:
             generate_ap_pin,
             is_ap_mode_active,
             is_connected,
+            pre_scan_for_ap,
             start_ap_mode,
             stop_ap_mode,
         )
@@ -221,6 +222,9 @@ class BackendDaemon:
             timeout, pin,
         )
         self._show_pin_on_screen(pin)
+        # Scan for networks BEFORE taking wlan0 for AP mode.
+        # Once hostapd claims the interface, it can't scan anymore.
+        pre_scan_for_ap()
         start_ap_mode()
 
         # Monitor for connection changes
@@ -236,25 +240,38 @@ class BackendDaemon:
                     stop_ap_mode()
                     clear_ap_pin()
                     ap_was_active = False
-                    self._dismiss_welcome_message()
                     self._dismiss_pin_message()
+                    self._show_connected_message()
             else:
                 if not ap_was_active and not is_ap_mode_active():
                     pin = generate_ap_pin()
                     logger.warning("Network lost — reactivating PIN-gated AP fallback (PIN: %s)", pin)
                     self._show_pin_on_screen(pin)
+                    pre_scan_for_ap()
                     start_ap_mode()
                     ap_was_active = True
 
     def _show_pin_on_screen(self, pin: str) -> None:
-        """Display the AP security PIN as a persistent message on the frame."""
+        """Display the AP security PIN as a persistent message on the frame.
+
+        Dismisses any existing messages first so the PIN doesn't stack
+        on top of the welcome message or other persistent overlays.
+        """
         try:
             from metixel.shared.ipc import ControlMessage
+            # Clear existing messages before showing PIN
+            self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
+            time.sleep(0.3)  # Brief pause so frontend processes dismiss
             self._ipc.send(ControlMessage(
                 cmd="show_message",
                 args={
-                    "title": "WiFi Setup Code",
-                    "body": f"Your setup PIN is: {pin}\nEnter this code on the captive portal to reconfigure WiFi.",
+                    "title": "Welcome to Metixel!",
+                    "body": (
+                        f"No network connection detected. "
+                        f"To configure one, connect to 'Metixel-Setup' WiFi, "
+                        f"open http://192.168.42.1 or http://metixel.local "
+                        f"and use PIN {pin} to login."
+                    ),
                     "severity": "info",
                     "duration": 0,  # persistent
                 },
@@ -271,28 +288,31 @@ class BackendDaemon:
         except Exception:
             logger.debug("Could not dismiss PIN message", exc_info=True)
 
-    def _dismiss_welcome_message(self) -> None:
-        """Remove the ``welcome_wifi`` persistent message from config.
-
-        Called automatically when Wi-Fi connects successfully so the
-        first-boot instructions disappear without requiring the user
-        to visit the web dashboard.
-        """
+    def _show_connected_message(self) -> None:
+        """Show a post-connection confirmation on the frame display."""
         try:
-            config = self._state.config
-            persistent: list[dict] = config.messages.get("persistent", [])
-            new_list = [m for m in persistent if m.get("id") != "welcome_wifi"]
-            if len(new_list) < len(persistent):
-                self._state.update_config("messages", {"persistent": new_list})
-                logger.info("Auto-dismissed welcome_wifi persistent message")
-                # Also tell the frontend to clear the screen
-                try:
-                    from metixel.shared.ipc import ControlMessage
-                    self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
-                except Exception:
-                    logger.debug("Could not send dismiss IPC (frontend may not be running)")
+            from metixel.backend.network_manager import get_connection_status
+            status = get_connection_status()
+            ip = status.get("ip", "unknown")
+            iface_type = status.get("interface_type", "")
+            label = "WiFi" if iface_type == "wifi" else "Ethernet"
+
+            from metixel.shared.ipc import ControlMessage
+            self._ipc.send(ControlMessage(
+                cmd="show_message",
+                args={
+                    "title": f"Connected via {label}",
+                    "body": (
+                        f"{label} connected. Access Metixel at "
+                        f"http://metixel.local or http://{ip}"
+                    ),
+                    "severity": "success",
+                    "duration": 30,  # auto-dismiss after 30s
+                },
+            ))
+            logger.info("Connected message sent to frontend")
         except Exception:
-            logger.warning("Failed to auto-dismiss welcome message", exc_info=True)
+            logger.warning("Failed to show connected message", exc_info=True)
 
     def _start_web_server(self) -> None:
         """Start the Flask web server — this BLOCKS the main thread."""

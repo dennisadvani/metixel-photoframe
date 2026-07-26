@@ -33,7 +33,8 @@ StandardError=journal
 MemoryMax=768M
 
 # Security hardening
-NoNewPrivileges=yes
+# NOTE: NoNewPrivileges is NOT set because the backend needs to run
+# privileged commands via sudo for AP mode (hostapd/dnsmasq control).
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=yes

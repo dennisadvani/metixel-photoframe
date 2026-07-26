@@ -20,13 +20,15 @@ logger = logging.getLogger(__name__)
 
 
 def _is_ap_mode() -> bool:
-    """Check whether the access point (captive portal) is currently active.
+    """Check whether the captive portal PIN gate is active.
 
-    Cached for the lifetime of a request to avoid repeated subprocess calls.
+    When True, the dashboard is blocked and only the captive portal
+    (captive.html) is served.  API routes remain accessible so the
+    captive portal can validate the PIN and configure Wi-Fi.
     """
     try:
-        from metixel.backend.network_manager import is_ap_mode_active
-        return is_ap_mode_active()
+        from metixel.backend.network_manager import is_ap_mode_active, is_pin_required
+        return is_ap_mode_active() or is_pin_required()
     except Exception:
         return False
 
@@ -81,11 +83,15 @@ def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = N
 
     @app.route("/<path:path>")
     def serve_spa(path: str) -> str:
-        # Try static files first, fall back to index.html for SPA routing
+        # Always serve static files, even when PIN gate is active
         try:
             return send_from_directory(app.static_folder or "static", path)
         except Exception:
-            return render_template("index.html", version=__version__)
+            pass
+        # Block dashboard access when the PIN gate is active
+        if _is_ap_mode():
+            return render_template("captive.html")
+        return render_template("index.html", version=__version__)
 
     # Disable caching for static assets in development so the browser
     # always picks up the latest JS/CSS after a page refresh.
