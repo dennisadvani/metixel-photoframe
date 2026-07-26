@@ -69,7 +69,7 @@ class Pi3dBackend(DisplayBackend):
         self._bg_color: tuple[float, float, float, float] = (0, 0, 0, 1)
         self._fps_limit: int = 30
         self._texture_count: int = 0
-        self._max_textures: int = 3
+        self._max_textures: int = 8
 
         # Second orthographic camera for the overlay layer (widgets, pop-ups).
         # Identical projection to the main camera — separation is architectural.
