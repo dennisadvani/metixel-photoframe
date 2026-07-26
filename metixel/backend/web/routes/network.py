@@ -18,9 +18,11 @@ from metixel.backend.network_manager import (
     forget_network,
     get_connection_status,
     is_ap_mode_active,
+    is_pin_required,
     scan_networks,
     start_ap_mode,
     stop_ap_mode,
+    validate_ap_pin,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,3 +112,25 @@ def ap_stop():
         return jsonify({"status": "ok", "message": "AP mode stopped"})
     else:
         return jsonify({"status": "error", "message": "Failed to stop AP mode"}), 500
+
+
+@network_bp.route("/network/validate-pin", methods=["POST"])
+def validate_pin():
+    """Validate the AP security PIN shown on the frame display.
+
+    Accepts JSON: ``{"pin": "1234"}``.
+    Returns ``{"valid": true}`` on success, or an error message with
+    remaining attempts on failure.  After 3 wrong attempts the PIN
+    is locked for 10 minutes.
+    """
+    data = request.get_json(silent=True) or {}
+    candidate = data.get("pin", "").strip()
+
+    if not candidate or len(candidate) != 4 or not candidate.isdigit():
+        return jsonify({"valid": False, "message": "Enter a 4-digit PIN"}), 400
+
+    valid, message = validate_ap_pin(candidate)
+    if valid:
+        return jsonify({"valid": True, "message": "PIN accepted"})
+    else:
+        return jsonify({"valid": False, "message": message}), 403

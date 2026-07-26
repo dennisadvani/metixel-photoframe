@@ -171,8 +171,21 @@
     <div class="logo">📷 Metixel</div>
     <p class="subtitle">WiFi Setup</p>
 
+    <!-- Step 0: PIN entry (security gate) -->
+    <div class="card" id="step-pin">
+        <h2>Security Check</h2>
+        <p style="color:var(--text-muted);font-size:0.88rem;margin-bottom:12px">
+            Enter the 4-digit code shown on your Metixel frame display.
+        </p>
+        <div class="form-group">
+            <input type="text" id="pin-input" placeholder="0000" maxlength="4" inputmode="numeric" pattern="[0-9]*" autocomplete="off" style="text-align:center;font-size:1.8rem;letter-spacing:0.3em">
+        </div>
+        <button class="btn btn--primary" id="btn-pin" onclick="doValidatePin()">Verify</button>
+        <div id="pin-status" class="status-msg"></div>
+    </div>
+
     <!-- Step 1: Scan -->
-    <div class="card" id="step-scan">
+    <div class="card" id="step-scan" style="display:none">
         <h2>Connect to WiFi</h2>
         <p style="color:var(--text-muted);font-size:0.88rem;margin-bottom:12px">
             Select your network to get started.
@@ -217,11 +230,81 @@
     <script>
         var selectedSSID = "";
         var selectedSecurity = "";
+        var pinValidated = false;
+
+        // Enter key submits PIN
+        document.getElementById("pin-input").addEventListener("keydown", function(e) {
+            if (e.key === "Enter") doValidatePin();
+        });
 
         // Enter key submits password
         document.getElementById("password-input").addEventListener("keydown", function(e) {
             if (e.key === "Enter") doConnect();
         });
+
+        // ── Check if PIN is required on page load ──────────────────
+        (async function init() {
+            try {
+                var resp = await fetch("/api/network/status");
+                var data = await resp.json();
+                if (!data.require_pin) {
+                    // No PIN active — skip to scan (shouldn't happen in AP mode,
+                    // but handle gracefully)
+                    pinValidated = true;
+                    document.getElementById("step-pin").style.display = "none";
+                    document.getElementById("step-scan").style.display = "";
+                }
+            } catch (e) {
+                // Can't reach API — show PIN screen as safe default
+            }
+        })();
+
+        // ── PIN validation ─────────────────────────────────────────
+        async function doValidatePin() {
+            var btn = document.getElementById("btn-pin");
+            var status = document.getElementById("pin-status");
+            var input = document.getElementById("pin-input");
+            var pin = input.value.trim();
+
+            if (pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+                status.className = "status-msg error";
+                status.textContent = "Enter a 4-digit PIN";
+                return;
+            }
+
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Checking…';
+            status.className = "status-msg loading";
+            status.textContent = "";
+
+            try {
+                var resp = await fetch("/api/network/validate-pin", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ pin: pin })
+                });
+                var data = await resp.json();
+
+                if (data.valid) {
+                    pinValidated = true;
+                    status.className = "";
+                    document.getElementById("step-pin").style.display = "none";
+                    document.getElementById("step-scan").style.display = "";
+                } else {
+                    status.className = "status-msg error";
+                    status.textContent = data.message || "Incorrect PIN";
+                    btn.disabled = false;
+                    btn.textContent = "Verify";
+                    input.value = "";
+                    input.focus();
+                }
+            } catch (e) {
+                status.className = "status-msg error";
+                status.textContent = "Validation failed — please try again";
+                btn.disabled = false;
+                btn.textContent = "Verify";
+            }
+        }
 
         async function doScan() {
             var btn = document.getElementById("btn-scan");

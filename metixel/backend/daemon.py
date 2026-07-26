@@ -183,8 +183,15 @@ class BackendDaemon:
                      network_cfg.get("ap_timeout_seconds", 60))
 
     def _network_monitor_loop(self) -> None:
-        """Background loop: monitor connectivity and manage AP fallback."""
+        """Background loop: monitor connectivity and manage AP fallback.
+
+        All AP activations are PIN-gated.  A random 4-digit PIN is shown
+        on the frame display and must be entered on the captive portal
+        before Wi-Fi reconfiguration is allowed.
+        """
         from metixel.backend.network_manager import (
+            clear_ap_pin,
+            generate_ap_pin,
             is_ap_mode_active,
             is_connected,
             start_ap_mode,
@@ -207,8 +214,13 @@ class BackendDaemon:
             logger.info("Network connected — AP fallback not needed")
             return
 
-        # No connection — activate AP fallback
-        logger.warning("No network after %ds — activating AP fallback", timeout)
+        # ── No connection — activate PIN-gated AP fallback ───────────
+        pin = generate_ap_pin()
+        logger.warning(
+            "No network after %ds — activating PIN-gated AP fallback (PIN: %s)",
+            timeout, pin,
+        )
+        self._show_pin_on_screen(pin)
         start_ap_mode()
 
         # Monitor for connection changes
@@ -222,16 +234,42 @@ class BackendDaemon:
                 if ap_was_active:
                     logger.info("Network connected — deactivating AP fallback")
                     stop_ap_mode()
+                    clear_ap_pin()
                     ap_was_active = False
-                    # Auto-dismiss the welcome_wifi persistent message
                     self._dismiss_welcome_message()
-                # Connection is up, normal monitoring
+                    self._dismiss_pin_message()
             else:
                 if not ap_was_active and not is_ap_mode_active():
-                    # Connection dropped and AP is not running — reactivate
-                    logger.warning("Network lost — reactivating AP fallback")
+                    pin = generate_ap_pin()
+                    logger.warning("Network lost — reactivating PIN-gated AP fallback (PIN: %s)", pin)
+                    self._show_pin_on_screen(pin)
                     start_ap_mode()
                     ap_was_active = True
+
+    def _show_pin_on_screen(self, pin: str) -> None:
+        """Display the AP security PIN as a persistent message on the frame."""
+        try:
+            from metixel.shared.ipc import ControlMessage
+            self._ipc.send(ControlMessage(
+                cmd="show_message",
+                args={
+                    "title": "WiFi Setup Code",
+                    "body": f"Your setup PIN is: {pin}\nEnter this code on the captive portal to reconfigure WiFi.",
+                    "severity": "info",
+                    "duration": 0,  # persistent
+                },
+            ))
+            logger.info("PIN message sent to frontend")
+        except Exception:
+            logger.warning("Failed to send PIN message to frontend", exc_info=True)
+
+    def _dismiss_pin_message(self) -> None:
+        """Dismiss the PIN message from the frame display."""
+        try:
+            from metixel.shared.ipc import ControlMessage
+            self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
+        except Exception:
+            logger.debug("Could not dismiss PIN message", exc_info=True)
 
     def _dismiss_welcome_message(self) -> None:
         """Remove the ``welcome_wifi`` persistent message from config.

@@ -13,6 +13,7 @@ dnsmasq, which are configured by ``scripts/setup_ap.sh``.
 from __future__ import annotations
 
 import logging
+import random
 import subprocess
 import time
 from typing import Any
@@ -31,6 +32,19 @@ CONNECT_TIMEOUT = 30
 
 # Well-known connectivity check URLs
 DEFAULT_CONNECTIVITY_URL = "http://connectivity-check.ubuntu.com"
+
+# ---------------------------------------------------------------------------
+# PIN-based security for AP re-activation
+# ---------------------------------------------------------------------------
+
+MAX_PIN_ATTEMPTS = 3
+PIN_COOLDOWN_SECONDS = 600  # 10 minutes
+
+_pin_state: dict[str, Any] = {
+    "pin": "",           # current valid 4-digit PIN (empty = no PIN required)
+    "attempts": 0,        # failed attempts since last reset
+    "locked_until": 0.0,  # monotonic timestamp; 0 = not locked
+}
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +90,89 @@ def has_saved_wifi_networks() -> bool:
     except Exception:
         logger.debug("Saved Wi-Fi check failed", exc_info=True)
         return False
+
+
+# -- PIN management (security gate for AP re-activation) ------------------
+
+
+def generate_ap_pin() -> str:
+    """Generate a new random 4-digit PIN for AP re-activation security.
+
+    When the frame was previously configured with Wi-Fi and the network
+    drops, the AP falls back with a PIN gate.  The PIN is displayed on
+    the frame's screen and must be entered on the captive portal before
+    Wi-Fi reconfiguration is allowed.
+
+    Returns the new PIN string.
+    """
+    pin = f"{random.randint(0, 9999):04d}"
+    _pin_state["pin"] = pin
+    _pin_state["attempts"] = 0
+    _pin_state["locked_until"] = 0.0
+    logger.info("AP PIN generated: %s", pin)
+    return pin
+
+
+def clear_ap_pin() -> None:
+    """Clear the current AP PIN (e.g. when network reconnects)."""
+    _pin_state["pin"] = ""
+    _pin_state["attempts"] = 0
+    _pin_state["locked_until"] = 0.0
+
+
+def get_active_pin() -> str:
+    """Return the currently active PIN, or empty string if none is set."""
+    return _pin_state["pin"]
+
+
+def is_pin_required() -> bool:
+    """Check whether PIN validation is required for AP reconfiguration.
+
+    Returns True whenever a PIN is active.  All AP fallback activations
+    are PIN-gated — fresh install or re-activation, same flow.
+    """
+    return bool(_pin_state["pin"])
+
+
+def validate_ap_pin(candidate: str) -> tuple[bool, str]:
+    """Validate a PIN entered on the captive portal.
+
+    Args:
+        candidate: The 4-digit PIN entered by the user.
+
+    Returns:
+        (valid, message) tuple.  After MAX_PIN_ATTEMPTS failures the PIN
+        is locked for PIN_COOLDOWN_SECONDS.
+    """
+    active = _pin_state["pin"]
+    if not active:
+        return True, "ok"  # No PIN active — allow through (fresh install)
+
+    now = time.monotonic()
+
+    # Check cooldown
+    if _pin_state["locked_until"] > 0 and now < _pin_state["locked_until"]:
+        remaining = int(_pin_state["locked_until"] - now)
+        return False, f"Too many attempts. Try again in {remaining} seconds."
+
+    # Check PIN
+    if candidate == active:
+        _pin_state["attempts"] = 0
+        logger.info("AP PIN validated successfully")
+        return True, "ok"
+
+    # Wrong PIN
+    _pin_state["attempts"] += 1
+    remaining = MAX_PIN_ATTEMPTS - _pin_state["attempts"]
+
+    if _pin_state["attempts"] >= MAX_PIN_ATTEMPTS:
+        _pin_state["locked_until"] = now + PIN_COOLDOWN_SECONDS
+        _pin_state["attempts"] = 0
+        logger.warning("AP PIN locked after %d failed attempts", MAX_PIN_ATTEMPTS)
+        return False, f"Too many attempts. Try again in {PIN_COOLDOWN_SECONDS} seconds."
+
+    logger.warning("AP PIN validation failed (%d/%d attempts)", _pin_state["attempts"], MAX_PIN_ATTEMPTS)
+    return False, f"Incorrect PIN. {remaining} attempt(s) remaining."
 
 
 def is_connected() -> bool:
@@ -241,6 +338,7 @@ def get_connection_status() -> dict[str, Any]:
         "security": "",
         "wifi_radio_enabled": is_wifi_radio_enabled(),
         "has_saved_wifi": has_saved_wifi_networks(),
+        "require_pin": is_pin_required(),
     }
 
     try:

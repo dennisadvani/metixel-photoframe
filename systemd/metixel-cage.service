@@ -4,7 +4,7 @@
 [Unit]
 Description=Metixel Photoframe — Digital Photo Frame (cage + Wayland)
 Documentation=https://github.com/denni/metixel-photoframe
-After=multi-user.target metixel-backend.service seatd.service
+After=metixel-backend.service seatd.service
 Requires=metixel-backend.service
 Wants=seatd.service
 
