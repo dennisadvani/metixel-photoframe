@@ -81,6 +81,11 @@ def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = N
             return render_template("captive.html")
         return render_template("index.html", version=__version__)
 
+    # Preview route for testing the captive portal without activating AP mode
+    @app.route("/captive")
+    def captive_preview() -> str:
+        return render_template("captive.html")
+
     @app.route("/<path:path>")
     def serve_spa(path: str) -> str:
         # Always serve static files, even when PIN gate is active

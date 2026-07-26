@@ -375,6 +375,12 @@
                 <div class="card">
                     <h2>Access Point (Captive Portal)</h2>
                     <p class="hint">When no Wi-Fi is available, the frame creates its own hotspot "Metixel-Setup" so you can connect with your phone and configure Wi-Fi.</p>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-ap-enabled" checked> Enable AP fallback
+                    </label>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-suppress-popups"> Suppress network popups on frame display
+                    </label>
                     <div id="network-ap-status" style="margin:8px 0;font-size:0.9rem">Checking…</div>
                     <button id="btn-network-ap-toggle" class="btn--secondary">Start AP Mode</button>
                 </div>

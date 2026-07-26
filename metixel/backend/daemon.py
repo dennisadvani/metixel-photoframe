@@ -213,22 +213,20 @@ class BackendDaemon:
 
         if is_connected():
             logger.info("Network connected — AP fallback not needed")
-            return
-
-        # ── No connection — activate PIN-gated AP fallback ───────────
-        pin = generate_ap_pin()
-        logger.warning(
-            "No network after %ds — activating PIN-gated AP fallback (PIN: %s)",
-            timeout, pin,
-        )
-        self._show_pin_on_screen(pin)
-        # Scan for networks BEFORE taking wlan0 for AP mode.
-        # Once hostapd claims the interface, it can't scan anymore.
-        pre_scan_for_ap()
-        start_ap_mode()
+            ap_was_active = False
+        else:
+            # ── No connection — activate PIN-gated AP fallback ───────
+            pin = generate_ap_pin()
+            logger.warning(
+                "No network after %ds — activating PIN-gated AP fallback (PIN: %s)",
+                timeout, pin,
+            )
+            self._show_pin_on_screen(pin)
+            pre_scan_for_ap()
+            start_ap_mode()
+            ap_was_active = True
 
         # Monitor for connection changes
-        ap_was_active = True
         while self._running:
             time.sleep(10)
             if not self._running:
@@ -291,6 +289,11 @@ class BackendDaemon:
     def _show_connected_message(self) -> None:
         """Show a post-connection confirmation on the frame display."""
         try:
+            # Respect the suppress-popups config setting
+            config = self._state.config
+            if not config.messages.get("enabled", True):
+                return
+
             from metixel.backend.network_manager import get_connection_status
             status = get_connection_status()
             ip = status.get("ip", "unknown")

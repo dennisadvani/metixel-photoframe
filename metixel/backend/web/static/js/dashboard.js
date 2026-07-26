@@ -550,11 +550,35 @@
                 }
                 _refreshNetworkAPStatus();
             });
+
+            // AP fallback toggle
+            document.getElementById("cfg-ap-enabled")?.addEventListener("change", async function () {
+                await apiPut("/config/network", { ap_fallback_enabled: this.checked });
+                showToast(this.checked ? "AP fallback enabled" : "AP fallback disabled", "info");
+            });
+
+            // Suppress popups toggle
+            document.getElementById("cfg-suppress-popups")?.addEventListener("change", async function () {
+                await apiPut("/config/messages", { enabled: !this.checked });
+                showToast(this.checked ? "Network popups suppressed" : "Network popups enabled", "info");
+            });
         }
 
         _refreshNetworkStatus();
         _refreshNetworkAPStatus();
         _refreshNetworkScan();
+        _loadNetworkConfig();
+    }
+
+    async function _loadNetworkConfig() {
+        var cfg = await apiGet("/config/network");
+        if (cfg) {
+            setChecked("cfg-ap-enabled", cfg.ap_fallback_enabled !== false);
+        }
+        var msgCfg = await apiGet("/config/messages");
+        if (msgCfg) {
+            setChecked("cfg-suppress-popups", msgCfg.enabled === false);
+        }
     }
 
     async function _refreshNetworkStatus() {
