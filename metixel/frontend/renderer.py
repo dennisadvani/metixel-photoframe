@@ -16,6 +16,7 @@ from pathlib import Path
 
 from metixel.display import detect_backend
 from metixel.display.backend import DisplayBackend
+from metixel.frontend.overlay import OverlayManager, MessageLayer
 from metixel.frontend.presentation.engine import PresentationEngine
 from metixel.shared.config import Config
 from metixel.shared.ipc import ControlMessage, IPCServer
@@ -41,6 +42,7 @@ class FrontendRenderer:
         self._config: Config = Config.load(config_path)
         self._backend: DisplayBackend | None = None
         self._presentation: PresentationEngine | None = None
+        self._overlay: OverlayManager | None = None
         self._ipc_server = IPCServer()
         self._running = False
         self._frame_count: int = 0
@@ -626,6 +628,12 @@ class FrontendRenderer:
         # Initialize subsystems
         self._presentation = PresentationEngine(self._config, self._backend)
 
+        # Initialize overlay layer system
+        self._overlay = OverlayManager()
+        self._overlay.add_layer(MessageLayer())
+        logger.info("Overlay system initialized: %d layers",
+                     len(self._overlay._layers))
+
         # ── Load queue from the backend's playlist.json ───────────────
         # The backend writes playlist.json incrementally during processing.
         # Loading from it avoids the dual-scan problem: the frontend used
@@ -733,11 +741,15 @@ class FrontendRenderer:
         if not self._backend or not self._presentation:
             return
 
-        # Clear screen
-        self._backend.clear()
-
         # Render presentation (slideshow + transition + matte)
         self._presentation.render()
+
+        # Render overlay layers on top of slideshow.
+        # Clear depth first so slideshow depth values don't occlude overlay.
+        self._backend.clear_depth()
+        if self._overlay:
+            self._overlay.update()
+            self._overlay.draw(self._backend)
 
     # -- Hot reload ----------------------------------------------------------
 
@@ -915,6 +927,26 @@ class FrontendRenderer:
         elif msg.cmd == "switch_album":
             album_id = msg.args.get("album_id", "")
             self._presentation.switch_album(album_id)
+        elif msg.cmd == "show_message":
+            if self._overlay:
+                msgs = self._overlay.get_layer("messages")
+                if msgs is not None:
+                    msgs.show(
+                        title=msg.args.get("title", ""),
+                        body=msg.args.get("body", ""),
+                        severity=msg.args.get("severity", "info"),
+                        duration=float(msg.args.get("duration", 5.0)),
+                    )
+        elif msg.cmd == "dismiss_message":
+            if self._overlay:
+                msgs = self._overlay.get_layer("messages")
+                if msgs is not None:
+                    msgs.dismiss(msg.args.get("message_id", ""))
+        elif msg.cmd == "dismiss_all_messages":
+            if self._overlay:
+                msgs = self._overlay.get_layer("messages")
+                if msgs is not None:
+                    msgs.dismiss_all()
         else:
             logger.warning("Unknown IPC command: %s", msg.cmd)
 

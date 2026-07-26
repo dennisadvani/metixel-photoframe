@@ -181,7 +181,7 @@ def send_control():
         return jsonify({"error": "Missing 'cmd' in JSON body"}), 400
 
     cmd = data["cmd"]
-    valid_cmds = {"next", "prev", "pause", "resume", "switch_album", "power_off", "power_on"}
+    valid_cmds = {"next", "prev", "pause", "resume", "switch_album", "power_off", "power_on", "show_message", "dismiss_message", "dismiss_all_messages"}
     if cmd not in valid_cmds:
         return jsonify({"error": f"Unknown command: {cmd}. Valid: {sorted(valid_cmds)}"}), 400
 

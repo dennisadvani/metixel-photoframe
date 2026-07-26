@@ -38,9 +38,15 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 ## Hardware Support
 
-| Phase | Models | RAM | GPU | Status |
-|---|---|---|---|---|
-| **Phase 1** | Pi 3 | 1GB+ & 1GB+ of Swap | VideoCore IV | ✅ Active |
+| Phase | Models | RAM | SWAP | Capabilities | GPU | Status |
+|---|---|---|---|---|---|---|
+| **Phase 1** | Pi Zero 2 W | 512MB | Required | Images only (no video playback or transcoding) | VideoCore IV | ✅ Active |
+| **Phase 1** | Pi 2, Pi 3 | 1GB | Required | Images + video playback (1080p max; >1080p requires transcoding before being queued) | VideoCore IV | ✅ Active |
+
+> **Notes:**
+> - A SWAP file is **required** on all models.
+> - Pi 3 hardware video decoder is limited to **1080p** — higher-resolution video must be transcoded down.
+> - Video playback or transcoding needs at least **1GB RAM** — the Pi Zero 2 W (512MB) is image-only.
 
 **Tested on:** Raspberry Pi 3 (1GB RAM) running Debian Trixie (13) Lite.
 

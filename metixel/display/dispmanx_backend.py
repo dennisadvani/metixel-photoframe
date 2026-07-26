@@ -71,6 +71,10 @@ class Pi3dBackend(DisplayBackend):
         self._texture_count: int = 0
         self._max_textures: int = 3
 
+        # Second orthographic camera for the overlay layer (widgets, pop-ups).
+        # Identical projection to the main camera — separation is architectural.
+        self._overlay_camera: Any = None
+
         # Manual frame timing (bypasses pi3d's inaccurate clock.tick)
         self._frame_period: float = 1.0 / 30.0
         self._last_frame_time: float = 0.0
@@ -103,6 +107,17 @@ class Pi3dBackend(DisplayBackend):
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def overlay_camera(self) -> Any:
+        """Secondary orthographic camera for widgets and pop-up messages.
+
+        Identical projection to the main camera (1 unit = 1 pixel, origin
+        at screen center).  The separation is architectural — the overlay
+        manager uses this camera so overlay rendering is fully independent
+        of the slideshow layer.
+        """
+        return self._overlay_camera
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -199,6 +214,14 @@ class Pi3dBackend(DisplayBackend):
 
         # 2D orthographic camera — 1 unit = 1 pixel
         self._camera = pi3d.Camera(is_3d=False)
+        # Second orthographic camera for the overlay layer (widgets, pop-ups).
+        # Identical projection — separation is purely architectural so the
+        # overlay manager can own its camera independently of the slideshow.
+        self._overlay_camera = pi3d.Camera(is_3d=False)
+        # Disable fog on both cameras — pi3d's default fog washes out colours
+        # on 2D overlay elements (makes reds look pink, etc.)
+        self._camera.fog = False
+        self._overlay_camera.fog = False
         # Simple flat shader for 2D texture rendering
         self._shader = pi3d.Shader("uv_flat")
         # Crossfade shader — blends two textures in a single GPU pass.
@@ -239,6 +262,7 @@ class Pi3dBackend(DisplayBackend):
                 pass
             self._display = None
         self._camera = None
+        self._overlay_camera = None
         self._shader = None
         gc.collect()
 
@@ -313,6 +337,38 @@ class Pi3dBackend(DisplayBackend):
         """No explicit swap needed — pi3d swaps at end of each draw call."""
         pass
 
+    def clear_depth(self) -> None:
+        """Clear the depth buffer, allowing subsequent draws to appear on top.
+
+        The slideshow's rendering may write depth values that would occlude
+        overlay content (widgets, pop-up messages).  Call this after the
+        slideshow renders and before drawing overlay elements.
+        """
+        if self._pi3d is not None:
+            try:
+                self._pi3d.opengles.glClear(0x00000100)  # GL_DEPTH_BUFFER_BIT
+            except Exception:
+                pass
+
+    def set_depth_test(self, enabled: bool) -> None:
+        """Enable or disable OpenGL depth testing.
+
+        Disabling depth testing allows the overlay layer to use simple
+        draw-order (painter's algorithm) for layering, avoiding z-fighting
+        with whatever the slideshow left in the depth buffer.
+
+        Args:
+            enabled: ``True`` to enable, ``False`` to disable.
+        """
+        if self._pi3d is not None:
+            try:
+                if enabled:
+                    self._pi3d.opengles.glEnable(0x0B71)  # GL_DEPTH_TEST
+                else:
+                    self._pi3d.opengles.glDisable(0x0B71)  # GL_DEPTH_TEST
+            except Exception:
+                pass
+
     # -- 2D Rendering --------------------------------------------------------
 
     def draw_rect(
@@ -350,15 +406,18 @@ class Pi3dBackend(DisplayBackend):
             sprite.set_draw_details(self._shader, [self._white_tex])
             # Tint the white texture via material color
             sprite.set_material((color[0], color[1], color[2]))
+            # Disable fog — pi3d's default fog washes out overlay colours
+            sprite.set_fog((0, 0, 0, 0), 100000)
             self._rect_sprites[cache_key] = sprite
 
         sprite = self._rect_sprites[cache_key]
         # Convert top-left origin to pi3d center-origin coordinate system.
-        # pi3d's default 2D camera: (0,0) = center, +X = right, +Y = down.
+        # pi3d's default 2D camera: (0,0) = center, +X = right, +Y = up.
         px = (x + w / 2) - self._display.width / 2
-        py = (y + h / 2) - self._display.height / 2
+        py = self._display.height / 2 - (y + h / 2)
         sprite.position(px, py, z)
         sprite.set_alpha(color[3])
+        sprite.set_fog((0, 0, 0, 0), 100000)  # disable fog every frame
         sprite.draw()
 
     def draw_image(
@@ -386,9 +445,9 @@ class Pi3dBackend(DisplayBackend):
             return
 
         # Convert top-left origin to pi3d center-origin coordinate system.
-        # pi3d's default 2D camera: (0,0) = center, +X = right, +Y = down.
+        # pi3d's default 2D camera: (0,0) = center, +X = right, +Y = up.
         px = (x + w / 2) - self._display.width / 2
-        py = (y + h / 2) - self._display.height / 2
+        py = self._display.height / 2 - (y + h / 2)
 
         sprite = self._pi3d.Sprite(
             w=w, h=h, x=px, y=py, z=z, camera=self._camera,
@@ -396,6 +455,7 @@ class Pi3dBackend(DisplayBackend):
         sprite.set_shader(self._shader)
         sprite.set_textures([texture])
         sprite.set_alpha(alpha)
+        sprite.set_fog((0, 0, 0, 0), 100000)
 
         if rotation != 0.0:
             sprite.rotateToZ(rotation)
@@ -632,6 +692,8 @@ class Pi3dBackend(DisplayBackend):
                 shader=self._shader,
             )
             self._text_cache[cache_key] = fixed_str
+            # Disable fog — pi3d's default fog washes out colours
+            fixed_str.sprite.set_fog((0, 0, 0, 0), 100000)
             # Prune cache if it grows too large (unlikely for a clock)
             if len(self._text_cache) > 16:
                 oldest = next(iter(self._text_cache))
@@ -639,10 +701,11 @@ class Pi3dBackend(DisplayBackend):
 
         # pi3d sprite position is the sprite's CENTER.
         # To place top-left at (x, y), offset by half the text dimensions.
+        # pi3d's 2D camera: +Y = up, so flip Y from top-left convention.
         tw = float(getattr(fixed_str.sprite, "width", font_size * len(text) * 0.55))
         th = float(getattr(fixed_str.sprite, "height", font_size))
         px = (x + tw / 2.0) - self._display.width / 2.0
-        py = (y + th / 2.0) - self._display.height / 2.0
+        py = self._display.height / 2.0 - (y + th / 2.0)
         fixed_str.sprite.position(px, py, z)
         fixed_str.sprite.draw()
 
