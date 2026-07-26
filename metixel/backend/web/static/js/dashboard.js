@@ -2408,6 +2408,38 @@
                 }
                 // The button will re-enable when the page reloads after restart
             });
+
+            // Reboot system
+            var rebootBtn = document.getElementById("btn-reboot-system");
+            rebootBtn?.addEventListener("click", async () => {
+                if (!confirm("Reboot the entire system? The photo frame will be unavailable for ~60 seconds.")) {
+                    return;
+                }
+                rebootBtn.disabled = true;
+                rebootBtn.textContent = "Rebooting…";
+                showToast("Rebooting system…", "info", 5000);
+                try {
+                    await apiPost("/config/reboot");
+                } catch (_) {
+                    // Expected — the system is going down
+                }
+            });
+
+            // Shutdown system
+            var shutdownBtn = document.getElementById("btn-shutdown-system");
+            shutdownBtn?.addEventListener("click", async () => {
+                if (!confirm("Shut down the entire system? You will need to physically power-cycle the Pi to turn it back on.")) {
+                    return;
+                }
+                shutdownBtn.disabled = true;
+                shutdownBtn.textContent = "Shutting down…";
+                showToast("Shutting down system…", "info", 5000);
+                try {
+                    await apiPost("/config/shutdown");
+                } catch (_) {
+                    // Expected — the system is going down
+                }
+            });
         }
     }
 
