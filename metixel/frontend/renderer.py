@@ -272,6 +272,23 @@ class FrontendRenderer:
             _ip = "unknown"
         _net_text = f"{_hostname}  |  {_ip}"
 
+        # ── Network status ────────────────────────────────────────────
+        _net_status_text = ""
+        try:
+            from metixel.backend.network_manager import get_connection_status
+            net_status = get_connection_status()
+            if net_status.get("connected"):
+                if net_status.get("interface_type") == "ethernet":
+                    _net_status_text = "Ethernet: Connected"
+                elif net_status.get("ssid"):
+                    _net_status_text = f"Wi-Fi: Connected to {net_status['ssid']}"
+                else:
+                    _net_status_text = "Network: Connected"
+            else:
+                _net_status_text = "Wi-Fi: Not connected — use Metixel-Setup hotspot"
+        except Exception:
+            _net_status_text = ""
+
         # ── Progress bar geometry ───────────────────────────────────────
         bar_w = int(display_w * 0.45)
         bar_h = max(int(display_h * 0.032), 12)
@@ -402,6 +419,17 @@ class FrontendRenderer:
                 centery=bar_y + bar_h + int(display_h * 0.09),
             )
             surface.blit(net_text, net_rect)
+
+            # Network status
+            if _net_status_text:
+                is_connected_str = "Connected" in _net_status_text
+                net_color = (0.2, 0.75, 0.35) if is_connected_str else (0.95, 0.6, 0.1)
+                net_surf = font_small.render(_net_status_text, True, net_color)
+                net_rect = net_surf.get_rect(
+                    centerx=display_w // 2,
+                    centery=bar_y + bar_h + int(display_h * 0.115),
+                )
+                surface.blit(net_surf, net_rect)
 
             pygame.display.flip()
 
@@ -633,6 +661,12 @@ class FrontendRenderer:
         self._overlay.add_layer(MessageLayer())
         logger.info("Overlay system initialized: %d layers",
                      len(self._overlay._layers))
+
+        # ── Show persistent messages from config ─────────────────────
+        # These are duration=0 messages that stay on screen until
+        # dismissed via the web UI or API.  Used for first-boot
+        # instructions (Wi-Fi setup, etc.).
+        self._show_persistent_messages()
 
         # ── Load queue from the backend's playlist.json ───────────────
         # The backend writes playlist.json incrementally during processing.
@@ -954,6 +988,32 @@ class FrontendRenderer:
                     msgs.dismiss_all()
         else:
             logger.warning("Unknown IPC command: %s", msg.cmd)
+
+    def _show_persistent_messages(self) -> None:
+        """Show config-defined persistent messages on the overlay.
+
+        Persistent messages have ``duration=0`` (never auto-dismiss).
+        They stay on screen until cleared via the dismiss API or the
+        web dashboard.
+        """
+        messages_cfg = self._config.messages
+        if not messages_cfg.get("enabled", True):
+            return
+        persistent = messages_cfg.get("persistent", [])
+        if not persistent:
+            return
+        msgs = self._overlay.get_layer("messages") if self._overlay else None
+        if msgs is None:
+            return
+        for entry in persistent:
+            msgs.show(
+                title=entry.get("title", ""),
+                body=entry.get("body", ""),
+                severity=entry.get("severity", "info"),
+                duration=0,  # persistent — never auto-dismiss
+                icon=entry.get("icon", ""),
+            )
+        logger.info("Showed %d persistent message(s) on boot", len(persistent))
 
     # -- Shutdown ------------------------------------------------------------
 

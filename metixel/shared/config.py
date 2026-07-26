@@ -94,6 +94,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ir_enabled": False,
         "ir_device": "/dev/lirc0",
     },
+    "messages": {
+        "enabled": True,
+        "default_duration": 5.0,
+        "max_visible": 5,
+        "persistent": [],
+    },
+    "network": {
+        "wifi_country": "",
+        "ap_fallback_enabled": True,
+        "ap_timeout_seconds": 60,
+        "connection_check_url": "http://connectivity-check.ubuntu.com",
+    },
     "system": {
         "cache_dir": "cache/",
         "log_level": "INFO",
@@ -186,6 +198,14 @@ class Config:
     @property
     def input(self) -> dict[str, Any]:
         return self._data["input"]
+
+    @property
+    def messages(self) -> dict[str, Any]:
+        return self._data["messages"]
+
+    @property
+    def network(self) -> dict[str, Any]:
+        return self._data["network"]
 
     @property
     def system(self) -> dict[str, Any]:

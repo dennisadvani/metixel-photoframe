@@ -71,6 +71,26 @@
     "ir_enabled": false,
     "ir_device": "/dev/lirc0"
   },
+  "messages": {
+    "enabled": true,
+    "default_duration": 5.0,
+    "max_visible": 5,
+    "persistent": [
+      {
+        "id": "welcome_wifi",
+        "title": "Welcome to Metixel!",
+        "body": "To set up Wi-Fi, connect to the 'Metixel-Setup' network from your phone or visit http://metixel.local",
+        "severity": "info",
+        "icon": "i"
+      }
+    ]
+  },
+  "network": {
+    "wifi_country": "",
+    "ap_fallback_enabled": true,
+    "ap_timeout_seconds": 60,
+    "connection_check_url": "http://connectivity-check.ubuntu.com"
+  },
   "system": {
     "cache_dir": "cache/",
     "log_level": "INFO",

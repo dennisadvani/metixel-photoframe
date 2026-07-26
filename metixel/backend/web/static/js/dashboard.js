@@ -103,6 +103,7 @@
         else if (page === "settings") loadSettings();
         else if (page === "sync") loadSync();
         else if (page === "media") loadMedia();
+        else if (page === "network") loadNetwork();
         else if (page === "advanced") loadAdvanced();
     }
 
@@ -451,6 +452,279 @@
                     _updateLogPagination();
                 });
             });
+        }
+
+        // Load persistent messages (shown once per dashboard visit)
+        _loadPersistentMessages();
+    }
+
+    // -- Persistent On-Screen Messages --------------------------------------
+
+    /**
+     * Load persistent messages from the API and render dismiss buttons.
+     * These are duration=0 messages shown on the photo frame display
+     * that stay until manually dismissed via the web UI.
+     */
+    async function _loadPersistentMessages() {
+        var card = document.getElementById("persistent-messages-card");
+        var list = document.getElementById("persistent-messages-list");
+        if (!card || !list) return;
+
+        var data = await apiGet("/messages/persistent");
+        if (!data || !data.persistent) {
+            card.style.display = "none";
+            return;
+        }
+
+        var messages = data.persistent;
+        if (messages.length === 0) {
+            card.style.display = "none";
+            return;
+        }
+
+        card.style.display = "";
+        list.innerHTML = "";
+
+        messages.forEach(function (msg) {
+            var row = document.createElement("div");
+            row.className = "persistent-msg-row";
+
+            var info = document.createElement("div");
+            info.className = "persistent-msg-info";
+            var severityBadge = msg.severity || "info";
+            info.innerHTML =
+                '<span class="persistent-msg-severity severity--' + escapeHtml(severityBadge) + '">'
+                + escapeHtml(severityBadge) + '</span> '
+                + '<strong>' + escapeHtml(msg.title || "") + '</strong>'
+                + (msg.body ? '<br><span style="font-size:0.82rem;color:var(--text-muted)">' + escapeHtml(msg.body) + '</span>' : "");
+
+            var dismissBtn = document.createElement("button");
+            dismissBtn.textContent = "Dismiss";
+            dismissBtn.className = "btn--secondary";
+            dismissBtn.style.fontSize = "0.82rem";
+            dismissBtn.addEventListener("click", async function () {
+                dismissBtn.disabled = true;
+                dismissBtn.textContent = "Dismissing…";
+                var result = await apiPost("/messages/dismiss", { id: msg.id });
+                if (result && result.status === "ok") {
+                    showToast("Message dismissed", "success");
+                    _loadPersistentMessages(); // refresh the list
+                } else {
+                    dismissBtn.disabled = false;
+                    dismissBtn.textContent = "Dismiss";
+                    showToast("Failed to dismiss message", "error");
+                }
+            });
+
+            row.appendChild(info);
+            row.appendChild(dismissBtn);
+            list.appendChild(row);
+        });
+    }
+
+    // -- Network Page --------------------------------------------------------
+
+    var _networkBound = false;
+
+    async function loadNetwork() {
+        if (!_networkBound) {
+            _networkBound = true;
+
+            document.getElementById("btn-network-scan")?.addEventListener("click", async function () {
+                var btn = this;
+                btn.disabled = true;
+                btn.textContent = "Scanning…";
+                await _refreshNetworkScan();
+                btn.disabled = false;
+                btn.textContent = "🔍 Scan for Networks";
+            });
+
+            document.getElementById("btn-network-ap-toggle")?.addEventListener("click", async function () {
+                var status = await apiGet("/network/ap-status");
+                if (status && status.active) {
+                    await apiPost("/network/ap-stop");
+                    showToast("AP mode stopped", "info");
+                } else {
+                    await apiPost("/network/ap-start");
+                    showToast("AP mode started — SSID: Metixel-Setup", "success");
+                }
+                _refreshNetworkAPStatus();
+            });
+        }
+
+        _refreshNetworkStatus();
+        _refreshNetworkAPStatus();
+        _refreshNetworkScan();
+    }
+
+    async function _refreshNetworkStatus() {
+        var el = document.getElementById("network-status");
+        if (!el) return;
+
+        var status = await apiGet("/network/status");
+        if (!status) {
+            el.innerHTML = '<span style="color:var(--text-muted)">Unable to get network status</span>';
+            return;
+        }
+
+        // ── WiFi radio is disabled at OS level ──────────────────────
+        if (status.wifi_radio_enabled === false) {
+            var wifiOffWarning =
+                '<div style="margin-top:6px;padding:6px 10px;background:rgba(240,160,48,0.12);border-radius:5px;font-size:0.8rem;color:#f0a030">'
+                + '⚠ WiFi is disabled at the OS level.<br>'
+                + 'Enable it via <code>sudo raspi-config</code> → System Options → Wireless LAN, '
+                + 'or run <code>sudo nmcli radio wifi on</code>.</div>';
+
+            if (status.connected && status.interface_type === "ethernet") {
+                // Ethernet works, but WiFi is off — note it
+                el.innerHTML =
+                    '<div style="display:flex;align-items:center;gap:12px">'
+                    + '<span style="font-size:2rem">🔌</span>'
+                    + '<div>'
+                    + '<strong>Connected via Ethernet</strong><br>'
+                    + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span>'
+                    + '</div></div>'
+                    + wifiOffWarning;
+                return;
+            }
+
+            // No connection and WiFi is disabled — tell the user why
+            el.innerHTML =
+                '<div style="display:flex;align-items:center;gap:12px">'
+                + '<span style="font-size:2rem">🔴</span>'
+                + '<div>'
+                + '<strong>WiFi is disabled</strong><br>'
+                + '<span style="font-size:0.82rem;color:var(--text-muted)">WiFi radio is turned off at the OS level</span>'
+                + '</div></div>'
+                + wifiOffWarning;
+            return;
+        }
+
+        // ── WiFi enabled but no saved networks ──────────────────────
+        if (!status.connected && status.wifi_radio_enabled && !status.has_saved_wifi) {
+            el.innerHTML =
+                '<div style="display:flex;align-items:center;gap:12px">'
+                + '<span style="font-size:2rem">🟡</span>'
+                + '<div>'
+                + '<strong>No WiFi networks configured</strong><br>'
+                + '<span style="font-size:0.82rem;color:var(--text-muted)">Scan below to find and connect to a network</span>'
+                + '</div></div>';
+            return;
+        }
+
+        // ── Connected via Ethernet (WiFi radio is on) ───────────────
+        if (status.connected && status.interface_type === "ethernet") {
+            el.innerHTML =
+                '<div style="display:flex;align-items:center;gap:12px">'
+                + '<span style="font-size:2rem">🔌</span>'
+                + '<div>'
+                + '<strong>Connected via Ethernet</strong><br>'
+                + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span><br>'
+                + '<span style="font-size:0.78rem;color:var(--text-muted)">Interface: ' + escapeHtml(status.interface || "eth0") + '</span>'
+                + '</div></div>';
+            return;
+        }
+
+        // ── Connected via Wi-Fi ─────────────────────────────────────
+        var signalBars = "";
+        if (status.connected && status.signal > 0) {
+            var level = Math.min(4, Math.ceil(status.signal / 25));
+            for (var i = 0; i < 4; i++) {
+                signalBars += '<span style="display:inline-block;width:6px;height:' + (6 + i*5) + 'px;background:' +
+                    (i < level ? 'var(--primary)' : 'var(--border)') + ';margin-right:2px;border-radius:1px;vertical-align:middle"></span>';
+            }
+            signalBars += ' ' + status.signal + '%';
+        }
+
+        if (status.connected) {
+            el.innerHTML =
+                '<div style="display:flex;align-items:center;gap:12px">'
+                + '<span style="font-size:2rem">🟢</span>'
+                + '<div>'
+                + '<strong>' + escapeHtml(status.ssid || "Unknown") + '</strong><br>'
+                + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span><br>'
+                + '<span style="font-size:0.82rem;color:var(--text-muted)">' + signalBars + '</span>'
+                + '</div></div>';
+        } else {
+            el.innerHTML =
+                '<div style="display:flex;align-items:center;gap:12px">'
+                + '<span style="font-size:2rem">🔴</span>'
+                + '<div>'
+                + '<strong>Not connected</strong><br>'
+                + '<span style="font-size:0.82rem;color:var(--text-muted)">Use the captive portal or connect below</span>'
+                + '</div></div>';
+        }
+    }
+
+    async function _refreshNetworkScan() {
+        var list = document.getElementById("network-scan-list");
+        var statusEl = document.getElementById("network-scan-status");
+        if (!list) return;
+
+        list.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">Scanning…</span>';
+        if (statusEl) { statusEl.style.display = "none"; }
+
+        var data = await apiGet("/network/scan");
+        if (!data || !data.networks) {
+            list.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">Scan failed — is Wi-Fi available?</span>';
+            return;
+        }
+
+        if (data.networks.length === 0) {
+            list.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">No networks found</span>';
+            return;
+        }
+
+        list.innerHTML = "";
+        data.networks.forEach(function (n) {
+            var row = document.createElement("div");
+            row.style.cssText = "display:flex;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:4px;gap:8px";
+
+            var hasLock = n.security && n.security !== "--";
+            row.innerHTML =
+                '<span style="flex:1;font-size:0.9rem;font-weight:500">' + escapeHtml(n.ssid) + '</span>'
+                + (hasLock ? '<span style="font-size:0.8rem">🔒 ' + escapeHtml(n.security) + '</span>' : '<span style="font-size:0.75rem;color:var(--text-muted)">Open</span>')
+                + '<span style="font-size:0.8rem;color:var(--text-muted);min-width:45px;text-align:right">' + n.signal + '%</span>'
+                + '<button style="font-size:0.78rem;padding:4px 10px;background:var(--primary);color:#fff;border:none;border-radius:4px;cursor:pointer">Connect</button>';
+
+            row.querySelector("button").addEventListener("click", async function () {
+                if (hasLock) {
+                    var pw = prompt("Enter password for " + n.ssid);
+                    if (pw === null) return; // cancelled
+                    var result = await apiPost("/network/connect", { ssid: n.ssid, password: pw });
+                    if (result && result.status === "ok") {
+                        showToast("Connected to " + n.ssid, "success");
+                        _refreshNetworkStatus();
+                    } else {
+                        showToast((result && result.message) || "Connection failed", "error");
+                    }
+                } else {
+                    var result = await apiPost("/network/connect", { ssid: n.ssid, password: "" });
+                    if (result && result.status === "ok") {
+                        showToast("Connected to " + n.ssid, "success");
+                        _refreshNetworkStatus();
+                    } else {
+                        showToast((result && result.message) || "Connection failed", "error");
+                    }
+                }
+            });
+
+            list.appendChild(row);
+        });
+    }
+
+    async function _refreshNetworkAPStatus() {
+        var el = document.getElementById("network-ap-status");
+        var btn = document.getElementById("btn-network-ap-toggle");
+        if (!el || !btn) return;
+
+        var status = await apiGet("/network/ap-status");
+        if (status && status.active) {
+            el.innerHTML = '<span style="color:#f0a030">🟡 AP mode active — SSID: <strong>Metixel-Setup</strong></span>';
+            btn.textContent = "Stop AP Mode";
+        } else {
+            el.innerHTML = '<span style="color:var(--text-muted)">⚪ AP mode inactive</span>';
+            btn.textContent = "Start AP Mode";
         }
     }
 

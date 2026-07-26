@@ -48,6 +48,10 @@ EOF
 
 sudo sed -i 's|^#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
 
+# Disable auto-start — the Metixel NetworkMonitor controls these services
+sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
+sudo systemctl unmask hostapd dnsmasq 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # 3. Configure dnsmasq (DHCP + DNS)
 # ---------------------------------------------------------------------------
@@ -75,7 +79,15 @@ EOF
 
 echo ""
 echo "=== Setup Complete ==="
-echo "To activate the portal manually:"
-echo "  sudo systemctl stop wpa_supplicant"
+echo ""
+echo "The hostapd and dnsmasq services are installed but disabled by default."
+echo "The Metixel backend will start them automatically when no Wi-Fi"
+echo "connection is detected (AP fallback mode)."
+echo ""
+echo "To test the portal manually:"
 echo "  sudo systemctl start hostapd dnsmasq"
-echo "  sudo ifconfig wlan0 192.168.42.1"
+echo "  sudo ip addr add 192.168.42.1/24 dev wlan0"
+echo "  sudo ip link set wlan0 up"
+echo ""
+echo "To stop:"
+echo "  sudo systemctl stop hostapd dnsmasq"

@@ -19,10 +19,13 @@ Environment=PYTHONUNBUFFERED=1
 Environment=METIXEL_DISPLAY_BACKEND=auto
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 
-# Ensure XDG_RUNTIME_DIR exists for cage's Wayland socket
-ExecStartPre=/bin/mkdir -p /run/user/1000
-ExecStartPre=/bin/chown pi:pi /run/user/1000
-ExecStartPre=/bin/chmod 0700 /run/user/1000
+# Ensure XDG_RUNTIME_DIR exists for cage's Wayland socket.
+# The '+' prefix runs these as root before dropping to User=pi.
+# loginctl enable-linger pi (run once at setup) ensures systemd-logind
+# creates /run/user/1000 on boot even without a user login.
+ExecStartPre=+/bin/mkdir -p /run/user/1000
+ExecStartPre=+/bin/chown pi:pi /run/user/1000
+ExecStartPre=+/bin/chmod 0700 /run/user/1000
 
 # cage starts a Wayland session with XWayland, then runs metixel inside it.
 # This gives pi3d the X11 surface it needs on KMS-only systems (Trixie).

@@ -35,6 +35,9 @@
             <a href="#" data-page="sync">
                 <span class="nav-icon material-symbols-outlined">cloud_sync</span> Image Sync
             </a>
+            <a href="#" data-page="network">
+                <span class="nav-icon material-symbols-outlined">wifi</span> Network
+            </a>
             <a href="#" data-page="advanced">
                 <span class="nav-icon material-symbols-outlined">tune</span> Advanced
             </a>
@@ -102,6 +105,12 @@
                         <strong>Last Sync:</strong> <span id="dash-sync-text">—</span>
                         <div id="dash-sync-detail" style="margin-top:0.3rem;color:var(--text-muted)"></div>
                     </div>
+                </div>
+
+                <div class="card" id="persistent-messages-card" style="display:none">
+                    <h2>On-Screen Messages</h2>
+                    <p class="hint">These messages are shown on the photo frame display. Dismiss them here to remove them permanently.</p>
+                    <div id="persistent-messages-list"></div>
                 </div>
             </section>
 
@@ -346,6 +355,28 @@
                         <div id="sync-status-detail" style="margin-top:0.3rem;color:var(--text-muted)"></div>
                         <ul id="sync-errors" style="margin:0.3rem 0 0 1.2rem;padding:0;font-size:0.78rem;color:var(--danger);display:none"></ul>
                     </div>
+                </div>
+            </section>
+
+            <!-- ═══════════════ Network Page ═══════════════ -->
+            <section id="page-network" class="page">
+                <div class="card">
+                    <h2>Network Status</h2>
+                    <div id="network-status" style="font-size:0.92rem">Loading…</div>
+                </div>
+
+                <div class="card">
+                    <h2>Available Networks</h2>
+                    <button class="btn--primary" id="btn-network-scan" style="margin-bottom:12px">🔍 Scan for Networks</button>
+                    <div id="network-scan-list"></div>
+                    <div id="network-scan-status" class="status-msg" style="display:none;margin-top:8px;padding:8px 12px;border-radius:6px;font-size:0.85rem"></div>
+                </div>
+
+                <div class="card">
+                    <h2>Access Point (Captive Portal)</h2>
+                    <p class="hint">When no Wi-Fi is available, the frame creates its own hotspot "Metixel-Setup" so you can connect with your phone and configure Wi-Fi.</p>
+                    <div id="network-ap-status" style="margin:8px 0;font-size:0.9rem">Checking…</div>
+                    <button id="btn-network-ap-toggle" class="btn--secondary">Start AP Mode</button>
                 </div>
             </section>
 

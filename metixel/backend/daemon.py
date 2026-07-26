@@ -55,6 +55,7 @@ class BackendDaemon:
         self._start_sync_engine()
         self._start_mqtt_client()
         self._start_input_handlers()
+        self._start_network_monitor()
         self._start_web_server()
 
         logger.info(
@@ -153,6 +154,107 @@ class BackendDaemon:
             t = threading.Thread(target=ir.run, name="ir-handler", daemon=True)
             t.start()
             self._threads.append(t)
+
+    def _start_network_monitor(self) -> None:
+        """Start the network monitor thread.
+
+        Waits for the configured timeout after startup.  If no network
+        connection is established by then, activates the AP fallback
+        (captive portal) so the user can configure Wi-Fi.
+
+        Once a connection is established, auto-deactivates the AP and
+        dismisses the ``welcome_wifi`` persistent message (if present).
+        """
+        config = self._state.config
+        network_cfg = config.network
+
+        if not network_cfg.get("ap_fallback_enabled", True):
+            logger.info("AP fallback disabled — skipping network monitor")
+            return
+
+        t = threading.Thread(
+            target=self._network_monitor_loop,
+            name="network-monitor",
+            daemon=True,
+        )
+        t.start()
+        self._threads.append(t)
+        logger.info("Network monitor started (timeout=%ds)",
+                     network_cfg.get("ap_timeout_seconds", 60))
+
+    def _network_monitor_loop(self) -> None:
+        """Background loop: monitor connectivity and manage AP fallback."""
+        from metixel.backend.network_manager import (
+            is_ap_mode_active,
+            is_connected,
+            start_ap_mode,
+            stop_ap_mode,
+        )
+
+        config = self._state.config
+        timeout = config.network.get("ap_timeout_seconds", 60)
+
+        # Wait for the initial timeout before checking
+        waited = 0
+        while self._running and waited < timeout:
+            time.sleep(5)
+            waited += 5
+
+        if not self._running:
+            return
+
+        if is_connected():
+            logger.info("Network connected — AP fallback not needed")
+            return
+
+        # No connection — activate AP fallback
+        logger.warning("No network after %ds — activating AP fallback", timeout)
+        start_ap_mode()
+
+        # Monitor for connection changes
+        ap_was_active = True
+        while self._running:
+            time.sleep(10)
+            if not self._running:
+                break
+
+            if is_connected():
+                if ap_was_active:
+                    logger.info("Network connected — deactivating AP fallback")
+                    stop_ap_mode()
+                    ap_was_active = False
+                    # Auto-dismiss the welcome_wifi persistent message
+                    self._dismiss_welcome_message()
+                # Connection is up, normal monitoring
+            else:
+                if not ap_was_active and not is_ap_mode_active():
+                    # Connection dropped and AP is not running — reactivate
+                    logger.warning("Network lost — reactivating AP fallback")
+                    start_ap_mode()
+                    ap_was_active = True
+
+    def _dismiss_welcome_message(self) -> None:
+        """Remove the ``welcome_wifi`` persistent message from config.
+
+        Called automatically when Wi-Fi connects successfully so the
+        first-boot instructions disappear without requiring the user
+        to visit the web dashboard.
+        """
+        try:
+            config = self._state.config
+            persistent: list[dict] = config.messages.get("persistent", [])
+            new_list = [m for m in persistent if m.get("id") != "welcome_wifi"]
+            if len(new_list) < len(persistent):
+                self._state.update_config("messages", {"persistent": new_list})
+                logger.info("Auto-dismissed welcome_wifi persistent message")
+                # Also tell the frontend to clear the screen
+                try:
+                    from metixel.shared.ipc import ControlMessage
+                    self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
+                except Exception:
+                    logger.debug("Could not send dismiss IPC (frontend may not be running)")
+        except Exception:
+            logger.warning("Failed to auto-dismiss welcome message", exc_info=True)
 
     def _start_web_server(self) -> None:
         """Start the Flask web server — this BLOCKS the main thread."""

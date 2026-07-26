@@ -47,7 +47,18 @@ sudo apt-get install -y \
     vlc-bin vlc-plugin-base vlc-plugin-video-output vlc-data \
     cpulimit \
     git \
-    samba
+    samba \
+    iptables-persistent
+
+# Redirect port 80 → 8080 so the web dashboard is reachable without a port
+# number and the captive portal detection works on port 80.
+# The Flask app runs as user 'pi' on port 8080 — this iptables rule avoids
+# needing root privileges to bind port 80.
+if ! iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null; then
+    iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+    netfilter-persistent save
+    echo "iptables: port 80 → 8080 redirect installed"
+fi
 
 # -- Python packages ---------------------------------------------------------
 echo "[3/7] Installing Python packages..."
@@ -78,6 +89,11 @@ sudo cp "${METIXEL_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable metixel-backend
 sudo systemctl enable metixel-cage
+
+# Enable linger for the pi user so systemd-logind creates
+# /run/user/1000 at boot even without a user login.
+# Required for cage (Wayland compositor) to start on headless boots.
+sudo loginctl enable-linger pi
 
 # -- Samba share -------------------------------------------------------------
 echo "[6/7] Configuring Samba share (/opt/metixel as 'metixel')..."

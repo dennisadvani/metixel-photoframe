@@ -19,6 +19,18 @@ from metixel.shared.ipc import IPCClient
 logger = logging.getLogger(__name__)
 
 
+def _is_ap_mode() -> bool:
+    """Check whether the access point (captive portal) is currently active.
+
+    Cached for the lifetime of a request to avoid repeated subprocess calls.
+    """
+    try:
+        from metixel.backend.network_manager import is_ap_mode_active
+        return is_ap_mode_active()
+    except Exception:
+        return False
+
+
 def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = None) -> Flask:
     """Create and configure the Flask application.
 
@@ -48,15 +60,23 @@ def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = N
     from metixel.backend.web.routes.immich import immich_bp
     from metixel.backend.web.routes.logs import logs_bp
     from metixel.backend.web.routes.media import media_bp
+    from metixel.backend.web.routes.messages import messages_bp
+    from metixel.backend.web.routes.network import network_bp
 
     app.register_blueprint(config_bp, url_prefix="/api/config")
     app.register_blueprint(media_bp, url_prefix="/api/media")
     app.register_blueprint(logs_bp, url_prefix="/api/logs")
     app.register_blueprint(immich_bp, url_prefix="/api/immich")
+    app.register_blueprint(messages_bp, url_prefix="/api")
+    app.register_blueprint(network_bp, url_prefix="/api")
 
-    # Serve the SPA — inject version into the root template
+    # Serve the SPA — inject version into the root template.
+    # When AP mode is active, serve the captive portal instead of the
+    # dashboard so users can configure Wi-Fi.
     @app.route("/")
     def index() -> str:
+        if _is_ap_mode():
+            return render_template("captive.html")
         return render_template("index.html", version=__version__)
 
     @app.route("/<path:path>")
