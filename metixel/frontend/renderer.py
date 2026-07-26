@@ -748,7 +748,12 @@ class FrontendRenderer:
         # Clear depth first so slideshow depth values don't occlude overlay.
         self._backend.clear_depth()
         if self._overlay:
-            self._overlay.update()
+            # Pass video state so message timers pause during VLC playback
+            video_playing = (
+                self._presentation._video_state != 0  # _VIDEO_IDLE
+                if hasattr(self._presentation, '_video_state') else False
+            )
+            self._overlay.update({"video_playing": video_playing})
             self._overlay.draw(self._backend)
 
     # -- Hot reload ----------------------------------------------------------

@@ -101,6 +101,7 @@ class MessageLayer(OverlayLayer):
         self._lock = threading.Lock()
         self._next_id = 0
         self._last_cleanup = 0.0
+        self._video_playing = False
 
     # -- Public API (thread-safe) -------------------------------------------
 
@@ -148,6 +149,7 @@ class MessageLayer(OverlayLayer):
     # -- OverlayLayer interface ---------------------------------------------
 
     def update(self, shared_state: dict[str, Any] | None = None) -> None:
+        self._video_playing = (shared_state or {}).get("video_playing", False)
         now = time.monotonic()
         with self._lock:
             for m in self._msgs:
@@ -176,7 +178,10 @@ class MessageLayer(OverlayLayer):
                 et = 1.0 - (1.0 - t) ** 3
                 m._alpha = min(1.0, t / 0.5)
         elif m.state == "visible":
-            if m.duration > 0 and (now - m._anim_start) >= m.duration:
+            if self._video_playing:
+                # Reset timer while VLC covers the screen
+                m._anim_start = now
+            elif m.duration > 0 and (now - m._anim_start) >= m.duration:
                 self._start_dismiss(m)
         elif m.state == "sliding_out":
             t = (now - m._anim_start) * 1000.0 / SLIDE_OUT_MS
