@@ -22,13 +22,34 @@ logger = logging.getLogger(__name__)
 def _is_ap_mode() -> bool:
     """Check whether the captive portal PIN gate is active.
 
-    When True, the dashboard is blocked and only the captive portal
-    (captive.html) is served.  API routes remain accessible so the
-    captive portal can validate the PIN and configure Wi-Fi.
+    Shows the captive portal ONLY when the AP is actually running (or a
+    PIN is set) AND there is no real network connection.  The primary
+    gate is the AP state — connectivity is only checked as a safety net
+    for lingering/stale AP instances.
+
+    Logic:
+        1. AP not active + no PIN → dashboard (normal operation)
+        2. AP/PIN active + real connection → dashboard (safety net)
+        3. AP/PIN active + no connection → captive portal (setup needed)
     """
     try:
-        from metixel.backend.network_manager import is_ap_mode_active, is_pin_required
-        return is_ap_mode_active() or is_pin_required()
+        from metixel.backend.network_manager import (
+            is_ap_mode_active,
+            is_connected,
+            is_pin_required,
+        )
+
+        # Fast path: nothing AP-related is active → dashboard
+        if not is_ap_mode_active() and not is_pin_required():
+            return False
+
+        # AP or PIN is active — but we have a real connection, so the AP
+        # is stale/lingering.  Serve the dashboard anyway.
+        if is_connected():
+            return False
+
+        # AP/PIN active + genuinely offline → captive portal for setup
+        return True
     except Exception:
         return False
 

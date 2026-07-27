@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Tkinter-based Development Display Backend.
 
-Used for local development on machines without pygame or pi3d.
+Used for local development on machines without pi3d.
 Tkinter is bundled with Python on all platforms, making this the
 most portable dev backend available.
 

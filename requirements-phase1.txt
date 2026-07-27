@@ -8,7 +8,6 @@ Flask>=3.0
 watchdog>=3.0
 paho-mqtt>=1.6
 requests>=2.31
-pygame>=2.5
 pysdl2>=0.9
 python-vlc>=3.0
 cec>=0.2

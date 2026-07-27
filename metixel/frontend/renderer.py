@@ -102,409 +102,10 @@ class FrontendRenderer:
         except Exception:
             logger.debug("Mouse warp failed (non-fatal)", exc_info=True)
 
-    # -- Backend processing progress -----------------------------------------
-
-    # Path to the progress file the backend's folder watcher writes.
-    _PROCESSING_STATUS_PATH = "/run/metixel/processing_status.json"
-
-    # How long to wait for the backend to start writing progress before
-    # giving up and starting the slideshow anyway (seconds).
-    # Increased from 60s → 300s: the backend writes playlist items
-    # incrementally now, so the frontend will have images to show even
-    # while processing is still ongoing.  Only abort if the backend
-    # hasn't started at all (crash / failed launch).
-    _PROCESSING_TIMEOUT = 300.0
-
-    # Minimum time the progress screen stays visible so the user actually
-    # sees it — even when all files are already cached from a previous run.
-    _PROGRESS_MIN_DISPLAY = 2.0
-
-    # Minimum number of items in the backend playlist before the splash
-    # exits early.  Matches the backend's incremental flush batch size
-    # so the frontend can start showing images as soon as the first batch
-    # lands, without waiting for all 300+ files to finish processing.
-    _PLAYLIST_READY_MIN = 12
-
-    def _wait_for_backend_processing(self) -> tuple[int, int]:
-        """Show a pygame boot splash while the backend processes media.
-
-        Returns the detected display resolution ``(width, height)`` so
-        the pi3d backend can be created with the correct dimensions.
-
-        Pygame handles text, images and rectangles reliably — unlike
-        pi3d's ``FixedString`` (GPU memory leak) and ``draw_rect``
-        (inconsistent inside the pi3d render loop for splash use).
-
-        After the splash is done, pygame is fully shut down so pi3d can
-        claim the display without SDL2 conflicts.
-        """
-        # ── Hide cursor BEFORE any graphics init ────────────────────────
-        # 1. X11-level: xsetroot (hides the hardware cursor on the X server)
-        try:
-            import subprocess
-            subprocess.run(
-                ["xsetroot", "-cursor", "/dev/null", "/dev/null"],
-                timeout=2, capture_output=True,
-            )
-        except Exception:
-            pass
-        # 2. SDL2-level: disable the SDL cursor before pygame touches SDL
-        try:
-            import sdl2
-            sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
-        except Exception:
-            pass
-
-        try:
-            import pygame
-        except ImportError:
-            logger.warning("Pygame not available — skipping boot splash")
-            return (0, 0)
-
-        # ── Init pygame ─────────────────────────────────────────────────
-        pygame.display.init()
-        pygame.font.init()
-        # 3. Pygame-level: double-insurance after display init
-        pygame.mouse.set_visible(False)
-
-        # Detect native resolution via fullscreen
-        try:
-            pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.NOFRAME)
-        except pygame.error:
-            pygame.display.set_mode((1920, 1080))
-        surface = pygame.display.get_surface()
-        if surface is None:
-            pygame.quit()
-            return (0, 0)
-        display_w, display_h = surface.get_size()
-
-        # When no monitor is connected, pygame/SDL2 may report 1×1 (or 0×0).
-        # Fall back to a safe 1080p default so the splash screen is visible.
-        if display_w <= 1 or display_h <= 1:
-            logger.warning(
-                "Boot splash detected %dx%d — likely no monitor connected. "
-                "Falling back to 1920x1080.",
-                display_w, display_h,
-            )
-            display_w, display_h = 1920, 1080
-            try:
-                pygame.display.set_mode(
-                    (display_w, display_h),
-                    pygame.FULLSCREEN | pygame.NOFRAME,
-                )
-            except pygame.error:
-                pygame.display.set_mode((display_w, display_h))
-            surface = pygame.display.get_surface()
-            if surface is None:
-                pygame.quit()
-                return (0, 0)
-
-        logger.info("Boot splash: %dx%d (pygame)", display_w, display_h)
-
-        # 4. Once more after the window exists
-        pygame.mouse.set_visible(False)
-
-        # ── Colours ─────────────────────────────────────────────────────
-        BAR_BORDER = (72, 72, 90)
-        BAR_BG = (16, 16, 24)
-        BAR_FILL = (160, 40, 40)   # dark red
-        TEXT_COLOR = (220, 220, 230)
-        TEXT_SUB = (180, 180, 195)
-
-        # ── Load background image ───────────────────────────────────────
-        bg_surf = None
-        bg_path = Path(__file__).resolve().parent.parent / "assets" / "metitoobebebe3.png"
-        if bg_path.is_file():
-            try:
-                raw = pygame.image.load(str(bg_path))
-                bg_surf = pygame.transform.smoothscale(raw, (display_w, display_h))
-            except Exception:
-                logger.debug("Failed to load background image", exc_info=True)
-
-        # ── Load logo ───────────────────────────────────────────────────
-        logo_surf = None
-        logo_rect = None
-        logo_path = Path(__file__).resolve().parent.parent / "assets" / "metixel.png"
-        if logo_path.is_file():
-            try:
-                raw = pygame.image.load(str(logo_path))
-                # Scale to ~35% of screen width, preserving aspect ratio
-                max_w = int(display_w * 0.35)
-                if raw.get_width() > max_w:
-                    scale = max_w / raw.get_width()
-                    new_h = int(raw.get_height() * scale)
-                    raw = pygame.transform.smoothscale(raw, (max_w, new_h))
-                logo_surf = raw.convert_alpha()
-                logo_rect = logo_surf.get_rect(
-                    centerx=display_w // 2,
-                    centery=display_h // 2,
-                )
-            except Exception:
-                logger.debug("Failed to load logo", exc_info=True)
-
-        # ── Fonts ───────────────────────────────────────────────────────
-        try:
-            font_large = pygame.font.Font(None, max(int(display_h * 0.04), 28))
-            font_small = pygame.font.Font(None, max(int(display_h * 0.026), 18))
-        except Exception:
-            font_large = pygame.font.Font(None, 28)
-            font_small = pygame.font.Font(None, 18)
-
-        # ── Network info ────────────────────────────────────────────────
-        import socket
-        try:
-            _hostname = socket.gethostname()
-        except Exception:
-            _hostname = "unknown"
-        try:
-            # Open a UDP socket to a public address to discover the
-            # LAN-facing interface IP (gethostbyname often returns 127.x).
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(0.5)
-            try:
-                s.connect(("8.8.8.8", 80))
-                _ip = s.getsockname()[0]
-            except OSError:
-                _ip = "unknown"
-            finally:
-                s.close()
-        except Exception:
-            _ip = "unknown"
-        _net_text = f"{_hostname}  |  {_ip}"
-
-        # ── Network status ────────────────────────────────────────────
-        _net_status_text = ""
-        try:
-            from metixel.backend.network_manager import get_connection_status
-            net_status = get_connection_status()
-            if net_status.get("connected"):
-                if net_status.get("interface_type") == "ethernet":
-                    _net_status_text = "Ethernet: Connected"
-                elif net_status.get("ssid"):
-                    _net_status_text = f"Wi-Fi: Connected to {net_status['ssid']}"
-                else:
-                    _net_status_text = "Network: Connected"
-            else:
-                _net_status_text = "Wi-Fi: Not connected — use Metixel-Setup hotspot"
-        except Exception:
-            _net_status_text = ""
-
-        # ── Progress bar geometry ───────────────────────────────────────
-        bar_w = int(display_w * 0.45)
-        bar_h = max(int(display_h * 0.032), 12)
-        bar_x = (display_w - bar_w) // 2
-        bar_y = int(display_h * 0.78)
-        border = 2
-
-        # ── Polling loop ────────────────────────────────────────────────
-        started = time.monotonic()
-        status_seen: str | None = None
-        target_pct: float = 0.0
-        display_pct: float = 0.0
-        processing_done: bool = False
-        done_at: float = 0.0  # timestamp when bar first hit 100 %
-        clock = pygame.time.Clock()
-
-        while True:
-            # Pump events so the window doesn't appear frozen
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    pygame.quit()
-                    return (display_w, display_h)
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    pygame.quit()
-                    return (display_w, display_h)
-
-            now = time.monotonic()
-            elapsed = now - started
-
-            # ── Read backend status ─────────────────────────────────
-            status = self._read_processing_status()
-            phase = status.get("phase", "") if status else ""
-            total = max(status.get("total", 0), 1) if status else 1
-            processed = status.get("processed", 0) if status else 0
-            playlist_count = self._count_playlist_items()
-
-            if phase == "complete":
-                target_pct = 1.0
-                processing_done = True
-            elif playlist_count >= self._PLAYLIST_READY_MIN:
-                # Enough images are ready — snap the bar to 100 % so the
-                # transition feels intentional.  The "hold for 2 s" logic
-                # below still runs, giving the bar time to animate smoothly.
-                target_pct = 1.0
-                processing_done = True
-            elif status is not None:
-                target_pct = min(processed / total, 1.0)
-
-            # Animate display toward target
-            if display_pct < target_pct:
-                display_pct += (target_pct - display_pct) * 0.12
-                if abs(display_pct - target_pct) < 0.002:
-                    display_pct = target_pct
-
-            # Log phase transitions
-            if phase and phase != status_seen:
-                status_seen = phase
-                if phase == "complete":
-                    logger.info(
-                        "Backend processing complete (%d/%d files) — "
-                        "starting slideshow", processed, total,
-                    )
-                else:
-                    logger.info(
-                        "Backend progress: %s — %d/%d files",
-                        phase, processed, total,
-                    )
-
-            # ── Render frame ────────────────────────────────────────
-            if bg_surf is not None:
-                surface.blit(bg_surf, (0, 0))
-            else:
-                surface.fill((180, 180, 190))  # fallback light grey
-
-            # Logo
-            if logo_surf is not None and logo_rect is not None:
-                surface.blit(logo_surf, logo_rect)
-
-            # Progress bar — border
-            pygame.draw.rect(
-                surface, BAR_BORDER,
-                (bar_x - border, bar_y - border,
-                 bar_w + 2 * border, bar_h + 2 * border),
-            )
-            # Progress bar — track
-            pygame.draw.rect(
-                surface, BAR_BG,
-                (bar_x, bar_y, bar_w, bar_h),
-            )
-            # Progress bar — fill
-            if display_pct > 0.001:
-                fill_w = max(int(bar_w * display_pct), 4)
-                pygame.draw.rect(
-                    surface, BAR_FILL,
-                    (bar_x, bar_y, fill_w, bar_h),
-                )
-
-            # Percentage text
-            pct_text = font_large.render(
-                f"{int(display_pct * 100)}%", True, TEXT_COLOR,
-            )
-            pct_rect = pct_text.get_rect(
-                centerx=display_w // 2,
-                centery=bar_y - int(display_h * 0.04),
-            )
-            surface.blit(pct_text, pct_rect)
-
-            # Status message
-            if processing_done:
-                msg = "Starting slideshow…"
-            elif status is None:
-                msg = "Starting Metixel Photoframe…"
-            elif phase == "scanning":
-                msg = "Scanning media folder…"
-            else:
-                msg = f"Processing media… ({processed}/{total})"
-            msg_text = font_small.render(msg, True, TEXT_SUB)
-            msg_rect = msg_text.get_rect(
-                centerx=display_w // 2,
-                centery=bar_y + bar_h + int(display_h * 0.045),
-            )
-            surface.blit(msg_text, msg_rect)
-
-            # Network info (hostname + IP)
-            net_text = font_small.render(_net_text, True, TEXT_SUB)
-            net_rect = net_text.get_rect(
-                centerx=display_w // 2,
-                centery=bar_y + bar_h + int(display_h * 0.09),
-            )
-            surface.blit(net_text, net_rect)
-
-            # Network status
-            if _net_status_text:
-                is_connected_str = "Connected" in _net_status_text
-                net_color = (0.2, 0.75, 0.35) if is_connected_str else (0.95, 0.6, 0.1)
-                net_surf = font_small.render(_net_status_text, True, net_color)
-                net_rect = net_surf.get_rect(
-                    centerx=display_w // 2,
-                    centery=bar_y + bar_h + int(display_h * 0.115),
-                )
-                surface.blit(net_surf, net_rect)
-
-            pygame.display.flip()
-
-            # ── Exit conditions ─────────────────────────────────────
-            # 1. Ready to start — bar is at 100 % (either all files
-            #    processed, or enough items in the playlist).  Hold for
-            #    _PROGRESS_MIN_DISPLAY so the 100 % animation is visible.
-            if processing_done and display_pct >= 0.999:
-                if done_at == 0.0:
-                    done_at = now
-                if now - done_at >= self._PROGRESS_MIN_DISPLAY:
-                    if phase == "complete":
-                        logger.info(
-                            "Boot splash finished — all %d files processed", total,
-                        )
-                    else:
-                        logger.info(
-                            "Boot splash finished — %d items in playlist "
-                            "(%d/%d files processed)",
-                            playlist_count, processed, total,
-                        )
-                    break
-
-            # 2. Backend never started → timeout fallback.
-            if status is None and elapsed > self._PROCESSING_TIMEOUT:
-                logger.warning(
-                    "Backend processing did not start within %.0fs — "
-                    "starting slideshow anyway", self._PROCESSING_TIMEOUT,
-                )
-                break
-
-            # 3. Absolute timeout safety net.
-            if elapsed > self._PROCESSING_TIMEOUT:
-                logger.warning(
-                    "Backend processing timed out — "
-                    "starting slideshow anyway (%d/%d processed)",
-                    processed, total,
-                )
-                break
-
-            clock.tick(30)
-
-        # ── Clean shutdown of pygame ────────────────────────────────────
-        pygame.display.quit()
-        pygame.font.quit()
-        pygame.quit()
-        logger.info("Boot splash finished — handing over to pi3d")
-        return (display_w, display_h)
-
-    @staticmethod
-    def _read_processing_status() -> dict | None:
-        """Read the backend's processing status file. Returns None if not found."""
-        try:
-            with open(FrontendRenderer._PROCESSING_STATUS_PATH) as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return None
-
-    @staticmethod
-    def _count_playlist_items() -> int:
-        """Count how many items the backend has written to playlist.json.
-
-        Returns 0 if the file doesn't exist or is unreadable.  Used by
-        the boot splash to decide when enough images are ready to start
-        the slideshow without waiting for all processing to finish.
-        """
-        try:
-            p = Path("/run/metixel/playlist.json")
-            if not p.exists():
-                return 0
-            with open(p, encoding="utf-8") as f:
-                data = json.load(f)
-            return len(data) if isinstance(data, list) else 0
-        except (json.JSONDecodeError, OSError):
-            return 0
+    # ══════════════════════════════════════════════════════════════════════
+    #  Boot screen is handled by BootLayer (overlay system via pi3d).
+    #  See metixel.frontend.overlay.boot_layer.  No pygame dependency.
+    # ══════════════════════════════════════════════════════════════════════
 
     @staticmethod
     def _load_backend_playlist() -> list[MediaItem]:
@@ -584,31 +185,9 @@ class FrontendRenderer:
         )
         display_cfg = self._config.display
 
-        # ── Boot splash (pygame) — BEFORE pi3d claims the display ──────
-        # Pygame is used for the boot screen because it handles text,
-        # images and rectangles reliably.  It quits cleanly before pi3d
-        # takes over, avoiding SDL2 conflicts.
-        splash_w, splash_h = 0, 0
-        if self._config.display.get("boot_splash", True):
-            try:
-                splash_w, splash_h = self._wait_for_backend_processing()
-            except Exception:
-                logger.exception("Progress screen failed — starting slideshow anyway")
-        else:
-            logger.info("Boot splash disabled by config — starting directly")
-
-        # Initialize display backend (pi3d)
+        # ── Initialize display backend immediately ───────────────────
+        # pi3d auto-detects native resolution when width=0 in config.
         self._backend = detect_backend()
-        # Use splash-detected resolution if config is set to auto-detect.
-        # Reject implausibly small resolutions (≤1 in either axis) —
-        # these indicate no monitor is connected and should fall through
-        # to the backend's own auto-detection + fallback logic.
-        if (
-            splash_w > 1 and splash_h > 1
-            and display_cfg.get("width", 0) == 0
-        ):
-            display_cfg["width"] = splash_w
-            display_cfg["height"] = splash_h
         self._backend.create(
             width=display_cfg["width"],
             height=display_cfg["height"],
@@ -656,8 +235,13 @@ class FrontendRenderer:
         # Initialize subsystems
         self._presentation = PresentationEngine(self._config, self._backend)
 
-        # Initialize overlay layer system
+        # Initialize overlay layer system.
+        # BootLayer (z=0.0, closest) covers the screen until the first
+        # slideshow items are ready, then fades out to reveal them.
+        from metixel.frontend.overlay.boot_layer import BootLayer
         self._overlay = OverlayManager()
+        self._boot_layer = BootLayer()
+        self._overlay.add_layer(self._boot_layer)
         self._overlay.add_layer(MessageLayer())
         logger.info("Overlay system initialized: %d layers",
                      len(self._overlay._layers))
@@ -713,6 +297,10 @@ class FrontendRenderer:
 
         # Track config file mtime for hot reload
         self._config_mtime = self._get_config_mtime()
+
+        # Reset playlist mtime so _check_playlist_changed() loads items
+        # immediately instead of waiting for the 3-second polling interval.
+        self._playlist_mtime = 0.0
 
         self._running = True
         logger.info("Frontend render loop starting")
@@ -815,7 +403,15 @@ class FrontendRenderer:
                 self._presentation.reload_config(self._config)
 
         # -- Playlist hot reload (backend may add items from Immich sync) --
-        if now - self._last_playlist_check >= 3.0:  # Check every 3 seconds
+        # Poll every 0.5s when the queue is empty (boot phase) so the
+        # first items are loaded quickly; throttle to 3s during normal
+        # operation to reduce disk I/O.
+        queue_empty = (
+            self._presentation is not None
+            and not self._presentation._queue
+        )
+        poll_interval = 0.5 if queue_empty else 3.0
+        if now - self._last_playlist_check >= poll_interval:
             self._last_playlist_check = now
             self._check_playlist_changed()
 

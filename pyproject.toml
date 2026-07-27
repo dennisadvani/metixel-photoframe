@@ -48,7 +48,6 @@ phase2 = [
     "requests>=2.31",
 ]
 dev = [
-    "pygame>=2.5",
     "ruff>=0.3",
     "mypy>=1.8",
     "pytest>=8.0",

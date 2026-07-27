@@ -8,4 +8,3 @@ Flask>=3.0
 watchdog>=3.0
 paho-mqtt>=1.6
 requests>=2.31
-pygame>=2.5

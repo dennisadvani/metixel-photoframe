@@ -32,7 +32,7 @@ class WaylandBackend(DisplayBackend):
     def __init__(self) -> None:
         logger.warning(
             "WaylandBackend is a STUB — Phase 2 rendering is not yet implemented. "
-            "Use DispmanxBackend (Phase 1) or DevBackend (desktop) for now."
+            "Use DispmanxBackend (Phase 1) or TkBackend (desktop) for now."
         )
         self._running: bool = False
         self._w: int = 1920

@@ -5,6 +5,7 @@
 import hashlib
 import io
 import logging
+import subprocess
 import time
 from pathlib import Path
 
@@ -417,6 +418,18 @@ def clear_image_cache():
     # Also invalidate the file-list cache so the next list_media()
     # call re-scans the filesystem.
     _file_list_cache.clear()
+
+    # ── Schedule services restart ────────────────────────────────────
+    # Restart both services after a short delay so the HTTP response
+    # is sent before the backend process is killed.  Uses a detached
+    # subprocess so the restart survives the backend's own shutdown.
+    subprocess.Popen(
+        ["bash", "-c", "sleep 1.5 && sudo systemctl restart metixel-backend metixel-cage"],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    logger.info("Services restart scheduled (metixel-backend + metixel-cage)")
 
     return jsonify({
         "status": "ok",

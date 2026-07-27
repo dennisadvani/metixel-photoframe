@@ -24,7 +24,7 @@ class DisplayBackend(ABC):
     Implementations:
     - :class:`~metixel.display.dispmanx_backend.Pi3dBackend` (Phase 1: pi3d)
     - :class:`~metixel.display.wayland_backend.WaylandBackend` (Phase 2: PyOpenGL)
-    - :class:`~metixel.display.dev_backend.DevBackend` (Desktop dev: pygame)
+    - :class:`~metixel.display.tk_backend.TkBackend` (Desktop dev: tkinter)
     """
 
     # -- Properties ----------------------------------------------------------

@@ -7,7 +7,7 @@ Provides a hardware-agnostic interface for 2D rendering. The factory function
 runtime environment (Raspberry Pi model, available drivers, etc.).
 
 On Trixie (Pi 2/3/Zero 2 W), pi3d uses Mesa EGL via cage/XWayland.
-On desktop, the dev backend (pygame or tkinter) is used for testing.
+On desktop, the TkBackend (tkinter) is used for testing.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def detect_backend() -> DisplayBackend:
     1. Check for ``METIXEL_DISPLAY_BACKEND`` environment variable override
     2. On Raspberry Pi with pi3d installed: use Pi3dBackend (Mesa EGL)
     3. On other Linux: use Wayland/DRM backend
-    4. On desktop / unknown: use dev backend (pygame or tkinter)
+    4. On desktop / unknown: use TkBackend (tkinter)
     """
     logger.info("Detecting display backend: platform=%s, python=%s", sys.platform, sys.version.split()[0])
 
@@ -45,8 +45,8 @@ def detect_backend() -> DisplayBackend:
             from metixel.display.wayland_backend import WaylandBackend
             return WaylandBackend()
         elif env_backend == "dev":
-            from metixel.display.dev_backend import DevBackend
-            return DevBackend()
+            from metixel.display.tk_backend import TkBackend
+            return TkBackend()
         elif env_backend == "tk":
             from metixel.display.tk_backend import TkBackend
             return TkBackend()
@@ -68,16 +68,10 @@ def detect_backend() -> DisplayBackend:
         return WaylandBackend()
 
     # -- Fallback: dev backend -----------------------------------------------
-    # Try pygame first, fall back to tkinter (bundled with Python)
-    try:
-        import pygame  # noqa: F401
-        logger.info("pygame available → DevBackend")
-        from metixel.display.dev_backend import DevBackend
-        return DevBackend()
-    except ImportError:
-        logger.info("pygame not available → TkBackend (tkinter)")
-        from metixel.display.tk_backend import TkBackend
-        return TkBackend()
+    # Use tkinter (bundled with Python, zero extra dependencies).
+    logger.info("Using TkBackend (tkinter) for desktop development")
+    from metixel.display.tk_backend import TkBackend
+    return TkBackend()
 
 
 def _is_raspberry_pi() -> bool:
