@@ -24,7 +24,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fullscreen": True,
         "fps_limit": 30,
         "hide_cursor": True,
-        "boot_splash": True,
     },
     "slideshow": {
         "image_duration_seconds": 15,

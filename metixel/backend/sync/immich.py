@@ -135,7 +135,15 @@ class ImmichSyncer:
                 logger.warning("Immich request timed out — will retry")
             except Exception:
                 logger.exception("Immich sync error")
-            time.sleep(self._poll_interval)
+
+            # Sleep in 5-second chunks so config changes (interval, album,
+            # enabled) are picked up promptly rather than waiting for the
+            # full poll_interval to expire.
+            remaining = self._poll_interval
+            while self._running and remaining > 0:
+                chunk = min(5, remaining)
+                time.sleep(chunk)
+                remaining -= chunk
 
     def stop(self) -> None:
         """Signal the sync loop to stop."""

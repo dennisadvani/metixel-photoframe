@@ -128,16 +128,16 @@
                 ? (mediaSizeBytes / 1073741824).toFixed(1) + " GB"
                 : (mediaSizeBytes / 1048576).toFixed(1) + " MB";
 
-            var imgCount = health.media_image_count || 0;
-            var vidCount = health.media_video_count || 0;
+            var imgCount = health.playlist_image_count || 0;
+            var vidCount = health.playlist_video_count || 0;
 
             shEl.innerHTML =
                 '<div class="stat-item"><div class="stat-label">Uptime</div><div class="stat-value">' + uptimeH + 'h ' + uptimeM + 'm</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Disk Free</div><div class="stat-value">' + health.disk_free_gb + ' / ' + health.disk_total_gb + ' GB</div></div>' +
+                '<div class="stat-item"><div class="stat-label">Disk Used</div><div class="stat-value">' + health.disk_used_gb + ' / ' + health.disk_total_gb + ' GB</div></div>' +
                 '<div class="stat-item"><div class="stat-label">Usage</div><div class="stat-value">' + health.disk_used_percent + '%</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Cache Size</div><div class="stat-value">' + cacheLabel + '</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Media Size</div><div class="stat-value">' + mediaSizeLabel + '</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Media</div><div class="stat-value">' + imgCount + ' photos, ' + vidCount + ' videos</div></div>';
+                '<div class="stat-item"><div class="stat-label">Cache Used</div><div class="stat-value">' + cacheLabel + '</div></div>' +
+                '<div class="stat-item"><div class="stat-label">Media Used</div><div class="stat-value">' + mediaSizeLabel + '</div></div>' +
+                '<div class="stat-item"><div class="stat-label">Playlist</div><div class="stat-value">' + imgCount + ' photos, ' + vidCount + ' videos</div></div>';
         }
 
         // Current media — use a stable DOM so the card doesn't jump on each poll
@@ -1590,6 +1590,7 @@
                 var result = await apiPost("/immich/sync", body);
                 if (result && result.status === "started") {
                     showToast("Sync started — check status below", "info");
+                    _syncWasActive = true;  // Set immediately — sync may finish before first poll
                     startSyncPolling();
                 } else {
                     showToast("Failed to start sync", "error");
@@ -2275,7 +2276,6 @@
         setValue("cfg-fps-limit", d.fps_limit || 30);
         setChecked("cfg-fullscreen", d.fullscreen !== false);
         setChecked("cfg-hide-cursor", d.hide_cursor !== false);
-        setChecked("cfg-boot-splash", d.boot_splash !== false);
         toggleResolutionFields(isAuto);
 
         // Fetch detected display resolution from the frontend
@@ -2314,7 +2314,6 @@
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
                     fullscreen: document.getElementById("cfg-fullscreen").checked,
                     hide_cursor: document.getElementById("cfg-hide-cursor").checked,
-                    boot_splash: document.getElementById("cfg-boot-splash").checked,
                 });
                 if (result) {
                     showToast("Display settings saved!", "success");

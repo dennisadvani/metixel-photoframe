@@ -113,20 +113,30 @@ class StateManager:
         import shutil
 
         disk = shutil.disk_usage("/")
+        # On Linux, disk.free is space available to non-root users
+        # (excludes reserved blocks).  Compute "used" as total − free
+        # so the dashboard math is internally consistent:
+        #   free + used = total,  used / total = percent
+        used_bytes = disk.total - disk.free
         cache_size = self._get_cache_size()
-        media_size = self._get_media_folder_size()
-        img_count, vid_count = self._get_media_counts()
+        # Media size: ALL files under media/ (not just watched folders).
+        # Playlist counts: only items in enabled watch folders.
+        media_dir = Path(self.config.system.get("media_dir", "media/"))
+        if not media_dir.is_absolute():
+            media_dir = Path("/opt/metixel") / media_dir
+        media_size = self._get_media_folder_size(media_dir)
+        img_count, vid_count = self._get_playlist_counts()
         return {
             "uptime_seconds": self._get_uptime(),
             "disk_total_gb": round(disk.total / (1024**3), 1),
-            "disk_used_gb": round(disk.used / (1024**3), 1),
+            "disk_used_gb": round(used_bytes / (1024**3), 1),
             "disk_free_gb": round(disk.free / (1024**3), 1),
-            "disk_used_percent": round(disk.used / disk.total * 100, 1),
+            "disk_used_percent": round(used_bytes / disk.total * 100, 1),
             "cache_size_mb": round(cache_size / (1024**2), 1),
             "cache_size_bytes": cache_size,
             "media_size_bytes": media_size,
-            "media_image_count": img_count,
-            "media_video_count": vid_count,
+            "playlist_image_count": img_count,
+            "playlist_video_count": vid_count,
         }
 
     def _get_cache_size(self) -> int:
@@ -153,40 +163,37 @@ class StateManager:
             logger.debug("Could not compute cache size", exc_info=True)
             return 0
 
-    def _get_media_folder_size(self) -> int:
-        """Calculate the total size of all enabled media watch folders in bytes.
+    def _get_media_folder_size(self, media_dir: Path) -> int:
+        """Calculate the total size of ALL files under *media_dir* in bytes.
 
-        Skips the cache directory (already tracked separately) and the
-        Immich sync directory (which is a subset of watch_paths).
-        Returns 0 if no watch paths exist or cannot be read.
+        This includes everything — watched folders, Immich sync data,
+        sample media — not just the actively-watched paths.
         """
         try:
-            from metixel.shared.config import resolve_watch_paths
-
-            watch_paths = resolve_watch_paths(self.config)
+            if not media_dir.is_dir():
+                return 0
             total = 0
-            seen: set[int] = set()  # deduplicate inodes
-            for media_folder in watch_paths:
-                if not media_folder.is_dir():
+            seen: set[int] = set()
+            for entry in media_dir.rglob("*"):
+                if not entry.is_file():
                     continue
-                for entry in media_folder.rglob("*"):
-                    if not entry.is_file():
-                        continue
-                    try:
-                        st = entry.stat()
-                        if st.st_ino in seen:
-                            continue
+                try:
+                    st = entry.stat()
+                    if st.st_ino not in seen:
                         seen.add(st.st_ino)
                         total += st.st_size
-                    except OSError:
-                        pass
+                except OSError:
+                    pass
             return total
         except Exception:
             logger.debug("Could not compute media folder size", exc_info=True)
             return 0
 
-    def _get_media_counts(self) -> tuple[int, int]:
-        """Count images and videos across all enabled media watch folders.
+    def _get_playlist_counts(self) -> tuple[int, int]:
+        """Count images and videos in enabled watch folders (playlist items).
+
+        This counts only items picked up by the folder watcher — not all
+        media on disk (Immich sync files, sample media, etc.).
 
         Returns:
             A tuple of ``(image_count, video_count)``.
