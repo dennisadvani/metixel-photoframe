@@ -39,7 +39,7 @@ _PLAYLIST_PATH = Path("/run/metixel/playlist.json")
 # ---------------------------------------------------------------------------
 # Timing
 # ---------------------------------------------------------------------------
-_MIN_DISPLAY = 2.0       # Minimum time logo is visible (seconds)
+_MIN_DISPLAY = 3.0       # Minimum time logo is visible (seconds)
 _FADE_DURATION = 0.8     # Fade-out animation duration (seconds)
 _SPINNER_RPM = 60        # Spinner rotation speed
 
@@ -70,7 +70,7 @@ class BootLayer(OverlayLayer):
         self._state: str = "active"
         self._alpha: float = 1.0
         self._spinner_angle: float = 0.0
-        self._start_time: float = time.monotonic()
+        self._start_time: float = 0.0  # Set on first draw (when screen actually visible)
         self._fade_start: float = 0.0
 
         # Layout (computed once display dimensions are known)
@@ -126,7 +126,7 @@ class BootLayer(OverlayLayer):
             return
 
         # ── Check exit conditions ──────────────────────────────────────
-        if self._state == "active":
+        if self._state == "active" and self._start_time > 0:
             min_elapsed = (now - self._start_time) >= _MIN_DISPLAY
             playlist_count = self._count_playlist_items()
 
@@ -137,8 +137,9 @@ class BootLayer(OverlayLayer):
                 )
                 self._start_fade()
 
-            # Safety net: if backend never starts, dismiss after timeout
-            if now - self._start_time > 300.0:
+            # Safety net: if backend never starts, dismiss after timeout.
+            # Only active once the clock has started (first draw occurred).
+            if self._start_time > 0 and (now - self._start_time) > 300.0:
                 logger.warning(
                     "Boot screen timed out after 300s — dismissing",
                 )
@@ -152,6 +153,9 @@ class BootLayer(OverlayLayer):
         # ── Lazy-init textures (first draw call only) ──────────────────
         if not self._tex_loaded:
             self._load_textures(backend)
+            # Start the minimum-display clock NOW — the boot screen is
+            # actually visible on screen for the first time.
+            self._start_time = time.monotonic()
 
         # ── Lazy-init layout (needs display dimensions) ────────────────
         if not self._layout_done:

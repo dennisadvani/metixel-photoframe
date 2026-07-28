@@ -703,6 +703,17 @@ class PresentationEngine:
         )
         return removed
 
+    def reset_slide_timer(self) -> None:
+        """Reset the current slide's display timer to now.
+
+        Called when the boot screen finishes fading out, so the first
+        slide gets its full configured display duration rather than
+        being partially elapsed from loading behind the boot layer.
+        """
+        if self._current_idx >= 0 and self._queue:
+            self._item_start_time = time.monotonic()
+            logger.debug("Slide timer reset for first visible slide")
+
     def _advance(self) -> None:
         """Move to the next item in the queue.
 

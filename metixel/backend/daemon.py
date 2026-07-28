@@ -310,7 +310,7 @@ class BackendDaemon:
                         f"http://metixel.local or http://{ip}"
                     ),
                     "severity": "success",
-                    "duration": 30,  # auto-dismiss after 30s
+                    "duration": 60,  # auto-dismiss after 60s
                 },
             ))
             logger.info("Connected message sent to frontend")

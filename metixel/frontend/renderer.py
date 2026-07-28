@@ -243,6 +243,7 @@ class FrontendRenderer:
         self._boot_layer = BootLayer()
         self._overlay.add_layer(self._boot_layer)
         self._overlay.add_layer(MessageLayer())
+        self._boot_was_active = True  # Track for first-slide timer reset
         logger.info("Overlay system initialized: %d layers",
                      len(self._overlay._layers))
 
@@ -377,6 +378,16 @@ class FrontendRenderer:
             )
             self._overlay.update({"video_playing": video_playing})
             self._overlay.draw(self._backend)
+
+        # ── Boot → slideshow transition ───────────────────────────────
+        # When the boot layer finishes fading, reset the first slide's
+        # display timer so it gets its full configured duration.
+        if getattr(self, '_boot_layer', None) is not None:
+            if self._boot_layer.is_done and getattr(self, '_boot_was_active', False):
+                self._boot_was_active = False
+                if self._presentation:
+                    self._presentation.reset_slide_timer()
+                    logger.info("First slide timer reset — boot screen finished")
 
     # -- Hot reload ----------------------------------------------------------
 

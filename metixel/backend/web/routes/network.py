@@ -18,6 +18,8 @@ from metixel.backend.network_manager import (
     forget_network,
     get_connection_status,
     is_ap_mode_active,
+    is_connected,
+    is_pin_required,
     scan_networks,
     start_ap_mode,
     stop_ap_mode,
@@ -31,9 +33,15 @@ network_bp = Blueprint("network", __name__)
 
 @network_bp.route("/network/status", methods=["GET"])
 def network_status():
-    """Get current Wi-Fi connection status and AP mode state."""
+    """Get current Wi-Fi connection status and AP mode state.
+
+    AP mode is only reported as active when the AP (or PIN) is actually
+    running AND there is no real network connection — matching the
+    captive-portal logic in the web server.
+    """
     status = get_connection_status()
-    status["ap_mode_active"] = is_ap_mode_active()
+    ap_or_pin = is_ap_mode_active() or is_pin_required()
+    status["ap_mode_active"] = ap_or_pin and not is_connected()
     return jsonify(status)
 
 
@@ -104,8 +112,13 @@ def network_forget():
 
 @network_bp.route("/network/ap-status", methods=["GET"])
 def ap_status():
-    """Check whether the access point (captive portal) is currently active."""
-    return jsonify({"active": is_ap_mode_active()})
+    """Check whether the access point (captive portal) is currently active.
+
+    Only reports active when the AP (or PIN) is running AND there is no
+    real network connection — matching the captive-portal logic.
+    """
+    ap_or_pin = is_ap_mode_active() or is_pin_required()
+    return jsonify({"active": ap_or_pin and not is_connected()})
 
 
 @network_bp.route("/network/ap-start", methods=["POST"])
