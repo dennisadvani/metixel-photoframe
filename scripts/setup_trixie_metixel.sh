@@ -134,9 +134,11 @@ DNSMASQEOF
 sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
 sudo systemctl unmask hostapd dnsmasq 2>/dev/null || true
 
-# -- Samba share -------------------------------------------------------------
-echo "[7/8] Configuring Samba share (/opt/metixel as 'metixel')..."
-echo "[7/8] Configuring Samba share (/opt/metixel as 'metixel')..."
+# -- Samba share (media only) ------------------------------------------------
+# Only shares /opt/metixel/media so users can add/remove photos and videos.
+# For full-project access during development, run setup_trixie_dev_env.sh
+# which adds a separate [metixel] share pointing to /opt/metixel.
+echo "[7/8] Configuring Samba share (/opt/metixel/media as 'metixel-media')..."
 
 # Add 'invalid users = nobody' to the [homes] section so the system
 # 'nobody' user doesn't get an auto-share (don't comment out [homes]
@@ -157,11 +159,11 @@ if ! grep -q 'disable spoolss = yes' "${SMB_CONF}" 2>/dev/null; then
 fi
 
 # Append share definition to smb.conf if not already present
-if ! grep -q '\[metixel\]' "${SMB_CONF}" 2>/dev/null; then
+if ! grep -q '\[metixel-media\]' "${SMB_CONF}" 2>/dev/null; then
     sudo tee -a "${SMB_CONF}" > /dev/null <<'SMBEOF'
-[metixel]
+[metixel-media]
    comment = Metixel Photoframe Media Share
-   path = /opt/metixel
+   path = /opt/metixel/media
    browseable = yes
    read only = no
    guest ok = no

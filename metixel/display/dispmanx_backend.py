@@ -166,11 +166,9 @@ class Pi3dBackend(DisplayBackend):
         if hide_cursor:
             display_config = display_config_hide_cursor
 
-        # Hide X11 cursor immediately — pi3d's DISPLAY_CONFIG_HIDE_CURSOR
-        # only takes effect after the display surface is fully initialised,
-        # leaving a visible cursor for 1-2 seconds at startup.
-        if hide_cursor:
-            self._hide_x11_cursor()
+        # Cursor hiding is handled at two levels:
+        # 1. cage -d flag → compositor seat cursor suppressed (Wayland/wlroots)
+        # 2. DISPLAY_CONFIG_HIDE_CURSOR → SDL2 cursor hidden (pi3d/X11 level)
 
         # Auto-detect display resolution if not explicitly specified.
         # pi3d (via SDL2 or DRM) will query the native mode when w=0 or h=0.
@@ -266,44 +264,6 @@ class Pi3dBackend(DisplayBackend):
         self._shader = None
         gc.collect()
 
-    @staticmethod
-    def _hide_x11_cursor() -> None:
-        """Hide the X11 cursor before pi3d initialises the display surface.
-
-        On Trixie with cage + XWayland, the default X11 cursor is visible
-        for 1–2 seconds between XWayland startup and pi3d's first frame.
-        We hide it immediately by creating a transparent 1×1 cursor and
-        applying it via xsetroot (if available).
-        """
-        try:
-            import tempfile
-            # Minimal XBM cursor: 1×1 fully transparent
-            xbm = (
-                "#define empty_width 1\n"
-                "#define empty_height 1\n"
-                "#define empty_x_hot 0\n"
-                "#define empty_y_hot 0\n"
-                "static unsigned char empty_bits[] = {\n"
-                "   0x00\n"
-                "};\n"
-            )
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".xbm", delete=False, prefix="empty_cursor_",
-            )
-            try:
-                tmp.write(xbm)
-                tmp.close()
-                subprocess.run(
-                    ["xsetroot", "-cursor", tmp.name, tmp.name],
-                    timeout=2, capture_output=True,
-                )
-            finally:
-                try:
-                    os.unlink(tmp.name)
-                except OSError:
-                    pass
-        except Exception:
-            pass  # xsetroot not available — pi3d's hide_cursor will handle it
         logger.info("Pi3dBackend destroyed")
 
     def loop_running(self) -> bool:

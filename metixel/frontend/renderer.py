@@ -58,50 +58,6 @@ class FrontendRenderer:
 
     # -- Main loop -----------------------------------------------------------
 
-    @staticmethod
-    def _hide_and_warp_cursor(display_w: int, display_h: int) -> None:
-        """Hide the mouse cursor and warp it to the bottom-right corner.
-
-        Called once during display initialization.  pi3d's
-        ``DISPLAY_CONFIG_HIDE_CURSOR`` hides the cursor within the pi3d
-        window, but on some setups (cage/XWayland) the SDL2 cursor may
-        briefly appear before pi3d finishes its first draw.  Warping to
-        the corner ensures it's never visible.
-
-        Uses the same approach as picframe:
-        ``sdl2.SDL_WarpMouseInWindow()`` → bottom-right pixel.
-        """
-        try:
-            import sdl2  # type: ignore
-            # Disable the cursor sprite
-            sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
-            # Warp to the bottom-right corner so even if the compositor
-            # briefly shows a hardware cursor, it's off the visible area
-            # (or at the very edge where it's least noticeable).
-            if display_w > 1 and display_h > 1:
-                # SDL_WarpMouseGlobal doesn't exist — use the pi3d/SDL2
-                # focus window.  The pi3d display is the only SDL2 window
-                # so GetMouseFocus() will find it after Display.create().
-                focus = sdl2.SDL_GetMouseFocus()
-                if focus:
-                    sdl2.SDL_WarpMouseInWindow(focus, display_w - 1, display_h - 1)
-                else:
-                    # Window not yet available — try again with a short
-                    # poll loop (the pi3d window may take a frame to appear).
-                    for _ in range(50):
-                        sdl2.SDL_PumpEvents()
-                        focus = sdl2.SDL_GetMouseFocus()
-                        if focus:
-                            sdl2.SDL_WarpMouseInWindow(
-                                focus, display_w - 1, display_h - 1,
-                            )
-                            break
-                        time.sleep(0.01)
-        except ImportError:
-            pass  # pysdl2 not installed — cursor will be hidden by pi3d
-        except Exception:
-            logger.debug("Mouse warp failed (non-fatal)", exc_info=True)
-
     # ══════════════════════════════════════════════════════════════════════
     #  Boot screen is handled by BootLayer (overlay system via pi3d).
     #  See metixel.frontend.overlay.boot_layer.  No pygame dependency.
@@ -222,15 +178,6 @@ class FrontendRenderer:
             logger.debug("Display info written to %s", info_path)
         except Exception:
             logger.warning("Could not write display info file", exc_info=True)
-
-        # -- Hide the mouse cursor ----------------------------------------
-        # pi3d's DISPLAY_CONFIG_HIDE_CURSOR hides the cursor within the
-        # pi3d window, but on some setups (cage/XWayland) the SDL2 cursor
-        # may still be briefly visible.  Warp it to the bottom-right corner
-        # so it's out of sight even before pi3d finishes initializing.
-        self._hide_and_warp_cursor(
-            int(self._backend.width), int(self._backend.height),
-        )
 
         # Initialize subsystems
         self._presentation = PresentationEngine(self._config, self._backend)
