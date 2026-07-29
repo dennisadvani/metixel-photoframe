@@ -54,7 +54,12 @@ def _is_ap_mode() -> bool:
         return False
 
 
-def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = None) -> Flask:
+def create_app(
+    state: StateManager,
+    ipc: IPCClient,
+    opt_queue: object | None = None,
+    update_mgr: object | None = None,
+) -> Flask:
     """Create and configure the Flask application.
 
     Args:
@@ -62,6 +67,8 @@ def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = N
         ipc: IPC client for sending commands to the frontend.
         opt_queue: The OptimisationQueue instance (optional — used by the
             media library API to report per-video transcode status).
+        update_mgr: The UpdateManager instance (optional — used by the
+            updates API to check for and apply OTA updates).
 
     Returns:
         A configured Flask application instance.
@@ -74,6 +81,7 @@ def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = N
     app.config["METIXEL_STATE"] = state
     app.config["METIXEL_IPC"] = ipc
     app.config["METIXEL_OPT_QUEUE"] = opt_queue
+    app.config["METIXEL_UPDATE_MGR"] = update_mgr
 
     # Silence Flask's HTTP access logs (they flood the log output)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -85,6 +93,7 @@ def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = N
     from metixel.backend.web.routes.media import media_bp
     from metixel.backend.web.routes.messages import messages_bp
     from metixel.backend.web.routes.network import network_bp
+    from metixel.backend.web.routes.updates import updates_bp
 
     app.register_blueprint(config_bp, url_prefix="/api/config")
     app.register_blueprint(media_bp, url_prefix="/api/media")
@@ -92,6 +101,7 @@ def create_app(state: StateManager, ipc: IPCClient, opt_queue: object | None = N
     app.register_blueprint(immich_bp, url_prefix="/api/immich")
     app.register_blueprint(messages_bp, url_prefix="/api")
     app.register_blueprint(network_bp, url_prefix="/api")
+    app.register_blueprint(updates_bp, url_prefix="/api/updates")
 
     # Serve the SPA — inject version into the root template.
     # When AP mode is active, serve the captive portal instead of the

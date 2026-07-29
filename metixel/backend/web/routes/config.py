@@ -255,6 +255,91 @@ def get_config_path():
     })
 
 
+@config_bp.route("/info", methods=["GET"])
+def get_system_info():
+    """Return system and version information for the Updates card.
+
+    Gathers app version, Pi hardware model, OS release, kernel version,
+    Python version, pi3d version, GPU memory, and DRM driver — all via
+    local /proc, /sys, and vcgencmd reads.  No external dependencies.
+    """
+    import os as _os
+    import platform as _platform
+    import sys as _sys
+
+    info: dict[str, str] = {}
+
+    # -- App version ---------------------------------------------------------
+    try:
+        from metixel import __version__
+        info["app_version"] = __version__
+    except Exception:
+        info["app_version"] = "unknown"
+
+    # -- Pi hardware model ---------------------------------------------------
+    try:
+        with open("/proc/device-tree/model") as f:
+            info["pi_model"] = f.read().strip("\x00\n\t ")
+    except (OSError, FileNotFoundError):
+        info["pi_model"] = "not a Raspberry Pi"
+
+    # -- OS release ----------------------------------------------------------
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                if line.startswith("PRETTY_NAME="):
+                    info["os_release"] = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except (OSError, FileNotFoundError):
+        pass
+    if "os_release" not in info:
+        info["os_release"] = _platform.platform() or "unknown"
+
+    # -- Kernel version ------------------------------------------------------
+    info["kernel"] = _platform.release() or "unknown"
+
+    # -- Python version ------------------------------------------------------
+    info["python_version"] = _sys.version.split()[0]
+
+    # -- pi3d version --------------------------------------------------------
+    try:
+        import pi3d
+        info["pi3d_version"] = getattr(pi3d, "__version__", "installed")
+    except ImportError:
+        info["pi3d_version"] = "not installed"
+
+    # -- GPU memory ----------------------------------------------------------
+    try:
+        result = subprocess.run(
+            ["vcgencmd", "get_mem", "gpu"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            info["gpu_memory"] = result.stdout.strip()
+        else:
+            info["gpu_memory"] = "unavailable"
+    except Exception:
+        info["gpu_memory"] = "unavailable"
+
+    # -- DRM driver ----------------------------------------------------------
+    try:
+        for entry in _os.listdir("/sys/class/drm"):
+            if entry.startswith("card"):
+                driver_link = f"/sys/class/drm/{entry}/device/driver"
+                if _os.path.islink(driver_link):
+                    info["drm_driver"] = _os.path.basename(_os.readlink(driver_link))
+                    break
+        else:
+            info["drm_driver"] = "none"
+    except Exception:
+        info["drm_driver"] = "unknown"
+
+    # -- Hostname ------------------------------------------------------------
+    info["hostname"] = _platform.node() or "unknown"
+
+    return jsonify(info)
+
+
 @config_bp.route("/display/info", methods=["GET"])
 def get_display_info():
     """Return the current display resolution detected by the frontend."""

@@ -110,6 +110,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "log_level": "INFO",
         "db_path": "cache/metixel.db",
     },
+    "update": {
+        "channel": "stable",
+        "auto_check": True,
+        "check_interval_hours": 6,
+        "github_repo": "metixel-photoframe/metixel-photoframe",
+        "last_check": None,
+        "last_update": None,
+    },
 }
 
 
@@ -209,6 +217,26 @@ class Config:
     @property
     def system(self) -> dict[str, Any]:
         return self._data["system"]
+
+    @property
+    def update(self) -> dict[str, Any]:
+        """Update channel and auto-check settings with backward-compatible defaults.
+
+        If the ``update`` section is missing from an older config file,
+        synthesizes sensible defaults.
+        """
+        u = self._data.get("update", {})
+        if not u:
+            u = {
+                "channel": "stable",
+                "auto_check": True,
+                "check_interval_hours": 6,
+                "github_repo": "metixel-photoframe/metixel-photoframe",
+                "last_check": None,
+                "last_update": None,
+            }
+            self._data["update"] = u
+        return u
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a top-level config value."""

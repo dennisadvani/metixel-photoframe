@@ -108,6 +108,68 @@
     }
 
     /** Refresh the dashboard health + current media without re-binding controls. */
+
+    // -- Sparkline ring buffers (last 20 samples = 60 seconds at 3s poll) --
+    var _sparkBufs = { cpu: [], mem: [], swap: [] };
+    var _SPARK_MAX = 20;
+
+    /** Draw a filled-area sparkline on a canvas element. */
+    function _drawSparkline(canvasId, values, maxVal, colorHex) {
+        var canvas = document.getElementById(canvasId);
+        if (!canvas || values.length < 2) return;
+        var ctx = canvas.getContext("2d");
+        var dpr = window.devicePixelRatio || 1;
+        var rect = canvas.parentNode.getBoundingClientRect();
+        var w = rect.width - 20;  // padding
+        var h = 56;
+        // Resize canvas backing store for HiDPI
+        if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+            canvas.width = Math.round(w * dpr);
+            canvas.height = Math.round(h * dpr);
+            canvas.style.width = w + "px";
+            canvas.style.height = h + "px";
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, w, h);
+
+        var n = values.length;
+        var stepX = w / (n - 1);
+        var ceil = maxVal > 0 ? maxVal : 100;
+
+        // -- Fill area --
+        ctx.beginPath();
+        ctx.moveTo(0, h);
+        for (var i = 0; i < n; i++) {
+            var v = Math.min(values[i], ceil) / ceil;
+            ctx.lineTo(i * stepX, h - v * (h - 4));
+        }
+        ctx.lineTo((n - 1) * stepX, h);
+        ctx.closePath();
+        var grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, colorHex + "50");
+        grad.addColorStop(1, colorHex + "08");
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // -- Line --
+        ctx.beginPath();
+        for (var i = 0; i < n; i++) {
+            var v2 = Math.min(values[i], ceil) / ceil;
+            if (i === 0) ctx.moveTo(i * stepX, h - v2 * (h - 4));
+            else ctx.lineTo(i * stepX, h - v2 * (h - 4));
+        }
+        ctx.strokeStyle = colorHex;
+        ctx.lineWidth = 1.5;
+        ctx.lineJoin = "round";
+        ctx.stroke();
+    }
+
+    /** Update a simple text stat element by ID. No-op if element missing. */
+    function _setStat(id, value) {
+        var el = document.getElementById(id);
+        if (el) el.textContent = value;
+    }
+
     async function refreshDashboard() {
         const health = await apiGet("/config/health");
         if (!health) return;
@@ -115,30 +177,51 @@
         var uptimeH = Math.floor(health.uptime_seconds / 3600);
         var uptimeM = Math.floor((health.uptime_seconds % 3600) / 60);
 
-        // Only update system-health if the element still exists
-        var shEl = document.getElementById("system-health");
-        if (shEl) {
-            var cacheMB = health.cache_size_mb != null ? health.cache_size_mb : 0;
-            var cacheLabel = cacheMB >= 1024
-                ? (cacheMB / 1024).toFixed(1) + " GB"
-                : cacheMB.toFixed(1) + " MB";
+        var cacheMB = health.cache_size_mb != null ? health.cache_size_mb : 0;
+        var cacheLabel = cacheMB >= 1024
+            ? (cacheMB / 1024).toFixed(1) + " GB"
+            : cacheMB.toFixed(1) + " MB";
 
-            var mediaSizeBytes = health.media_size_bytes || 0;
-            var mediaSizeLabel = mediaSizeBytes >= 1073741824
-                ? (mediaSizeBytes / 1073741824).toFixed(1) + " GB"
-                : (mediaSizeBytes / 1048576).toFixed(1) + " MB";
+        var mediaSizeBytes = health.media_size_bytes || 0;
+        var mediaSizeLabel = mediaSizeBytes >= 1073741824
+            ? (mediaSizeBytes / 1073741824).toFixed(1) + " GB"
+            : (mediaSizeBytes / 1048576).toFixed(1) + " MB";
 
-            var imgCount = health.playlist_image_count || 0;
-            var vidCount = health.playlist_video_count || 0;
+        var imgCount = health.playlist_image_count || 0;
+        var vidCount = health.playlist_video_count || 0;
 
-            shEl.innerHTML =
-                '<div class="stat-item"><div class="stat-label">Uptime</div><div class="stat-value">' + uptimeH + 'h ' + uptimeM + 'm</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Disk Used</div><div class="stat-value">' + health.disk_used_gb + ' / ' + health.disk_total_gb + ' GB</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Usage</div><div class="stat-value">' + health.disk_used_percent + '%</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Cache Used</div><div class="stat-value">' + cacheLabel + '</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Media Used</div><div class="stat-value">' + mediaSizeLabel + '</div></div>' +
-                '<div class="stat-item"><div class="stat-label">Playlist</div><div class="stat-value">' + imgCount + ' photos, ' + vidCount + ' videos</div></div>';
-        }
+        // -- CPU tile --
+        var cpuPct = health.cpu_percent != null ? health.cpu_percent : 0;
+        _setStat("stat-cpu-val", cpuPct + "%");
+        _sparkBufs.cpu.push(cpuPct);
+        if (_sparkBufs.cpu.length > _SPARK_MAX) _sparkBufs.cpu.shift();
+        _drawSparkline("stat-cpu-canvas", _sparkBufs.cpu, 100, "#3b82f6");
+
+        // -- Memory tile --
+        var memPct = health.memory_percent != null ? health.memory_percent : 0;
+        var memUsed = health.memory_used_gb != null ? health.memory_used_gb : 0;
+        var memTotal = health.memory_total_gb != null ? health.memory_total_gb : 0;
+        _setStat("stat-mem-val", memPct + "%  (" + memUsed.toFixed(1) + " / " + memTotal.toFixed(1) + " GB)");
+        _sparkBufs.mem.push(memPct);
+        if (_sparkBufs.mem.length > _SPARK_MAX) _sparkBufs.mem.shift();
+        _drawSparkline("stat-mem-canvas", _sparkBufs.mem, 100, "#8b5cf6");
+
+        // -- Swap tile --
+        var swapPct = health.swap_percent != null ? health.swap_percent : 0;
+        var swapUsed = health.swap_used_gb != null ? health.swap_used_gb : 0;
+        var swapTotal = health.swap_total_gb != null ? health.swap_total_gb : 0;
+        _setStat("stat-swap-val", swapPct + "%  (" + swapUsed.toFixed(1) + " / " + swapTotal.toFixed(1) + " GB)");
+        _sparkBufs.swap.push(swapPct);
+        if (_sparkBufs.swap.length > _SPARK_MAX) _sparkBufs.swap.shift();
+        _drawSparkline("stat-swap-canvas", _sparkBufs.swap, Math.max(swapTotal > 0 ? 100 : 0, 1), "#f59e0b");
+
+        // -- Existing text-only tiles --
+        _setStat("stat-uptime-val", uptimeH + "h " + uptimeM + "m");
+        _setStat("stat-disk-val", health.disk_used_gb + " / " + health.disk_total_gb + " GB");
+        _setStat("stat-disk-pct-val", health.disk_used_percent + "%");
+        _setStat("stat-cache-val", cacheLabel);
+        _setStat("stat-media-val", mediaSizeLabel);
+        _setStat("stat-playlist-val", imgCount + " photos, " + vidCount + " videos");
 
         // Current media — use a stable DOM so the card doesn't jump on each poll
         var cm = health.current_media;
@@ -2294,6 +2377,23 @@
         setValue("cfg-log-level", sys.log_level || "INFO");
         setValue("cfg-cache-dir", sys.cache_dir || "cache/");
 
+        // Updates / System Info
+        apiGet("/config/info").then(function (info) {
+            if (!info) return;
+            _setStat("info-app-version", "v" + (info.app_version || "--"));
+            _setStat("info-pi-model", info.pi_model || "--");
+            _setStat("info-os-release", info.os_release || "--");
+            _setStat("info-kernel", info.kernel || "--");
+            _setStat("info-python", info.python_version || "--");
+            _setStat("info-pi3d", info.pi3d_version || "--");
+            _setStat("info-gpu-mem", info.gpu_memory || "--");
+            _setStat("info-drm-driver", info.drm_driver || "--");
+            _setStat("info-hostname", info.hostname || "--");
+        });
+
+        // Update channel & available versions
+        loadUpdateStatus();
+
         // Web
         var web = config.web || {};
         setValue("cfg-web-host", web.host || "0.0.0.0");
@@ -2439,7 +2539,246 @@
                     // Expected — the system is going down
                 }
             });
+
+            // ── Update Controls ──────────────────────────────────────
+            bindUpdateControls();
         }
+    }
+
+    // -- OTA Updates ---------------------------------------------------------
+
+    var _updateBound = false;
+
+    /** Load and render the update status from the backend. */
+    async function loadUpdateStatus() {
+        var status = await apiGet("/updates/status");
+        if (!status) return;
+
+        // ── Channel selector ───────────────────────────────────────
+        setValue("cfg-update-channel", status.current_channel || "stable");
+        _updateChannelDesc(status.current_channel);
+
+        // ── Auto-check toggle ──────────────────────────────────────
+        setChecked("cfg-update-auto-check", status.auto_check !== false);
+
+        // ── Status line ────────────────────────────────────────────
+        var statusEl = document.getElementById("update-status");
+        if (!statusEl) return;
+
+        if (status.check_in_progress) {
+            statusEl.innerHTML = '<span class="update-status-checking">Checking for updates\u2026</span>';
+        } else if (status.update_in_progress) {
+            statusEl.innerHTML = '<span class="update-status-checking">Installing update\u2026</span>';
+        } else if (status.last_error) {
+            statusEl.innerHTML = '<span class="update-status-error">' + escapeHtml(status.last_error) + '</span>';
+        } else {
+            var ch = status.current_channel || "stable";
+            var avail = (status.available && status.available[ch]) ? status.available[ch] : null;
+            var installBtn = document.getElementById("btn-apply-update");
+
+            if (avail && avail.is_newer) {
+                statusEl.innerHTML =
+                    '<span class="update-status-available">Update available: '
+                    + escapeHtml(avail.version) + '</span>';
+                if (installBtn) {
+                    installBtn.style.display = "";
+                    installBtn.textContent = "Install " + escapeHtml(avail.version || "Update");
+                }
+            } else {
+                statusEl.innerHTML = '<span class="update-status-uptodate">Up to date</span>';
+                if (installBtn) installBtn.style.display = "none";
+            }
+
+            // Last check time
+            if (status.last_check) {
+                var ago = _timeAgo(status.last_check);
+                statusEl.innerHTML += ' <span style="font-size:0.75rem;color:var(--text-muted)">(checked ' + ago + ')</span>';
+            }
+        }
+
+        // ── Available versions list ─────────────────────────────────
+        _renderAvailableVersions(status);
+
+        // ── Check interval hint ─────────────────────────────────────
+        var intervalHint = document.getElementById("update-check-interval-hint");
+        if (intervalHint) {
+            var hours = (status.check_interval_hours) ? status.check_interval_hours : 6;
+            intervalHint.textContent = "Checks every " + hours + " hours";
+        }
+    }
+
+    /** Update the channel description text based on selection. */
+    function _updateChannelDesc(channel) {
+        var el = document.getElementById("update-channel-desc");
+        if (!el) return;
+        var descs = {
+            "stable": "Stable releases are thoroughly tested and recommended for most users.",
+            "beta": "Beta releases include new features ready for wider testing. May have minor issues."
+        };
+        el.textContent = descs[channel] || "";
+    }
+
+    /** Render the list of available versions across all channels. */
+    function _renderAvailableVersions(status) {
+        var list = document.getElementById("update-available-list");
+        if (!list) return;
+
+        var avail = status.available;
+        if (!avail || Object.keys(avail).length === 0) {
+            list.innerHTML = '<span style="color:var(--text-muted);font-size:0.82rem">Check for updates to see versions</span>';
+            return;
+        }
+        var html = "";
+        var channels = ["stable", "beta"];
+        var currentCh = status.current_channel || "stable";
+
+        channels.forEach(function (ch) {
+            var info = avail[ch];
+            if (!info) return;
+            var isCurrent = ch === currentCh;
+            var badge = isCurrent ? ' <span style="font-size:0.7rem;background:var(--primary);color:#fff;padding:1px 5px;border-radius:3px;vertical-align:middle">current</span>' : '';
+            var newerBadge = info.is_newer ? ' <span style="font-size:0.7rem;background:#f0a030;color:#000;padding:1px 5px;border-radius:3px;vertical-align:middle">newer</span>' : '';
+
+            html += '<div class="update-available-item">'
+                + '<span style="font-weight:600;text-transform:capitalize">' + escapeHtml(ch) + '</span>'
+                + '<span>' + escapeHtml(info.version) + badge + newerBadge + '</span>'
+                + '</div>';
+        });
+
+        list.innerHTML = html;
+    }
+
+    /** Format a duration from an ISO timestamp to a human-readable "X ago" string. */
+    function _timeAgo(isoStr) {
+        var then = Date.parse(isoStr);
+        if (isNaN(then)) return "";
+        var seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+        if (seconds < 60) return seconds + "s ago";
+        if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
+        if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+        return Math.floor(seconds / 86400) + "d ago";
+    }
+
+    /** Wire up the update control buttons (one-time binding). */
+    function bindUpdateControls() {
+        if (_updateBound) return;
+        _updateBound = true;
+
+        // ── Channel selector ──────────────────────────────────────
+        var channelSel = document.getElementById("cfg-update-channel");
+        channelSel?.addEventListener("change", async function () {
+            var ch = this.value;
+            _updateChannelDesc(ch);
+            var result = await apiPut("/updates/channel", { channel: ch });
+            if (result && result.status === "ok") {
+                showToast("Switched to " + ch + " channel", "success");
+                // Trigger a check on the new channel
+                await apiPost("/updates/check");
+                loadUpdateStatus();
+            } else {
+                showToast("Failed to switch channel", "error");
+            }
+        });
+
+        // ── Check for Updates button ──────────────────────────────
+        var checkBtn = document.getElementById("btn-check-updates");
+        checkBtn?.addEventListener("click", async function () {
+            checkBtn.disabled = true;
+            checkBtn.textContent = "Checking\u2026";
+            var statusEl = document.getElementById("update-status");
+            if (statusEl) statusEl.innerHTML =
+                '<span class="update-status-checking">Checking for updates\u2026</span>';
+
+            var result = await apiPost("/updates/check");
+            if (result && result.status === "ok") {
+                // Poll for results (the check runs in a background thread)
+                var attempts = 0;
+                var maxAttempts = 30; // 15 seconds max
+                var pollInterval = setInterval(async function () {
+                    attempts++;
+                    var status = await apiGet("/updates/status");
+                    if (!status || !status.check_in_progress || attempts >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        checkBtn.disabled = false;
+                        checkBtn.textContent = "Check for Updates";
+                        loadUpdateStatus();
+                    }
+                }, 500);
+            } else {
+                checkBtn.disabled = false;
+                checkBtn.textContent = "Check for Updates";
+                loadUpdateStatus();
+            }
+        });
+
+        // ── Install Update button ─────────────────────────────────
+        var installBtn = document.getElementById("btn-apply-update");
+        installBtn?.addEventListener("click", async function () {
+            var ch = document.getElementById("cfg-update-channel")?.value || "stable";
+            if (!confirm("Install the latest update from the " + ch + " channel? Services will restart.")) {
+                return;
+            }
+
+            installBtn.disabled = true;
+            installBtn.textContent = "Installing\u2026";
+
+            // Show progress bar
+            var progressDiv = document.getElementById("update-progress");
+            var progressBar = document.getElementById("update-progress-bar");
+            var progressPhase = document.getElementById("update-progress-phase");
+            if (progressDiv) progressDiv.style.display = "";
+            if (progressBar) progressBar.style.width = "30%";
+            if (progressPhase) progressPhase.textContent = "Stopping services\u2026";
+
+            // Simulate progress steps (actual update is synchronous)
+            var steps = [
+                { pct: 30, text: "Stopping services\u2026" },
+                { pct: 50, text: "Fetching updates\u2026" },
+                { pct: 70, text: "Applying update\u2026" },
+                { pct: 85, text: "Reinstalling packages\u2026" },
+                { pct: 95, text: "Restarting services\u2026" },
+            ];
+
+            var stepIdx = 0;
+            var progressTimer = setInterval(function () {
+                if (stepIdx < steps.length) {
+                    var s = steps[stepIdx];
+                    if (progressBar) progressBar.style.width = s.pct + "%";
+                    if (progressPhase) progressPhase.textContent = s.text;
+                    stepIdx++;
+                }
+            }, 1500);
+
+            // Fire the update
+            try {
+                var result = await apiPost("/updates/apply", { channel: ch });
+                clearInterval(progressTimer);
+                if (result && result.status === "ok") {
+                    if (progressBar) progressBar.style.width = "100%";
+                    if (progressPhase) progressPhase.textContent = "Complete — reconnecting\u2026";
+                    showToast("Update applied! Services are restarting.", "success", 8000);
+                } else {
+                    if (progressDiv) progressDiv.style.display = "none";
+                    showToast((result && result.message) || "Update failed", "error", 5000);
+                    installBtn.disabled = false;
+                    installBtn.textContent = "Install Update";
+                }
+            } catch (_) {
+                clearInterval(progressTimer);
+                // Expected during restart — the request will fail
+                if (progressDiv) progressDiv.style.display = "none";
+                showToast("Services restarting — the page will reconnect shortly.", "info", 8000);
+            }
+        });
+
+        // ── Auto-check toggle ─────────────────────────────────────
+        var autoCheck = document.getElementById("cfg-update-auto-check");
+        autoCheck?.addEventListener("change", async function () {
+            var result = await apiPut("/config/update", { auto_check: this.checked });
+            if (result) {
+                showToast(this.checked ? "Auto-check enabled" : "Auto-check disabled", "info");
+            }
+        });
     }
 
     // -- Init ----------------------------------------------------------------

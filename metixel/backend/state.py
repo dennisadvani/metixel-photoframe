@@ -126,6 +126,11 @@ class StateManager:
             media_dir = Path("/opt/metixel") / media_dir
         media_size = self._get_media_folder_size(media_dir)
         img_count, vid_count = self._get_playlist_counts()
+
+        cpu_pct = self._get_cpu_percent()
+        mem = self._get_memory_stats()
+        swap = self._get_swap_stats()
+
         return {
             "uptime_seconds": self._get_uptime(),
             "disk_total_gb": round(disk.total / (1024**3), 1),
@@ -137,6 +142,13 @@ class StateManager:
             "media_size_bytes": media_size,
             "playlist_image_count": img_count,
             "playlist_video_count": vid_count,
+            "cpu_percent": cpu_pct,
+            "memory_percent": mem["percent"],
+            "memory_used_gb": mem["used_gb"],
+            "memory_total_gb": mem["total_gb"],
+            "swap_percent": swap["percent"],
+            "swap_used_gb": swap["used_gb"],
+            "swap_total_gb": swap["total_gb"],
         }
 
     def _get_cache_size(self) -> int:
@@ -230,6 +242,115 @@ class StateManager:
                 return float(f.readline().split()[0])
         except Exception:
             return 0.0
+
+    # Cached /proc/stat from previous call for CPU delta calculation.
+    _prev_cpu_jiffies: float | None = None
+
+    @classmethod
+    def _get_cpu_percent(cls) -> float:
+        """Compute CPU utilisation as a percentage (0–100).
+
+        Reads ``/proc/stat`` and computes the delta in total CPU jiffies
+        since the previous call.  Because the web dashboard polls health
+        every ~3 seconds, the delta window matches the display interval.
+        On the first call (no prior sample) returns 0.0.
+        """
+        try:
+            with open("/proc/stat") as f:
+                line = f.readline()
+            # cpu  user nice system idle iowait irq softirq steal ...
+            parts = line.split()
+            if parts[0] != "cpu":
+                return 0.0
+            # Sum all jiffy columns (ignore guest/guest_nice)
+            jiffies = sum(int(x) for x in parts[1:8])
+            idle_now = int(parts[4])  # idle column
+        except Exception:
+            return 0.0
+
+        prev_total = cls._prev_cpu_jiffies
+        prev_idle = getattr(cls, "_prev_idle_jiffies", None)
+        cls._prev_cpu_jiffies = float(jiffies)
+        cls._prev_idle_jiffies = float(idle_now)
+
+        if prev_total is None or prev_idle is None:
+            return 0.0
+
+        delta_total = jiffies - prev_total
+        if delta_total <= 0:
+            return 0.0
+
+        delta_idle = idle_now - prev_idle
+        if delta_idle < 0:
+            delta_idle = 0.0
+
+        pct = (1.0 - delta_idle / delta_total) * 100.0
+        return round(max(0.0, min(100.0, pct)), 1)
+
+    @staticmethod
+    def _get_memory_stats() -> dict[str, float]:
+        """Read ``/proc/meminfo`` and return memory usage stats.
+
+        Returns:
+            Dict with keys ``percent``, ``used_gb``, ``total_gb``.
+            Falls back to zeros if ``/proc/meminfo`` cannot be read.
+        """
+        try:
+            with open("/proc/meminfo") as f:
+                lines = f.readlines()
+            mem = {}
+            for line in lines:
+                if ":" in line:
+                    key, val = line.split(":", 1)
+                    # Value is " 12345 kB" — extract the number
+                    parts = val.strip().split()
+                    if parts:
+                        mem[key.strip()] = int(parts[0])
+            total_kb = mem.get("MemTotal", 0)
+            available_kb = mem.get("MemAvailable", 0)
+            if total_kb <= 0:
+                return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
+            used_kb = total_kb - available_kb
+            pct = round(used_kb / total_kb * 100.0, 1)
+            return {
+                "percent": max(0.0, min(100.0, pct)),
+                "used_gb": round(used_kb / (1024 * 1024), 1),
+                "total_gb": round(total_kb / (1024 * 1024), 1),
+            }
+        except Exception:
+            return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
+
+    @staticmethod
+    def _get_swap_stats() -> dict[str, float]:
+        """Read ``/proc/meminfo`` and return swap usage stats.
+
+        Returns:
+            Dict with keys ``percent``, ``used_gb``, ``total_gb``.
+            Falls back to zeros if swap is disabled or unreadable.
+        """
+        try:
+            with open("/proc/meminfo") as f:
+                lines = f.readlines()
+            mem = {}
+            for line in lines:
+                if ":" in line:
+                    key, val = line.split(":", 1)
+                    parts = val.strip().split()
+                    if parts:
+                        mem[key.strip()] = int(parts[0])
+            total_kb = mem.get("SwapTotal", 0)
+            free_kb = mem.get("SwapFree", 0)
+            if total_kb <= 0:
+                return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
+            used_kb = total_kb - free_kb
+            pct = round(used_kb / total_kb * 100.0, 1)
+            return {
+                "percent": max(0.0, min(100.0, pct)),
+                "used_gb": round(used_kb / (1024 * 1024), 1),
+                "total_gb": round(total_kb / (1024 * 1024), 1),
+            }
+        except Exception:
+            return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
 
     # -- Playlist Management -------------------------------------------------
 

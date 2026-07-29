@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=7">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=8">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -66,7 +66,47 @@
             <section id="page-dashboard" class="page active">
                 <div class="card">
                     <h2>System Status</h2>
-                    <div class="stat-grid" id="system-health">Loading…</div>
+                    <div class="stat-grid" id="system-health">
+                        <div class="stat-item stat-graph" id="stat-cpu">
+                            <div class="stat-label">CPU</div>
+                            <div class="stat-value" id="stat-cpu-val">--</div>
+                            <canvas class="stat-sparkline" id="stat-cpu-canvas"></canvas>
+                        </div>
+                        <div class="stat-item stat-graph" id="stat-memory">
+                            <div class="stat-label">Memory</div>
+                            <div class="stat-value" id="stat-mem-val">--</div>
+                            <canvas class="stat-sparkline" id="stat-mem-canvas"></canvas>
+                        </div>
+                        <div class="stat-item stat-graph" id="stat-swap">
+                            <div class="stat-label">Swap</div>
+                            <div class="stat-value" id="stat-swap-val">--</div>
+                            <canvas class="stat-sparkline" id="stat-swap-canvas"></canvas>
+                        </div>
+                        <div class="stat-item" id="stat-uptime">
+                            <div class="stat-label">Uptime</div>
+                            <div class="stat-value" id="stat-uptime-val">--</div>
+                        </div>
+                        <div class="stat-item" id="stat-disk">
+                            <div class="stat-label">Disk Used</div>
+                            <div class="stat-value" id="stat-disk-val">--</div>
+                        </div>
+                        <div class="stat-item" id="stat-disk-pct">
+                            <div class="stat-label">Usage</div>
+                            <div class="stat-value" id="stat-disk-pct-val">--</div>
+                        </div>
+                        <div class="stat-item" id="stat-cache">
+                            <div class="stat-label">Cache Used</div>
+                            <div class="stat-value" id="stat-cache-val">--</div>
+                        </div>
+                        <div class="stat-item" id="stat-media">
+                            <div class="stat-label">Media Used</div>
+                            <div class="stat-value" id="stat-media-val">--</div>
+                        </div>
+                        <div class="stat-item" id="stat-playlist">
+                            <div class="stat-label">Playlist</div>
+                            <div class="stat-value" id="stat-playlist-val">--</div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="card">
@@ -388,6 +428,76 @@
 
             <!-- ═══════════════ Advanced Page ═══════════════ -->
             <section id="page-advanced" class="page">
+                <div class="card">
+                    <h2>Updates</h2>
+                    <p class="hint">System and version information. Use this to verify what's running before applying updates.</p>
+                    <div class="info-grid" id="updates-info">
+                        <div class="info-row"><span class="info-label">Metixel</span><span class="info-value" id="info-app-version">--</span></div>
+                        <div class="info-row"><span class="info-label">Hardware</span><span class="info-value" id="info-pi-model">--</span></div>
+                        <div class="info-row"><span class="info-label">OS</span><span class="info-value" id="info-os-release">--</span></div>
+                        <div class="info-row"><span class="info-label">Kernel</span><span class="info-value" id="info-kernel">--</span></div>
+                        <div class="info-row"><span class="info-label">Python</span><span class="info-value" id="info-python">--</span></div>
+                        <div class="info-row"><span class="info-label">pi3d</span><span class="info-value" id="info-pi3d">--</span></div>
+                        <div class="info-row"><span class="info-label">GPU Memory</span><span class="info-value" id="info-gpu-mem">--</span></div>
+                        <div class="info-row"><span class="info-label">DRM Driver</span><span class="info-value" id="info-drm-driver">--</span></div>
+                        <div class="info-row"><span class="info-label">Hostname</span><span class="info-value" id="info-hostname">--</span></div>
+                    </div>
+
+                    <!-- OTA Update Controls -->
+                    <hr style="border-color:var(--border);margin:1rem 0">
+                    <h3 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin:0 0 0.8rem 0;text-transform:uppercase;letter-spacing:0.04em">Over-the-Air Updates</h3>
+
+                    <div class="update-layout">
+                        <!-- Left column: settings & controls -->
+                        <div class="update-left">
+                            <!-- Channel selector -->
+                            <div class="form-group">
+                                <span class="form-label">Update Channel</span>
+                                <select id="cfg-update-channel">
+                                    <option value="stable">Stable (recommended)</option>
+                                    <option value="beta">Beta</option>
+                                </select>
+                            </div>
+                            <p class="hint" id="update-channel-desc">Stable releases are thoroughly tested and recommended for most users.</p>
+
+                            <!-- Actions -->
+                            <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.8rem;flex-wrap:wrap">
+                                <button id="btn-check-updates" class="btn--primary">Check for Updates</button>
+                                <button id="btn-apply-update" class="btn--primary" style="display:none">Install Update</button>
+                            </div>
+
+                            <!-- Status -->
+                            <div id="update-status" style="margin-top:0.5rem;font-size:0.82rem;color:var(--text-muted)"></div>
+
+                            <!-- Progress bar (shown during install) -->
+                            <div id="update-progress" style="display:none;margin-top:0.5rem">
+                                <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem;font-size:0.78rem">
+                                    <span id="update-progress-phase">Installing…</span>
+                                </div>
+                                <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                    <div id="update-progress-bar" style="background:var(--primary);height:100%;width:0%;transition:width 0.5s"></div>
+                                </div>
+                            </div>
+
+                            <!-- Auto-check toggle -->
+                            <label class="checkbox-row" style="margin-top:0.8rem">
+                                <input type="checkbox" id="cfg-update-auto-check"> Automatically check for updates
+                            </label>
+                            <p class="hint" id="update-check-interval-hint">Checks every 6 hours</p>
+                        </div>
+
+                        <!-- Right column: available versions -->
+                        <div class="update-right">
+                            <div id="update-available-section">
+                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Available Versions</div>
+                                <div id="update-available-list">
+                                    <span style="color:var(--text-muted);font-size:0.82rem">Check for updates to see versions</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Display Settings (moved from Settings page) -->
                 <div class="card">
                     <h2>Display Settings</h2>
@@ -411,12 +521,6 @@
                         <span class="form-label">FPS Limit</span>
                         <input type="number" id="cfg-fps-limit" min="10" max="60" value="30">
                     </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-fullscreen" checked> Fullscreen
-                    </label>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-hide-cursor" checked> Hide Mouse Cursor
-                    </label>
                     <button id="btn-save-display">Save Display Settings</button>
                     <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
                 </div>

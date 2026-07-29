@@ -604,6 +604,59 @@ button:focus-visible {
     color: var(--text);
 }
 
+/* Stat tiles with sparkline graphs (CPU, Memory, Swap) */
+.stat-item.stat-graph {
+    grid-column: span 2;
+    min-width: 280px;
+    padding: 0.75rem 0.85rem 0.5rem;
+}
+
+.stat-item.stat-graph .stat-value {
+    font-size: 0.95rem;
+    margin-bottom: 0.25rem;
+}
+
+.stat-sparkline {
+    display: block;
+    width: 100%;
+    height: 56px;
+    border-radius: 4px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Info Grid (Updates card, version rows)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.info-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.35rem 1.2rem;
+}
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.35rem 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+}
+
+.info-label {
+    color: var(--text-muted);
+    font-weight: 500;
+    flex-shrink: 0;
+    margin-right: 0.75rem;
+}
+
+.info-value {
+    color: var(--text);
+    font-weight: 600;
+    text-align: right;
+    word-break: break-word;
+    font-family: var(--font-mono, "SF Mono", "Cascadia Code", "Consolas", monospace);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Controls Row
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -1199,3 +1252,75 @@ footer {
     background: var(--surface-hover);
     color: var(--text);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   OTA Update Status Indicators
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Two-column layout: settings left, versions right */
+.update-layout {
+    display: flex;
+    gap: 1.5rem;
+    align-items: flex-start;
+}
+
+.update-left {
+    flex: 1 1 55%;
+    min-width: 0;
+}
+
+.update-right {
+    flex: 1 1 45%;
+    min-width: 0;
+    padding-left: 1.5rem;
+    border-left: 1px solid var(--border);
+}
+
+/* Stack vertically on narrow screens */
+@media (max-width: 640px) {
+    .update-layout {
+        flex-direction: column;
+    }
+    .update-right {
+        padding-left: 0;
+        border-left: none;
+        border-top: 1px solid var(--border);
+        padding-top: 1rem;
+    }
+}
+
+.update-status-uptodate {
+    color: var(--success);
+    font-weight: 500;
+}
+
+.update-status-available {
+    color: #f0a030;
+    font-weight: 500;
+}
+
+.update-status-checking {
+    color: var(--info);
+    font-style: italic;
+}
+
+.update-status-error {
+    color: var(--danger);
+}
+
+/* Available version items in the Updates card */
+.update-available-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.82rem;
+    border-bottom: 1px solid var(--border);
+    gap: 0.5rem;
+}
+
+.update-available-item:last-child {
+    border-bottom: none;
+}
+
+/* Update progress bar (reuses existing progress bar pattern) */

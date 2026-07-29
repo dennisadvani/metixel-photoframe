@@ -38,6 +38,7 @@ class BackendDaemon:
         self._running = False
         self._config = self._state.config
         self._threads: list[threading.Thread] = []
+        self._update_mgr: object | None = None
 
     # -- Service lifecycle ---------------------------------------------------
 
@@ -56,6 +57,7 @@ class BackendDaemon:
         self._start_mqtt_client()
         self._start_input_handlers()
         self._start_network_monitor()
+        self._start_update_manager()
         self._start_web_server()
 
         logger.info(
@@ -71,6 +73,11 @@ class BackendDaemon:
     def shutdown(self) -> None:
         """Gracefully stop all services."""
         self._running = False
+        if self._update_mgr is not None:
+            try:
+                self._update_mgr.shutdown()
+            except Exception:
+                pass
 
     # -- Service starters ----------------------------------------------------
 
@@ -317,12 +324,30 @@ class BackendDaemon:
         except Exception:
             logger.warning("Failed to show connected message", exc_info=True)
 
+    def _start_update_manager(self) -> None:
+        """Start the OTA update manager in a background thread.
+
+        Periodically checks GitHub for new versions on the configured
+        channel.  Must be started BEFORE the web server so the
+        UpdateManager is available to the API routes.
+        """
+        from metixel.backend.update_manager import UpdateManager
+
+        self._update_mgr = UpdateManager(self._state)
+        t = threading.Thread(
+            target=self._update_mgr.run, name="update-manager", daemon=True,
+        )
+        t.start()
+        self._threads.append(t)
+        logger.info("Update manager started")
+
     def _start_web_server(self) -> None:
         """Start the Flask web server — this BLOCKS the main thread."""
         from metixel.backend.web.server import create_app
 
         opt_queue = getattr(self, "_opt_queue", None)
-        app = create_app(self._state, self._ipc, opt_queue=opt_queue)
+        update_mgr = getattr(self, "_update_mgr", None)
+        app = create_app(self._state, self._ipc, opt_queue=opt_queue, update_mgr=update_mgr)
         web_config = self._state.config.web
 
         logger.info("Web server starting on %s:%d", web_config["host"], web_config["port"])
