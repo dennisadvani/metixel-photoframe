@@ -9,7 +9,7 @@
 # Run this ONCE after flashing Trixie Lite to set up Metixel Photoframe.
 #
 # Usage (run on the Pi as root or with sudo):
-#   git clone https://github.com/denni/metixel-photoframe.git /opt/metixel
+#   git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel
 #   sudo bash /opt/metixel/scripts/setup_trixie.sh
 # =============================================================================
 

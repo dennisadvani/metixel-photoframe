@@ -68,7 +68,7 @@ See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory reco
 
 ```bash
 # SSH into your Pi, then:
-git clone https://github.com/denni/metixel-photoframe.git /opt/metixel
+git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel
 sudo bash /opt/metixel/scripts/setup_trixie.sh
 sudo reboot
 ```
@@ -198,7 +198,7 @@ Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full technical specification.
 Contributions are welcome! Before diving in:
 
 1. Read [`ARCHITECTURE.md`](ARCHITECTURE.md) — it's the single source of truth
-2. Check the [issues](https://github.com/denni/metixel-photoframe/issues) for open tasks
+2. Check the [issues](https://github.com/dennisadvani/metixel-photoframe/issues) for open tasks
 3. Test on desktop first with `python -m metixel --mode frontend` (pygame dev backend)
 4. The Pi Zero 2 W (512MB) is the tightest constraint — test memory usage there
 

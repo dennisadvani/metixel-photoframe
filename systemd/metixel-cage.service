@@ -3,7 +3,7 @@
 
 [Unit]
 Description=Metixel Photoframe — Digital Photo Frame (cage + Wayland)
-Documentation=https://github.com/denni/metixel-photoframe
+Documentation=https://github.com/dennisadvani/metixel-photoframe
 After=metixel-backend.service seatd.service
 Requires=metixel-backend.service
 Wants=seatd.service

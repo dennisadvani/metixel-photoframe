@@ -55,9 +55,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/denni/metixel-photoframe"
-Documentation = "https://github.com/denni/metixel-photoframe/blob/main/ARCHITECTURE.md"
-Repository = "https://github.com/denni/metixel-photoframe"
+Homepage = "https://github.com/dennisadvani/metixel-photoframe"
+Documentation = "https://github.com/dennisadvani/metixel-photoframe/blob/main/ARCHITECTURE.md"
+Repository = "https://github.com/dennisadvani/metixel-photoframe"
 
 [tool.setuptools.packages.find]
 include = ["metixel*"]
