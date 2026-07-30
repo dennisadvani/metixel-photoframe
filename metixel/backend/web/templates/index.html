@@ -358,7 +358,10 @@
                     <p class="hint">After saving settings, click <strong>Fetch Albums</strong> to populate the list.</p>
                     <div class="form-group">
                         <span class="form-label">Sync Directory</span>
-                        <input type="text" id="cfg-immich-sync-dir" placeholder="media/sync/immich/">
+                        <div style="display:flex;gap:0.4rem;align-items:center">
+                            <input type="text" id="cfg-immich-sync-dir" placeholder="media/sync/immich/" style="flex:1">
+                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-immich-sync-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                        </div>
                     </div>
                     <p class="hint">Where downloaded assets are stored. Relative paths are under <code>/opt/metixel/</code>.</p>
                     <label class="checkbox-row">
@@ -407,7 +410,7 @@
 
                 <div class="card">
                     <h2>Available Networks</h2>
-                    <button class="btn--primary" id="btn-network-scan" style="margin-bottom:12px">🔍 Scan for Networks</button>
+                    <button class="btn--primary" id="btn-network-scan" style="margin-bottom:12px"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">wifi_find</span> Scan for Networks</button>
                     <div id="network-scan-list"></div>
                     <div id="network-scan-status" class="status-msg" style="display:none;margin-top:8px;padding:8px 12px;border-radius:6px;font-size:0.85rem"></div>
                 </div>
@@ -521,12 +524,58 @@
                         <span class="form-label">FPS Limit</span>
                         <input type="number" id="cfg-fps-limit" min="10" max="60" value="30">
                     </div>
+                    <hr style="border-color:var(--border);margin:0.8rem 0">
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-schedule-enabled">
+                        <span>Power Schedule</span>
+                    </label>
+                    <p class="hint">Automatically turn the display on and off at set times.</p>
+                    <div id="schedule-fields" style="margin-top:0.5rem">
+                        <div style="display:flex;gap:0.8rem;flex-wrap:wrap">
+                            <div class="form-group" style="flex:1;min-width:120px">
+                                <span class="form-label">Turn On</span>
+                                <input type="time" id="cfg-schedule-on" value="07:00">
+                            </div>
+                            <div class="form-group" style="flex:1;min-width:120px">
+                                <span class="form-label">Turn Off</span>
+                                <input type="time" id="cfg-schedule-off" value="22:00">
+                            </div>
+                        </div>
+                    </div>
                     <button id="btn-save-display">Save Display Settings</button>
                     <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
                 </div>
 
                 <div class="card">
                     <h2>System</h2>
+                    <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
+                        <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
+                        <span style="font-weight:600;font-size:0.9rem">Server Time</span>
+                        <span id="server-clock" style="font-family:monospace;font-size:1.05rem;margin-left:0.3rem">--:--:--</span>
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Timezone</span>
+                        <div style="display:flex;gap:0.4rem;align-items:center">
+                            <select id="cfg-timezone" style="flex:1">
+                                <option value="">Auto-detect</option>
+                            </select>
+                            <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
+                        </div>
+                    </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-ntp-enabled" checked>
+                        <span>NTP Time Sync</span>
+                    </label>
+                    <div class="form-group" id="ntp-servers-group" style="margin-top:0.3rem">
+                        <span class="form-label">NTP Servers</span>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <input type="text" id="cfg-ntp-server-1" placeholder="0.debian.pool.ntp.org">
+                            <input type="text" id="cfg-ntp-server-2" placeholder="1.debian.pool.ntp.org">
+                            <input type="text" id="cfg-ntp-server-3" placeholder="2.debian.pool.ntp.org">
+                        </div>
+                        <p class="hint" style="margin-top:0.2rem">Up to 3 servers. Leave blank to use defaults.</p>
+                    </div>
+                    <hr style="border-color:var(--border);margin:0.8rem 0">
                     <div class="form-group">
                         <span class="form-label">File Log Level</span>
                         <select id="cfg-log-level">
@@ -534,12 +583,23 @@
                             <option value="INFO" selected>Info</option>
                             <option value="WARNING">Warning</option>
                             <option value="ERROR">Error</option>
+                            <option value="NONE">None</option>
                         </select>
                     </div>
                     <p class="hint">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</p>
                     <div class="form-group">
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="cfg-quiet-boot">
+                            <span>Quiet Boot</span>
+                        </label>
+                        <p class="hint" style="margin-top:0.2rem">Hides kernel messages and console text during startup. Requires a reboot to take effect.</p>
+                    </div>
+                    <div class="form-group">
                         <span class="form-label">Cache Dir</span>
-                        <input type="text" id="cfg-cache-dir" placeholder="cache/">
+                        <div style="display:flex;gap:0.4rem">
+                            <input type="text" id="cfg-cache-dir" placeholder="cache/" style="flex:1">
+                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                        </div>
                     </div>
                     <button id="btn-save-system">Save System Settings</button>
                     <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
@@ -548,6 +608,7 @@
                     <button id="btn-shutdown-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Shutdown</button>
                 </div>
 
+                <!-- Web Server card hidden — uncomment to re-enable
                 <div class="card">
                     <h2>Web Server</h2>
                     <p class="hint">Changing these requires a backend restart.</p>
@@ -561,6 +622,7 @@
                     </div>
                     <button id="btn-save-web">Save Web Settings</button>
                 </div>
+                -->
 
                 <div class="card">
                     <h2>System Logs</h2>
@@ -573,7 +635,7 @@
                         </div>
                         <div style="font-size:0.78rem;color:var(--text-muted);margin:0.25rem 0 0.25rem 0">Severity</div>
                         <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;flex-wrap:wrap">
-                            <label class="checkbox-row" style="margin:0"><input type="checkbox" class="log-filter" data-level="DEBUG" checked> Debug</label>
+                            <label class="checkbox-row" style="margin:0"><input type="checkbox" class="log-filter" data-level="DEBUG"> Debug</label>
                             <label class="checkbox-row" style="margin:0"><input type="checkbox" class="log-filter" data-level="INFO" checked> Info</label>
                             <label class="checkbox-row" style="margin:0"><input type="checkbox" class="log-filter" data-level="WARNING" checked> Warning</label>
                             <label class="checkbox-row" style="margin:0"><input type="checkbox" class="log-filter" data-level="ERROR" checked> Error</label>
@@ -608,7 +670,7 @@
                 <li style="padding:0.5rem;color:var(--text-muted)">Loading…</li>
             </ul>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end">
-                <button id="btn-browser-parent" class="btn--secondary">⬆ Parent</button>
+                <button id="btn-browser-parent" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">arrow_upward</span> Parent</button>
                 <button id="btn-browser-select" class="btn--primary">Select</button>
                 <button id="btn-browser-cancel" class="btn--secondary">Cancel</button>
             </div>
@@ -616,6 +678,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script src="/static/js/dashboard.js?v=6"></script>
+    <script src="/static/js/dashboard.js?v=8"></script>
 </body>
 </html>

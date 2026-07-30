@@ -81,6 +81,7 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
                 "INFO": logging.INFO,
                 "WARNING": logging.WARNING,
                 "ERROR": logging.ERROR,
+                "NONE": 100,  # Above CRITICAL (50) — effectively disables disk logging
             }
             file_level = file_levels.get(persisted_level, logging.INFO)
             _apply_file_handler_levels(file_level)

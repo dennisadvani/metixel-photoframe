@@ -145,7 +145,7 @@ class UpdateManager:
 
         while self._running:
             try:
-                update_cfg = self._state.config.update
+                update_cfg = self._state.config.updates
                 interval_hours = max(0.17, float(update_cfg.get("check_interval_hours", 6)))
                 interval_seconds = interval_hours * 3600
 
@@ -172,12 +172,12 @@ class UpdateManager:
     @property
     def channel(self) -> str:
         """Current update channel (stable, beta, dev)."""
-        return self._state.config.update.get("channel", "stable")
+        return self._state.config.updates.get("channel", "stable")
 
     @property
     def repo(self) -> str:
         """GitHub repository in owner/repo format."""
-        return self._state.config.update.get(
+        return self._state.config.updates.get(
             "github_repo", "metixel-photoframe/metixel-photoframe"
         )
 
@@ -203,7 +203,7 @@ class UpdateManager:
         - repo_root: path to the git repository (or None)
         """
         with self._lock:
-            update_cfg = self._state.config.update
+            update_cfg = self._state.config.updates
             available = self._cache.get("available", {})
             return {
                 "installed_version": self.installed_version,

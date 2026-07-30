@@ -58,6 +58,7 @@ class BackendDaemon:
         self._start_input_handlers()
         self._start_network_monitor()
         self._start_update_manager()
+        self._start_display_scheduler()
         self._start_web_server()
 
         logger.info(
@@ -340,6 +341,68 @@ class BackendDaemon:
         t.start()
         self._threads.append(t)
         logger.info("Update manager started")
+
+    def _start_display_scheduler(self) -> None:
+        """Start the display power scheduler in a background thread.
+
+        Checks the configured on/off schedule every 30 seconds and sends
+        ``power_on`` / ``power_off`` IPC commands to the frontend when
+        the display should change state.
+        """
+        from metixel.shared.ipc import ControlMessage
+
+        def _scheduler_loop() -> None:
+            logger.info("Display scheduler started")
+            last_state: bool | None = None  # None on first iteration
+
+            while self._running:
+                try:
+                    config = self._state.config
+                    enabled = config.display.get("schedule_enabled", False)
+                    if not enabled:
+                        time.sleep(30)
+                        continue
+
+                    on_str = config.display.get("schedule_on_time", "07:00")
+                    off_str = config.display.get("schedule_off_time", "22:00")
+
+                    now = time.localtime()
+                    now_minutes = now.tm_hour * 60 + now.tm_min
+
+                    def _parse_time(t: str) -> int:
+                        parts = t.strip().split(":")
+                        return int(parts[0]) * 60 + int(parts[1])
+
+                    on_min = _parse_time(on_str)
+                    off_min = _parse_time(off_str)
+
+                    should_be_on = on_min <= now_minutes < off_min
+
+                    if should_be_on != last_state:
+                        last_state = should_be_on
+                        if should_be_on:
+                            logger.info(
+                                "Display scheduler: turning ON (scheduled %s–%s)",
+                                on_str, off_str,
+                            )
+                            self._ipc.send(ControlMessage(cmd="power_on"))
+                        else:
+                            logger.info(
+                                "Display scheduler: turning OFF (scheduled %s–%s)",
+                                on_str, off_str,
+                            )
+                            self._ipc.send(ControlMessage(cmd="power_off"))
+                except Exception:
+                    logger.debug("Display scheduler error", exc_info=True)
+
+                time.sleep(30)
+
+        t = threading.Thread(
+            target=_scheduler_loop, name="display-scheduler", daemon=True,
+        )
+        t.start()
+        self._threads.append(t)
+        logger.info("Display scheduler started")
 
     def _start_web_server(self) -> None:
         """Start the Flask web server — this BLOCKS the main thread."""

@@ -107,11 +107,15 @@ def _find_log_file() -> str | None:
     return None
 
 
+# Sentinel level — above CRITICAL (50); no log record passes this filter.
+_NONE_LEVEL = 100
+
+
 @logs_bp.route("/level", methods=["POST"])
 def set_log_level():
     """Change the **file-handler** log level at runtime.
 
-    Accepts JSON: ``{"level": "DEBUG|INFO|WARNING|ERROR"}``
+    Accepts JSON: ``{"level": "DEBUG|INFO|WARNING|ERROR|NONE"}``
 
     Only ``FileHandler`` instances (i.e. the on-disk log file) are
     affected — the in-memory ring buffer stays at ``DEBUG`` so the
@@ -129,7 +133,8 @@ def set_log_level():
 
     level_name = data["level"].upper()
     valid_levels = {"DEBUG": logging.DEBUG, "INFO": logging.INFO,
-                    "WARNING": logging.WARNING, "ERROR": logging.ERROR}
+                    "WARNING": logging.WARNING, "ERROR": logging.ERROR,
+                    "NONE": _NONE_LEVEL}
     if level_name not in valid_levels:
         return jsonify({
             "error": f"Invalid level: {data['level']}",

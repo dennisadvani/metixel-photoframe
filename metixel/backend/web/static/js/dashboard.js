@@ -316,6 +316,59 @@
         }
     }
 
+    function toggleScheduleFields(enabled) {
+        // Always visible — the checkbox only controls whether the scheduler runs.
+        // The fields are always shown so the user can see and edit the times.
+    }
+
+    function toggleNtpFields(enabled) {
+        var group = document.getElementById("ntp-servers-group");
+        if (group) group.style.display = enabled ? "block" : "none";
+    }
+
+    /** @type {number|null} */
+    var _clockTimer = null;
+
+    async function _refreshServerClock() {
+        var el = document.getElementById("server-clock");
+        if (!el) return;
+        try {
+            var data = await apiGet("/config/time");
+            if (data && data.time) {
+                el.textContent = data.time;
+                el.title = data.date + " " + data.timezone + " (UTC" + (data.utc_offset || "") + ")";
+            }
+        } catch (_) {
+            // Clock is non-critical — silently ignore errors
+        }
+    }
+
+    async function loadTimezoneList(currentTz) {
+        var sel = document.getElementById("cfg-timezone");
+        if (!sel) return;
+        sel.innerHTML = '<option value="">Auto-detect</option>';
+        try {
+            var data = await apiGet("/config/timezones");
+            if (data && data.timezones) {
+                data.timezones.forEach(function (tz) {
+                    var opt = document.createElement("option");
+                    opt.value = tz;
+                    opt.textContent = tz;
+                    if (tz === currentTz) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            }
+        } catch (_) {}
+        // If currentTz is not in the list, add it
+        if (currentTz && !Array.from(sel.options).some(function (o) { return o.value === currentTz; })) {
+            var opt = document.createElement("option");
+            opt.value = currentTz;
+            opt.textContent = currentTz + " (current)";
+            opt.selected = true;
+            sel.appendChild(opt);
+        }
+    }
+
     /**
      * Show or hide the transcode sub-settings based on the main toggle.
      * @param {boolean} enabled - Whether transcoding is enabled.
@@ -619,7 +672,7 @@
                 btn.textContent = "Scanning…";
                 await _refreshNetworkScan();
                 btn.disabled = false;
-                btn.textContent = "🔍 Scan for Networks";
+                btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">wifi_find</span> Scan for Networks';
             });
 
             document.getElementById("btn-network-ap-toggle")?.addEventListener("click", async function () {
@@ -686,7 +739,7 @@
                 // Ethernet works, but WiFi is off — note it
                 el.innerHTML =
                     '<div style="display:flex;align-items:center;gap:12px">'
-                    + '<span style="font-size:2rem">🔌</span>'
+                    + '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--text-muted)">settings_ethernet</span>'
                     + '<div>'
                     + '<strong>Connected via Ethernet</strong><br>'
                     + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span>'
@@ -698,7 +751,7 @@
             // No connection and WiFi is disabled — tell the user why
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
-                + '<span style="font-size:2rem">🔴</span>'
+                + '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--danger)">wifi_off</span>'
                 + '<div>'
                 + '<strong>WiFi is disabled</strong><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">WiFi radio is turned off at the OS level</span>'
@@ -711,7 +764,7 @@
         if (!status.connected && status.wifi_radio_enabled && !status.has_saved_wifi) {
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
-                + '<span style="font-size:2rem">🟡</span>'
+                + '<span class="material-symbols-outlined" style="font-size:2rem;color:#f0a030">wifi_find</span>'
                 + '<div>'
                 + '<strong>No WiFi networks configured</strong><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">Scan below to find and connect to a network</span>'
@@ -723,7 +776,7 @@
         if (status.connected && status.interface_type === "ethernet") {
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
-                + '<span style="font-size:2rem">🔌</span>'
+                + '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--text-muted)">settings_ethernet</span>'
                 + '<div>'
                 + '<strong>Connected via Ethernet</strong><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span><br>'
@@ -746,7 +799,7 @@
         if (status.connected) {
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
-                + '<span style="font-size:2rem">🟢</span>'
+                + '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--success)">wifi</span>'
                 + '<div style="flex:1">'
                 + '<strong>' + escapeHtml(status.ssid || "Unknown") + '</strong><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span><br>'
@@ -784,7 +837,7 @@
         } else {
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
-                + '<span style="font-size:2rem">🔴</span>'
+                + '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--danger)">wifi_off</span>'
                 + '<div>'
                 + '<strong>Not connected</strong><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">Use the captive portal or connect below</span>'
@@ -829,7 +882,7 @@
 
             row.innerHTML =
                 '<span style="flex:1;font-size:0.9rem;font-weight:500">' + escapeHtml(n.ssid) + '</span>'
-                + (hasLock ? '<span style="font-size:0.8rem">🔒 ' + escapeHtml(n.security) + '</span>' : '<span style="font-size:0.75rem;color:var(--text-muted)">Open</span>')
+                + (hasLock ? '<span class="material-symbols-outlined" style="font-size:0.8rem;vertical-align:middle">lock</span> ' + escapeHtml(n.security) + '</span>' : '<span style="font-size:0.75rem;color:var(--text-muted)">Open</span>')
                 + '<span style="font-size:0.8rem;color:var(--text-muted);min-width:45px;text-align:right">' + n.signal + '%</span>'
                 + btnHTML;
 
@@ -868,10 +921,10 @@
 
         var status = await apiGet("/network/ap-status");
         if (status && status.active) {
-            el.innerHTML = '<span style="color:#f0a030">🟡 AP mode active — SSID: <strong>Metixel-Setup</strong></span>';
+            el.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;color:#f0a030">warning</span> <span style="color:#f0a030">AP mode active — SSID: <strong>Metixel-Setup</strong></span>';
             btn.textContent = "Stop AP Mode";
         } else {
-            el.innerHTML = '<span style="color:var(--text-muted)">⚪ AP mode inactive</span>';
+            el.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;color:var(--text-muted)">radio_button_unchecked</span> <span style="color:var(--text-muted)">AP mode inactive</span>';
             btn.textContent = "Start AP Mode";
         }
     }
@@ -1239,6 +1292,38 @@
                 addWatchPathRow("", true, true);
             });
 
+            // Schedule toggle
+            document.getElementById("cfg-schedule-enabled")?.addEventListener("change", function () {
+                toggleScheduleFields(this.checked);
+            });
+
+            // NTP toggle
+            document.getElementById("cfg-ntp-enabled")?.addEventListener("change", function () {
+                toggleNtpFields(this.checked);
+            });
+
+            // Timezone set button
+            document.getElementById("btn-save-timezone")?.addEventListener("click", async function () {
+                var tz = document.getElementById("cfg-timezone").value;
+                if (!tz) { showToast("Select a timezone first", "info"); return; }
+                var result = await apiPost("/config/timezone", { timezone: tz });
+                if (result && result.status === "ok") {
+                    showToast("Timezone set to " + tz, "success");
+                    _refreshServerClock();
+                } else {
+                    showToast("Failed to set timezone: " + ((result && result.message) || "Unknown error"), "error");
+                }
+            });
+
+            // Browse buttons for cache dir and sync dir
+            document.querySelectorAll(".btn-browse").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    var targetId = this.getAttribute("data-target");
+                    var inputEl = document.getElementById(targetId);
+                    if (inputEl) openFolderBrowser(inputEl);
+                });
+            });
+
             // Folder Browser modal handlers
             document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
             document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
@@ -1346,7 +1431,7 @@
         // Browse button
         var browseBtn = document.createElement("button");
         browseBtn.type = "button";
-        browseBtn.textContent = "📁";
+        browseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span>';
         browseBtn.title = "Browse folders";
         browseBtn.className = "btn--secondary";
         browseBtn.style.cssText = "flex-shrink:0;padding:0.3rem 0.5rem;font-size:0.9rem";
@@ -1357,7 +1442,7 @@
         // Remove button
         var removeBtn = document.createElement("button");
         removeBtn.type = "button";
-        removeBtn.textContent = "✕";
+        removeBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">close</span>';
         removeBtn.title = "Remove this watch path";
         removeBtn.className = "btn--danger";
         removeBtn.style.cssText = "flex-shrink:0;padding:0.3rem 0.5rem;font-size:0.82rem";
@@ -1455,7 +1540,7 @@
             html = '<li style="padding:0.5rem;color:var(--text-muted)">No subdirectories</li>';
         } else {
             data.entries.forEach(function (entry) {
-                html += '<li class="browser-entry" data-path="' + escapeHtml(entry.path) + '" style="padding:0.4rem 0.5rem;cursor:pointer;border-bottom:1px solid var(--border);font-size:0.82rem">📁 ' + escapeHtml(entry.name) + '</li>';
+                html += '<li class="browser-entry" data-path="' + escapeHtml(entry.path) + '" style="padding:0.4rem 0.5rem;cursor:pointer;border-bottom:1px solid var(--border);font-size:0.82rem"><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">folder</span> ' + escapeHtml(entry.name) + '</li>';
             });
         }
         listEl.innerHTML = html;
@@ -2357,8 +2442,10 @@
         setValue("cfg-display-width", d.width || 0);
         setValue("cfg-display-height", d.height || 0);
         setValue("cfg-fps-limit", d.fps_limit || 30);
-        setChecked("cfg-fullscreen", d.fullscreen !== false);
-        setChecked("cfg-hide-cursor", d.hide_cursor !== false);
+        setChecked("cfg-schedule-enabled", d.schedule_enabled === true);
+        setValue("cfg-schedule-on", d.schedule_on_time || "07:00");
+        setValue("cfg-schedule-off", d.schedule_off_time || "22:00");
+        toggleScheduleFields(d.schedule_enabled === true);
         toggleResolutionFields(isAuto);
 
         // Fetch detected display resolution from the frontend
@@ -2376,6 +2463,21 @@
         var sys = config.system || {};
         setValue("cfg-log-level", sys.log_level || "INFO");
         setValue("cfg-cache-dir", sys.cache_dir || "cache/");
+        setChecked("cfg-quiet-boot", sys.quiet_boot === true);
+        setChecked("cfg-ntp-enabled", sys.ntp_enabled !== false);
+        var ntpServers = sys.ntp_servers || [""];
+        setValue("cfg-ntp-server-1", ntpServers[0] || "");
+        setValue("cfg-ntp-server-2", ntpServers[1] || "");
+        setValue("cfg-ntp-server-3", ntpServers[2] || "");
+        toggleNtpFields(sys.ntp_enabled !== false);
+
+        // Load timezone dropdown
+        loadTimezoneList(sys.timezone || "");
+
+        // Start server clock
+        _refreshServerClock();
+        if (_clockTimer) clearInterval(_clockTimer);
+        _clockTimer = setInterval(_refreshServerClock, 10000);
 
         // Updates / System Info
         apiGet("/config/info").then(function (info) {
@@ -2412,8 +2514,9 @@
                     width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
                     height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
-                    fullscreen: document.getElementById("cfg-fullscreen").checked,
-                    hide_cursor: document.getElementById("cfg-hide-cursor").checked,
+                    schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
+                    schedule_on_time: document.getElementById("cfg-schedule-on").value,
+                    schedule_off_time: document.getElementById("cfg-schedule-off").value,
                 });
                 if (result) {
                     showToast("Display settings saved!", "success");
@@ -2435,13 +2538,40 @@
 
             document.getElementById("btn-save-system")?.addEventListener("click", async () => {
                 var logLevel = document.getElementById("cfg-log-level").value;
+                var quietBoot = document.getElementById("cfg-quiet-boot").checked;
+                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
+                var ntpServers = [
+                    document.getElementById("cfg-ntp-server-1").value.trim(),
+                    document.getElementById("cfg-ntp-server-2").value.trim(),
+                    document.getElementById("cfg-ntp-server-3").value.trim(),
+                ].filter(function(s) { return s !== ""; });
                 var sysResult = await apiPut("/config/system", {
                     log_level: logLevel,
                     cache_dir: document.getElementById("cfg-cache-dir").value,
+                    quiet_boot: quietBoot,
+                    ntp_enabled: ntpEnabled,
+                    ntp_servers: ntpServers,
                 });
                 var logResult = await apiPost("/logs/level", { level: logLevel });
+                // Apply NTP settings via systemd-timesyncd
+                if (ntpEnabled) {
+                    await apiPost("/config/ntp", {
+                        enabled: true,
+                        servers: ntpServers,
+                    });
+                } else {
+                    await apiPost("/config/ntp", { enabled: false });
+                }
+                // Apply quiet boot change (requires sudo)
+                if (quietBoot !== (sys.quiet_boot === true)) {
+                    await apiPost("/config/quiet-boot", { enabled: quietBoot });
+                }
                 if (sysResult && logResult && logResult.status === "ok") {
-                    showToast("System settings saved! File log level: " + logLevel, "success");
+                    var msg = "System settings saved! File log level: " + logLevel;
+                    if (quietBoot !== (sys.quiet_boot === true)) {
+                        msg += " | Quiet boot " + (quietBoot ? "enabled" : "disabled") + " — reboot to apply.";
+                    }
+                    showToast(msg, "success");
                 } else if (sysResult) {
                     showToast("System settings saved (log level apply failed — check server)", "info");
                 } else {

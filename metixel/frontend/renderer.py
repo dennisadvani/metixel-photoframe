@@ -246,6 +246,11 @@ class FrontendRenderer:
         # Track config file mtime for hot reload
         self._config_mtime = self._get_config_mtime()
 
+        # Apply persisted log level to this process's file handlers.
+        # (The backend API can also change it at runtime — the periodic
+        # _check_config_changed() will pick up the new value.)
+        self._apply_file_log_level()
+
         # Reset playlist mtime so _check_playlist_changed() loads items
         # immediately instead of waiting for the 3-second polling interval.
         self._playlist_mtime = 0.0
@@ -354,11 +359,16 @@ class FrontendRenderer:
         new_mtime = self._get_config_mtime()
         if new_mtime > self._config_mtime:
             logger.info("Config file changed — hot reloading")
+            old_log_level = self._config.system.get("log_level", "INFO")
             self._config = Config.load(self._config_path)
             self._config_mtime = new_mtime
             # Re-initialize components that depend on config
             if self._presentation:
                 self._presentation.reload_config(self._config)
+            # Re-apply file log level if it changed (matches backend behaviour)
+            new_log_level = self._config.system.get("log_level", "INFO")
+            if new_log_level != old_log_level:
+                self._apply_file_log_level()
 
         # -- Playlist hot reload (backend may add items from Immich sync) --
         # Poll every 0.5s when the queue is empty (boot phase) so the
@@ -488,6 +498,43 @@ class FrontendRenderer:
             return os.path.getmtime(self._config_path)
         except OSError:
             return 0.0
+
+    def _apply_file_log_level(self) -> None:
+        """Apply the persisted log level to all FileHandlers in this process.
+
+        This runs at frontend startup and whenever the config changes,
+        ensuring the frontend's file handlers stay in sync with what
+        the user selected in the web UI (which only directly updates
+        the backend process).
+        """
+        level_name = self._config.system.get("log_level", "INFO").upper()
+        file_levels = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "NONE": 100,
+        }
+        target_level = file_levels.get(level_name, logging.INFO)
+
+        updated = 0
+        for logger_obj in logging.Logger.manager.loggerDict.values():
+            if not isinstance(logger_obj, logging.Logger):
+                continue
+            for handler in logger_obj.handlers:
+                if isinstance(handler, logging.FileHandler):
+                    handler.setLevel(target_level)
+                    updated += 1
+        for handler in logging.getLogger().handlers:
+            if isinstance(handler, logging.FileHandler):
+                handler.setLevel(target_level)
+                updated += 1
+
+        if updated:
+            logger.debug(
+                "Frontend file log level set to %s (%d handler(s) updated)",
+                level_name, updated,
+            )
 
     # -- IPC -----------------------------------------------------------------
 

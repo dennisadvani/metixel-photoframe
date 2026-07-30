@@ -24,6 +24,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fullscreen": True,
         "fps_limit": 30,
         "hide_cursor": True,
+        "schedule_enabled": False,
+        "schedule_on_time": "07:00",
+        "schedule_off_time": "22:00",
     },
     "slideshow": {
         "image_duration_seconds": 15,
@@ -108,6 +111,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "system": {
         "cache_dir": "cache/",
         "log_level": "INFO",
+        "quiet_boot": False,
+        "timezone": "",
+        "ntp_enabled": True,
+        "ntp_servers": [""],
         "db_path": "cache/metixel.db",
     },
     "update": {
@@ -219,7 +226,7 @@ class Config:
         return self._data["system"]
 
     @property
-    def update(self) -> dict[str, Any]:
+    def updates(self) -> dict[str, Any]:
         """Update channel and auto-check settings with backward-compatible defaults.
 
         If the ``update`` section is missing from an older config file,
