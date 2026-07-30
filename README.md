@@ -64,12 +64,14 @@ See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory reco
 - HDMI display (720p, 1080p or 1200p recommended)
 - Network connection (Wi-Fi or Ethernet)
 
-### One-Command Setup
+### Setup
 
 ```bash
-# SSH into your Pi, then:
+sudo apt install git
+sudo mkdir /opt/metixel
+sudo chown pi /opt/metixel
 git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel
-sudo bash /opt/metixel/scripts/setup_trixie.sh
+sudo bash /opt/metixel/scripts/setup_trixie_metixel.sh
 sudo reboot
 ```
 
@@ -111,7 +113,7 @@ All settings live in `etc/config.json`. Changes are picked up live — no restar
     "video_playback_enabled": true,
     "transition_duration_ms": 1500,
     "transition_style": "crossfade",
-    "fit_mode": "contain",
+    "fit_mode": "cover",
     "shuffle": true
   },
   "sync": {

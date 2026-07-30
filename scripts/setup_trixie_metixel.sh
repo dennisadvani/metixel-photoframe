@@ -28,11 +28,11 @@ echo "Target: Raspberry Pi 2/3/Zero 2 W (Trixie + KMS)"
 echo ""
 
 # -- System packages ---------------------------------------------------------
-echo "[1/7] Updating package lists..."
+echo "[1/9] Updating package lists..."
 sudo apt-get update -qq
 
-echo "[2/7] Installing system packages..."
-sudo apt-get install -y \
+echo "[2/9] Installing system packages..."
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3-pip \
     python3-pil \
     python3-numpy \
@@ -63,7 +63,7 @@ if ! iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 
 fi
 
 # -- Python packages ---------------------------------------------------------
-echo "[3/7] Installing Python packages..."
+echo "[3/9] Installing Python packages..."
 cd "${METIXEL_DIR}"
 
 # Use --ignore-installed to skip packages already provided by apt
@@ -78,14 +78,14 @@ sudo pip3 install ${PIP_IGNORE} -r requirements-phase1.txt 2>/dev/null || \
     pip3 install ${PIP_IGNORE} -r requirements-phase1.txt
 
 # -- Directory structure -----------------------------------------------------
-echo "[4/7] Creating directory structure..."
-sudo mkdir -p /opt/metixel/media /opt/metixel/cache /opt/metixel/logs /opt/metixel/etc /run/metixel
+echo "[4/9] Creating directory structure..."
+sudo mkdir -p /opt/metixel/media /opt/metixel/media/sync/immich /opt/metixel/media/my_media /opt/metixel/cache /opt/metixel/logs /opt/metixel/etc /run/metixel
 sudo cp -n "${METIXEL_DIR}/etc/config.example.json" /opt/metixel/etc/config.json 2>/dev/null || true
 sudo cp -n "${METIXEL_DIR}/etc/logging.conf" /opt/metixel/etc/logging.conf 2>/dev/null || true
 sudo chown -R pi:pi /opt/metixel /run/metixel 2>/dev/null || true
 
 # -- systemd services --------------------------------------------------------
-echo "[5/7] Installing systemd services..."
+echo "[5/9] Installing systemd services..."
 sudo cp "${METIXEL_DIR}/systemd/metixel-backend.service" /etc/systemd/system/
 sudo cp "${METIXEL_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -97,8 +97,20 @@ sudo systemctl enable metixel-cage
 # Required for cage (Wayland compositor) to start on headless boots.
 sudo loginctl enable-linger pi
 
+# -- Enable Wi-Fi -----------------------------------------------------------
+echo "[6/9] Enabling Wi-Fi..."
+# Raspberry Pi Imager disables WiFi at the OS level if you skip Wi-Fi
+# configuration during imaging.  Re-enable it before configuring hostapd
+# so the wireless interface is available for the captive portal.
+sudo rfkill unblock wifi 2>/dev/null || true
+sudo rfkill unblock wlan 2>/dev/null || true
+# Also ensure NetworkManager doesn't treat wlan0 as unmanaged
+if command -v nmcli &>/dev/null; then
+    sudo nmcli radio wifi on 2>/dev/null || true
+fi
+
 # -- Captive Portal (AP mode) -----------------------------------------------
-echo "[6/8] Configuring Wi-Fi captive portal (AP fallback)..."
+echo "[7/9] Configuring Wi-Fi captive portal (AP fallback)..."
 # Configure hostapd (open network "Metixel-Setup")
 sudo tee /etc/hostapd/hostapd.conf > /dev/null <<'HOSTAPDEOF'
 interface=wlan0
@@ -138,7 +150,7 @@ sudo systemctl unmask hostapd dnsmasq 2>/dev/null || true
 # Only shares /opt/metixel/media so users can add/remove photos and videos.
 # For full-project access during development, run setup_trixie_dev_env.sh
 # which adds a separate [metixel] share pointing to /opt/metixel.
-echo "[7/8] Configuring Samba share (/opt/metixel/media as 'metixel-media')..."
+echo "[8/9] Configuring Samba share (/opt/metixel/media as 'metixel-media')..."
 
 # Add 'invalid users = nobody' to the [homes] section so the system
 # 'nobody' user doesn't get an auto-share (don't comment out [homes]
@@ -182,7 +194,7 @@ sudo systemctl enable smbd
 sudo systemctl restart smbd
 
 # -- Boot config -------------------------------------------------------------
-echo "[8/8] Configuring boot..."
+echo "[9/9] Configuring boot..."
 
 BOOT_CONFIG="/boot/firmware/config.txt"
 if [ -f "${BOOT_CONFIG}" ]; then
@@ -193,24 +205,9 @@ if [ -f "${BOOT_CONFIG}" ]; then
         echo "dtoverlay=vc4-kms-v3d" | sudo tee -a "${BOOT_CONFIG}"
         echo "gpu_mem=16" | sudo tee -a "${BOOT_CONFIG}"
     fi
-    # Quiet boot
-    if ! grep -q "disable_splash=1" "${BOOT_CONFIG}"; then
-        echo "disable_splash=1" | sudo tee -a "${BOOT_CONFIG}"
-    fi
-fi
-
-CMDLINE="/boot/firmware/cmdline.txt"
-if [ -f "${CMDLINE}" ] && ! grep -q "quiet" "${CMDLINE}"; then
-    sudo sed -i 's/$/ quiet loglevel=3 logo.nologo/' "${CMDLINE}"
 fi
 
 echo ""
 echo "=== Setup Complete ==="
 echo ""
-echo "Next steps:"
-echo "  1. Review config:  nano /opt/metixel/etc/config.json"
-echo "  2. Start services: sudo systemctl start metixel-backend metixel-cage"
-echo "  3. Check logs:     journalctl -u metixel-backend -u metixel-cage -f"
-echo "  4. Web dashboard:  http://<pi-ip>:8080"
-echo ""
-echo "To reboot and auto-start: sudo reboot"
+echo "Reboot and Metixel will auto-start: sudo reboot"

@@ -359,14 +359,14 @@ class FrontendRenderer:
         new_mtime = self._get_config_mtime()
         if new_mtime > self._config_mtime:
             logger.info("Config file changed — hot reloading")
-            old_log_level = self._config.system.get("log_level", "INFO")
+            old_log_level = self._config.system.get("log_level", "NONE")
             self._config = Config.load(self._config_path)
             self._config_mtime = new_mtime
             # Re-initialize components that depend on config
             if self._presentation:
                 self._presentation.reload_config(self._config)
             # Re-apply file log level if it changed (matches backend behaviour)
-            new_log_level = self._config.system.get("log_level", "INFO")
+            new_log_level = self._config.system.get("log_level", "NONE")
             if new_log_level != old_log_level:
                 self._apply_file_log_level()
 
@@ -507,7 +507,7 @@ class FrontendRenderer:
         the user selected in the web UI (which only directly updates
         the backend process).
         """
-        level_name = self._config.system.get("log_level", "INFO").upper()
+        level_name = self._config.system.get("log_level", "NONE").upper()
         file_levels = {
             "DEBUG": logging.DEBUG,
             "INFO": logging.INFO,
@@ -515,7 +515,7 @@ class FrontendRenderer:
             "ERROR": logging.ERROR,
             "NONE": 100,
         }
-        target_level = file_levels.get(level_name, logging.INFO)
+        target_level = file_levels.get(level_name, 100)
 
         updated = 0
         for logger_obj in logging.Logger.manager.loggerDict.values():

@@ -11,7 +11,7 @@
     "image_duration_seconds": 5,
     "transition_duration_ms": 1500,
     "transition_style": "crossfade",
-    "fit_mode": "contain",
+    "fit_mode": "cover",
     "matte_color": [20, 20, 20],
     "shuffle": true
   },
@@ -85,7 +85,7 @@
   },
   "system": {
     "cache_dir": "cache/",
-    "log_level": "INFO",
+    "log_level": "NONE",
     "db_path": "cache/metixel.db"
   }
 }

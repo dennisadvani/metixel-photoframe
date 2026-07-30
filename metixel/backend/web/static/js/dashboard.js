@@ -2461,7 +2461,7 @@
 
         // System
         var sys = config.system || {};
-        setValue("cfg-log-level", sys.log_level || "INFO");
+        setValue("cfg-log-level", sys.log_level || "NONE");
         setValue("cfg-cache-dir", sys.cache_dir || "cache/");
         setChecked("cfg-quiet-boot", sys.quiet_boot === true);
         setChecked("cfg-ntp-enabled", sys.ntp_enabled !== false);

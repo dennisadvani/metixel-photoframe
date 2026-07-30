@@ -110,7 +110,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "system": {
         "cache_dir": "cache/",
-        "log_level": "INFO",
+        "log_level": "NONE",
         "quiet_boot": False,
         "timezone": "",
         "ntp_enabled": True,

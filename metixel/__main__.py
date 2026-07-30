@@ -75,7 +75,7 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
 
         if config_path.exists():
             raw = _json.loads(config_path.read_text(encoding="utf-8"))
-            persisted_level = raw.get("system", {}).get("log_level", "INFO").upper()
+            persisted_level = raw.get("system", {}).get("log_level", "NONE").upper()
             file_levels = {
                 "DEBUG": logging.DEBUG,
                 "INFO": logging.INFO,
@@ -83,7 +83,7 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
                 "ERROR": logging.ERROR,
                 "NONE": 100,  # Above CRITICAL (50) — effectively disables disk logging
             }
-            file_level = file_levels.get(persisted_level, logging.INFO)
+            file_level = file_levels.get(persisted_level, 100)
             _apply_file_handler_levels(file_level)
     except Exception:
         pass  # Config file may not exist yet or be unreadable
