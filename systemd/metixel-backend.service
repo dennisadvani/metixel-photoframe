@@ -38,7 +38,7 @@ MemoryMax=768M
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=yes
-ReadWritePaths=/opt/metixel /tmp /boot/firmware /etc/systemd /etc/sysctl.d /etc/rc.local
+ReadWritePaths=/opt/metixel /tmp /boot/firmware /etc/systemd /etc/sysctl.d
 
 [Install]
 WantedBy=multi-user.target
