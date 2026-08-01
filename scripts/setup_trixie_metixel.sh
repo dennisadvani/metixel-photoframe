@@ -149,7 +149,7 @@ pip3 install ${PIP_IGNORE} -r requirements-phase1.txt 2>/dev/null || \
 
 # -- Git safe.directory (OTA updates run as root via systemd-run) ------------
 echo "[3b/9] Marking repository as safe for git..."
-git config --global --add safe.directory /opt/metixel 2>/dev/null || true
+git config --system --add safe.directory /opt/metixel 2>/dev/null || true
 
 # -- Directory structure -----------------------------------------------------
 echo "[4/9] Creating directory structure..."

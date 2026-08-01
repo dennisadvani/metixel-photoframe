@@ -426,9 +426,9 @@ sleep 2
 # ── Git operations ──
 echo "Fetching from origin…"
 cd "$REPO"
-# The repo may be owned by 'pi' but systemd-run executes as root.
-# Mark it safe so git doesn't refuse to operate.
-git config --global --add safe.directory "$REPO" 2>/dev/null || true
+# systemd-run executes as root without HOME set, so --global fails.
+# Use --system to write to /etc/gitconfig instead.
+git config --system --add safe.directory "$REPO" 2>/dev/null || true
 git fetch --tags --force origin || echo "WARNING: git fetch failed (continuing)"
 
 echo "Checking out $REF…"
@@ -458,7 +458,6 @@ rm -f "$0"
                 "--unit=metixel-update",
                 "--description=Metixel OTA Update",
                 "--collect",          # drop unit after it exits (don't leave garbage)
-                "--pipe",             # suppress systemd-run's own output
                 "/bin/bash", script_path,
             ],
             stdout=subprocess.DEVNULL,
