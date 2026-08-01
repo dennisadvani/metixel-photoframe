@@ -147,6 +147,10 @@ pip3 install ${PIP_IGNORE} pi3d 2>/dev/null || \
 pip3 install ${PIP_IGNORE} -r requirements-phase1.txt 2>/dev/null || \
     pip3 install ${PIP_IGNORE} -r requirements-phase1.txt
 
+# -- Git safe.directory (OTA updates run as root via systemd-run) ------------
+echo "[3b/9] Marking repository as safe for git..."
+git config --global --add safe.directory /opt/metixel 2>/dev/null || true
+
 # -- Directory structure -----------------------------------------------------
 echo "[4/9] Creating directory structure..."
 mkdir -p /opt/metixel/media /opt/metixel/media/sync/immich /opt/metixel/media/my_media /opt/metixel/cache /opt/metixel/logs /opt/metixel/etc /run/metixel
