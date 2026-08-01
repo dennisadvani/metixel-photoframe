@@ -391,50 +391,57 @@ class UpdateManager:
         """
         import stat
 
-        script_path = "/tmp/metixel-update.sh"
+        script_path = "/opt/metixel/cache/metixel-update.sh"
+        log_path = "/opt/metixel/cache/metixel-update.log"
         script = f"""#!/bin/bash
-# Metixel OTA update — launched by UpdateManager
-# This script runs detached from the Python process so it survives
-# the backend service being stopped.
-set -euo pipefail
+# Metixel OTA update — launched as a transient systemd service
+# so it survives the backend being stopped (runs in its own cgroup).
+# Uses a trap to guarantee services are restarted even if git/pip fail.
+set -uo pipefail
 
 REPO="{repo_root}"
 REF="{target_ref}"
 CHANNEL="{channel}"
-LOG="/tmp/metixel-update.log"
+LOG="{log_path}"
 
-exec >"$LOG" 2>&1
+exec > >(tee -a "$LOG") 2>&1
 echo "=== Metixel OTA Update ==="
 echo "Target: $REF  Channel: $CHANNEL"
 echo "Started: $(date)"
 
-# 1. Wait for the backend to finish shutting down
+# ── Guaranteed restart (trap fires on EXIT, success or failure) ──
+_restart() {{
+    echo ""
+    echo "--- Restarting services (final) ---"
+    sudo -n systemctl restart metixel-backend metixel-cage 2>/dev/null || true
+    echo "=== End: $(date) ==="
+}}
+trap _restart EXIT
+
+# ── Stop services ──
+echo "Stopping metixel services…"
+sudo -n systemctl stop metixel-cage metixel-backend 2>/dev/null || true
 sleep 2
 
-# 2. Stop cage explicitly (belt and suspenders — backend already stopped)
-sudo -n systemctl stop metixel-cage 2>/dev/null || true
-sleep 1
-
-# 3. Git operations
+# ── Git operations ──
 echo "Fetching from origin…"
 cd "$REPO"
-git fetch --tags --force origin
+# The repo may be owned by 'pi' but systemd-run executes as root.
+# Mark it safe so git doesn't refuse to operate.
+git config --global --add safe.directory "$REPO" 2>/dev/null || true
+git fetch --tags --force origin || echo "WARNING: git fetch failed (continuing)"
 
 echo "Checking out $REF…"
-git reset --hard "$REF"
+git reset --hard "$REF" || echo "WARNING: git checkout failed (continuing)"
 
-# 4. Reinstall Python package
+# ── Reinstall Python package ──
 echo "Reinstalling Python package…"
-pip install --break-system-packages -e "$REPO"
+pip install --break-system-packages -e "$REPO" || echo "WARNING: pip install failed (continuing)"
 
-# 5. Restart services
-echo "Restarting services…"
-sudo -n systemctl restart metixel-backend metixel-cage
-
-echo "Update complete: $(date)"
+echo "Update finished: $(date)"
 echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' 2>/dev/null || echo unknown)"
 
-# 6. Clean up
+# ── Clean up script (trap handles restart next) ──
 rm -f "$0"
 """
         # Write the script
@@ -442,15 +449,21 @@ rm -f "$0"
             f.write(script)
         os.chmod(script_path, os.stat(script_path).st_mode | stat.S_IEXEC)
 
-        logger.info("Update script written to %s — launching via nohup", script_path)
-        # Detach: nohup ensures the script keeps running after the parent dies
-        subprocess.Popen(
-            ["nohup", "/bin/bash", script_path],
+        logger.info("Update script written to %s — launching via systemd-run", script_path)
+        # systemd-run creates a transient service in its own cgroup, so the
+        # script survives even when the backend is stopped.
+        subprocess.run(
+            [
+                "sudo", "-n", "systemd-run",
+                "--unit=metixel-update",
+                "--description=Metixel OTA Update",
+                "--collect",          # drop unit after it exits (don't leave garbage)
+                "--pipe",             # suppress systemd-run's own output
+                "/bin/bash", script_path,
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            start_new_session=True,
-            cwd=repo_root,
+            timeout=10,
         )
 
     # -- Channel Management --------------------------------------------------
