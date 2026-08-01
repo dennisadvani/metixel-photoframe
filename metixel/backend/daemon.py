@@ -352,19 +352,41 @@ class BackendDaemon:
             ip = status.get("ip", "unknown")
 
             from metixel.shared.ipc import ControlMessage
-            sent = self._ipc.send(ControlMessage(
-                cmd="show_message",
-                args={
-                    "title": "Welcome to Metixel Photoframe!",
-                    "body": f"Web dashboard: http://metixel.local or http://{ip}. Upload media via SMB — Windows: \\\\metixel\\metixel-media, Mac: smb://metixel/metixel-media. Default password: raspberry. Dismiss the welcome banner in the Web UI to remove this popup.",
-                    "severity": "info",
-                    "duration": 120,  # auto-dismiss after 2 min
+
+            # Show three welcome messages sequentially on the frame display.
+            # Each auto-dismisses after 2 minutes.
+            messages = [
+                {
+                    "title": "Welcome to Metixel",
+                    "body": f"Manage your photo frame via the Web UI at http://metixel.local or http://{ip}.",
                 },
-            ))
-            if sent:
-                logger.info("First-run welcome sent to frontend")
-            else:
-                logger.debug("First-run welcome IPC send failed — frontend may not be ready")
+                {
+                    "title": "Upload photos via File Sharing",
+                    "body": (
+                        f"Upload photos and videos to your media folder via SMB — "
+                        f"Windows: \\\\metixel\\metixel-media, "
+                        f"Mac: smb://metixel/metixel-media. "
+                        f"Or sync your Immich media to this photo frame via the Web UI."
+                    ),
+                },
+                {
+                    "title": "Enjoy Metixel!",
+                    "body": (
+                        "Remove these welcome messages in future by dismissing the "
+                        "welcome banner in the Web UI. You can also remove all the "
+                        "boot up messages in Advanced → System → Quiet Boot."
+                    ),
+                },
+            ]
+
+            for msg in messages:
+                self._ipc.send(ControlMessage(
+                    cmd="show_message",
+                    args={**msg, "severity": "info", "duration": 120},
+                ))
+                time.sleep(0.5)  # brief pause so messages queue in order
+
+            logger.info("First-run welcome messages sent to frontend")
         except Exception:
             logger.warning("Failed to show first-run welcome", exc_info=True)
 
