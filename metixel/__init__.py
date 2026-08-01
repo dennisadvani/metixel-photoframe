@@ -7,4 +7,4 @@ Phase 1: Raspberry Pi 2/3/Zero 2 W (Mesa EGL via pi3d + cage/XWayland)
 Phase 2: Raspberry Pi 4/5 + Radxa Zero 3W (Mesa/DRM/Wayland)
 """
 
-__version__ = "0.2.5-beta.6"
+__version__ = "0.2.6-beta.7"
