@@ -64,24 +64,33 @@
         <main>
             <!-- ═══════════════ Dashboard Page ═══════════════ -->
             <section id="page-dashboard" class="page active">
+                <div id="welcome-banner" class="card card--welcome" style="display:none">
+                    <button class="card-close" id="btn-welcome-dismiss" aria-label="Dismiss" title="Dismiss">&times;</button>
+                    <h2>🎉 Welcome to Metixel Photoframe!</h2>
+                    <div class="welcome-grid">
+                        <div class="welcome-item">
+                            <span class="material-symbols-outlined">desktop_windows</span>
+                            <div>
+                                <strong>Web Dashboard</strong>
+                                <p>Manage your frame at <code id="welcome-url">http://metixel.local:8080</code></p>
+                            </div>
+                        </div>
+                        <div class="welcome-item">
+                            <span class="material-symbols-outlined">folder_open</span>
+                            <div>
+                                <strong>Upload Media via SMB</strong>
+                                <p>
+                                    <strong>Windows:</strong> <code>\\metixel\metixel-media</code><br>
+                                    <strong>Mac:</strong> <code>smb://metixel/metixel-media</code><br>
+                                    <strong>Password:</strong> <code>raspberry</code>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="card">
                     <h2>System Status</h2>
                     <div class="stat-grid" id="system-health">
-                        <div class="stat-item stat-graph" id="stat-cpu">
-                            <div class="stat-label">CPU</div>
-                            <div class="stat-value" id="stat-cpu-val">--</div>
-                            <canvas class="stat-sparkline" id="stat-cpu-canvas"></canvas>
-                        </div>
-                        <div class="stat-item stat-graph" id="stat-memory">
-                            <div class="stat-label">Memory</div>
-                            <div class="stat-value" id="stat-mem-val">--</div>
-                            <canvas class="stat-sparkline" id="stat-mem-canvas"></canvas>
-                        </div>
-                        <div class="stat-item stat-graph" id="stat-swap">
-                            <div class="stat-label">Swap</div>
-                            <div class="stat-value" id="stat-swap-val">--</div>
-                            <canvas class="stat-sparkline" id="stat-swap-canvas"></canvas>
-                        </div>
                         <div class="stat-item" id="stat-uptime">
                             <div class="stat-label">Uptime</div>
                             <div class="stat-value" id="stat-uptime-val">--</div>
@@ -105,6 +114,21 @@
                         <div class="stat-item" id="stat-playlist">
                             <div class="stat-label">Playlist</div>
                             <div class="stat-value" id="stat-playlist-val">--</div>
+                        </div>
+                        <div class="stat-item stat-graph" id="stat-cpu">
+                            <div class="stat-label">CPU</div>
+                            <div class="stat-value" id="stat-cpu-val">--</div>
+                            <canvas class="stat-sparkline" id="stat-cpu-canvas"></canvas>
+                        </div>
+                        <div class="stat-item stat-graph" id="stat-memory">
+                            <div class="stat-label">Memory</div>
+                            <div class="stat-value" id="stat-mem-val">--</div>
+                            <canvas class="stat-sparkline" id="stat-mem-canvas"></canvas>
+                        </div>
+                        <div class="stat-item stat-graph" id="stat-swap">
+                            <div class="stat-label">Swap</div>
+                            <div class="stat-value" id="stat-swap-val">--</div>
+                            <canvas class="stat-sparkline" id="stat-swap-canvas"></canvas>
                         </div>
                     </div>
                 </div>

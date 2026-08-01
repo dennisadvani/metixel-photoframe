@@ -112,6 +112,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cache_dir": "cache/",
         "log_level": "NONE",
         "quiet_boot": False,
+        "first_run": True,
         "timezone": "",
         "ntp_enabled": True,
         "ntp_servers": [""],

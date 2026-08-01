@@ -524,6 +524,9 @@
         await refreshProcessing();
         _refreshDashSyncStatus();
 
+        // Show welcome banner on first run
+        _checkWelcomeBanner();
+
         // Poll every 3 seconds for live updates
         _dashboardTimer = setInterval(async function () {
             if (document.getElementById("page-dashboard").classList.contains("active")) {
@@ -592,6 +595,48 @@
 
         // Load persistent messages (shown once per dashboard visit)
         _loadPersistentMessages();
+    }
+
+    // -- First-Run Welcome Banner --------------------------------------------
+
+    var _welcomeBound = false;
+
+    /**
+     * Show the welcome banner on the dashboard if this is a first-run
+     * (system.first_run is true).  Binds the dismiss button once.
+     */
+    async function _checkWelcomeBanner() {
+        var banner = document.getElementById("welcome-banner");
+        if (!banner) return;
+
+        // Fetch config to check the first_run flag
+        var config = await apiGet("/config/system");
+        if (!config || !config.first_run) {
+            banner.style.display = "none";
+            return;
+        }
+
+        // Show the banner
+        banner.style.display = "";
+
+        // Bind dismiss button once
+        if (!_welcomeBound) {
+            _welcomeBound = true;
+            var dismissBtn = document.getElementById("btn-welcome-dismiss");
+            if (dismissBtn) {
+                dismissBtn.addEventListener("click", async function () {
+                    dismissBtn.disabled = true;
+                    var result = await apiPut("/config/system", { first_run: false });
+                    if (result && result.status === "ok") {
+                        banner.style.display = "none";
+                        showToast("Welcome dismissed!", "success");
+                    } else {
+                        dismissBtn.disabled = false;
+                        showToast("Failed to dismiss — try again", "error");
+                    }
+                });
+            }
+        }
     }
 
     // -- Persistent On-Screen Messages --------------------------------------
@@ -2583,7 +2628,7 @@
                 if (sysResult && logResult && logResult.status === "ok") {
                     var msg = "System settings saved! File log level: " + logLevel;
                     if (qbResult && qbResult.status === "ok") {
-                        msg += " | Quiet boot " + (quietBoot ? "enabled" : "disabled") + " — reboot to apply.";
+                        msg += " | Quiet boot " + (quietBoot ? "enabled" : "disabled") + ".";
                     } else if (qbResult && qbResult.status === "error") {
                         msg += " | Quiet boot failed: " + (qbResult.message || "script error");
                         showToast(msg, "error");

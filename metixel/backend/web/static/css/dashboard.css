@@ -388,6 +388,68 @@ header {
     border-radius: 2px;
 }
 
+/* Welcome banner */
+.card--welcome {
+    position: relative;
+    background: linear-gradient(135deg, #1a1a2e 0%, #2d1f3d 50%, #1a1a2e 100%);
+    border-color: var(--primary);
+}
+.card--welcome h2::before {
+    display: none;
+}
+.card-close {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.4rem;
+    cursor: pointer;
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius);
+    line-height: 1;
+}
+.card-close:hover {
+    color: #fff;
+    background: rgba(255,255,255,0.1);
+}
+.welcome-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 0.5rem;
+}
+.welcome-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    flex: 1;
+    min-width: 220px;
+}
+.welcome-item .material-symbols-outlined {
+    font-size: 1.5rem;
+    color: var(--primary);
+    margin-top: 0.15rem;
+}
+.welcome-item strong {
+    color: #fff;
+    font-size: 0.9rem;
+}
+.welcome-item p {
+    margin: 0.25rem 0 0;
+    color: var(--text-muted);
+    font-size: 0.83rem;
+    line-height: 1.5;
+}
+.welcome-item code {
+    background: rgba(255,255,255,0.08);
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    color: var(--primary-light);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Form Elements
    ═══════════════════════════════════════════════════════════════════════════ */

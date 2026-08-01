@@ -393,7 +393,7 @@ revert_quiet_boot() {
     echo "  systemd:      getty unmasks, drop-ins removed"
     echo "  sysctl:       99-metixel.conf removed"
     echo ""
-    echo "  Reboot to apply. Boot messages and login prompt will be visible again."
+    echo "  Boot messages and login prompt will be visible on next boot."
 }
 
 # ===========================================================================

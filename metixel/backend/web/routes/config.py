@@ -411,9 +411,9 @@ def toggle_quiet_boot():
             "status": "ok",
             "quiet_boot": enabled,
             "message": (
-                "Quiet boot enabled — reboot to apply."
+                "Quiet boot enabled."
                 if enabled
-                else "Quiet boot disabled — reboot to restore console output."
+                else "Quiet boot disabled."
             ),
         })
     except subprocess.TimeoutExpired:

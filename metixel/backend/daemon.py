@@ -222,6 +222,9 @@ class BackendDaemon:
         if is_connected():
             logger.info("Network connected — AP fallback not needed")
             ap_was_active = False
+            # On first run with a network connection, show the welcome
+            # overlay on the frame display and in the web dashboard.
+            self._show_first_run_welcome()
         else:
             # ── No connection — activate PIN-gated AP fallback ───────
             pin = generate_ap_pin()
@@ -248,6 +251,9 @@ class BackendDaemon:
                     ap_was_active = False
                     self._dismiss_pin_message()
                     self._show_connected_message()
+                    # If this is a first run, also show the welcome overlay
+                    # now that the network is available.
+                    self._show_first_run_welcome()
             else:
                 if not ap_was_active and not is_ap_mode_active():
                     pin = generate_ap_pin()
@@ -324,6 +330,50 @@ class BackendDaemon:
             logger.info("Connected message sent to frontend")
         except Exception:
             logger.warning("Failed to show connected message", exc_info=True)
+
+    def _show_first_run_welcome(self) -> None:
+        """Show a first-run welcome overlay on the frame display.
+
+        Only triggers when ``system.first_run`` is ``True`` in config.
+        After showing the message, sets the flag to ``False`` so the
+        welcome is never shown again.
+
+        If the frontend is not yet running (IPC send fails), the flag
+        is NOT cleared — the web dashboard will still show its welcome
+        banner on first access.
+        """
+        try:
+            config = self._state.config
+            if not config.system.get("first_run", False):
+                return
+
+            from metixel.backend.network_manager import get_connection_status
+            status = get_connection_status()
+            ip = status.get("ip", "unknown")
+
+            from metixel.shared.ipc import ControlMessage
+            sent = self._ipc.send(ControlMessage(
+                cmd="show_message",
+                args={
+                    "title": "🎉 Welcome to Metixel Photoframe!",
+                    "body": (
+                        f"Web dashboard: http://metixel.local:8080 or http://{ip}:8080\n"
+                        f"Upload media via SMB:\n"
+                        f"  Windows: \\\\metixel\\metixel-media\n"
+                        f"  Mac:      smb://metixel/metixel-media\n"
+                        f"Default SMB password: raspberry"
+                    ),
+                    "severity": "info",
+                    "duration": 30,  # auto-dismiss after 30s
+                },
+            ))
+            if sent:
+                self._state.update_config("system", {"first_run": False})
+                logger.info("First-run welcome sent to frontend, flag cleared")
+            else:
+                logger.debug("First-run welcome IPC send failed — frontend may not be ready")
+        except Exception:
+            logger.warning("Failed to show first-run welcome", exc_info=True)
 
     def _start_update_manager(self) -> None:
         """Start the OTA update manager in a background thread.
