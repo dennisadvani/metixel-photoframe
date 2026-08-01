@@ -178,7 +178,7 @@ class UpdateManager:
     def repo(self) -> str:
         """GitHub repository in owner/repo format."""
         return self._state.config.updates.get(
-            "github_repo", "metixel-photoframe/metixel-photoframe"
+            "github_repo", "dennisadvani/metixel-photoframe"
         )
 
     @property
@@ -221,11 +221,12 @@ class UpdateManager:
 
     # -- Check for Updates ---------------------------------------------------
 
-    def check_for_updates(self) -> None:
+    def check_for_updates(self, force: bool = False) -> None:
         """Query GitHub for available updates across all channels.
 
         Caches results for ``API_CACHE_TTL_SECONDS`` to avoid hitting
-        rate limits on rapid re-checks.
+        rate limits on rapid re-checks.  Set *force* to ``True`` to
+        bypass the cache (used by the manual "Check for Updates" button).
         """
         # Avoid concurrent checks
         with self._lock:
@@ -236,15 +237,16 @@ class UpdateManager:
             self._last_error = None
 
         try:
-            # Check cache freshness
-            now = time.monotonic()
-            with self._lock:
-                cache_age = now - self._cache_time
-            if cache_age < API_CACHE_TTL_SECONDS and self._cache.get("available"):
-                logger.debug("Using cached GitHub results (%.0fs old)", cache_age)
+            # Check cache freshness (skip if force=True)
+            if not force:
+                now = time.monotonic()
                 with self._lock:
-                    self._check_in_progress = False
-                return
+                    cache_age = now - self._cache_time
+                if cache_age < API_CACHE_TTL_SECONDS and self._cache.get("available"):
+                    logger.debug("Using cached GitHub results (%.0fs old)", cache_age)
+                    with self._lock:
+                        self._check_in_progress = False
+                    return
 
             logger.info("Checking GitHub for updates (repo=%s, channel=%s)",
                          self.repo, self.channel)
@@ -351,8 +353,12 @@ class UpdateManager:
 
             logger.info("Applying update: channel=%s target=%s", target_channel, target_ref)
 
-            # ── Step 1: Stop the frontend (cage) first ─────────────
-            self._stop_frontend()
+            # ── Step 1: Stop the backend first ─────────────────────
+            # Stopping the backend also stops cage (due to
+            # Requires=metixel-backend.service) and prevents
+            # systemd's Restart=always from bringing cage back
+            # with old code while we update.
+            self._stop_services()
 
             # ── Step 2: git fetch + checkout ───────────────────────
             self._git_fetch()
@@ -361,8 +367,8 @@ class UpdateManager:
             # ── Step 3: Reinstall Python package (deps may have changed) ──
             self._pip_install()
 
-            # ── Step 4: Restart services ───────────────────────────
-            self._restart_services()
+            # ── Step 4: Schedule restart (detached — after HTTP response) ──
+            self._schedule_restart()
 
             # Record the update
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -387,7 +393,7 @@ class UpdateManager:
             logger.exception("Update failed")
             # Attempt to restart services even on failure
             try:
-                self._restart_services()
+                self._schedule_restart()
             except Exception:
                 pass
             return {"status": "error", "message": f"Update failed: {exc}"}
@@ -507,33 +513,39 @@ class UpdateManager:
     # -- Internal: Service Control -------------------------------------------
 
     @staticmethod
-    def _stop_frontend() -> None:
-        """Stop the metixel-cage service (frontend renderer)."""
-        logger.info("Stopping frontend (metixel-cage)…")
+    def _stop_services() -> None:
+        """Stop the backend service (cage stops automatically via Requires=).
+
+        Stopping the backend first prevents systemd's ``Restart=always``
+        on metixel-cage from racing ahead with old code while we update.
+        Because cage ``Requires`` the backend, systemd stops cage
+        automatically and won't restart it until the backend is back up.
+        """
+        logger.info("Stopping metixel-backend (cage will follow)…")
         try:
             subprocess.run(
-                ["sudo", "-n", "systemctl", "stop", "metixel-cage"],
+                ["sudo", "-n", "systemctl", "stop", "metixel-backend"],
                 capture_output=True, text=True, timeout=15,
             )
         except Exception as exc:
-            logger.warning("Could not stop metixel-cage (may already be stopped): %s", exc)
+            logger.warning("Could not stop metixel-backend: %s", exc)
 
     @staticmethod
-    def _restart_services() -> None:
-        """Restart both metixel-backend and metixel-cage services.
+    def _schedule_restart() -> None:
+        """Detached restart of both services after the HTTP response is sent.
 
-        Restarting the backend also restarts the Flask server, so the
-        web UI will briefly show a "Reconnecting…" overlay.
+        Uses ``Popen`` with ``start_new_session=True`` so the restart
+        survives the Flask process exiting.  This avoids the
+        ERR_EMPTY_RESPONSE / timeout issues from running systemctl
+        synchronously inside the request handler.
         """
-        logger.info("Restarting services…")
-        try:
-            subprocess.run(
-                ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
-                capture_output=True, text=True, timeout=20,
-            )
-        except Exception as exc:
-            logger.warning("Service restart may have failed: %s", exc)
-            raise
+        logger.info("Scheduling detached restart of metixel-backend + metixel-cage…")
+        subprocess.Popen(
+            ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
 
     # -- Internal: GitHub API ------------------------------------------------
 

@@ -121,7 +121,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "channel": "stable",
         "auto_check": True,
         "check_interval_hours": 6,
-        "github_repo": "metixel-photoframe/metixel-photoframe",
+        "github_repo": "dennisadvani/metixel-photoframe",
         "last_check": None,
         "last_update": None,
     },
@@ -238,7 +238,7 @@ class Config:
                 "channel": "stable",
                 "auto_check": True,
                 "check_interval_hours": 6,
-                "github_repo": "metixel-photoframe/metixel-photoframe",
+                "github_repo": "dennisadvani/metixel-photoframe",
                 "last_check": None,
                 "last_update": None,
             }

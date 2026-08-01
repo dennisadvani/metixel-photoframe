@@ -2835,7 +2835,7 @@
             if (statusEl) statusEl.innerHTML =
                 '<span class="update-status-checking">Checking for updates\u2026</span>';
 
-            var result = await apiPost("/updates/check");
+            var result = await apiPost("/updates/check?force=true");
             if (result && result.status === "ok") {
                 // Poll for results (the check runs in a background thread)
                 var attempts = 0;

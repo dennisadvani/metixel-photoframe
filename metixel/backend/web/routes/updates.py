@@ -45,6 +45,10 @@ def get_update_status():
 def trigger_update_check():
     """Trigger an immediate check for available updates.
 
+    Query params:
+        force (bool): If ``true``, bypass the 5-minute cache and
+            re-fetch from GitHub.  Use for manual checks.
+
     The check runs in a background thread so the HTTP response returns
     immediately.  Poll ``GET /api/updates/status`` to see results.
     """
@@ -55,9 +59,12 @@ def trigger_update_check():
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 503
 
+    force = request.args.get("force", "false").lower() in ("true", "1", "yes")
+
     # Run the check in a background thread so the HTTP request doesn't block
     thread = threading.Thread(
         target=mgr.check_for_updates,
+        kwargs={"force": force},
         name="update-check-on-demand",
         daemon=True,
     )
