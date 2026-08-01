@@ -90,18 +90,21 @@ $BumpScript = Join-Path $RepoRoot "scripts\bump_version.py"
 $BumpOutput = & python $BumpScript $BumpFlag 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Version bump failed:" -ForegroundColor Red
-    Write-Host $BumpOutput
+    Write-Host ($BumpOutput -join "`n")
     exit 1
 }
 
 # bump_version.py prints a multi-line success message like:
 #   Bumped version: 0.2.8-beta.9
-#   File: C:\...\metixel\__init__.py
-# Extract just the version number from the first line.
-$NewVersion = if ($BumpOutput -match 'Bumped version:\s*(\S+)') {
+#     File: C:\...\metixel\__init__.py
+# PowerShell may capture this as a string array; join first, then
+# extract just the version number from the first line.
+$BumpText = if ($BumpOutput -is [array]) { $BumpOutput -join "`n" } else { "$BumpOutput" }
+$NewVersion = if ($BumpText -match 'Bumped version:\s*(\S+)') {
     $Matches[1]
 } else {
-    $BumpOutput.Trim()
+    # Fallback: take the first non-empty line
+    ($BumpText -split "`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1).Trim()
 }
 
 Write-Host "New version: " -ForegroundColor Green -NoNewline
