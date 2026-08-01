@@ -7,10 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2-beta.3] — 2026-08-01
+
 ### Added
 
 - Version bump script (`scripts/bump_version.py`) with full semver + pre-release support
 - Release documentation (`docs/RELEASING.md`) covering versioning, channels, and workflow
+
+### Fixed
+
+- Channel switch hanging on "Checking for updates…" — added polling loop so the
+  UI refreshes when the background check completes instead of showing the spinner
+  indefinitely
+
+### Changed
+
+- Setup script (`setup_trixie_metixel.sh`): standalone execution support,
+  auto-detects git repository state, improved user feedback during setup
+- README revised for clarity and setup script details
 
 ## [0.2.0-beta.1] — 2026-08-01
 
