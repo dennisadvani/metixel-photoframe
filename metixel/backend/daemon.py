@@ -356,14 +356,13 @@ class BackendDaemon:
                 cmd="show_message",
                 args={
                     "title": "Welcome to Metixel Photoframe!",
-                    "body": f"Web dashboard: http://metixel.local or http://{ip}. Upload media via SMB — Windows: \\\\metixel\\metixel-media, Mac: smb://metixel/metixel-media. Default password: raspberry.",
+                    "body": f"Web dashboard: http://metixel.local or http://{ip}. Upload media via SMB — Windows: \\\\metixel\\metixel-media, Mac: smb://metixel/metixel-media. Default password: raspberry. Dismiss the welcome banner in the Web UI to remove this popup.",
                     "severity": "info",
-                    "duration": 30,  # auto-dismiss after 30s
+                    "duration": 120,  # auto-dismiss after 2 min
                 },
             ))
             if sent:
-                self._state.update_config("system", {"first_run": False})
-                logger.info("First-run welcome sent to frontend, flag cleared")
+                logger.info("First-run welcome sent to frontend")
             else:
                 logger.debug("First-run welcome IPC send failed — frontend may not be ready")
         except Exception:
