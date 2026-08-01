@@ -87,13 +87,22 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "Bumping version: $Type" -ForegroundColor Green
 $BumpScript = Join-Path $RepoRoot "scripts\bump_version.py"
-$NewVersion = & python $BumpScript $BumpFlag 2>&1
+$BumpOutput = & python $BumpScript $BumpFlag 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Version bump failed:" -ForegroundColor Red
-    Write-Host $NewVersion
+    Write-Host $BumpOutput
     exit 1
 }
-$NewVersion = $NewVersion.Trim()
+
+# bump_version.py prints a multi-line success message like:
+#   Bumped version: 0.2.8-beta.9
+#   File: C:\...\metixel\__init__.py
+# Extract just the version number from the first line.
+$NewVersion = if ($BumpOutput -match 'Bumped version:\s*(\S+)') {
+    $Matches[1]
+} else {
+    $BumpOutput.Trim()
+}
 
 Write-Host "New version: " -ForegroundColor Green -NoNewline
 Write-Host $NewVersion -ForegroundColor Yellow
@@ -144,13 +153,12 @@ git push origin $Tag
 
 # -- Done -------------------------------------------------------------------
 
+Write-Host "Switching back to dev..." -ForegroundColor Green
+git checkout dev
+
 Write-Host ""
 Write-Host "=== Release $NewVersion ready ===" -ForegroundColor Green
 Write-Host ""
-Write-Host "Next steps:"
-Write-Host "  1. Create a GitHub Release from the tag:"
-Write-Host "     gh release create $Tag --prerelease --title `"$NewVersion`" --notes `"See CHANGELOG.md`""
-Write-Host "     (use --prerelease for beta/rc, omit for stable)"
-Write-Host ""
-Write-Host "  2. Switch back to dev:"
-Write-Host "     git checkout dev"
+Write-Host "Next step: create a GitHub Release from the tag:"
+Write-Host "  gh release create $Tag --prerelease --title `"$NewVersion`" --notes `"See CHANGELOG.md`""
+Write-Host "  (use --prerelease for beta/rc, omit for stable)"

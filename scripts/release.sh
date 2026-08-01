@@ -156,13 +156,12 @@ git push origin "$TAG"
 
 # -- Done -------------------------------------------------------------------
 
+echo -e "${GREEN}Switching back to dev...${NC}"
+git checkout dev
+
 echo ""
 echo -e "${GREEN}═══ Release $NEW_VERSION ready ═══${NC}"
 echo ""
-echo "Next steps:"
-echo "  1. Create a GitHub Release from the tag:"
-echo "     gh release create $TAG --prerelease --title \"$NEW_VERSION\" --notes \"See CHANGELOG.md\""
-echo "     (use --prerelease for beta/rc, omit for stable)"
-echo ""
-echo "  2. Switch back to dev:"
-echo "     git checkout dev"
+echo "Next step: create a GitHub Release from the tag:"
+echo "  gh release create $TAG --prerelease --title \"$NEW_VERSION\" --notes \"See CHANGELOG.md\""
+echo "  (use --prerelease for beta/rc, omit for stable)"
