@@ -2562,14 +2562,34 @@
                 } else {
                     await apiPost("/config/ntp", { enabled: false });
                 }
-                // Apply quiet boot change (requires sudo)
-                if (quietBoot !== (sys.quiet_boot === true)) {
-                    await apiPost("/config/quiet-boot", { enabled: quietBoot });
+                // Apply quiet boot change (requires sudo) — always run so the
+                // idempotent script is applied.  Show "Applying…" on the
+                // save button while the script runs (may take a few seconds).
+                var qbResult = null;
+                var btnSave = document.getElementById("btn-save-system");
+                var originalLabel = btnSave ? btnSave.textContent : "Save System Settings";
+                if (btnSave) {
+                    btnSave.textContent = "Applying…";
+                    btnSave.disabled = true;
+                }
+                try {
+                    qbResult = await apiPost("/config/quiet-boot", { enabled: quietBoot });
+                } finally {
+                    if (btnSave) {
+                        btnSave.textContent = originalLabel;
+                        btnSave.disabled = false;
+                    }
                 }
                 if (sysResult && logResult && logResult.status === "ok") {
                     var msg = "System settings saved! File log level: " + logLevel;
-                    if (quietBoot !== (sys.quiet_boot === true)) {
+                    if (qbResult && qbResult.status === "ok") {
                         msg += " | Quiet boot " + (quietBoot ? "enabled" : "disabled") + " — reboot to apply.";
+                    } else if (qbResult && qbResult.status === "error") {
+                        msg += " | Quiet boot failed: " + (qbResult.message || "script error");
+                        showToast(msg, "error");
+                        return;
+                    } else if (!qbResult) {
+                        msg += " | Quiet boot unreachable — check server logs.";
                     }
                     showToast(msg, "success");
                 } else if (sysResult) {
