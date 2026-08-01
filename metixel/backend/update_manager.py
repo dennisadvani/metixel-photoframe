@@ -500,7 +500,7 @@ class UpdateManager:
             raise RuntimeError("No repository root found")
         logger.info("Reinstalling Python package…")
         result = subprocess.run(
-            ["pip", "install", "-e", str(self._repo_root)],
+            ["pip", "install", "--break-system-packages", "-e", str(self._repo_root)],
             cwd=str(self._repo_root),
             capture_output=True, text=True, timeout=300,
         )
