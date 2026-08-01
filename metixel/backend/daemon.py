@@ -355,14 +355,8 @@ class BackendDaemon:
             sent = self._ipc.send(ControlMessage(
                 cmd="show_message",
                 args={
-                    "title": "🎉 Welcome to Metixel Photoframe!",
-                    "body": (
-                        f"Web dashboard: http://metixel.local:8080 or http://{ip}:8080\n"
-                        f"Upload media via SMB:\n"
-                        f"  Windows: \\\\metixel\\metixel-media\n"
-                        f"  Mac:      smb://metixel/metixel-media\n"
-                        f"Default SMB password: raspberry"
-                    ),
+                    "title": "Welcome to Metixel Photoframe!",
+                    "body": f"Web dashboard: http://metixel.local or http://{ip}. Upload media via SMB — Windows: \\\\metixel\\metixel-media, Mac: smb://metixel/metixel-media. Default password: raspberry.",
                     "severity": "info",
                     "duration": 30,  # auto-dismiss after 30s
                 },
