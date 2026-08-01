@@ -67,21 +67,20 @@ See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory reco
 ### Setup
 
 ```bash
-sudo apt install git
-sudo mkdir /opt/metixel
-sudo chown pi /opt/metixel
-git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel
-sudo bash /opt/metixel/scripts/setup_trixie_metixel.sh
-sudo reboot
+wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/setup_trixie_metixel.sh
+sudo bash setup_trixie_metixel.sh
 ```
 
-The setup script handles everything:
-1. Installs system packages (cage, XWayland, Mesa, ffmpeg, VLC, Samba)
-2. Sets up Python dependencies
-3. Installs systemd services (`metixel-backend` + `metixel-cage`)
-4. Configures quiet boot (no kernel messages on screen)
-5. Enables I²C, SPI, and HDMI-CEC
-6. Sets GPU memory to 16MB (KMS doesn't need more)
+The setup script can take up to an hour and handles everything:
+1. Installs git and clones the repository to `/opt/metixel`
+2. Installs system packages (cage, XWayland, Mesa, ffmpeg, VLC, Samba)
+3. Sets up Python dependencies
+4. Installs systemd services (`metixel-backend` + `metixel-cage`)
+5. Configures quiet boot (no kernel messages on screen)
+6. Configures Wi-Fi captive portal for initial setup
+7. Enables I²C, SPI, and HDMI-CEC
+8. Sets GPU memory to 16MB (KMS doesn't need more)
+9. Reboots automatically when complete
 
 After reboot, the photo frame starts automatically. Access the dashboard at `http://<pi-ip-address>:8080`.
 

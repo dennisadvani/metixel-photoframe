@@ -31,7 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Boot screen** — custom splash screen with spinner (replaces pygame dependency)
   - `BootLayer` renders on startup until the first media item is ready
 - **System status monitoring** in the Web UI dashboard
-  - CPU temperature, memory usage, disk space, and uptime
+  - CPU utilisation, memory usage, disk space, and uptime
   - Scheduled sync status and next-sync countdown
 - **NTP time synchronisation** with configurable NTP servers
 - **Display sleep schedule** — configurable on/off times for screen power saving

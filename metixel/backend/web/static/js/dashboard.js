@@ -2799,14 +2799,30 @@
         channelSel?.addEventListener("change", async function () {
             var ch = this.value;
             _updateChannelDesc(ch);
+
+            // Show checking state immediately
+            var statusEl = document.getElementById("update-status");
+            if (statusEl) statusEl.innerHTML =
+                '<span class="update-status-checking">Checking for updates\u2026</span>';
+
             var result = await apiPut("/updates/channel", { channel: ch });
             if (result && result.status === "ok") {
                 showToast("Switched to " + ch + " channel", "success");
-                // Trigger a check on the new channel
-                await apiPost("/updates/check");
-                loadUpdateStatus();
+                // set_channel() already triggers a background check on the
+                // backend — poll until it completes, then refresh the UI.
+                var attempts = 0;
+                var maxAttempts = 30; // 15 seconds max
+                var pollInterval = setInterval(async function () {
+                    attempts++;
+                    var status = await apiGet("/updates/status");
+                    if (!status || !status.check_in_progress || attempts >= maxAttempts) {
+                        clearInterval(pollInterval);
+                        loadUpdateStatus();
+                    }
+                }, 500);
             } else {
                 showToast("Failed to switch channel", "error");
+                loadUpdateStatus();
             }
         });
 
