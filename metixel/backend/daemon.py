@@ -372,7 +372,8 @@ class BackendDaemon:
                 {
                     "title": "Enjoy Metixel!",
                     "body": (
-                        "Remove these welcome messages in future by dismissing the "
+                        "These messages will dismiss in 2 minutes. "
+                        "Remove these messages in future by dismissing the "
                         "welcome banner in the Web UI. You can also remove all the "
                         "boot up messages in Advanced → System → Quiet Boot."
                     ),
