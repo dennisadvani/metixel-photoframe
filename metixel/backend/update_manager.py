@@ -49,14 +49,7 @@ _SEMVER_RE = re.compile(
 # Time between update check cycles (when auto_check is enabled)
 MIN_CHECK_INTERVAL = 600  # 10 minutes minimum
 
-# Directories to protect during git reset --hard (already in .gitignore,
-# but we verify they exist and are not tracked to be safe).
-_PROTECTED_PATHS = [
-    "etc/config.json",
-    "media/",
-    "cache/",
-    "logs/",
-]
+# Directories to protect during git reset --hard (already in .gitignore)
 
 
 # ---------------------------------------------------------------------------
@@ -321,15 +314,16 @@ class UpdateManager:
     # -- Apply Update --------------------------------------------------------
 
     def apply_update(self, channel: str | None = None, version: str | None = None) -> dict[str, Any]:
-        """Apply an update by checking out the target git ref and restarting services.
+        """Apply an update via a detached shell script.
 
-        Args:
-            channel: Which channel to update from.  Defaults to current channel.
-            version: Specific version tag or SHA to install.
-                     If omitted, installs the latest on the channel.
+        The update cannot run inside the Python process because stopping
+        the backend service kills this process.  Instead we write a
+        self-contained shell script to ``/tmp/metixel-update.sh`` and
+        launch it with ``nohup``.  The script survives the backend
+        shutdown, performs git + pip + restart, and cleans itself up.
 
-        Returns:
-            A dict with ``status`` ("ok" or "error") and a ``message``.
+        Returns a ``{"status": "ok"}`` response immediately — the actual
+        work happens after the HTTP response is sent and the backend stops.
         """
         if not self._repo_root:
             return {"status": "error", "message": "Git repository not found — cannot self-update"}
@@ -343,7 +337,6 @@ class UpdateManager:
             self._last_error = None
 
         try:
-            # Resolve the target git ref
             target_ref = self._resolve_target_ref(target_channel, version)
             if not target_ref:
                 return {
@@ -352,51 +345,113 @@ class UpdateManager:
                 }
 
             logger.info("Applying update: channel=%s target=%s", target_channel, target_ref)
+            self._write_and_launch_update_script(str(self._repo_root), target_ref, target_channel)
 
-            # ── Step 1: Stop the backend first ─────────────────────
-            # Stopping the backend also stops cage (due to
-            # Requires=metixel-backend.service) and prevents
-            # systemd's Restart=always from bringing cage back
-            # with old code while we update.
-            self._stop_services()
-
-            # ── Step 2: git fetch + checkout ───────────────────────
-            self._git_fetch()
-            self._git_checkout(target_ref)
-
-            # ── Step 3: Reinstall Python package (deps may have changed) ──
-            self._pip_install()
-
-            # ── Step 4: Schedule restart (detached — after HTTP response) ──
-            self._schedule_restart()
-
-            # Record the update
+            # Record the update attempt
             now_iso = datetime.now(timezone.utc).isoformat()
-            self._state.update_config("update", {
-                "last_update": now_iso,
-                "channel": target_channel,
-            })
+            try:
+                self._state.update_config("update", {
+                    "last_update": now_iso,
+                    "channel": target_channel,
+                })
+            except Exception:
+                logger.debug("Could not persist last_update timestamp", exc_info=True)
 
             with self._lock:
                 self._update_in_progress = False
 
-            logger.info("Update applied successfully: %s", target_ref)
+            logger.info("Update script launched for %s — backend will restart now", target_ref)
             return {
                 "status": "ok",
-                "message": f"Updated to {target_ref}. Services are restarting.",
+                "message": f"Updating to {target_ref}. Services will restart momentarily.",
             }
 
         except Exception as exc:
             with self._lock:
                 self._update_in_progress = False
                 self._last_error = str(exc)
-            logger.exception("Update failed")
-            # Attempt to restart services even on failure
-            try:
-                self._schedule_restart()
-            except Exception:
-                pass
+            logger.exception("Update launch failed")
             return {"status": "error", "message": f"Update failed: {exc}"}
+
+    # -- Internal: Update Script ---------------------------------------------
+
+    @staticmethod
+    def _write_and_launch_update_script(
+        repo_root: str, target_ref: str, channel: str
+    ) -> None:
+        """Write and detach a shell script that performs the actual update.
+
+        The script:
+        1. Waits for the backend to fully stop
+        2. Stops cage explicitly
+        3. ``git fetch`` + ``git reset --hard``
+        4. ``pip install --break-system-packages -e .``
+        5. Restarts both services
+        6. Removes itself
+        """
+        import stat
+
+        script_path = "/tmp/metixel-update.sh"
+        script = f"""#!/bin/bash
+# Metixel OTA update — launched by UpdateManager
+# This script runs detached from the Python process so it survives
+# the backend service being stopped.
+set -euo pipefail
+
+REPO="{repo_root}"
+REF="{target_ref}"
+CHANNEL="{channel}"
+LOG="/tmp/metixel-update.log"
+
+exec >"$LOG" 2>&1
+echo "=== Metixel OTA Update ==="
+echo "Target: $REF  Channel: $CHANNEL"
+echo "Started: $(date)"
+
+# 1. Wait for the backend to finish shutting down
+sleep 2
+
+# 2. Stop cage explicitly (belt and suspenders — backend already stopped)
+sudo -n systemctl stop metixel-cage 2>/dev/null || true
+sleep 1
+
+# 3. Git operations
+echo "Fetching from origin…"
+cd "$REPO"
+git fetch --tags --force origin
+
+echo "Checking out $REF…"
+git reset --hard "$REF"
+
+# 4. Reinstall Python package
+echo "Reinstalling Python package…"
+pip install --break-system-packages -e "$REPO"
+
+# 5. Restart services
+echo "Restarting services…"
+sudo -n systemctl restart metixel-backend metixel-cage
+
+echo "Update complete: $(date)"
+echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' 2>/dev/null || echo unknown)"
+
+# 6. Clean up
+rm -f "$0"
+"""
+        # Write the script
+        with open(script_path, "w") as f:
+            f.write(script)
+        os.chmod(script_path, os.stat(script_path).st_mode | stat.S_IEXEC)
+
+        logger.info("Update script written to %s — launching via nohup", script_path)
+        # Detach: nohup ensures the script keeps running after the parent dies
+        subprocess.Popen(
+            ["nohup", "/bin/bash", script_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            cwd=repo_root,
+        )
 
     # -- Channel Management --------------------------------------------------
 
@@ -444,108 +499,6 @@ class UpdateManager:
         except Exception:
             pass
         return None
-
-    def _git_fetch(self) -> None:
-        """Fetch all tags and branches from origin."""
-        if not self._repo_root:
-            raise RuntimeError("No git repository found")
-        logger.info("Fetching from origin…")
-        result = subprocess.run(
-            ["git", "fetch", "--tags", "--force", "origin"],
-            cwd=str(self._repo_root),
-            capture_output=True, text=True, timeout=120,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"git fetch failed: {result.stderr.strip()[-500:]}")
-
-    def _git_checkout(self, ref: str) -> None:
-        """Reset the working tree to the target ref (in-place, no merge)."""
-        if not self._repo_root:
-            raise RuntimeError("No git repository found")
-
-        # Verify protected paths are not going to be clobbered
-        for rel_path in _PROTECTED_PATHS:
-            full_path = self._repo_root / rel_path
-            if not full_path.exists():
-                continue
-            # Check if git tracks this file
-            tracked_result = subprocess.run(
-                ["git", "ls-files", "--error-unmatch", rel_path],
-                cwd=str(self._repo_root),
-                capture_output=True,
-            )
-            if tracked_result.returncode == 0:
-                logger.warning(
-                    "Protected path '%s' is tracked by git — it will be overwritten!",
-                    rel_path,
-                )
-
-        logger.info("Checking out %s…", ref)
-        result = subprocess.run(
-            ["git", "reset", "--hard", ref],
-            cwd=str(self._repo_root),
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"git reset --hard {ref} failed: {result.stderr.strip()[-500:]}")
-        logger.info("Working tree reset to %s", ref)
-
-    def _pip_install(self) -> None:
-        """Reinstall the metixel package with pip (editable install).
-
-        Uses ``pip install -e .`` which is fast when dependencies
-        haven't changed (wheels are cached).
-        """
-        if not self._repo_root:
-            raise RuntimeError("No repository root found")
-        logger.info("Reinstalling Python package…")
-        result = subprocess.run(
-            ["pip", "install", "--break-system-packages", "-e", str(self._repo_root)],
-            cwd=str(self._repo_root),
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            # pip install failure is not fatal — the code may still run
-            logger.warning("pip install had issues (may be OK): %s",
-                           result.stderr.strip()[-500:])
-            # Don't raise — the git checkout already updated the code
-
-    # -- Internal: Service Control -------------------------------------------
-
-    @staticmethod
-    def _stop_services() -> None:
-        """Stop the backend service (cage stops automatically via Requires=).
-
-        Stopping the backend first prevents systemd's ``Restart=always``
-        on metixel-cage from racing ahead with old code while we update.
-        Because cage ``Requires`` the backend, systemd stops cage
-        automatically and won't restart it until the backend is back up.
-        """
-        logger.info("Stopping metixel-backend (cage will follow)…")
-        try:
-            subprocess.run(
-                ["sudo", "-n", "systemctl", "stop", "metixel-backend"],
-                capture_output=True, text=True, timeout=15,
-            )
-        except Exception as exc:
-            logger.warning("Could not stop metixel-backend: %s", exc)
-
-    @staticmethod
-    def _schedule_restart() -> None:
-        """Detached restart of both services after the HTTP response is sent.
-
-        Uses ``Popen`` with ``start_new_session=True`` so the restart
-        survives the Flask process exiting.  This avoids the
-        ERR_EMPTY_RESPONSE / timeout issues from running systemctl
-        synchronously inside the request handler.
-        """
-        logger.info("Scheduling detached restart of metixel-backend + metixel-cage…")
-        subprocess.Popen(
-            ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
 
     # -- Internal: GitHub API ------------------------------------------------
 
