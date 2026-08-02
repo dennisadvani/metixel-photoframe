@@ -214,7 +214,24 @@ class ImmichSyncer:
 
     def _sync(self) -> SyncResult:
         """Perform one full sync cycle."""
-        # Prevent overlapping syncs
+        # ── Network connectivity gate ─────────────────────────────────
+        # Don't waste time attempting Immich API calls when there's no
+        # upstream network — the result would always be a timeout/error.
+        try:
+            from metixel.backend.network_manager import is_connected
+        except ImportError:
+            # Non-Linux / dev environment — assume connected.
+            pass
+        else:
+            if not is_connected():
+                logger.info("No network connectivity — skipping Immich sync cycle")
+                result = SyncResult(started_at=time.time(), finished_at=time.time())
+                result.errors.append("No network connectivity")
+                result.success = False
+                self._persist_result(result)
+                return result
+
+        # ── Prevent overlapping syncs ─────────────────────────────────
         with self._sync_lock:
             if self._syncing:
                 logger.warning("Sync already in progress — aborting duplicate")

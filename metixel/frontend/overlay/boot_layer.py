@@ -98,6 +98,10 @@ class BootLayer(OverlayLayer):
         # 1×1 pixel textures for the progress bar (avoids draw_rect colour bugs)
         self._progress_bg_tex: Any = None   # dark gray track
         self._progress_fill_tex: Any = None  # red fill
+        # Suppress the progress bar once the slideshow queue has enough
+        # items to begin — avoids the bar cycling to 100% multiple times
+        # on cached restarts where items process instantly.
+        self._progress_hidden: bool = False
 
     # -- Properties ----------------------------------------------------------
 
@@ -153,6 +157,14 @@ class BootLayer(OverlayLayer):
 
             # ── Update progress bar from backend status file ──────────
             self._progress_pct = self._read_progress_pct()
+
+            # Hide the progress bar once enough items are queued for a
+            # meaningful slideshow.  On cached restarts the optimisation
+            # queue processes items instantly, making the bar jump to
+            # 100% repeatedly — confusing and unnecessary.
+            queue_size = (shared_state or {}).get("queue_size", 0)
+            if queue_size >= 6:
+                self._progress_hidden = True
 
             if slideshow_ready and min_elapsed:
                 logger.info("Boot screen fading out — slideshow is ready")
@@ -218,8 +230,9 @@ class BootLayer(OverlayLayer):
         # Uses draw_image with 1×1 pixel textures instead of draw_rect
         # to avoid colour-space issues (draw_rect may render wrong
         # colours on some pi3d/OpenGL configurations).
-        # The bar only draws when we have a meaningful percentage.
-        if self._progress_pct > 0.0 and self._progress_pct <= 100.0:
+        # The bar only draws when we have a meaningful percentage
+        # and haven't been suppressed (queue already has enough items).
+        if self._progress_pct > 0.0 and self._progress_pct <= 100.0 and not self._progress_hidden:
             # Lazy-init progress bar textures
             if self._progress_bg_tex is None:
                 self._progress_bg_tex = self._make_pixel_tex(
@@ -357,27 +370,6 @@ class BootLayer(OverlayLayer):
             return self._progress_pct
         except (json.JSONDecodeError, OSError, ValueError):
             return self._progress_pct
-        """Read the optimisation queue's progress from the status file.
-
-        Returns a percentage (0–100) during the ``optimising_images``
-        phase, or 0.0 if the file doesn't exist or is in any other
-        phase (scanning, complete, transcoding, etc.).
-        """
-        try:
-            if not _PROCESSING_STATUS_PATH.exists():
-                return 0.0
-            with open(_PROCESSING_STATUS_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-            phase = data.get("phase", "")
-            if phase != "optimising_images":
-                return 0.0
-            total = data.get("total", 0)
-            processed = data.get("processed", 0)
-            if total > 0 and processed > 0:
-                return min(100.0, (processed / total) * 100.0)
-            return 0.0
-        except (json.JSONDecodeError, OSError, ValueError):
-            return 0.0
 
     def _start_fade(self) -> None:
         """Begin the fade-out animation."""

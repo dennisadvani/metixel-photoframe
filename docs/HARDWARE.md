@@ -7,13 +7,13 @@
 |---|---|---|---|
 | Raspberry Pi Zero 2 W | 512MB | VideoCore IV | Minimum recommended spec |
 | Raspberry Pi 2 Model B | 1GB | VideoCore IV | |
-| Raspberry Pi 3 Model B/B+ | 1GB | VideoCore IV | Recommended for best experience |
+| Raspberry Pi 3 Model B/B+ | 1GB | VideoCore IV | |
+| Raspberry Pi 5 | 2GB / 4GB / 8GB | VideoCore VII | **Recommended (2GB+)** — runs the same Trixie image as Pi 2/3 via cage + XWayland |
 
 ### Phase 2 (Planned)
 | Model | RAM | GPU | Notes |
 |---|---|---|---|
 | Raspberry Pi 4 Model B | 1-8GB | VideoCore VI | |
-| Raspberry Pi 5 | 4-8GB | VideoCore VII | |
 | Radxa Zero 3W | 1-4GB | Mali G52 | Rockchip RK3566 |
 
 ## Required Accessories

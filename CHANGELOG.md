@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `/api/config/processing-status` endpoint — serves per‑phase progress data
 - `FEATURES.md` — comprehensive feature list linked from README
 - Per‑image processing time and per‑batch memory delta logging (DEBUG level)
+- **Raspberry Pi 5 (2GB+) official Phase 1 support** — runs the same Trixie
+  image via cage + XWayland; now the recommended platform over Pi 3
+- **Immich network connectivity gate** — syncer checks `is_connected()` before
+  attempting API calls, avoiding wasted time on doomed requests when offline
 
 ### Changed
 
@@ -49,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `is_ready_to_play` now requires `first_frame_path` and `last_frame_path` for
   video items — videos without cached frames are excluded from the slideshow
 - Dev setup script: removed `python3-pip` and `python3-pygame` (dead deps)
+- **Pi 5 moved from Phase 2 to Phase 1** — `ARCHITECTURE.md`, `CLAUDE.md`,
+  `README.md`, and `HARDWARE.md` updated; Pi 5 (2GB+) now the recommended platform
+- **Boot progress bar auto‑hides** when slideshow queue reaches 6 items,
+  preventing repeated 100 % cycling on cached restarts
+- **Release scripts** (`release.ps1`, `release.sh`): merge strategy changed
+  from `--ff-only` to `--no-ff` for cleaner release history
+- **Web UI** scanning label updated to "Scanning folders and generating thumbnails"
 
 ### Fixed
 
@@ -67,6 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   shrinking `total_remaining`
 - **Progress bar disappearing** — retains last‑known percentage when phase
   switches away from `optimising_images`
+- **Boot layer duplicate docstring** — removed dead duplicate of
+  `_read_progress_pct` that shadowed the real implementation
 
 ### Removed
 

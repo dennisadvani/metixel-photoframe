@@ -139,7 +139,7 @@ git checkout main
 git pull origin main
 
 echo -e "${GREEN}Merging dev into main...${NC}"
-git merge dev --ff-only -m "Release $NEW_VERSION"
+git merge dev --no-ff -m "Release $NEW_VERSION"
 
 # -- Tag on main ------------------------------------------------------------
 
