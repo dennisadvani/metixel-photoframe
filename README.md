@@ -135,18 +135,8 @@ Contributions are welcome! Before diving in:
 
 1. Read [`ARCHITECTURE.md`](ARCHITECTURE.md) — it's the single source of truth
 2. Check the [issues](https://github.com/dennisadvani/metixel-photoframe/issues) for open tasks
-3. Run scripts/setup_trixie_dev_env.sh to setup a dev SMB share to mount in VS Code
+3. Set up a dev environment — see **[Development Setup →](docs/INSTALLATION.md#path-c-development-setup-remote-via-samba)**
 
-```bash
-# Run tests
-python -m pytest tests/ -v
-
-# Lint
-ruff check metixel/
-
-# Type check
-mypy metixel/
-```
 
 ---
 
