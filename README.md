@@ -1,7 +1,19 @@
-# Metixel Photoframe
+<p align="center">
+  <a href="https://github.com/dennisadvani/metixel-photoframe">
+    <img src="docs/images/metixel_logo_red_white.png" alt="Metixel Photoframe" width="450">
+  </a>
+</p>
 
 <p align="center">
-  <em>A custom, open-source digital photo frame OS for Raspberry Pi.<br>Beautiful slideshows. Immich integration. Zero-cloud. Just pictures.</em>
+  <em>A custom, open-source digital photo frame OS for Raspberry Pi.<br>Beautiful slideshows. Immich integration. Web UI. Zero-cloud. Just pictures and videos.</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/digital_frame_wall.PNG" alt="Metixel digital photo frame on a wall" width="70%">
+</p>
+
+<p align="center">
+  <img src="docs/images/metixel_web_ui.PNG" alt="Metixel Web Dashboard" width="70%">
 </p>
 
 ---
@@ -36,8 +48,8 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 ## Hardware Support
 
-| Phase | Models | RAM | SWAP | Capabilities | GPU |
-|---|---|---|---|---|---|
+| Models | RAM | SWAP | Capabilities | GPU |
+|---|---|---|---|---|
 | Pi Zero 2 W | 512MB | Required | Images only (no video playback, optimisation or transcoding) | VideoCore IV | ✅ Active |
 | Pi 2, Pi 3 | 1GB | Required | Images + video playback (1080p max; >1080p requires transcoding before being queued) | VideoCore IV | ✅ Active |
 | **Pi 5** | 2GB+ | Recommended | Images + video playback + transcoding — **recommended platform** | VideoCore VII | ✅ Active |
