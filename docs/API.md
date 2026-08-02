@@ -5,7 +5,7 @@
 
 ## REST API (Backend → Web Dashboard)
 
-Base URL: `http://<frame-ip>:8080/api`
+Base URL: `http://<frame-ip>/api` (port 8080 also works — Flask listens directly)
 
 ### Configuration
 - `GET /api/config` — Full configuration
