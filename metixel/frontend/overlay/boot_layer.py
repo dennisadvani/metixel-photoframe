@@ -3,16 +3,17 @@
 """Boot Screen Layer — renders the Metixel logo and spinner on startup.
 
 The boot layer is drawn at z=0.0 (closest to camera, on top of everything).
-It fades out smoothly once the first slideshow item is ready, revealing
-the slideshow underneath with no black-screen gap.
+It fades out smoothly once the frontend's presentation engine has loaded
+its initial queue, revealing the slideshow underneath with no black-screen gap.
 
 For video: VLC renders on top of everything anyway, so the boot layer
 unloads immediately when a video starts — no fade needed.
 
 Architecture:
     BootLayer is a self-contained :class:`OverlayLayer`.  It has zero
-    knowledge of the slideshow or presentation engine — it only checks
-    the backend's ``playlist.json`` to decide when to dismiss.
+    knowledge of the slideshow or presentation engine — it receives a
+    ``slideshow_ready`` flag through the overlay shared-state dict from
+    the renderer and uses that to decide when to dismiss.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ logger = logging.getLogger(__name__)
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 _LOGO_PATH = _ASSETS_DIR / "metixel_logo_red_white.png"
 _SPINNER_PATH = _ASSETS_DIR / "spinner.png"
-_PLAYLIST_PATH = Path("/run/metixel/playlist.json")
 
 # ---------------------------------------------------------------------------
 # Timing
@@ -49,6 +49,12 @@ _SPINNER_RPM = 60        # Spinner rotation speed
 _LOGO_WIDTH_RATIO = 0.60       # Logo takes 60% of screen width
 _SPINNER_SIZE_RATIO = 0.05     # Spinner size relative to screen height
 _SPINNER_GAP_RATIO = 0.04      # Gap between logo bottom and spinner top
+_PROGRESS_GAP_RATIO = 0.02     # Gap between spinner bottom and progress bar
+_PROGRESS_HEIGHT_RATIO = 0.008 # Progress bar height relative to screen height
+_PROGRESS_WIDTH_RATIO = 0.30   # Progress bar is 30% screen width (half of logo)
+
+# Processing status file written by the optimisation queue
+_PROCESSING_STATUS_PATH = Path("/run/metixel/processing_status.json")
 
 
 class BootLayer(OverlayLayer):
@@ -82,6 +88,16 @@ class BootLayer(OverlayLayer):
         self._spinner_x: int = 0
         self._spinner_y: int = 0
         self._layout_done: bool = False
+
+        # Progress bar (below spinner, shows optimisation progress)
+        self._progress_pct: float = 0.0
+        self._progress_w: int = 0
+        self._progress_h: int = 0
+        self._progress_x: int = 0
+        self._progress_y: int = 0
+        # 1×1 pixel textures for the progress bar (avoids draw_rect colour bugs)
+        self._progress_bg_tex: Any = None   # dark gray track
+        self._progress_fill_tex: Any = None  # red fill
 
     # -- Properties ----------------------------------------------------------
 
@@ -126,19 +142,24 @@ class BootLayer(OverlayLayer):
             return
 
         # ── Check exit conditions ──────────────────────────────────────
+        # The boot layer fades out when the frontend's presentation
+        # engine has actually loaded its queue (not just when the
+        # backend has written playlist.json to disk).  The renderer
+        # passes ``slideshow_ready`` via shared_state once the
+        # background queue loader thread has finished.
         if self._state == "active" and self._start_time > 0:
             min_elapsed = (now - self._start_time) >= _MIN_DISPLAY
-            playlist_count = self._count_playlist_items()
+            slideshow_ready = (shared_state or {}).get("slideshow_ready", False)
 
-            if playlist_count > 0 and min_elapsed:
-                logger.info(
-                    "Boot screen fading out — %d items in playlist",
-                    playlist_count,
-                )
+            # ── Update progress bar from backend status file ──────────
+            self._progress_pct = self._read_progress_pct()
+
+            if slideshow_ready and min_elapsed:
+                logger.info("Boot screen fading out — slideshow is ready")
                 self._start_fade()
 
-            # Safety net: if backend never starts, dismiss after timeout.
-            # Only active once the clock has started (first draw occurred).
+            # Safety net: if the frontend never loads its queue, dismiss
+            # after a timeout rather than showing the boot screen forever.
             if self._start_time > 0 and (now - self._start_time) > 300.0:
                 logger.warning(
                     "Boot screen timed out after 300s — dismissing",
@@ -192,6 +213,41 @@ class BootLayer(OverlayLayer):
                 rotation=self._spinner_angle,
                 z=self.next_z(),
             )
+
+        # ── Progress bar ───────────────────────────────────────────────
+        # Uses draw_image with 1×1 pixel textures instead of draw_rect
+        # to avoid colour-space issues (draw_rect may render wrong
+        # colours on some pi3d/OpenGL configurations).
+        # The bar only draws when we have a meaningful percentage.
+        if self._progress_pct > 0.0 and self._progress_pct <= 100.0:
+            # Lazy-init progress bar textures
+            if self._progress_bg_tex is None:
+                self._progress_bg_tex = self._make_pixel_tex(
+                    backend, (0.2, 0.2, 0.2))
+            if self._progress_fill_tex is None:
+                self._progress_fill_tex = self._make_pixel_tex(
+                    backend, (0.85, 0.15, 0.15))
+
+            pct = self._progress_pct / 100.0
+            # Track (dark gray, full width)
+            if self._progress_bg_tex is not None:
+                backend.draw_image(
+                    self._progress_bg_tex,
+                    self._progress_x, self._progress_y,
+                    self._progress_w, self._progress_h,
+                    alpha=self._alpha,
+                    z=self.next_z(),
+                )
+            # Fill (red, clipped to percentage)
+            if self._progress_fill_tex is not None and pct > 0.0:
+                fill_w = max(1, int(self._progress_w * pct))
+                backend.draw_image(
+                    self._progress_fill_tex,
+                    self._progress_x, self._progress_y,
+                    fill_w, self._progress_h,
+                    alpha=self._alpha,
+                    z=self.next_z(),
+                )
 
     # -- Internal ------------------------------------------------------------
 
@@ -262,12 +318,66 @@ class BootLayer(OverlayLayer):
         self._spinner_x = (dw - self._spinner_size) // 2
         self._spinner_y = self._logo_y + self._logo_h + int(dh * _SPINNER_GAP_RATIO)
 
+        # Progress bar: half the logo width, centred, in the gap
+        # between the spinner and the bottom of the screen.
+        self._progress_h = max(int(dh * _PROGRESS_HEIGHT_RATIO), 4)
+        self._progress_w = int(dw * _PROGRESS_WIDTH_RATIO)
+        self._progress_x = (dw - self._progress_w) // 2
+        # Place in the middle of the remaining space below the spinner
+        _space_below = dh - (self._spinner_y + self._spinner_size)
+        self._progress_y = self._spinner_y + self._spinner_size + (_space_below - self._progress_h) // 2
+
         self._layout_done = True
         logger.debug(
-            "Boot layout: logo=%dx%d@(%d,%d) spinner=%d@(%d,%d)",
+            "Boot layout: logo=%dx%d@(%d,%d) spinner=%d@(%d,%d) "
+            "progress=%dx%d@(%d,%d)",
             self._logo_w, self._logo_h, self._logo_x, self._logo_y,
             self._spinner_size, self._spinner_x, self._spinner_y,
+            self._progress_w, self._progress_h,
+            self._progress_x, self._progress_y,
         )
+
+    def _read_progress_pct(self) -> float:
+        """Read optimisation progress from the per-phase status file.
+
+        Returns percentage (0–100) from the ``optimising_images`` phase
+        or retains the last-known value when that phase is absent.
+        """
+        try:
+            if not _PROCESSING_STATUS_PATH.exists():
+                return self._progress_pct
+            with open(_PROCESSING_STATUS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            phases = data.get("phases", {})
+            opt = phases.get("optimising_images", {})
+            total = opt.get("total", 0)
+            processed = opt.get("processed", 0)
+            if total > 0 and processed > 0:
+                return min(100.0, (processed / total) * 100.0)
+            return self._progress_pct
+        except (json.JSONDecodeError, OSError, ValueError):
+            return self._progress_pct
+        """Read the optimisation queue's progress from the status file.
+
+        Returns a percentage (0–100) during the ``optimising_images``
+        phase, or 0.0 if the file doesn't exist or is in any other
+        phase (scanning, complete, transcoding, etc.).
+        """
+        try:
+            if not _PROCESSING_STATUS_PATH.exists():
+                return 0.0
+            with open(_PROCESSING_STATUS_PATH, encoding="utf-8") as f:
+                data = json.load(f)
+            phase = data.get("phase", "")
+            if phase != "optimising_images":
+                return 0.0
+            total = data.get("total", 0)
+            processed = data.get("processed", 0)
+            if total > 0 and processed > 0:
+                return min(100.0, (processed / total) * 100.0)
+            return 0.0
+        except (json.JSONDecodeError, OSError, ValueError):
+            return 0.0
 
     def _start_fade(self) -> None:
         """Begin the fade-out animation."""
@@ -297,7 +407,8 @@ class BootLayer(OverlayLayer):
 
     def _unload_textures(self) -> None:
         """Release GPU textures.  Safe to call multiple times."""
-        for attr in ('_bg_tex', '_logo_tex', '_spinner_tex'):
+        for attr in ('_bg_tex', '_logo_tex', '_spinner_tex',
+                     '_progress_bg_tex', '_progress_fill_tex'):
             tex = getattr(self, attr, None)
             if tex is not None:
                 try:
@@ -307,19 +418,14 @@ class BootLayer(OverlayLayer):
                     logger.debug("Failed to unload %s texture", attr, exc_info=True)
                 setattr(self, attr, None)
 
-    # -- Playlist helpers (static — no dependency on presentation engine) ---
-
     @staticmethod
-    def _count_playlist_items() -> int:
-        """Count items in the backend's playlist.json.
+    def _make_pixel_tex(backend: DisplayBackend, color: tuple[float, float, float]) -> Any:
+        """Create a 1×1 pixel texture of the given RGB color.
 
-        Returns 0 if the file doesn't exist or is unreadable.
+        Used for the progress bar since ``draw_rect`` can produce
+        incorrect colours on some pi3d / OpenGL configurations.
         """
-        try:
-            if not _PLAYLIST_PATH.exists():
-                return 0
-            with open(_PLAYLIST_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-            return len(data) if isinstance(data, list) else 0
-        except (json.JSONDecodeError, OSError):
-            return 0
+        import numpy as np
+        arr = np.zeros((1, 1, 3), dtype=np.uint8)
+        arr[0, 0] = [int(c * 255) for c in color]
+        return backend.load_texture(arr)

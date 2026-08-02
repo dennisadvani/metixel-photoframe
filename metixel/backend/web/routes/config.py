@@ -696,3 +696,24 @@ def _read_display_info() -> dict | None:
     except (OSError, ValueError, json.JSONDecodeError):
         pass
     return None
+
+
+# ── Background processing status (per-phase progress bars) ─────────────────
+
+@config_bp.route("/processing-status", methods=["GET"])
+def processing_status():
+    """Return per-phase processing progress for the dashboard.
+
+    Each phase (``scanning``, ``optimising_images``, ``transcoding``)
+    tracks its own ``total``/``processed`` independently.  The web UI
+    renders a separate progress bar for each phase so the user can see
+    all queue states at once, without flickering between them.
+    """
+    try:
+        path = Path("/run/metixel/processing_status.json")
+        if not path.exists():
+            return jsonify({"active": None, "phases": {}})
+        with open(path, encoding="utf-8") as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({"active": None, "phases": {}})

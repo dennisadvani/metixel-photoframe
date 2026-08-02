@@ -14,11 +14,54 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image
 
 from metixel.shared.models import MediaItem, MediaType
 
 logger = logging.getLogger(__name__)
+
+# ── CPU limit detection (cached at import time) ──────────────────────────
+
+_CPULIMIT_PATH: str | None = None
+
+
+def _detect_cpulimit() -> str | None:
+    """Locate the ``cpulimit`` binary.  Returns the path or None."""
+    global _CPULIMIT_PATH
+    if _CPULIMIT_PATH is None:
+        import shutil
+        _CPULIMIT_PATH = shutil.which("cpulimit")
+        if _CPULIMIT_PATH:
+            logger.debug("cpulimit found at %s — workers will be CPU-capped", _CPULIMIT_PATH)
+        else:
+            logger.debug("cpulimit not installed — workers use nice-only (no CPU cap)")
+    return _CPULIMIT_PATH
+
+
+def _wrap_worker_cmd(worker_cmd: list[str]) -> list[str]:
+    """Wrap the worker command with cpulimit and/or nice.
+
+    Priority order:
+    1. ``cpulimit -l 50`` (hard 50 % CPU cap) if installed
+    2. ``nice -n 19`` (lowest scheduling priority) always
+
+    On a Pi 3 with 4 cores, ``cpulimit -l 50`` means the worker uses
+    at most half of one core — the other 3.5 cores stay free for the
+    frontend renderer and Flask web server.
+    """
+    cpulimit = _detect_cpulimit()
+    if cpulimit:
+        # cpulimit -l 50 -f -- nice -n 19 python3 ...
+        # -f = foreground (wait for child to exit) — required on v3.1
+        return [
+            cpulimit, "-l", "50", "-f", "--",
+            "nice", "-n", "19",
+        ] + worker_cmd
+    # cpulimit not available — nice only (scheduling hint, no hard cap)
+    return ["nice", "-n", "19"] + worker_cmd
+
+
+# ── ImageProcessor ───────────────────────────────────────────────────────
 
 
 class ImageProcessor:
@@ -77,21 +120,30 @@ class ImageProcessor:
     def process(self, source_path: Path, source: str = "local") -> MediaItem | None:
         """Process a single image file.
 
+        Heavy PIL operations (load, transpose, resize, save) are delegated
+        to a subprocess via :mod:`metixel.backend.processing.worker` so that:
+
+        * Memory is reclaimed by the OS when the subprocess exits
+        * ``nice -n 19`` gives the subprocess lowest CPU priority
+        * A crash/OOM in PIL kills only the worker, not the backend daemon
+
         Returns a MediaItem with paths to the cached version, or None on failure.
-        Corrupt/unreadable images are automatically deleted so they don't block
-        future scan cycles.
+        Corrupt/unreadable images are automatically deleted.
         """
+        import json
+        import subprocess
+        import sys
+
         try:
-            # Compute content hash for cache key
+            # Compute content hash for cache key (in-process — fast)
             file_hash = self._hash_file(source_path)
 
-            # Check cache
+            # Resolve cache paths
             cached_path = self._image_cache / f"{file_hash}.jpg"
             thumb_path = self._thumb_cache / f"{file_hash}.jpg"
 
+            # ── Cache hit ────────────────────────────────────────────
             if cached_path.exists():
-                # Validate the cached file isn't corrupt (e.g. partial write
-                # from a killed process).  Re-process if it's broken.
                 if cached_path.stat().st_size < 1024 or not self._validate_cached_image(cached_path):
                     logger.warning(
                         "Cached image is corrupt — will re-process: %s",
@@ -101,67 +153,101 @@ class ImageProcessor:
                         cached_path.unlink()
                 else:
                     logger.debug("Image already cached: %s", file_hash)
-                    # Regenerate thumbnail if missing (e.g. cache was cleared)
                     if not thumb_path.exists():
                         self._regenerate_thumbnail(cached_path, thumb_path)
                     exif = self._read_exif(source_path)
-                    return self._build_item(source_path, cached_path, thumb_path, exif, source, file_hash)
+                    w, h = self._get_cached_dimensions(cached_path)
+                    return MediaItem(
+                        id=file_hash,
+                        original_path=source_path,
+                        cached_path=cached_path,
+                        media_type=MediaType.IMAGE,
+                        width=w,
+                        height=h,
+                        thumbnail_path=thumb_path,
+                        exif_data=exif,
+                        source=source,
+                    )
 
-            # Open and process
-            with Image.open(source_path) as img:
-                # Auto-rotate based on EXIF orientation
-                img = ImageOps.exif_transpose(img)
+            # ── Cache miss — delegate to subprocess ──────────────────
+            logger.debug("Spawning worker for: %s", source_path.name)
+            screen = f"{self._screen_w}x{self._screen_h}"
+            worker_cmd = [
+                sys.executable, "-m", "metixel.backend.processing.worker",
+                "--source", str(source_path),
+                "--cache", str(cached_path),
+                "--thumb", str(thumb_path),
+                "--screen", screen,
+            ]
+            # Wrap with cpulimit (hard CPU cap) if installed, otherwise
+            # fall back to nice-only (priority hint, no hard cap).
+            cmd = _wrap_worker_cmd(worker_cmd)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+            )
 
-                # Extract EXIF before converting
-                exif = self._extract_exif(img)
+            # Parse JSON output from the worker.
+            # cpulimit prints "Process NNNN detected\n" to stdout
+            # BEFORE the worker's output, so we take only the last
+            # non-empty line (the worker's JSON).
+            try:
+                stdout_lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+                # The worker's JSON is the first line; cpulimit noise
+                # ("Process NNNN detected") comes after it.
+                json_line = stdout_lines[0] if stdout_lines else result.stdout
+                data = json.loads(json_line)
+            except (json.JSONDecodeError, IndexError):
+                logger.error(
+                    "Worker returned invalid JSON for %s (rc=%d, stderr=%r, stdout=%r)",
+                    source_path.name, result.returncode,
+                    result.stderr[:200] if result.stderr else "",
+                    result.stdout[:200] if result.stdout else "",
+                )
+                return None
 
-                # Convert to RGB (handles RGBA, P, etc.)
-                if img.mode not in ("RGB", "L"):
-                    img = img.convert("RGB")
+            status = data.get("status", "error")
 
-                # Resize to screen resolution (maintain aspect ratio)
-                img = self._resize_to_screen(img)
+            # ── Corrupt image — delete source ────────────────────────
+            if status == "corrupt":
+                logger.warning(
+                    "Corrupt/unreadable image — deleting: %s",
+                    source_path.name,
+                )
+                self._safe_delete(source_path)
+                return None
 
-                # Save cached version
-                img.save(cached_path, "JPEG", quality=self.JPEG_QUALITY)
+            # ── Transient error ──────────────────────────────────────
+            if status == "error":
+                logger.warning(
+                    "Worker failed for %s: %s (rc=%d)",
+                    source_path.name,
+                    data.get("message", "unknown"),
+                    result.returncode,
+                )
+                return None
 
-                # Generate thumbnail
-                thumb = img.copy()
-                thumb.thumbnail((self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE), Image.LANCZOS)
-                thumb.save(thumb_path, "JPEG", quality=70)
-
+            # ── Success ──────────────────────────────────────────────
             logger.info("Image processed: %s → %s", source_path.name, file_hash)
-            return self._build_item(source_path, cached_path, thumb_path, exif, source, file_hash)
+            return MediaItem(
+                id=file_hash,
+                original_path=source_path,
+                cached_path=cached_path,
+                media_type=MediaType.IMAGE,
+                width=data.get("width", 0),
+                height=data.get("height", 0),
+                thumbnail_path=thumb_path,
+                exif_data=data.get("exif", {}),
+                source=source,
+            )
 
-        except UnidentifiedImageError:
-            # File is corrupt, truncated, or not a valid image format.
-            # Remove it so it doesn't keep failing on every scan cycle.
-            logger.warning(
-                "Corrupt/unreadable image — deleting: %s (%d bytes)",
-                source_path.name, source_path.stat().st_size if source_path.exists() else 0,
-            )
-            self._safe_delete(source_path)
-            return None
-        except OSError as e:
-            logger.warning(
-                "Cannot read image file (permissions / I/O error): %s — %s",
-                source_path.name, e,
-            )
+        except subprocess.TimeoutExpired:
+            logger.error("Worker timed out after 120s: %s", source_path.name)
             return None
         except Exception:
             logger.exception("Failed to process image: %s", source_path)
             return None
 
     # -- Helpers -------------------------------------------------------------
-
-    def _resize_to_screen(self, img: Image.Image) -> Image.Image:
-        """Resize image to fit within screen dimensions, maintaining aspect ratio."""
-        # Max dimension = screen diagonal to ensure quality for Ken Burns zoom
-        max_w = int(self._screen_w * 1.2)  # 20% overscan for Ken Burns
-        max_h = int(self._screen_h * 1.2)
-
-        img.thumbnail((max_w, max_h), Image.LANCZOS)
-        return img
 
     def _regenerate_thumbnail(self, cached_path: Path, thumb_path: Path) -> None:
         """Generate a thumbnail from an already-cached image.
@@ -195,24 +281,15 @@ class ImageProcessor:
         except Exception:
             return False
 
-    def _extract_exif(self, img: Image.Image) -> dict[str, Any]:
-        """Extract relevant EXIF tags from a PIL Image."""
-        exif_data: dict[str, Any] = {}
+    @staticmethod
+    def _get_cached_dimensions(path: Path) -> tuple[int, int]:
+        """Read image dimensions without decoding pixel data."""
         try:
-            exif = img.getexif()
-            if exif:
-                # Map common EXIF tags
-                for tag_id, value in exif.items():
-                    from PIL.ExifTags import TAGS
-
-                    tag_name = TAGS.get(tag_id, str(tag_id))
-                    # Skip binary data
-                    if isinstance(value, bytes):
-                        continue
-                    exif_data[tag_name] = str(value)
+            from PIL import Image as PILImage
+            with PILImage.open(path) as img:
+                return img.size
         except Exception:
-            pass
-        return exif_data
+            return (0, 0)
 
     @staticmethod
     def _read_exif(path: Path) -> dict[str, Any]:
@@ -255,32 +332,3 @@ class ImageProcessor:
                 logger.info("Deleted corrupt file: %s", path.name)
         except OSError as e:
             logger.warning("Could not delete corrupt file %s: %s", path.name, e)
-
-    def _build_item(
-        self,
-        source: Path,
-        cached: Path,
-        thumb: Path,
-        exif: dict[str, Any],
-        source_name: str,
-        file_hash: str,
-    ) -> MediaItem:
-        """Build a MediaItem from processed data."""
-        # Get dimensions from cached file
-        try:
-            with Image.open(cached) as img:
-                w, h = img.size
-        except Exception:
-            w, h = 0, 0
-
-        return MediaItem(
-            id=file_hash,
-            original_path=source,
-            cached_path=cached,
-            media_type=MediaType.IMAGE,
-            width=w,
-            height=h,
-            thumbnail_path=thumb,
-            exif_data=exif,
-            source=source_name,
-        )

@@ -15,7 +15,6 @@ at all times.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import json
 import logging
@@ -52,39 +51,6 @@ _VIDEO_PLAYING = 1
 #: Last frame has been swapped under VLC; waiting for VLC to exit.
 _VIDEO_SWAPPED = 2
 
-# ---------------------------------------------------------------------------
-# Video frame cache helpers (module-level — no GPU/OpenGL dependency)
-# ---------------------------------------------------------------------------
-
-def _video_frame_cache_path(video_path: str, frame: int, *, cache_base: str = "cache") -> Path:
-    """Return the cache path for a video frame.
-
-    ``frame=1`` → first frame, ``frame=2`` → last frame.
-    Files are stored in ``{cache_base}/videos/{hash}.{frame}.frame``
-    using a SHA-256 hash of the video path to avoid polluting the
-    source media directory.
-    """
-    file_hash = hashlib.sha256(video_path.encode()).hexdigest()[:16]
-    return Path(cache_base) / "videos" / f"{file_hash}.{frame}.frame"
-
-
-def _video_frame_is_cached(video_path: str, frame: int, *, cache_base: str = "cache") -> bool:
-    """Check whether a cached frame file exists and is a valid JPEG."""
-    p = _video_frame_cache_path(video_path, frame, cache_base=cache_base)
-    if not p.exists() or p.stat().st_size == 0:
-        return False
-    # Validate that it's actually a readable JPEG — stale/corrupt
-    # cache files from old extraction code would load as black.
-    try:
-        with Image.open(p) as img:
-            img.verify()
-        return True
-    except Exception:
-        logger.warning("Cached frame is corrupt — will regenerate: %s", p)
-        with contextlib.suppress(OSError):
-            p.unlink()
-        return False
-
 
 def _hash_image_file(path: Path) -> str:
     """Compute a short content hash for an image file.
@@ -100,225 +66,6 @@ def _hash_image_file(path: Path) -> str:
             f.seek(-1024, 2)
             sha.update(f.read(1024))
     return sha.hexdigest()[:16]
-
-
-def _extract_frame_array_cpu(
-    video_path: str,
-    video_w: int,
-    video_h: int,
-    *,
-    seek_time: float | None = None,
-    seek_from_end: float | None = None,
-) -> np.ndarray | None:
-    """Extract a single video frame as a numpy array (CPU-only, no GPU).
-
-    Safe to call from any thread.
-
-    When *seek_from_end* is set, ffmpeg's ``-sseof`` option seeks to
-    *seek_from_end* seconds before EOF.  Because compressed video can
-    only be decoded from a keyframe, a seek that is too close to the
-    end (e.g. 0.05 s) may silently snap to the previous keyframe —
-    potentially **seconds** earlier.  A larger offset (≥ 1 s) combined
-    with decoding multiple frames and taking the last one avoids this.
-    """
-    try:
-        if seek_from_end is not None:
-            # Decode the last ~1 second of video into individual frames,
-            # then keep only the final frame.  This is robust against
-            # keyframe placement: even if the nearest keyframe is several
-            # seconds before EOF, we decode through to the actual end.
-            #
-            # MEMORY-SAFE: uses subprocess.Popen with incremental stdout
-            # reading and a rolling buffer containing only the last ~2
-            # frames.  On a Pi Zero 2 W (512 MB) a single 1080p raw-
-            # RGB24 frame is ~6 MB, so the buffer peaks at ~12 MB —
-            # compared to the previous capture_output=True approach which
-            # could hold **gigabytes** of raw video in RAM when the last
-            # keyframe was far from EOF.
-            cmd = [
-                "ffmpeg", "-y",
-                "-sseof", f"-{seek_from_end}",
-                "-i", video_path,
-                "-f", "image2pipe",
-                "-pix_fmt", "rgb24", "-vcodec", "rawvideo", "-",
-            ]
-            proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            )
-            frame_size = video_w * video_h * 3
-
-            # Read stdout incrementally, keeping only the last ~2 frames
-            # in a rolling byte buffer.  The rawvideo pipe has no framing
-            # — it's just a continuous RGB24 stream — but ffmpeg always
-            # writes complete frames, so the *end* of the stream is
-            # guaranteed to be frame-aligned.
-            buf = b''
-            max_buf = 2 * frame_size + 65536  # ~12 MB for 1080p
-            while True:
-                chunk = proc.stdout.read(65536)
-                if not chunk:
-                    break
-                buf += chunk
-                if len(buf) > max_buf:
-                    # Drop oldest data; keep ~2 frames = safe margin
-                    buf = buf[-(2 * frame_size):]
-
-            proc.wait(timeout=30)
-            if proc.returncode != 0:
-                logger.warning(
-                    "ffmpeg (sseof) returned %d for %s",
-                    proc.returncode, video_path,
-                )
-                return None
-
-            total = len(buf)
-            if total < frame_size:
-                # Fewer bytes than one frame — maybe a partial frame.
-                # Try to salvage whatever we got.
-                if total < 3:
-                    return None
-                pixels = total // 3
-                h = max(1, int((pixels / (video_w / max(video_h, 1))) ** 0.5))
-                h = min(h, video_h)
-                w = pixels // h
-                if w < 1 or h < 1:
-                    return None
-                return np.frombuffer(
-                    buf[: w * h * 3], dtype=np.uint8,
-                ).reshape((h, w, 3))
-
-            # The last frame_size bytes of buf are the last complete frame
-            # (the stream always ends on a frame boundary).
-            num_frames = total // frame_size
-            frame = np.frombuffer(
-                buf[-frame_size:], dtype=np.uint8,
-            ).reshape((video_h, video_w, 3))
-            logger.debug(
-                "Extracted last frame from %d frames (%.1fs of video) for %s",
-                num_frames, num_frames / 30.0, video_path,
-            )
-            return frame
-
-        elif seek_time is not None:
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", str(seek_time),
-                "-i", video_path,
-                "-vframes", "1", "-f", "image2pipe",
-                "-pix_fmt", "rgb24", "-vcodec", "rawvideo", "-",
-            ]
-            proc = subprocess.run(cmd, capture_output=True, timeout=30)
-            if proc.returncode != 0:
-                logger.warning(
-                    "ffmpeg (ss) returned %d for %s (stderr: %.200s)",
-                    proc.returncode, video_path,
-                    proc.stderr.decode(errors="replace") if proc.stderr else "",
-                )
-                return None
-
-            actual = len(proc.stdout)
-            expected = video_w * video_h * 3
-            if actual < 3:
-                return None
-            if actual >= expected:
-                frame = np.frombuffer(
-                    proc.stdout[:expected], dtype=np.uint8,
-                ).reshape((video_h, video_w, 3))
-            else:
-                pixels = actual // 3
-                h = max(1, int((pixels / (video_w / max(video_h, 1))) ** 0.5))
-                h = min(h, video_h)
-                w = pixels // h
-                if w < 1 or h < 1:
-                    return None
-                frame = np.frombuffer(
-                    proc.stdout[: w * h * 3], dtype=np.uint8,
-                ).reshape((h, w, 3))
-            return frame
-        else:
-            return None
-
-    except Exception:
-        logger.warning(
-            "Frame extraction failed for %s", video_path, exc_info=True,
-        )
-        return None
-
-
-def _get_or_create_video_frame(
-    video_path: str,
-    frame: int,
-    video_w: int,
-    video_h: int,
-    duration: float,
-    *,
-    screen_w: int = 1920,
-    screen_h: int = 1080,
-    cache_base: str = "cache",
-) -> Path | None:
-    """Return the path to a cached video frame JPEG, creating it if needed.
-
-    ``frame=1`` → first frame (t=0).
-    ``frame=2`` → last frame.  Uses ``-sseof -1.0`` to decode the final
-    second of video and take the very last complete frame.  This is
-    robust against keyframe placement — even if the nearest I-frame is
-    several seconds before EOF, all frames are decoded and the last one
-    is kept.  Falls back to ``-ss duration-1.0`` if ``-sseof`` is
-    unavailable (older ffmpeg).
-
-    The JPEG is downscaled to *screen_w* × *screen_h* and saved to
-    ``{cache_base}/videos/{hash}.{frame}.frame``.  Returns ``None``
-    if extraction fails.
-    """
-    cache_path = _video_frame_cache_path(video_path, frame, cache_base=cache_base)
-    if _video_frame_is_cached(video_path, frame, cache_base=cache_base):
-        return cache_path
-
-    if frame == 1:
-        arr = _extract_frame_array_cpu(video_path, video_w, video_h, seek_time=0.0)
-    else:
-        # Primary: decode the last ~1 second of video, keep the final frame.
-        # -sseof -1.0 → start 1 second before EOF, decode all remaining frames.
-        # This is keyframe-robust: ffmpeg snaps to the nearest previous I-frame
-        # (which could be seconds earlier), but since we decode everything to EOF
-        # and take the last frame, we always get the true final frame.
-        arr = _extract_frame_array_cpu(
-            video_path, video_w, video_h, seek_from_end=1.0,
-        )
-        if arr is None and duration > 1.0:
-            logger.debug("-sseof failed for %s, falling back to -ss", video_path)
-            arr = _extract_frame_array_cpu(
-                video_path, video_w, video_h,
-                seek_time=max(0.0, duration - 1.0),
-            )
-
-    if arr is None:
-        logger.warning("Cannot extract frame %d for %s", frame, video_path)
-        return None
-
-    try:
-        img = Image.fromarray(arr)
-        if img.width > screen_w or img.height > screen_h:
-            img.thumbnail((screen_w, screen_h), Image.LANCZOS)
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            suffix=".jpg", delete=False, dir=cache_path.parent,
-        ) as tmp:
-            try:
-                img.save(tmp.name, "JPEG", quality=92)
-                os.replace(tmp.name, cache_path)
-            except Exception:
-                with contextlib.suppress(OSError):
-                    os.unlink(tmp.name)
-                raise
-
-        logger.debug("Cached video frame %d: %s", frame, cache_path)
-        return cache_path
-    except Exception:
-        logger.warning(
-            "Failed to cache frame %d for %s", frame, video_path, exc_info=True,
-        )
-        return None
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +116,7 @@ class PresentationEngine:
         self._current_idx: int = -1
         self._paused: bool = False
         self._item_start_time: float = 0.0
+        self._queue_loaded: bool = False  # True after first set_queue() call
 
         # --- Preload (CPU worker → GPU upload on main thread) ---
         self._preload_thread: threading.Thread | None = None
@@ -537,6 +285,7 @@ class PresentationEngine:
 
         self._preload_into_inactive()
         self._write_current_media()
+        self._queue_loaded = True
         logger.info("Media queue set: %d items", len(self._queue))
 
     def add_items(self, items: list[MediaItem]) -> int:
@@ -1135,11 +884,34 @@ class PresentationEngine:
         self._tex_item[slot] = item
 
     def _load_texture_for_item(self, item: MediaItem) -> Any:
-        """Load an image as a GPU texture (videos are handled elsewhere)."""
+        """Load an image as a GPU texture (videos are handled elsewhere).
+
+        If the file is an uncached original that is excessively large
+        (> 3× screen pixels), the load is skipped to avoid OOM on
+        memory-constrained hardware.  The backend will eventually
+        provide a cached (resized) version via playlist hot-reload.
+        """
         path_to_load = item.cached_path
 
         max_w = int(self._backend.width * 1.2)
         max_h = int(self._backend.height * 1.2)
+
+        # ── Guard: skip huge uncached originals ──────────────────────
+        if str(item.cached_path) == str(item.original_path):
+            try:
+                file_size_mb = path_to_load.stat().st_size / (1024 * 1024)
+            except OSError:
+                file_size_mb = 0.0
+            # Files > 8 MB are likely high-res originals.  Loading them
+            # into PIL can consume 100+ MB of RAM per image.  Defer to
+            # the backend's cached (resized) version.
+            if file_size_mb > 8.0:
+                logger.debug(
+                    "Skipping large uncached original (%.1f MB): %s — "
+                    "waiting for backend cached version",
+                    file_size_mb, path_to_load,
+                )
+                return None
 
         try:
             from PIL import ImageFile
@@ -1232,6 +1004,22 @@ class PresentationEngine:
             else:
                 path_to_load = item.cached_path
 
+            # ── Guard: skip huge uncached originals ──────────────────
+            if str(item.cached_path) == str(item.original_path):
+                try:
+                    file_size_mb = path_to_load.stat().st_size / (1024 * 1024)
+                except OSError:
+                    file_size_mb = 0.0
+                if file_size_mb > 8.0:
+                    logger.debug(
+                        "Preload skipping large uncached original "
+                        "(%.1f MB): %s — waiting for backend cache",
+                        file_size_mb, path_to_load,
+                    )
+                    with self._preload_lock:
+                        self._preload_array = None
+                    return
+
             img = Image.open(path_to_load)
             img = ImageOps.exif_transpose(img)
 
@@ -1265,9 +1053,11 @@ class PresentationEngine:
                 self._preload_array = None
 
     def _preload_video_first_frame(self, item: MediaItem) -> Path | None:
-        """Ensure the first frame of a video is cached and return its path.
+        """Return the path to the pre-generated first frame JPEG.
 
-        Called from the preload worker thread — CPU-only, no GPU.
+        Frame extraction is a backend (Phase 2 OPTIMISE) responsibility.
+        The frontend simply loads the cache file referenced by the
+        ``MediaItem`` — no ffmpeg/ffprobe here.
         """
         video_path = str(item.cached_path or item.original_path)
 
@@ -1282,37 +1072,15 @@ class PresentationEngine:
                 )
                 return None
 
-        try:
-            result = subprocess.run(
-                ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                 "-show_entries", "stream=width,height,duration",
-                 "-of", "json", video_path],
-                capture_output=True, text=True, timeout=30,
-            )
-            if result.returncode != 0:
-                logger.warning("ffprobe failed for %s (rc=%d)", video_path, result.returncode)
-                return None
-            import json
-            probe = json.loads(result.stdout)
-            streams = probe.get("streams", [])
-            if not streams:
-                logger.warning("No video stream in %s", video_path)
-                return None
-            s = streams[0]
-            vw = s.get("width", 0) or 0
-            vh = s.get("height", 0) or 0
-            duration = float(s.get("duration", 0) or 0)
-        except Exception:
-            logger.warning("ffprobe timed out or failed for %s — skipping preload", video_path)
-            return None
+        if item.first_frame_path is not None and item.first_frame_path.exists():
+            return item.first_frame_path
 
-        screen_w = int(self._backend.width)
-        screen_h = int(self._backend.height)
-        return _get_or_create_video_frame(
-            video_path, 1, vw, vh, duration,
-            screen_w=screen_w, screen_h=screen_h,
-            cache_base=self._cache_base,
+        logger.warning(
+            "No first frame cached for %s — "
+            "backend should have pre-generated this during OPTIMISE",
+            video_path,
         )
+        return None
 
     def _upload_pending_preload(self) -> None:
         """Upload a finished preload numpy array to the inactive GPU slot."""
@@ -1389,31 +1157,16 @@ class PresentationEngine:
 
         video_path = str(item.cached_path or item.original_path)
 
-        # --- Probe -------------------------------------------------------
-        try:
-            result = subprocess.run(
-                ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                 "-show_entries", "stream=width,height,duration",
-                 "-of", "json", video_path],
-                capture_output=True, text=True, timeout=30,
+        # --- Use metadata from backend (no ffprobe here) ---------------
+        vw = item.width
+        vh = item.height
+        duration = item.duration_seconds
+
+        if vw <= 0 or vh <= 0:
+            logger.warning(
+                "Video has invalid dimensions (%dx%d): %s — skipping",
+                vw, vh, video_path,
             )
-            if result.returncode != 0:
-                logger.warning("Cannot probe video (rc=%d): %s — skipping", result.returncode, video_path)
-                self._advance()
-                return
-            import json
-            probe = json.loads(result.stdout)
-            streams = probe.get("streams", [])
-            if not streams:
-                logger.warning("No video stream in %s — skipping", video_path)
-                self._advance()
-                return
-            s = streams[0]
-            vw = s.get("width", 0) or 0
-            vh = s.get("height", 0) or 0
-            duration = float(s.get("duration", 0) or 0)
-        except Exception:
-            logger.warning("Cannot probe video: %s — skipping", video_path)
             self._advance()
             return
 
@@ -1422,14 +1175,19 @@ class PresentationEngine:
 
         # --- Ensure first frame in active slot --------------------------
         if self._tex[self._active] is None:
-            first_cache = _get_or_create_video_frame(
-                video_path, 1, vw, vh, duration,
-                screen_w=screen_w, screen_h=screen_h,
-                cache_base=self._cache_base,
-            )
-            if first_cache is not None:
-                self._tex[self._active] = self._backend.load_texture(first_cache)
+            if item.first_frame_path is not None and item.first_frame_path.exists():
+                self._tex[self._active] = self._backend.load_texture(
+                    item.first_frame_path,
+                )
                 self._tex_item[self._active] = item
+            else:
+                logger.warning(
+                    "No first frame cached for %s — "
+                    "backend should have pre-generated this. Skipping video.",
+                    video_path,
+                )
+                self._advance()
+                return
 
         # --- Compute layout (needed for both the pre-VLC draw and VLC) ---
         resolved_fit = self._resolve_fit_mode(item)
@@ -1458,7 +1216,10 @@ class PresentationEngine:
 
         VLC creates its own borderless window on top of the pi3d display.
         The state machine in :meth:`_video_tick` polls the subprocess and
-        handles the last-frame under-swap.
+        handles the last-frame under-swap (scheduled at 20% of duration).
+
+        First and last frame caches are generated by the backend during
+        Phase 2 (OPTIMISE) — the frontend never runs ffmpeg/ffprobe.
         """
         # --- Draw first frame to both buffers before VLC starts ----------
         # VLC creates its own window on top of the pi3d display.  The
@@ -1473,6 +1234,19 @@ class PresentationEngine:
         else:
             logger.warning(
                 "No first-frame texture for %s — VLC will appear over black",
+                video_path,
+            )
+
+        # --- Verify last frame cache exists (backend responsibility) -----
+        last_cached = (
+            item.last_frame_path is not None
+            and item.last_frame_path.exists()
+        )
+        if not last_cached:
+            logger.warning(
+                "Last frame not cached for %s — "
+                "backend should have pre-generated this during OPTIMISE. "
+                "First frame will persist after video ends.",
                 video_path,
             )
 
@@ -1504,13 +1278,15 @@ class PresentationEngine:
         self._video_duration = duration
         self._video_paused = False
         self._video_last_frame_loaded = False
-        # Swap the last frame ~1s before the video ends (or immediately
-        # for very short videos).
-        swap_delay = max(0.0, duration - 1.0) if duration > 0 else 3.0
+        # Swap the last frame at 20% of video playtime — early enough
+        # that VLC is guaranteed to still be running and the last frame
+        # was pre-cached before launch (cache hit → no blocking ffmpeg).
+        swap_delay = duration * 0.20 if duration > 0 else 0.6
         self._video_swap_at = time.monotonic() + swap_delay
         logger.debug(
-            "Video state machine: PLAYING (swap_at=%.1f, duration=%.1f)",
-            self._video_swap_at, duration,
+            "Video state machine: PLAYING (swap_at=%.1f, duration=%.1f, "
+            "last_frame_cached=%s)",
+            self._video_swap_at, duration, last_cached,
         )
 
     def _video_tick(self) -> None:
@@ -1551,27 +1327,26 @@ class PresentationEngine:
         self, item: MediaItem, video_path: str,
         video_vw: int, video_vh: int, video_duration: float,
     ) -> bool:
-        """Extract & upload the last frame into the active texture slot.
+        """Load the pre-generated last frame into the active texture slot.
 
-        Returns ``True`` on success, ``False`` if extraction failed.
+        Frame extraction is a backend (Phase 2 OPTIMISE) responsibility.
+        The frontend simply loads the cache file from ``item.last_frame_path``
+        — no ffmpeg/ffprobe here.
+
+        Returns ``True`` on success, ``False`` if the frame file is missing.
         Does **not** modify ``_video_state`` or ``_video_last_frame_loaded``
         — callers are responsible for state management.
         """
-        screen_w = int(self._backend.width)
-        screen_h = int(self._backend.height)
-
-        last_cache = _get_or_create_video_frame(
-            video_path, 2,
-            video_vw, video_vh, video_duration,
-            screen_w=screen_w, screen_h=screen_h,
-            cache_base=self._cache_base,
-        )
-        if last_cache is None:
+        if item.last_frame_path is None or not item.last_frame_path.exists():
             logger.warning(
-                "No last frame for %s — first frame stays in pi3d",
+                "No last frame cached for %s — "
+                "backend should have pre-generated this during OPTIMISE. "
+                "First frame will persist after video ends.",
                 video_path,
             )
             return False
+
+        last_cache = item.last_frame_path
 
         self._unload_texture(self._tex[self._active])
         try:
@@ -1801,12 +1576,10 @@ class PresentationEngine:
                             thumb = str(hash_thumb)
                     except OSError:
                         pass
-                # Video-only: fall back to first-frame cache
+                # Video-only: fall back to first-frame cache (backend-generated)
                 if thumb is None and item.media_type == MediaType.VIDEO:
-                    video_path = str(item.cached_path or item.original_path)
-                    first_frame = _video_frame_cache_path(video_path, 1, cache_base=self._cache_base)
-                    if first_frame.exists():
-                        thumb = str(first_frame)
+                    if item.first_frame_path is not None and item.first_frame_path.exists():
+                        thumb = str(item.first_frame_path)
                 data = {
                     "file": str(item.original_path.name) if item.original_path else "unknown",
                     "index": self._current_idx,
@@ -1830,12 +1603,15 @@ class PresentationEngine:
     # ------------------------------------------------------------------
 
     def scan_folder(self, folder_path: Path) -> list[MediaItem]:
-        """Scan a folder and build MediaItem stubs from its contents.
+        """Scan a folder and build lightweight MediaItem stubs from its contents.
 
         This is a dev/debug fallback — in normal operation the backend
         ``OptimisationQueue`` handles media discovery and processing.
-        Only minimal metadata is gathered; no optimisation or thumbnail
-        generation is performed.
+
+        The scan is deliberately lightweight (no PIL, no content hashing)
+        to avoid competing with the backend optimiser for CPU/memory/I/O
+        on resource-constrained hardware.  Stub items are replaced by
+        backend-processed items via playlist hot-reload.
 
         Videos are intentionally excluded — they must come through the
         backend pipeline so transcoding, guardrails, and playlist gating
@@ -1853,36 +1629,27 @@ class PresentationEngine:
             if suffix not in self.IMAGE_EXTENSIONS:
                 continue
             try:
-                with Image.open(entry) as img:
-                    w, h = img.size
+                # Fast identity: use file path hash (NOT content hash).
+                # Content hashing reads 1 MB per file and competes with
+                # the backend optimiser for I/O — skipped intentionally.
+                # Backend-processed items will replace these stubs via
+                # playlist hot-reload with correct content-hash IDs.
+                file_id = hashlib.sha256(
+                    str(entry).encode()
+                ).hexdigest()[:16]
 
-                # Use content-hash ID (matching ImageProcessor) so the
-                # backend's playlist items deduplicate correctly when
-                # merged via hot-reload.
-                file_id = _hash_image_file(entry)
-
-                # Check if an optimised cached version already exists
-                # (e.g. from a previous run).  This avoids loading and
-                # downscaling the original 4K file on every cycle.
-                cache_base = Path(self._cache_base)
-                cached = cache_base / "images" / f"{file_id}.jpg"
-                if not cached.is_file() or cached.stat().st_size < 1024:
-                    cached = entry  # fall back to original if cache is missing/corrupt
-
-                # Thumbnails are generated by the backend OptimisationQueue —
-                # not here.  The frontend only displays what the backend provides.
                 items.append(MediaItem(
                     id=file_id,
                     original_path=entry,
-                    cached_path=cached,
+                    cached_path=entry,  # No cache check — backend will replace
                     media_type=MediaType.IMAGE,
-                    width=w, height=h,
+                    width=0, height=0,  # No PIL — backend provides dimensions
                     duration_seconds=0.0,
                     thumbnail_path=None,
                     source="local",
                 ))
-            except Exception:
-                logger.warning("Skipping unreadable file: %s", entry)
+            except OSError:
+                logger.debug("Skipping unreadable file: %s", entry)
 
         logger.info(
             "Folder scan (dev fallback): %d images in %s",

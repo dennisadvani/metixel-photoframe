@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import Flask, render_template, request, send_from_directory
+from flask import Flask, current_app, jsonify, render_template, request, send_from_directory
 
 from metixel import __version__
 from metixel.backend.state import StateManager
@@ -59,6 +59,7 @@ def create_app(
     ipc: IPCClient,
     opt_queue: object | None = None,
     update_mgr: object | None = None,
+    daemon: object | None = None,
 ) -> Flask:
     """Create and configure the Flask application.
 
@@ -69,6 +70,8 @@ def create_app(
             media library API to report per-video transcode status).
         update_mgr: The UpdateManager instance (optional — used by the
             updates API to check for and apply OTA updates).
+        daemon: The BackendDaemon instance (optional — used to signal
+            slideshow-started for network monitor deferral).
 
     Returns:
         A configured Flask application instance.
@@ -82,6 +85,7 @@ def create_app(
     app.config["METIXEL_IPC"] = ipc
     app.config["METIXEL_OPT_QUEUE"] = opt_queue
     app.config["METIXEL_UPDATE_MGR"] = update_mgr
+    app.config["METIXEL_DAEMON"] = daemon
 
     # Silence Flask's HTTP access logs (they flood the log output)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -116,6 +120,21 @@ def create_app(
     @app.route("/captive")
     def captive_preview() -> str:
         return render_template("captive.html")
+
+    # ── Frontend → backend signal: slideshow has started ──────────────
+    # The frontend renderer calls this once the initial media queue is
+    # loaded and the slideshow begins playing.  The network monitor
+    # defers its AP-fallback countdown until this signal arrives, so it
+    # doesn't compete for CPU / I/O during the initial processing phase.
+    @app.route("/api/slideshow-started", methods=["POST"])
+    def slideshow_started():
+        daemon_obj = current_app.config.get("METIXEL_DAEMON")
+        if daemon_obj is not None:
+            event = getattr(daemon_obj, "_slideshow_started", None)
+            if event is not None and not event.is_set():
+                event.set()
+                logger.info("Slideshow started signal received — network monitor unblocked")
+        return jsonify({"status": "ok"})
 
     @app.route("/<path:path>")
     def serve_spa(path: str) -> str:

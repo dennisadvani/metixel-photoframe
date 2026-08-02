@@ -200,7 +200,7 @@ metixel-photoframe/                           # Repository root
 │   │   ├── processing/
 │   │   │   ├── __init__.py
 │   │   │   ├── image.py              # EXIF parse, resize, downsample, rotate
-│   │   │   ├── video.py              # ffmpeg transcode, thumbnail
+│   │   │   ├── video.py              # ffmpeg transcode, thumbnail, first/last frame extraction
 │   │   │   ├── optimisation_queue.py # 4-phase pipeline orchestrator
 │   │   │   └── matte.py              # Virtual matte board generation
 │   │   ├── web/
@@ -457,18 +457,26 @@ Next frame reflects change
 ┌─────────────────────────────────────────────────────────────┐
 │ Phase 2: OPTIMISE (OptimisationQueue — background thread)   │
 │                                                             │
+│  ALL videos go through VideoProcessor.process() — frame     │
+│  extraction (first + last frame) is always required for     │
+│  slideshow preload/swap.  The transcode step is skipped     │
+│  for H.264 videos within resolution limits.                 │
+│                                                             │
 │  Classifies each item against thresholds:                   │
 │  ┌─────────────────────┐  ┌─────────────────────┐           │
 │  │ Image threshold     │  │ Video threshold     │           │
 │  │ Default: display    │  │ Default: display    │           │
 │  │ resolution.         │  │ resolution + must   │           │
 │  │ Skip if ≤ threshold │  │ be H.264 codec.     │           │
-│  │ (UI overridable).   │  │ Skip if both met.   │           │
+│  │ (UI overridable).   │  │ Skip transcode if   │           │
+│  │                     │  │ both met (frames    │           │
+│  │                     │  │ still extracted).   │           │
 │  └────────┬────────────┘  └────────┬────────────┘           │
 │           │                        │                        │
 │  Priority: Images first → Videos second.                    │
 │  Current job finishes before switching.                     │
 │  Cleanup partial transcodes on startup.                     │
+│  Frame extraction is idempotent (skips if cached).          │
 └──────────────────────┬──────────────────────────────────────┘
                        │ Optimised MediaItems
                        ▼
@@ -478,7 +486,9 @@ Next frame reflects change
 │  Slideshow playlist contains ONLY ready-to-play items:      │
 │  • Images ≤ threshold (no opt needed)                       │
 │  • Optimised images (post-resize)                           │
-│  • Videos ≤ threshold + H.264 codec                         │
+│  • Videos with cached first/last frames                     │
+│    (VideoProcessor extracts .1.frame / .2.frame)            │
+│  • Transcode-skipped videos (H.264 + within limits)         │
 │  • Optimised videos (post-transcode)                        │
 │                                                             │
 │  Playlist persisted to /run/metixel/playlist.json.          │

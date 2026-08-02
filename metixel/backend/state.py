@@ -435,6 +435,8 @@ class StateManager:
                     "height": item.height,
                     "duration_seconds": item.duration_seconds,
                     "thumbnail_path": str(item.thumbnail_path) if item.thumbnail_path else None,
+                    "first_frame_path": str(item.first_frame_path) if item.first_frame_path else None,
+                    "last_frame_path": str(item.last_frame_path) if item.last_frame_path else None,
                     "source": item.source,
                     "transcode_status": item.transcode_status.value if item.transcode_status else None,
                 }

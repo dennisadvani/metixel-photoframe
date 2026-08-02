@@ -435,6 +435,12 @@
         var overlay = document.getElementById("connection-overlay");
         if (!overlay) return;
         if (ok) {
+            // Reconnected after being disconnected — reload the page
+            // to pick up fresh state (playlist, config, dashboard data).
+            if (overlay.style.display === "flex") {
+                window.location.reload();
+                return;
+            }
             overlay.style.display = "none";
             _apiConnected = true;
             _apiErrorCount = 0;
@@ -977,78 +983,50 @@
     // -- Background Processing Status ---------------------------------------
 
     /**
-     * Poll the backend's processing status file and update the
-     * "Background Processing" section of the controls card.
+     * Poll the backend's per-phase processing status and update the
+     * three persistent progress bars (scanning, optimising, transcoding).
+     * Each bar retains its last position even when the active phase
+     * switches, so the user sees all queue states at once.
      */
     async function refreshProcessing() {
-        var status = await apiGet("/config/processing");
+        var status = await apiGet("/config/processing-status");
         if (!status) return;
 
-        var el = document.getElementById("processing-status");
-        if (!el) return;
+        var phases = status.phases || {};
+        var active = status.active || null;
+        var idleEl = document.getElementById("processing-idle");
+        var anyActive = false;
 
-        var phase = status.phase || "";
-        var total = status.total || 0;
-        var processed = status.processed || 0;
-        var currentFile = status.current_file || "";
+        ["scanning", "optimising_images", "transcoding"].forEach(function (phase) {
+            var container = document.querySelector('.proc-phase[data-phase="' + phase + '"]');
+            if (!container) return;
+            var pctEl = container.querySelector(".proc-pct");
+            var fillEl = container.querySelector(".proc-fill");
+            var info = phases[phase] || {};
+            var total = info.total || 0;
+            var processed = info.processed || 0;
 
-        // Build the inner HTML — keep it stable to avoid layout shift
-        // Use data attributes to detect when the DOM needs rebuilding
-        if (!el.dataset.stable) {
-            el.innerHTML =
-                '<div class="processing-phase" id="proc-phase">Idle</div>'
-                + '<div class="processing-detail" id="proc-detail"></div>'
-                + '<div class="processing-bar-wrap" id="proc-bar-wrap" style="display:none">'
-                + '<div class="processing-bar-fill" id="proc-bar-fill"></div>'
-                + '</div>';
-            el.dataset.stable = "1";
-        }
-
-        var phaseEl = document.getElementById("proc-phase");
-        var detailEl = document.getElementById("proc-detail");
-        var barWrap = document.getElementById("proc-bar-wrap");
-        var barFill = document.getElementById("proc-bar-fill");
-
-        // Determine the display state
-        if (!phase || phase === "complete" || phase === "unknown") {
-            // Idle or complete
-            phaseEl.textContent = (phase === "complete") ? "Processing complete" : "Idle";
-            phaseEl.className = "processing-phase" + (phase === "complete" ? " is-complete" : "");
-            if (detailEl) detailEl.textContent = "";
-            if (barWrap) barWrap.style.display = "none";
-        } else {
-            // Active processing
-            var pct = total > 0 ? Math.round((processed / total) * 100) : 0;
-
-            // Human-readable phase labels
-            var phaseLabels = {
-                "scanning": "Scanning files\u2026",
-                "optimising_images": "Image Optimisation",
-                "transcoding": "Transcoding video",
-            };
-            phaseEl.textContent = phaseLabels[phase] || phase;
-            phaseEl.className = "processing-phase is-active"
-                + (phase === "transcoding" ? " is-transcoding" : "");
-
-            var detailParts = [];
-            if (total > 0) {
-                detailParts.push(processed + " / " + total + " files");
+            if (total > 0 && processed > 0) {
+                anyActive = true;
+                var pct = Math.min(100, Math.round((processed / total) * 100));
+                if (pctEl) pctEl.textContent = processed + "/" + total + " (" + pct + "%)";
+                if (fillEl) fillEl.style.width = pct + "%";
+            } else if (phase === active && total > 0 && processed === 0) {
+                // Phase is active but no progress yet — show as active
+                anyActive = true;
+                if (pctEl) pctEl.textContent = "0/" + total;
+                if (fillEl) fillEl.style.width = "0%";
+            } else {
+                // No data for this phase — keep last-known state
+                if (pctEl && !pctEl.textContent || pctEl.textContent === "—") {
+                    pctEl.textContent = "—";
+                }
             }
-            if (pct > 0) {
-                detailParts.push(pct + "%");
-            }
-            if (currentFile) {
-                // Show just the filename, not the full path
-                var fname = currentFile.replace(/^.*[\\/]/, "");
-                detailParts.push(fname);
-            }
-            if (detailEl) detailEl.textContent = detailParts.join(" — ");
+        });
 
-            if (barWrap && barFill) {
-                barWrap.style.display = "";
-                barFill.style.width = pct + "%";
-                barFill.className = "processing-bar-fill" + (pct >= 100 ? " is-complete" : "");
-            }
+        // Show/hide the idle message
+        if (idleEl) {
+            idleEl.style.display = anyActive ? "none" : "";
         }
     }
 
@@ -2584,29 +2562,12 @@
             document.getElementById("btn-save-system")?.addEventListener("click", async () => {
                 var logLevel = document.getElementById("cfg-log-level").value;
                 var quietBoot = document.getElementById("cfg-quiet-boot").checked;
-                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
-                var ntpServers = [
-                    document.getElementById("cfg-ntp-server-1").value.trim(),
-                    document.getElementById("cfg-ntp-server-2").value.trim(),
-                    document.getElementById("cfg-ntp-server-3").value.trim(),
-                ].filter(function(s) { return s !== ""; });
                 var sysResult = await apiPut("/config/system", {
                     log_level: logLevel,
                     cache_dir: document.getElementById("cfg-cache-dir").value,
                     quiet_boot: quietBoot,
-                    ntp_enabled: ntpEnabled,
-                    ntp_servers: ntpServers,
                 });
                 var logResult = await apiPost("/logs/level", { level: logLevel });
-                // Apply NTP settings via systemd-timesyncd
-                if (ntpEnabled) {
-                    await apiPost("/config/ntp", {
-                        enabled: true,
-                        servers: ntpServers,
-                    });
-                } else {
-                    await apiPost("/config/ntp", { enabled: false });
-                }
                 // Apply quiet boot change (requires sudo) — always run so the
                 // idempotent script is applied.  Show "Applying…" on the
                 // save button while the script runs (may take a few seconds).
@@ -2642,6 +2603,32 @@
                 } else {
                     showToast("Failed to save system settings", "error");
                 }
+            });
+
+            // Time settings (NTP + timezone are saved immediately; NTP servers
+            // are saved here together so the user can edit all three at once.)
+            document.getElementById("btn-save-time")?.addEventListener("click", async () => {
+                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
+                var ntpServers = [
+                    document.getElementById("cfg-ntp-server-1").value.trim(),
+                    document.getElementById("cfg-ntp-server-2").value.trim(),
+                    document.getElementById("cfg-ntp-server-3").value.trim(),
+                ].filter(function(s) { return s !== ""; });
+                // Persist config
+                await apiPut("/config/system", {
+                    ntp_enabled: ntpEnabled,
+                    ntp_servers: ntpServers,
+                });
+                // Apply NTP settings via systemd-timesyncd
+                if (ntpEnabled) {
+                    await apiPost("/config/ntp", {
+                        enabled: true,
+                        servers: ntpServers,
+                    });
+                } else {
+                    await apiPost("/config/ntp", { enabled: false });
+                }
+                showToast("Time settings saved" + (ntpEnabled ? " — NTP enabled" : ""), "success");
             });
 
             document.getElementById("btn-save-web")?.addEventListener("click", async () => {

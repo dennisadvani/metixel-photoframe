@@ -46,16 +46,31 @@ PROCESSING_STATUS_PATH = "/run/metixel/processing_status.json"
 
 
 def _write_progress(phase: str, total: int, processed: int, current_file: str = "") -> None:
-    """Atomically write the processing progress status file."""
+    """Atomically write per-phase processing progress.
+
+    Each phase tracks its own total/processed so the web UI can show
+    separate progress bars that persist across phase switches.
+    """
     try:
         os.makedirs(os.path.dirname(PROCESSING_STATUS_PATH), exist_ok=True)
-        tmp = PROCESSING_STATUS_PATH + ".tmp"
-        data = {
-            "phase": phase,
+
+        existing: dict[str, dict] = {}
+        try:
+            if os.path.exists(PROCESSING_STATUS_PATH):
+                with open(PROCESSING_STATUS_PATH, encoding="utf-8") as f:
+                    prev = json.load(f)
+                existing = prev.get("phases", {})
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        existing[phase] = {
             "total": total,
             "processed": processed,
             "current_file": current_file,
         }
+
+        data = {"active": phase, "phases": existing}
+        tmp = PROCESSING_STATUS_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, PROCESSING_STATUS_PATH)
@@ -342,9 +357,25 @@ class FolderWatcher:
 
             # Push to optimisation queue in batches to avoid holding
             # too many items in memory at once.
-            if len(stubs) >= 24:
+            if len(stubs) >= 6:
                 self._enqueue_stubs(stubs)
                 stubs.clear()
+
+            # ── Yield when the optimiser is busy ────────────────────
+            # Thumbnail generation (above) uses PIL, which competes
+            # with the optimisation queue's own image processing.
+            # When the queue is actively working, pause between files
+            # so the optimiser gets the CPU/memory.  Sleep duration
+            # scales with loadavg — same formula as the optimiser.
+            if self._opt_queue is not None and self._opt_queue.is_busy:
+                _sleep = 0.2
+                try:
+                    with open("/proc/loadavg") as f:
+                        _load1 = float(f.readline().split()[0])
+                    _sleep = min(1.0, max(0.1, _load1 * 0.2))
+                except (OSError, ValueError, IndexError):
+                    pass
+                time.sleep(_sleep)
 
         # Final push
         if stubs:
@@ -366,12 +397,12 @@ class FolderWatcher:
         blocked on a long video transcode.
 
         * **Images**: PLAY_ORIGINAL images are always ready to play.
-        * **Videos**: PLAY_ORIGINAL videos have their ``transcode_status``
-          set to ``NOT_TRANSCODED`` here so they can bypass the queue.
-          (The optimisation queue would do the same thing, but it may be
-          blocked on a different transcode.)
+        * **Videos**: ALL videos go through the optimisation queue for
+          mandatory first/last frame extraction.  ``VideoProcessor.process()``
+          skips the expensive transcode step for H.264 videos within
+          resolution limits but still generates ``.1.frame`` / ``.2.frame``.
 
-        Items that need optimisation (PLAY_CACHED) are sent to the
+        Items that need optimisation (PLAY_CACHED) are also sent to the
         OptimisationQueue for processing.
         """
         if self._opt_queue is not None:
@@ -382,10 +413,14 @@ class FolderWatcher:
                 if item.cached_path == item.original_path:
                     # PLAY_ORIGINAL — no optimisation needed
                     if item.media_type == MediaType.VIDEO:
-                        # Mark as NOT_TRANSCODED so the frontend knows
-                        # this video is safe to play as-is.
-                        item.transcode_status = TranscodeStatus.NOT_TRANSCODED
-                    ready.append(item)
+                        # Videos always go through the optimisation queue
+                        # for frame extraction (first + last frame), even
+                        # when the codec/resolution are already optimal.
+                        # VideoProcessor.process() will skip the transcode
+                        # step but still extract frames.
+                        needs_opt.append(item)
+                    else:
+                        ready.append(item)
                 else:
                     # PLAY_CACHED — needs resize / transcode
                     needs_opt.append(item)

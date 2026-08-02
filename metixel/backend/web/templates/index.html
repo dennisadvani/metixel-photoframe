@@ -150,9 +150,36 @@
 
                 <div class="card">
                     <h2>Background Processing</h2>
-                    <div id="processing-status">
-                        <span class="processing-phase">Idle</span>
+                    <div id="processing-phases">
+                        <div class="proc-phase" data-phase="scanning" style="margin-bottom:0.6rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">folder</span> Scanning folders</span>
+                                <span class="proc-pct">—</span>
+                            </div>
+                            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                <div class="proc-fill" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
+                            </div>
+                        </div>
+                        <div class="proc-phase" data-phase="optimising_images" style="margin-bottom:0.6rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">image</span> Optimising images</span>
+                                <span class="proc-pct">—</span>
+                            </div>
+                            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                <div class="proc-fill" style="background:#d92626;height:100%;width:0%;transition:width 0.3s"></div>
+                            </div>
+                        </div>
+                        <div class="proc-phase" data-phase="transcoding" style="margin-bottom:0.6rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">movie</span> Transcoding video</span>
+                                <span class="proc-pct">—</span>
+                            </div>
+                            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                <div class="proc-fill" style="background:#d92626;height:100%;width:0%;transition:width 0.3s"></div>
+                            </div>
+                        </div>
                     </div>
+                    <div id="processing-idle" style="font-size:0.82rem;color:var(--text-muted)">Idle — no processing active</div>
                 </div>
 
                 <div class="card">
@@ -458,6 +485,73 @@
             <!-- ═══════════════ Advanced Page ═══════════════ -->
             <section id="page-advanced" class="page">
                 <div class="card">
+                    <h2>System</h2>
+                    <div class="form-group">
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="cfg-quiet-boot">
+                            <span>Quiet Boot</span>
+                        </label>
+                        <p class="hint" style="margin-top:0.2rem">Hides kernel messages and console text during startup. Requires a reboot to take effect.</p>
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Cache Dir</span>
+                        <div style="display:flex;gap:0.4rem">
+                            <input type="text" id="cfg-cache-dir" placeholder="cache/" style="flex:1">
+                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">File Log Level</span>
+                        <select id="cfg-log-level">
+                            <option value="DEBUG">Debug</option>
+                            <option value="INFO">Info</option>
+                            <option value="WARNING">Warning</option>
+                            <option value="ERROR">Error</option>
+                            <option value="NONE" selected>None</option>
+                        </select>
+                    </div>
+                    <p class="hint">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</p>
+                    <p class="hint" style="color:var(--warning,#e6a817)">⚠️ <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
+                    <button id="btn-save-system">Save System Settings</button>
+                    <button id="btn-restart-services" class="btn--secondary" style="margin-left:0.5rem">Restart Services</button>
+                    <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
+                    <button id="btn-reboot-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Reboot System</button>
+                    <button id="btn-shutdown-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Shutdown</button>
+                </div>
+
+                <div class="card">
+                    <h2>Updates</h2>
+                    <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
+                        <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
+                        <span style="font-weight:600;font-size:0.9rem">Server Time</span>
+                        <span id="server-clock" style="font-family:monospace;font-size:1.05rem;margin-left:0.3rem">--:--:--</span>
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Timezone</span>
+                        <div style="display:flex;gap:0.4rem;align-items:center">
+                            <select id="cfg-timezone" style="flex:1">
+                                <option value="">Auto-detect</option>
+                            </select>
+                            <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
+                        </div>
+                    </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-ntp-enabled" checked>
+                        <span>NTP Time Sync</span>
+                    </label>
+                    <div class="form-group" id="ntp-servers-group" style="margin-top:0.3rem">
+                        <span class="form-label">NTP Servers</span>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <input type="text" id="cfg-ntp-server-1" placeholder="0.debian.pool.ntp.org">
+                            <input type="text" id="cfg-ntp-server-2" placeholder="1.debian.pool.ntp.org">
+                            <input type="text" id="cfg-ntp-server-3" placeholder="2.debian.pool.ntp.org">
+                        </div>
+                        <p class="hint" style="margin-top:0.2rem">Up to 3 servers. Leave blank to use defaults.</p>
+                    </div>
+                    <button id="btn-save-time">Save Time Settings</button>
+                </div>
+
+                <div class="card">
                     <h2>Updates</h2>
                     <p class="hint">System and version information. Use this to verify what's running before applying updates.</p>
                     <div class="info-grid" id="updates-info">
@@ -570,69 +664,6 @@
                     </div>
                     <button id="btn-save-display">Save Display Settings</button>
                     <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
-                </div>
-
-                <div class="card">
-                    <h2>System</h2>
-                    <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
-                        <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
-                        <span style="font-weight:600;font-size:0.9rem">Server Time</span>
-                        <span id="server-clock" style="font-family:monospace;font-size:1.05rem;margin-left:0.3rem">--:--:--</span>
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Timezone</span>
-                        <div style="display:flex;gap:0.4rem;align-items:center">
-                            <select id="cfg-timezone" style="flex:1">
-                                <option value="">Auto-detect</option>
-                            </select>
-                            <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
-                        </div>
-                    </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-ntp-enabled" checked>
-                        <span>NTP Time Sync</span>
-                    </label>
-                    <div class="form-group" id="ntp-servers-group" style="margin-top:0.3rem">
-                        <span class="form-label">NTP Servers</span>
-                        <div style="display:flex;flex-direction:column;gap:0.25rem">
-                            <input type="text" id="cfg-ntp-server-1" placeholder="0.debian.pool.ntp.org">
-                            <input type="text" id="cfg-ntp-server-2" placeholder="1.debian.pool.ntp.org">
-                            <input type="text" id="cfg-ntp-server-3" placeholder="2.debian.pool.ntp.org">
-                        </div>
-                        <p class="hint" style="margin-top:0.2rem">Up to 3 servers. Leave blank to use defaults.</p>
-                    </div>
-                    <hr style="border-color:var(--border);margin:0.8rem 0">
-                    <div class="form-group">
-                        <span class="form-label">File Log Level</span>
-                        <select id="cfg-log-level">
-                            <option value="DEBUG">Debug</option>
-                            <option value="INFO">Info</option>
-                            <option value="WARNING">Warning</option>
-                            <option value="ERROR">Error</option>
-                            <option value="NONE" selected>None</option>
-                        </select>
-                    </div>
-                    <p class="hint">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</p>
-                    <p class="hint" style="color:var(--warning,#e6a817)">⚠️ <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
-                    <div class="form-group">
-                        <label class="checkbox-row">
-                            <input type="checkbox" id="cfg-quiet-boot">
-                            <span>Quiet Boot</span>
-                        </label>
-                        <p class="hint" style="margin-top:0.2rem">Hides kernel messages and console text during startup. Requires a reboot to take effect.</p>
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Cache Dir</span>
-                        <div style="display:flex;gap:0.4rem">
-                            <input type="text" id="cfg-cache-dir" placeholder="cache/" style="flex:1">
-                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
-                        </div>
-                    </div>
-                    <button id="btn-save-system">Save System Settings</button>
-                    <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
-                    <button id="btn-restart-services" class="btn--secondary" style="margin-left:0.5rem">Restart Services</button>
-                    <button id="btn-reboot-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Reboot System</button>
-                    <button id="btn-shutdown-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Shutdown</button>
                 </div>
 
                 <!-- Web Server card hidden — uncomment to re-enable
