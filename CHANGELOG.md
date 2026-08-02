@@ -13,33 +13,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   video frame caches referenced directly by the presentation engine
 - `VideoProcessor._extract_video_frames()` — extracts first frame (t=0) and last
   frame (sseof) during Phase 2 OPTIMISE; cached as `.1.frame` / `.2.frame` JPEGs
-- **Time card** in the Web UI Advanced page — separate NTP/timezone settings
-  (extracted from the System card)
+- **Image optimisation worker subprocess** (`worker.py`) — PIL operations (load,
+  transpose, resize, save) run in an isolated process with `cpulimit -l 50` (hard
+  50 % CPU cap) and `nice -n 19` (lowest priority); OS reclaims all memory on exit
+- **Adaptive CPU throttling** — sleep between image optimisations scales with
+  1‑minute load average (`load1 × 0.2`, capped at 1.0 s); folder watcher also
+  yields between thumbnail generations when the optimiser is busy
+- **Boot screen progress bar** — red fill bar below the spinner showing
+  optimisation progress (1/6 → 6/6); uses `draw_image` with 1×1 pixel textures
+  to avoid pi3d colour-space issues
+- **Per‑phase progress bars** in the Web UI Background Processing card — separate
+  persistent bars for scanning, image optimisation, and video transcoding;
+  each retains its last position when the active phase switches
+- **Frontend→backend slideshow‑started signal** — `POST /api/slideshow-started`
+  defers the network monitor's AP‑fallback countdown until the first slideshow
+  items are ready, preventing CPU/I/O contention during initial processing
+- `/api/config/processing-status` endpoint — serves per‑phase progress data
+- `FEATURES.md` — comprehensive feature list linked from README
+- Per‑image processing time and per‑batch memory delta logging (DEBUG level)
 
 ### Changed
 
-- **Frame extraction moved from frontend to backend** — `PresentationEngine` no
-  longer runs ffmpeg/ffprobe; all video frame extraction is now a Phase 2
-  (OPTIMISE) responsibility performed by `VideoProcessor`
-- **All videos route through the optimisation queue** — the folder watcher no
-  longer bypasses the queue for PLAY_ORIGINAL videos; `VideoProcessor.process()`
-  skips transcode for H.264 within resolution limits but always extracts frames
-- **Last frame swap at 20% of video playtime** (was ~1 s before end) — eliminates
-  the race condition where VLC exits before/during synchronous ffmpeg extraction
-- **Web UI**: System card moved to top of Advanced page; NTP/time settings
-  extracted into their own Time card with independent save button
+- **Image processing moved to subprocess** — `ImageProcessor.process()` spawns
+  `worker.py` for cache misses; cache hits remain in‑process (fast path)
+- **Throttle formula 4× more aggressive** — `load1 × 0.05` → `load1 × 0.2`
+- **Batch sizes reduced** — optimiser flush 12→6, folder watcher enqueue 24→6;
+  items reach the slideshow ~4× faster after startup
+- **Boot layer** fades based on `slideshow_ready` signal from renderer (not
+  playlist.json on disk) and waits for active GPU texture before signalling
+  readiness — eliminates fade‑to‑black and jump‑cut regressions
+- `_write_progress` uses per‑phase format — scanning, optimising, and transcoding
+  each track their own `total`/`processed` independently
+- **Web UI** Background Processing card replaced with three persistent progress
+  bars using Material Symbols icons
 - `is_ready_to_play` now requires `first_frame_path` and `last_frame_path` for
   video items — videos without cached frames are excluded from the slideshow
+- Dev setup script: removed `python3-pip` and `python3-pygame` (dead deps)
 
 ### Fixed
 
-- **Black screen after cache clear** — frontend playlist hot-reload no longer
-  removes items when the backend playlist is smaller than the frontend queue
-  (backend is still building its initial playlist)
-- **Video playback with missing frames** — videos no longer appear in the
-  playlist before first/last frame extraction completes
-- **Missing `first_frame_path` / `last_frame_path` in playlist hot-reload**
-  deserialization path
+- **AP fallback falsely activated under CPU load** — `is_connected()` now returns
+  `True` on exception (nmcli timeout) instead of `False`
+- **Worker JSON corrupted by cpulimit** — cpulimit prints `Process NNNN detected`
+  to stdout; parser now takes the first JSON line only
+- **Duplicate throttle line** — old `×0.05` formula overwrote new `×0.2` formula
+- **Cache‑hit `AttributeError`** — removed `_build_item` call, inlined
+  `MediaItem` construction with `_get_cached_dimensions()`
+- **Boot screen jump cut** — `slideshow_ready` now requires non‑None active GPU
+  texture before signalling, preventing fade timer expiry during sync texture load
+- **Slideshow‑started sent on empty queue** — notification only fires when items
+  are present; hot‑reload path also signals if initial load was empty
+- **Progress bar jumping backward** — uses batch size (6) as total instead of
+  shrinking `total_remaining`
+- **Progress bar disappearing** — retains last‑known percentage when phase
+  switches away from `optimising_images`
 
 ### Removed
 
@@ -47,6 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `_extract_frame_array_cpu`, `_get_or_create_video_frame`,
   `_video_frame_cache_path`, `_video_frame_is_cached`
 - `contextlib` import from frontend (no longer needed)
+- `_count_playlist_items()`, `_PLAYLIST_PATH`, and `json` import from boot layer
+- `_resize_to_screen`, `_extract_exif`, `_build_item` from `ImageProcessor`
+- `ImageOps`, `UnidentifiedImageError` imports from `image.py`
 
 ## [0.2.2-beta.3] — 2026-08-01
 
