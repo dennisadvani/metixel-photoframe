@@ -183,6 +183,17 @@ if command -v nmcli &>/dev/null; then
     nmcli radio wifi on 2>/dev/null || true
 fi
 
+# Disable Wi-Fi power management — Pi 3 WiFi is flakey with power saving
+# enabled (failed beacons, missed connections).  NetworkManager's default
+# is to enable powersave, which causes the captive portal AP to be
+# unreliable and client connections to drop.
+echo "     Disabling Wi-Fi power management..."
+mkdir -p /etc/NetworkManager/conf.d
+tee /etc/NetworkManager/conf.d/wifi-powersave-off.conf > /dev/null <<'NMPOWEREOF'
+[connection]
+wifi.powersave = 2
+NMPOWEREOF
+
 # -- Captive Portal (AP mode) -----------------------------------------------
 echo "[7/9] Configuring Wi-Fi captive portal (AP fallback)..."
 # Configure hostapd (open network "Metixel-Setup")
