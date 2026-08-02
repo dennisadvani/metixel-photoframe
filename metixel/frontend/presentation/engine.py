@@ -1458,7 +1458,12 @@ class PresentationEngine:
 
         VLC creates its own borderless window on top of the pi3d display.
         The state machine in :meth:`_video_tick` polls the subprocess and
-        handles the last-frame under-swap.
+        handles the last-frame under-swap (scheduled at 20% of duration).
+
+        The last frame is pre-extracted and cached **before** VLC starts
+        so the swap at 20% is near-instant (cache hit).  This eliminates
+        the race condition where VLC exits before/during synchronous
+        ffmpeg extraction on slow hardware (Pi Zero 2 W).
         """
         # --- Draw first frame to both buffers before VLC starts ----------
         # VLC creates its own window on top of the pi3d display.  The
@@ -1473,6 +1478,24 @@ class PresentationEngine:
         else:
             logger.warning(
                 "No first-frame texture for %s — VLC will appear over black",
+                video_path,
+            )
+
+        # --- Pre-extract + cache last frame before VLC starts -------------
+        # The first frame is already visible on screen (both buffers).
+        # Extract the last frame now so the swap at 20% playtime is a
+        # near-instant cache hit — no synchronous ffmpeg blocking during
+        # the critical VLC-exit window.  If extraction fails, the first
+        # frame stays visible; the slideshow continues gracefully.
+        last_cache = _get_or_create_video_frame(
+            video_path, 2, vw, vh, duration,
+            screen_w=screen_w, screen_h=screen_h,
+            cache_base=self._cache_base,
+        )
+        if last_cache is None:
+            logger.warning(
+                "Last frame pre-extraction failed for %s — "
+                "first frame will persist after video ends",
                 video_path,
             )
 
@@ -1504,13 +1527,15 @@ class PresentationEngine:
         self._video_duration = duration
         self._video_paused = False
         self._video_last_frame_loaded = False
-        # Swap the last frame ~1s before the video ends (or immediately
-        # for very short videos).
-        swap_delay = max(0.0, duration - 1.0) if duration > 0 else 3.0
+        # Swap the last frame at 20% of video playtime — early enough
+        # that VLC is guaranteed to still be running and the last frame
+        # was pre-cached before launch (cache hit → no blocking ffmpeg).
+        swap_delay = duration * 0.20 if duration > 0 else 0.6
         self._video_swap_at = time.monotonic() + swap_delay
         logger.debug(
-            "Video state machine: PLAYING (swap_at=%.1f, duration=%.1f)",
-            self._video_swap_at, duration,
+            "Video state machine: PLAYING (swap_at=%.1f, duration=%.1f, "
+            "last_frame_cached=%s)",
+            self._video_swap_at, duration, last_cache is not None,
         )
 
     def _video_tick(self) -> None:
