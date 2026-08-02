@@ -136,7 +136,7 @@ git checkout main
 git pull origin main
 
 Write-Host "Merging dev into main..." -ForegroundColor Green
-git merge dev --ff-only -m "Release $NewVersion"
+git merge dev --no-ff -m "Release $NewVersion"
 if ($LASTEXITCODE -ne 0) { throw "git merge failed" }
 
 # -- Tag on main ------------------------------------------------------------
