@@ -1254,7 +1254,7 @@ class PresentationEngine:
         from metixel.frontend.presentation.video_player import VlcVideoPlayer
 
         vlc_player = VlcVideoPlayer()
-        logger.info(
+        logger.debug(
             "Starting VLC: %s (duration=%.1fs, fit_mode=%s)",
             video_path, item.duration_seconds, resolved_fit,
         )
