@@ -627,6 +627,7 @@ class VideoProcessor:
                 "-noaccurate_seek", "-ss", "0",
                 "-i", str(source),
                 "-vframes", "1", "-q:v", "2",
+                "-f", "image2",
                 str(first_path),
             ])
             try:
@@ -642,12 +643,23 @@ class VideoProcessor:
                 first_path = None  # type: ignore[assignment]
 
         # ── Last frame (sseof -1, decode final second) ────────────────
+        # Decode ALL frames from 1 s before EOF to the actual end and
+        # keep only the last one.  ``-update 1`` tells ffmpeg to
+        # overwrite the output file with each frame, so the file on
+        # disk is always the *latest* decoded frame — i.e. the true
+        # final frame regardless of keyframe placement.
+        # Using ``-vframes 1`` would grab the *first* frame after the
+        # seek position, which is typically a keyframe several seconds
+        # before the real end — causing a visible jitter when VLC
+        # exits and the last frame appears underneath.
         if not last_path.exists() or last_path.stat().st_size == 0:
             cmd = nice_cmd([
                 "ffmpeg", "-y",
                 "-sseof", "-1",
                 "-i", str(source),
-                "-vframes", "1", "-q:v", "2",
+                "-q:v", "2",
+                "-f", "image2",
+                "-update", "1",
                 str(last_path),
             ])
             try:

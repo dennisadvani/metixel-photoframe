@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
+import urllib.request
 from pathlib import Path
 
 from metixel.display import detect_backend
@@ -204,42 +206,10 @@ class FrontendRenderer:
         # instructions (Wi-Fi setup, etc.).
         self._show_persistent_messages()
 
-        # ── Load queue from the backend's playlist.json ───────────────
-        # The backend writes playlist.json incrementally during processing.
-        # Loading from it avoids the dual-scan problem: the frontend used
-        # to scan folders directly, bypassing the backend's cached files
-        # and starting with only a tiny subset of images.
-        playlist_items = self._load_backend_playlist()
-
-        # ── Fallback: scan folders directly if playlist is empty ──────
-        # On first-ever boot or if the backend hasn't started yet, the
-        # playlist file won't exist.  Fall back to direct folder scanning.
-        if not playlist_items:
-            logger.info("Backend playlist is empty — falling back to direct folder scan")
-            from metixel.shared.config import resolve_watch_paths
-
-            base_dir = self._config_path.parent.parent
-            watch_paths = resolve_watch_paths(self._config, base_dir=base_dir)
-            for folder in watch_paths:
-                if folder.exists():
-                    logger.info("Scanning media folder: %s", folder)
-                    items = self._presentation.scan_folder(folder)
-                    playlist_items.extend(items)
-                    logger.info("Found %d items in %s", len(items), folder)
-                else:
-                    logger.debug("Watch path not found (skipping): %s", folder)
-
-        if playlist_items:
-            self._presentation.set_queue(playlist_items)
-            logger.info(
-                "Loaded %d items into slideshow queue",
-                len(playlist_items),
-            )
-        else:
-            logger.warning(
-                "No images found — slideshow will show empty screen. "
-                "Waiting for backend to process media…",
-            )
+        # ── Queue loading moved to _render_loop() ────────────────────
+        # The boot screen must appear immediately — scanning large
+        # media folders can take minutes (1000+ files).  The render
+        # loop now shows the boot layer first, then loads the queue.
 
         # Start IPC server (best-effort — may fail on dev machines without /run)
         try:
@@ -279,7 +249,55 @@ class FrontendRenderer:
         """
         self._fps_last_time = time.monotonic()
 
+        # ── Show boot screen immediately ──────────────────────────────
+        # Render the boot layer before anything else so the user sees
+        # feedback right away.  Scanning 1000+ media files can take
+        # over a minute — the scan runs in a background thread so the
+        # boot spinner keeps animating during the wait.
+        if self._overlay:
+            self._overlay.update({"video_playing": False})
+            self._overlay.draw(self._backend)
+        self._backend.loop_running()
+
+        # ── Start background queue loader ─────────────────────────────
+        # The folder scan can take minutes on large libraries.  Run it
+        # in a daemon thread so the render loop keeps spinning (boot
+        # screen stays animated).  The main thread checks a shared flag
+        # and swaps in the queue once loading is done.
+        _queue_ready = threading.Event()
+        _loaded_items: list[MediaItem] = []
+
+        def _load_initial_queue() -> None:
+            nonlocal _loaded_items
+            items: list[MediaItem] = list(self._load_backend_playlist())
+
+            if items:
+                logger.info("Loaded %d items from backend playlist", len(items))
+            else:
+                logger.warning(
+                    "Backend playlist is empty — slideshow will wait for "
+                    "the optimisation queue to process media.  The boot "
+                    "screen stays visible until items are ready."
+                )
+            _loaded_items = items
+            _queue_ready.set()
+
+        loader_thread = threading.Thread(
+            target=_load_initial_queue, daemon=True, name="queue-loader",
+        )
+        loader_thread.start()
+
         while self._running and self._backend and self._backend.loop_running():
+            # ── Swap in initial queue when loading finishes ───────────
+            if _queue_ready.is_set() and self._presentation._queue_loaded is False:
+                self._presentation.set_queue(_loaded_items)
+                # Signal the backend that the slideshow has started so
+                # the network monitor can begin its AP-fallback countdown.
+                # Only fire when there are actually items to display —
+                # an empty initial load means the backend hasn't processed
+                # any media yet; the hot-reload path will populate later.
+                if _loaded_items:
+                    self._notify_slideshow_started()
             # 1. Check for config changes (hot reload)
             self._check_config_changed()
 
@@ -298,6 +316,9 @@ class FrontendRenderer:
             # Log FPS every 5 seconds
             self._log_fps()
 
+            # Log system resources every 30 seconds (debug builds only)
+            self._log_resources()
+
     def _log_fps(self) -> None:
         """Log the actual frames-per-second every 5 seconds."""
         now = time.monotonic()
@@ -314,6 +335,101 @@ class FrontendRenderer:
             )
             self._fps_last_time = now
             self._fps_frame_snapshot = self._frame_count
+
+    # Track last resource log time (class-level to survive across frames)
+    _last_resource_log: float = 0.0
+
+    # Prevent duplicate slideshow-started notifications
+    _slideshow_started_notified: bool = False
+
+    def _notify_slideshow_started(self) -> None:
+        """Notify the backend that the slideshow has begun playing.
+
+        Sends a single HTTP POST to the backend's web server.  The
+        backend network monitor defers its AP-fallback countdown until
+        this signal arrives, avoiding CPU / I/O contention during the
+        initial media processing phase.
+
+        Only sends once — subsequent calls are silently ignored.
+        Failures (e.g. backend not yet listening) are logged but not
+        retried; the network monitor has a 5-minute hard timeout as a
+        safety net.
+        """
+        if FrontendRenderer._slideshow_started_notified:
+            return
+        FrontendRenderer._slideshow_started_notified = True
+        try:
+            req = urllib.request.Request(
+                "http://127.0.0.1:8080/api/slideshow-started",
+                method="POST",
+                data=b"",
+            )
+            urllib.request.urlopen(req, timeout=5)
+            logger.info("Slideshow started notification sent to backend")
+        except Exception:
+            # Backend may not be ready yet — the network monitor's
+            # 5-minute safety timeout will unblock it regardless.
+            logger.debug("Failed to notify backend of slideshow start (backend may not be ready)")
+
+    def _log_resources(self) -> None:
+        """Log CPU, memory, and swap usage every 30 seconds (DEBUG only).
+
+        Reads from ``/proc/stat``, ``/proc/meminfo``, and ``/proc/loadavg``.
+        Non-Linux systems (dev/Win) are silently skipped.
+        """
+        now = time.monotonic()
+        if now - FrontendRenderer._last_resource_log < 30.0:
+            return
+        FrontendRenderer._last_resource_log = now
+
+        try:
+            # ── CPU utilisation via /proc/stat ───────────────────────
+            with open("/proc/stat") as f:
+                cpu_line = f.readline()
+            parts = cpu_line.split()
+            if parts[0] == "cpu" and len(parts) >= 8:
+                user, nice, system, idle = (
+                    int(parts[1]), int(parts[2]),
+                    int(parts[3]), int(parts[4]),
+                )
+                total = user + nice + system + idle
+                active = user + nice + system
+                cpu_pct = (active / total * 100) if total > 0 else 0.0
+            else:
+                cpu_pct = -1.0
+
+            # ── Memory + swap via /proc/meminfo ──────────────────────
+            meminfo: dict[str, int] = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if ":" in line:
+                        key, val = line.split(":", 1)
+                        val = val.strip().split()[0]
+                        meminfo[key.strip()] = int(val)
+
+            total_mb = meminfo.get("MemTotal", 0) // 1024
+            avail_mb = meminfo.get("MemAvailable", 0) // 1024
+            used_mb = total_mb - avail_mb if total_mb > 0 else 0
+            mem_pct = (used_mb / total_mb * 100) if total_mb > 0 else 0.0
+
+            swap_total = meminfo.get("SwapTotal", 0) // 1024
+            swap_free = meminfo.get("SwapFree", 0) // 1024
+            swap_used = swap_total - swap_free
+
+            # ── Load average ─────────────────────────────────────────
+            with open("/proc/loadavg") as f:
+                load = f.readline().split()[:3]
+
+            logger.debug(
+                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  "
+                "SWAP=%d/%dMB  LOAD=%s %s %s",
+                cpu_pct,
+                used_mb, total_mb, mem_pct,
+                swap_used, swap_total,
+                load[0], load[1], load[2],
+            )
+        except (OSError, ValueError, IndexError):
+            pass  # Non-Linux or /proc not available
 
     def _render_frame(self) -> None:
         """Render a single frame."""
@@ -332,7 +448,29 @@ class FrontendRenderer:
                 self._presentation._video_state != 0  # _VIDEO_IDLE
                 if hasattr(self._presentation, '_video_state') else False
             )
-            self._overlay.update({"video_playing": video_playing})
+            # Tell the boot layer whether the frontend has actually
+            # loaded its queue — not just whether the backend wrote
+            # playlist.json to disk.  This prevents the boot screen
+            # from fading to a black screen when queue loading is
+            # deferred to a background thread.
+            #
+            # Additionally, the active GPU texture slot must be
+            # non-None before we signal readiness.  If the first
+            # slide's texture hasn't been uploaded yet (e.g. a sync
+            # load is still in progress), the render loop stalls
+            # and the fade timer would expire before any frames
+            # are drawn — producing a jump cut instead of a smooth
+            # crossfade.  Waiting for the texture ensures the fade
+            # runs over actual rendered frames.
+            slideshow_ready = (
+                self._presentation._queue_loaded
+                and len(self._presentation._queue) > 0
+                and self._presentation._tex[self._presentation._active] is not None
+            )
+            self._overlay.update({
+                "video_playing": video_playing,
+                "slideshow_ready": slideshow_ready,
+            })
             self._overlay.draw(self._backend)
 
         # ── Boot → slideshow transition ───────────────────────────────
@@ -463,6 +601,10 @@ class FrontendRenderer:
             # Populate from scratch.
             self._presentation.set_queue(items)
             logger.info("Initialised slideshow queue with %d items", len(items))
+            # If the initial background load found 0 items and this
+            # hot-reload is the first time the queue gets populated,
+            # notify the backend so the network monitor can unblock.
+            self._notify_slideshow_started()
             return
 
         # ── Incremental diff: add new, remove stale ──────────────────

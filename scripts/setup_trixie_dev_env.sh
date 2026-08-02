@@ -7,7 +7,7 @@
 #
 # Installs development & testing tools on top of an existing Metixel install.
 # Run this after setup_trixie.sh (or on a dev desktop) to add:
-#   pytest, pytest-cov, ruff, mypy, pygame
+#   pytest, pytest-cov, ruff, mypy
 #
 # Usage:
 #   sudo bash /opt/metixel/scripts/setup_dev_env.sh
@@ -26,21 +26,13 @@ echo "=== Metixel Photoframe — Dev Environment Setup ==="
 echo "Project root: ${METIXEL_DIR}"
 echo ""
 
-# -- System packages (dev tools) ---------------------------------------------
-echo "[1/4] Installing system packages for dev tools..."
-sudo apt-get update -qq
-sudo apt-get install -y \
-    python3-pip \
-    python3-pygame
-
 # -- Python dev packages -----------------------------------------------------
-echo "[2/4] Installing Python dev packages..."
+echo "[1/3] Installing Python dev packages..."
 cd "${METIXEL_DIR}"
 
 PIP_IGNORE="--break-system-packages --ignore-installed"
 
 # Install dev tools: pytest, pytest-cov, ruff, mypy
-# pygame is provided by apt above; pip install as fallback
 sudo pip3 install ${PIP_IGNORE} pytest pytest-cov ruff mypy 2>/dev/null || \
     pip3 install ${PIP_IGNORE} pytest pytest-cov ruff mypy
 
@@ -50,7 +42,7 @@ sudo pip3 install ${PIP_IGNORE} pytest pytest-cov ruff mypy 2>/dev/null || \
 # network.  The production setup_trixie_metixel.sh creates a separate
 # [metixel-media] share scoped to /opt/metixel/media only; the two shares
 # can coexist without conflict.
-echo "[3/4] Configuring Samba share (/opt/metixel as 'metixel')..."
+echo "[2/3] Configuring Samba share (/opt/metixel as 'metixel')..."
 SMB_CONF="/etc/samba/smb.conf"
 if ! grep -q '\[metixel\]' "${SMB_CONF}" 2>/dev/null; then
     sudo tee -a "${SMB_CONF}" > /dev/null <<'SMBEOF'
@@ -74,7 +66,7 @@ fi
 
 # -- Verify ------------------------------------------------------------------
 echo ""
-echo "[4/4] Verifying installed tools..."
+echo "[3/3] Verifying installed tools..."
 echo ""
 echo "=== Dev environment setup complete ==="
 echo ""

@@ -435,6 +435,12 @@
         var overlay = document.getElementById("connection-overlay");
         if (!overlay) return;
         if (ok) {
+            // Reconnected after being disconnected — reload the page
+            // to pick up fresh state (playlist, config, dashboard data).
+            if (overlay.style.display === "flex") {
+                window.location.reload();
+                return;
+            }
             overlay.style.display = "none";
             _apiConnected = true;
             _apiErrorCount = 0;

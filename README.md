@@ -10,11 +10,10 @@
 
 Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated digital photo frame. It's a complete operating system overlay — not just an app — designed to run headless on a wall or shelf, pulling photos from local folders, USB drives, network shares, or an [Immich](https://immich.app/) server.
 
-- 🖥️ **Web dashboard** on port 8080 — configure everything from any browser
+- 🖥️ **Web dashboard** on port 80/http — configure everything from any browser
 - 🎞️ **Smooth crossfade transitions** with hardware OpenGL ES rendering
 - 📷 **Native Immich sync** — auto-pull albums and assets
 - 🎬 **Video playback** via VLC
-- 🏠 **Home Assistant** — MQTT control, presence-based on/off, status reporting
 - 🔒 **Runs locally** — no cloud dependency, your photos stay on your network
 
 ---
@@ -30,7 +29,6 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 | | Immich server sync (albums, favorites, people) | ✅ |
 | | Video playback | ✅ |
 | **Control** | Web dashboard (vanilla JS SPA) | ✅ |
-| | MQTT (Home Assistant auto-discovery) | ✅ |
 | **System** | systemd services (auto-start on boot) | ✅ |
 | | Atomic config writes (no corruption on power loss) | ✅ |
 
@@ -60,8 +58,8 @@ See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory reco
 
 - Raspberry Pi 3+
 - MicroSD card (8GB+, Class 10 recommended)
-- Debian **Trixie** (13) Lite flashed to the SD card
-- HDMI display (720p, 1080p or 1200p recommended)
+- Debian **Trixie** (13) Lite flashed to the SD card, use [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
+- HDMI display (720p, 1080p or 1200p recommended for RPi 3)
 - Network connection (Wi-Fi or Ethernet)
 
 ### Setup
@@ -95,88 +93,11 @@ sudo journalctl -u metixel-backend -f    # Follow logs
 
 ---
 
-## Configuration
-
-All settings live in `etc/config.json`. Changes are picked up live — no restart needed.
-
-```jsonc
-{
-  "display": {
-    "width": 0,              // 0 = auto-detect
-    "height": 0,
-    "fullscreen": true,
-    "fps_limit": 30
-  },
-  "slideshow": {
-    "image_duration_seconds": 30,
-    "video_playback_enabled": true,
-    "transition_duration_ms": 1500,
-    "transition_style": "crossfade",
-    "fit_mode": "cover",
-    "shuffle": true
-  },
-  "sync": {
-    "immich": {
-      "enabled": false,
-      "server_url": "https://immich.example.com",
-      "api_key": ""
-    },
-    "local": {
-      "enabled": true,
-      "watch_paths": ["media/"]
-    }
-  },
-  "mqtt": {
-    "enabled": false,
-    "broker": "localhost",
-    "port": 1883,
-    "topic_prefix": "metixel"
-  }
-}
-```
-
-💡 **Tip:** Use the web dashboard at `http://<ip>:8080` for a guided configuration UI — no manual JSON editing required.
-
-See [`etc/config.example.json`](etc/config.example.json) for all options.
-
----
-
-## Architecture
-
-Metixel Photoframe is a Python 3 monorepo split into a **backend** (web server, sync engines, MQTT) and **frontend** (display renderer, presentation engine, widgets). The two processes communicate over a Unix domain socket.
-
-```
-┌──────────────┐     Unix socket     ┌──────────────────┐
-│   BACKEND    │◄──────────────────►│    FRONTEND       │
-│              │                    │                    │
-│  Flask web   │                    │  Display backend   │
-│  Immich sync │                    │  (pi3d / PyOpenGL) │
-│  MQTT client │                    │  Presentation eng  │
-│  CEC/IR      │                    │  Widget layer      │
-│  Processing  │                    │  Transitions       │
-└──────┬───────┘                    └───────────────────┘
-       │
-       ▼
-   Port 8080
-   Web Dashboard
-```
-
-The display layer has a hardware abstraction — no widget or presentation code imports pi3d directly. This means:
-
-- **Phase 1** (today): pi3d + Mesa EGL under cage/XWayland on Pi 2/3/Zero 2 W
-- **Phase 2** (future): PyOpenGL + direct Wayland/DRM on Pi 4/5
-- **Desktop**: pygame software renderer for development
-
-Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full technical specification.
-
----
-
 ## Media Sources
 
 | Source | How it works |
 |---|---|
-| **Local folder** | Point `sync.local.watch_paths` at directories — new files auto-imported |
-| **USB drive** | Auto-mounted and imported on insert |
+| **Local folder** | Via watch paths in the Web UI — new files auto-imported |
 | **Network share** | Mount via SMB/NFS, add to watch paths |
 | **Immich** | Configure server URL + API key — albums auto-sync every N seconds |
 
@@ -186,10 +107,10 @@ Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full technical specification.
 
 | Document | Content |
 |---|---|
+| [`FEATURES.md`](FEATURES.md) | Complete feature list |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Full system design & implementation roadmap |
 | [`docs/HARDWARE.md`](docs/HARDWARE.md) | Hardware setup, wiring, and accessories |
 | [`docs/API.md`](docs/API.md) | REST API and IPC protocol reference |
-| [`docs/WIDGET_DEV.md`](docs/WIDGET_DEV.md) | How to build custom widget overlays |
 | [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) | Dependency license details |
 
 ---
@@ -200,8 +121,7 @@ Contributions are welcome! Before diving in:
 
 1. Read [`ARCHITECTURE.md`](ARCHITECTURE.md) — it's the single source of truth
 2. Check the [issues](https://github.com/dennisadvani/metixel-photoframe/issues) for open tasks
-3. Test on desktop first with `python -m metixel --mode frontend` (pygame dev backend)
-4. The Pi Zero 2 W (512MB) is the tightest constraint — test memory usage there
+3. Run scripts/setup_trixie_dev_env.sh to setup a dev SMB share to mount in VS Code
 
 ```bash
 # Run tests

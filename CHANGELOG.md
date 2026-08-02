@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `first_frame_path` and `last_frame_path` fields on `MediaItem` — backend-generated
+  video frame caches referenced directly by the presentation engine
+- `VideoProcessor._extract_video_frames()` — extracts first frame (t=0) and last
+  frame (sseof) during Phase 2 OPTIMISE; cached as `.1.frame` / `.2.frame` JPEGs
+- **Time card** in the Web UI Advanced page — separate NTP/timezone settings
+  (extracted from the System card)
+
+### Changed
+
+- **Frame extraction moved from frontend to backend** — `PresentationEngine` no
+  longer runs ffmpeg/ffprobe; all video frame extraction is now a Phase 2
+  (OPTIMISE) responsibility performed by `VideoProcessor`
+- **All videos route through the optimisation queue** — the folder watcher no
+  longer bypasses the queue for PLAY_ORIGINAL videos; `VideoProcessor.process()`
+  skips transcode for H.264 within resolution limits but always extracts frames
+- **Last frame swap at 20% of video playtime** (was ~1 s before end) — eliminates
+  the race condition where VLC exits before/during synchronous ffmpeg extraction
+- **Web UI**: System card moved to top of Advanced page; NTP/time settings
+  extracted into their own Time card with independent save button
+- `is_ready_to_play` now requires `first_frame_path` and `last_frame_path` for
+  video items — videos without cached frames are excluded from the slideshow
+
+### Fixed
+
+- **Black screen after cache clear** — frontend playlist hot-reload no longer
+  removes items when the backend playlist is smaller than the frontend queue
+  (backend is still building its initial playlist)
+- **Video playback with missing frames** — videos no longer appear in the
+  playlist before first/last frame extraction completes
+- **Missing `first_frame_path` / `last_frame_path` in playlist hot-reload**
+  deserialization path
+
+### Removed
+
+- All ffmpeg/ffprobe calls from `PresentationEngine` (`engine.py`):
+  `_extract_frame_array_cpu`, `_get_or_create_video_frame`,
+  `_video_frame_cache_path`, `_video_frame_is_cached`
+- `contextlib` import from frontend (no longer needed)
+
 ## [0.2.2-beta.3] — 2026-08-01
 
 ### Added

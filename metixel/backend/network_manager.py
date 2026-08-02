@@ -189,6 +189,11 @@ def is_connected() -> bool:
     Returns True if any non-loopback interface is connected AND has an IP
     that is NOT on the AP subnet (192.168.42.x).  The AP's own static IP
     is not a real upstream connection.
+
+    On exception (e.g. nmcli timeout under heavy system load), returns
+    ``True`` — assume connected rather than falsely activating AP fallback.
+    The monitor re-checks every 10 s and will self-correct when nmcli
+    becomes responsive again.
     """
     try:
         result = subprocess.run(
@@ -206,8 +211,8 @@ def is_connected() -> bool:
                         return True
         return False
     except Exception:
-        logger.debug("is_connected() check failed", exc_info=True)
-        return False
+        logger.debug("is_connected() check failed — assuming connected", exc_info=True)
+        return True
 
 
 def _interface_has_real_ip(device: str) -> bool:

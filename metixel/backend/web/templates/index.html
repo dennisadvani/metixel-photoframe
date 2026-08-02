@@ -460,18 +460,6 @@
                 <div class="card">
                     <h2>System</h2>
                     <div class="form-group">
-                        <span class="form-label">File Log Level</span>
-                        <select id="cfg-log-level">
-                            <option value="DEBUG">Debug</option>
-                            <option value="INFO">Info</option>
-                            <option value="WARNING">Warning</option>
-                            <option value="ERROR">Error</option>
-                            <option value="NONE" selected>None</option>
-                        </select>
-                    </div>
-                    <p class="hint">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</p>
-                    <p class="hint" style="color:var(--warning,#e6a817)">⚠️ <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
-                    <div class="form-group">
                         <label class="checkbox-row">
                             <input type="checkbox" id="cfg-quiet-boot">
                             <span>Quiet Boot</span>
@@ -485,15 +473,27 @@
                             <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
                         </div>
                     </div>
+                    <div class="form-group">
+                        <span class="form-label">File Log Level</span>
+                        <select id="cfg-log-level">
+                            <option value="DEBUG">Debug</option>
+                            <option value="INFO">Info</option>
+                            <option value="WARNING">Warning</option>
+                            <option value="ERROR">Error</option>
+                            <option value="NONE" selected>None</option>
+                        </select>
+                    </div>
+                    <p class="hint">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</p>
+                    <p class="hint" style="color:var(--warning,#e6a817)">⚠️ <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
                     <button id="btn-save-system">Save System Settings</button>
-                    <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
                     <button id="btn-restart-services" class="btn--secondary" style="margin-left:0.5rem">Restart Services</button>
+                    <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
                     <button id="btn-reboot-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Reboot System</button>
                     <button id="btn-shutdown-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Shutdown</button>
                 </div>
 
                 <div class="card">
-                    <h2>Time</h2>
+                    <h2>Updates</h2>
                     <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
                         <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
                         <span style="font-weight:600;font-size:0.9rem">Server Time</span>

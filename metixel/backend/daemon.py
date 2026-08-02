@@ -39,6 +39,9 @@ class BackendDaemon:
         self._config = self._state.config
         self._threads: list[threading.Thread] = []
         self._update_mgr: object | None = None
+        # Set by the web API when the frontend signals that the
+        # slideshow has started — used to defer network checks.
+        self._slideshow_started = threading.Event()
 
     # -- Service lifecycle ---------------------------------------------------
 
@@ -209,6 +212,17 @@ class BackendDaemon:
 
         config = self._state.config
         timeout = config.network.get("ap_timeout_seconds", 60)
+
+        # ── Wait for the frontend to signal that the slideshow has ──
+        # started before beginning the network check countdown.  This
+        # prevents the network monitor from competing for CPU / I/O
+        # during the initial media processing phase.  If the frontend
+        # never signals (crash/failure), fall through after 5 minutes.
+        logger.info("Network monitor waiting for slideshow start signal")
+        self._slideshow_started.wait(timeout=300.0)
+        if not self._running:
+            return
+        logger.info("Slideshow started — network monitor beginning countdown (%ds)", timeout)
 
         # Wait for the initial timeout before checking
         waited = 0
@@ -476,7 +490,7 @@ class BackendDaemon:
 
         opt_queue = getattr(self, "_opt_queue", None)
         update_mgr = getattr(self, "_update_mgr", None)
-        app = create_app(self._state, self._ipc, opt_queue=opt_queue, update_mgr=update_mgr)
+        app = create_app(self._state, self._ipc, opt_queue=opt_queue, update_mgr=update_mgr, daemon=self)
         web_config = self._state.config.web
 
         logger.info("Web server starting on %s:%d", web_config["host"], web_config["port"])

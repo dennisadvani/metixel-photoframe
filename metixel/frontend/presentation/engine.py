@@ -116,6 +116,7 @@ class PresentationEngine:
         self._current_idx: int = -1
         self._paused: bool = False
         self._item_start_time: float = 0.0
+        self._queue_loaded: bool = False  # True after first set_queue() call
 
         # --- Preload (CPU worker → GPU upload on main thread) ---
         self._preload_thread: threading.Thread | None = None
@@ -284,6 +285,7 @@ class PresentationEngine:
 
         self._preload_into_inactive()
         self._write_current_media()
+        self._queue_loaded = True
         logger.info("Media queue set: %d items", len(self._queue))
 
     def add_items(self, items: list[MediaItem]) -> int:
@@ -882,11 +884,34 @@ class PresentationEngine:
         self._tex_item[slot] = item
 
     def _load_texture_for_item(self, item: MediaItem) -> Any:
-        """Load an image as a GPU texture (videos are handled elsewhere)."""
+        """Load an image as a GPU texture (videos are handled elsewhere).
+
+        If the file is an uncached original that is excessively large
+        (> 3× screen pixels), the load is skipped to avoid OOM on
+        memory-constrained hardware.  The backend will eventually
+        provide a cached (resized) version via playlist hot-reload.
+        """
         path_to_load = item.cached_path
 
         max_w = int(self._backend.width * 1.2)
         max_h = int(self._backend.height * 1.2)
+
+        # ── Guard: skip huge uncached originals ──────────────────────
+        if str(item.cached_path) == str(item.original_path):
+            try:
+                file_size_mb = path_to_load.stat().st_size / (1024 * 1024)
+            except OSError:
+                file_size_mb = 0.0
+            # Files > 8 MB are likely high-res originals.  Loading them
+            # into PIL can consume 100+ MB of RAM per image.  Defer to
+            # the backend's cached (resized) version.
+            if file_size_mb > 8.0:
+                logger.debug(
+                    "Skipping large uncached original (%.1f MB): %s — "
+                    "waiting for backend cached version",
+                    file_size_mb, path_to_load,
+                )
+                return None
 
         try:
             from PIL import ImageFile
@@ -978,6 +1003,22 @@ class PresentationEngine:
                     return
             else:
                 path_to_load = item.cached_path
+
+            # ── Guard: skip huge uncached originals ──────────────────
+            if str(item.cached_path) == str(item.original_path):
+                try:
+                    file_size_mb = path_to_load.stat().st_size / (1024 * 1024)
+                except OSError:
+                    file_size_mb = 0.0
+                if file_size_mb > 8.0:
+                    logger.debug(
+                        "Preload skipping large uncached original "
+                        "(%.1f MB): %s — waiting for backend cache",
+                        file_size_mb, path_to_load,
+                    )
+                    with self._preload_lock:
+                        self._preload_array = None
+                    return
 
             img = Image.open(path_to_load)
             img = ImageOps.exif_transpose(img)
@@ -1562,12 +1603,15 @@ class PresentationEngine:
     # ------------------------------------------------------------------
 
     def scan_folder(self, folder_path: Path) -> list[MediaItem]:
-        """Scan a folder and build MediaItem stubs from its contents.
+        """Scan a folder and build lightweight MediaItem stubs from its contents.
 
         This is a dev/debug fallback — in normal operation the backend
         ``OptimisationQueue`` handles media discovery and processing.
-        Only minimal metadata is gathered; no optimisation or thumbnail
-        generation is performed.
+
+        The scan is deliberately lightweight (no PIL, no content hashing)
+        to avoid competing with the backend optimiser for CPU/memory/I/O
+        on resource-constrained hardware.  Stub items are replaced by
+        backend-processed items via playlist hot-reload.
 
         Videos are intentionally excluded — they must come through the
         backend pipeline so transcoding, guardrails, and playlist gating
@@ -1585,36 +1629,27 @@ class PresentationEngine:
             if suffix not in self.IMAGE_EXTENSIONS:
                 continue
             try:
-                with Image.open(entry) as img:
-                    w, h = img.size
+                # Fast identity: use file path hash (NOT content hash).
+                # Content hashing reads 1 MB per file and competes with
+                # the backend optimiser for I/O — skipped intentionally.
+                # Backend-processed items will replace these stubs via
+                # playlist hot-reload with correct content-hash IDs.
+                file_id = hashlib.sha256(
+                    str(entry).encode()
+                ).hexdigest()[:16]
 
-                # Use content-hash ID (matching ImageProcessor) so the
-                # backend's playlist items deduplicate correctly when
-                # merged via hot-reload.
-                file_id = _hash_image_file(entry)
-
-                # Check if an optimised cached version already exists
-                # (e.g. from a previous run).  This avoids loading and
-                # downscaling the original 4K file on every cycle.
-                cache_base = Path(self._cache_base)
-                cached = cache_base / "images" / f"{file_id}.jpg"
-                if not cached.is_file() or cached.stat().st_size < 1024:
-                    cached = entry  # fall back to original if cache is missing/corrupt
-
-                # Thumbnails are generated by the backend OptimisationQueue —
-                # not here.  The frontend only displays what the backend provides.
                 items.append(MediaItem(
                     id=file_id,
                     original_path=entry,
-                    cached_path=cached,
+                    cached_path=entry,  # No cache check — backend will replace
                     media_type=MediaType.IMAGE,
-                    width=w, height=h,
+                    width=0, height=0,  # No PIL — backend provides dimensions
                     duration_seconds=0.0,
                     thumbnail_path=None,
                     source="local",
                 ))
-            except Exception:
-                logger.warning("Skipping unreadable file: %s", entry)
+            except OSError:
+                logger.debug("Skipping unreadable file: %s", entry)
 
         logger.info(
             "Folder scan (dev fallback): %d images in %s",

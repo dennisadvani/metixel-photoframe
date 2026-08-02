@@ -3,21 +3,21 @@
 """Boot Screen Layer — renders the Metixel logo and spinner on startup.
 
 The boot layer is drawn at z=0.0 (closest to camera, on top of everything).
-It fades out smoothly once the first slideshow item is ready, revealing
-the slideshow underneath with no black-screen gap.
+It fades out smoothly once the frontend's presentation engine has loaded
+its initial queue, revealing the slideshow underneath with no black-screen gap.
 
 For video: VLC renders on top of everything anyway, so the boot layer
 unloads immediately when a video starts — no fade needed.
 
 Architecture:
     BootLayer is a self-contained :class:`OverlayLayer`.  It has zero
-    knowledge of the slideshow or presentation engine — it only checks
-    the backend's ``playlist.json`` to decide when to dismiss.
+    knowledge of the slideshow or presentation engine — it receives a
+    ``slideshow_ready`` flag through the overlay shared-state dict from
+    the renderer and uses that to decide when to dismiss.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from pathlib import Path
@@ -34,7 +34,6 @@ logger = logging.getLogger(__name__)
 _ASSETS_DIR = Path(__file__).resolve().parent.parent.parent / "assets"
 _LOGO_PATH = _ASSETS_DIR / "metixel_logo_red_white.png"
 _SPINNER_PATH = _ASSETS_DIR / "spinner.png"
-_PLAYLIST_PATH = Path("/run/metixel/playlist.json")
 
 # ---------------------------------------------------------------------------
 # Timing
@@ -126,19 +125,21 @@ class BootLayer(OverlayLayer):
             return
 
         # ── Check exit conditions ──────────────────────────────────────
+        # The boot layer fades out when the frontend's presentation
+        # engine has actually loaded its queue (not just when the
+        # backend has written playlist.json to disk).  The renderer
+        # passes ``slideshow_ready`` via shared_state once the
+        # background queue loader thread has finished.
         if self._state == "active" and self._start_time > 0:
             min_elapsed = (now - self._start_time) >= _MIN_DISPLAY
-            playlist_count = self._count_playlist_items()
+            slideshow_ready = (shared_state or {}).get("slideshow_ready", False)
 
-            if playlist_count > 0 and min_elapsed:
-                logger.info(
-                    "Boot screen fading out — %d items in playlist",
-                    playlist_count,
-                )
+            if slideshow_ready and min_elapsed:
+                logger.info("Boot screen fading out — slideshow is ready")
                 self._start_fade()
 
-            # Safety net: if backend never starts, dismiss after timeout.
-            # Only active once the clock has started (first draw occurred).
+            # Safety net: if the frontend never loads its queue, dismiss
+            # after a timeout rather than showing the boot screen forever.
             if self._start_time > 0 and (now - self._start_time) > 300.0:
                 logger.warning(
                     "Boot screen timed out after 300s — dismissing",
@@ -306,20 +307,3 @@ class BootLayer(OverlayLayer):
                 except Exception:
                     logger.debug("Failed to unload %s texture", attr, exc_info=True)
                 setattr(self, attr, None)
-
-    # -- Playlist helpers (static — no dependency on presentation engine) ---
-
-    @staticmethod
-    def _count_playlist_items() -> int:
-        """Count items in the backend's playlist.json.
-
-        Returns 0 if the file doesn't exist or is unreadable.
-        """
-        try:
-            if not _PLAYLIST_PATH.exists():
-                return 0
-            with open(_PLAYLIST_PATH, encoding="utf-8") as f:
-                data = json.load(f)
-            return len(data) if isinstance(data, list) else 0
-        except (json.JSONDecodeError, OSError):
-            return 0

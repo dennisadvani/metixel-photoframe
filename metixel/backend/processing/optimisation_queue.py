@@ -125,6 +125,8 @@ class OptimisationQueue:
 
         # Track when we last refreshed config thresholds
         _last_config_refresh = 0.0
+        # Track when we last logged resource usage
+        _last_resource_log = 0.0
 
         while self._running:
             # Refresh config thresholds periodically (every 30s) so
@@ -133,6 +135,11 @@ class OptimisationQueue:
             if now - _last_config_refresh >= 30.0:
                 self.reload_config()
                 _last_config_refresh = now
+
+            # Log system resources every 30s for debugging
+            if now - _last_resource_log >= 30.0:
+                self._log_resources()
+                _last_resource_log = now
 
             # Drain incoming items into the appropriate queues
             self._classify_incoming()
@@ -166,6 +173,19 @@ class OptimisationQueue:
         """Signal the worker loop to stop."""
         self._running = False
         self._wake.set()
+
+    def pause(self) -> None:
+        """Temporarily halt processing (used during cache clears).
+
+        Drains the incoming and image/video queues so no stale items
+        are processed against now-deleted cached files.
+        """
+        with self._incoming_lock:
+            self._incoming.clear()
+        with self._queue_lock:
+            self._image_queue.clear()
+            self._video_queue.clear()
+        logger.debug("OptimisationQueue paused — all queues drained")
 
     def enqueue(self, items: list[MediaItem]) -> None:
         """Accept metadata-only items from the FolderWatcher.
@@ -595,9 +615,19 @@ class OptimisationQueue:
                 logger.exception(
                     "Failed to optimise image: %s", item.original_path,
                 )
-            # Yield briefly between items so the folder watcher and
-            # frontend get CPU time — PIL resize can saturate a core.
-            time.sleep(0.05)
+            # Yield between items so the frontend gets CPU time.
+            # Sleep duration scales with system load to prevent the
+            # Pi from becoming unresponsive during batch processing.
+            _sleep = 0.05
+            try:
+                with open("/proc/loadavg") as f:
+                    _load1 = float(f.readline().split()[0])
+                # At load 2.0 → sleep 0.10s, load 4.0 → 0.20s,
+                # load 7.0 → 0.35s.  Caps at 1.0s.
+                _sleep = min(1.0, max(0.05, _load1 * 0.05))
+            except (OSError, ValueError, IndexError):
+                pass
+            time.sleep(_sleep)
             _write_progress(
                 "optimising_images",
                 total_remaining,
@@ -744,3 +774,59 @@ class OptimisationQueue:
         except Exception:
             pass
         return {"width": 0, "height": 0, "duration": 0.0, "codec_name": ""}
+
+    @staticmethod
+    def _log_resources() -> None:
+        """Log CPU, memory, and swap usage at DEBUG level.
+
+        Reads ``/proc/stat``, ``/proc/meminfo``, and ``/proc/loadavg``.
+        Silent on non-Linux (dev/Win) systems.
+        """
+        try:
+            # ── CPU utilisation via /proc/stat ───────────────────────
+            with open("/proc/stat") as f:
+                cpu_line = f.readline()
+            parts = cpu_line.split()
+            if parts[0] == "cpu" and len(parts) >= 8:
+                user, nice, system, idle = (
+                    int(parts[1]), int(parts[2]),
+                    int(parts[3]), int(parts[4]),
+                )
+                total = user + nice + system + idle
+                active = user + nice + system
+                cpu_pct = (active / total * 100) if total > 0 else 0.0
+            else:
+                cpu_pct = -1.0
+
+            # ── Memory + swap via /proc/meminfo ──────────────────────
+            meminfo: dict[str, int] = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if ":" in line:
+                        key, val = line.split(":", 1)
+                        val = val.strip().split()[0]
+                        meminfo[key.strip()] = int(val)
+
+            total_mb = meminfo.get("MemTotal", 0) // 1024
+            avail_mb = meminfo.get("MemAvailable", 0) // 1024
+            used_mb = total_mb - avail_mb if total_mb > 0 else 0
+            mem_pct = (used_mb / total_mb * 100) if total_mb > 0 else 0.0
+
+            swap_total = meminfo.get("SwapTotal", 0) // 1024
+            swap_free = meminfo.get("SwapFree", 0) // 1024
+            swap_used = swap_total - swap_free
+
+            # ── Load average ─────────────────────────────────────────
+            with open("/proc/loadavg") as f:
+                load = f.readline().split()[:3]
+
+            logger.debug(
+                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  "
+                "SWAP=%d/%dMB  LOAD=%s %s %s",
+                cpu_pct,
+                used_mb, total_mb, mem_pct,
+                swap_used, swap_total,
+                load[0], load[1], load[2],
+            )
+        except (OSError, ValueError, IndexError):
+            pass  # Non-Linux or /proc not available
