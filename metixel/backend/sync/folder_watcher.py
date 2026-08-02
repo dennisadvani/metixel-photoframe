@@ -366,12 +366,12 @@ class FolderWatcher:
         blocked on a long video transcode.
 
         * **Images**: PLAY_ORIGINAL images are always ready to play.
-        * **Videos**: PLAY_ORIGINAL videos have their ``transcode_status``
-          set to ``NOT_TRANSCODED`` here so they can bypass the queue.
-          (The optimisation queue would do the same thing, but it may be
-          blocked on a different transcode.)
+        * **Videos**: ALL videos go through the optimisation queue for
+          mandatory first/last frame extraction.  ``VideoProcessor.process()``
+          skips the expensive transcode step for H.264 videos within
+          resolution limits but still generates ``.1.frame`` / ``.2.frame``.
 
-        Items that need optimisation (PLAY_CACHED) are sent to the
+        Items that need optimisation (PLAY_CACHED) are also sent to the
         OptimisationQueue for processing.
         """
         if self._opt_queue is not None:
@@ -382,10 +382,14 @@ class FolderWatcher:
                 if item.cached_path == item.original_path:
                     # PLAY_ORIGINAL — no optimisation needed
                     if item.media_type == MediaType.VIDEO:
-                        # Mark as NOT_TRANSCODED so the frontend knows
-                        # this video is safe to play as-is.
-                        item.transcode_status = TranscodeStatus.NOT_TRANSCODED
-                    ready.append(item)
+                        # Videos always go through the optimisation queue
+                        # for frame extraction (first + last frame), even
+                        # when the codec/resolution are already optimal.
+                        # VideoProcessor.process() will skip the transcode
+                        # step but still extract frames.
+                        needs_opt.append(item)
+                    else:
+                        ready.append(item)
                 else:
                     # PLAY_CACHED — needs resize / transcode
                     needs_opt.append(item)

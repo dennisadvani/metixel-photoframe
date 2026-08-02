@@ -94,6 +94,8 @@ class FrontendRenderer:
                 original = Path(entry["original_path"])
                 cached = Path(entry["cached_path"])
                 thumb = Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None
+                first_frame = Path(entry["first_frame_path"]) if entry.get("first_frame_path") else None
+                last_frame = Path(entry["last_frame_path"]) if entry.get("last_frame_path") else None
 
                 # Guard: skip items whose cached file doesn't exist yet
                 # (e.g. transcoding still in progress from a previous run).
@@ -115,6 +117,8 @@ class FrontendRenderer:
                     height=entry.get("height", 0),
                     duration_seconds=entry.get("duration_seconds", 0.0),
                     thumbnail_path=thumb,
+                    first_frame_path=first_frame,
+                    last_frame_path=last_frame,
                     source=entry.get("source", "local"),
                     transcode_status=(
                         TranscodeStatus(entry["transcode_status"])
@@ -430,6 +434,8 @@ class FrontendRenderer:
                     height=entry.get("height", 0),
                     duration_seconds=entry.get("duration_seconds", 0.0),
                     thumbnail_path=Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None,
+                    first_frame_path=Path(entry["first_frame_path"]) if entry.get("first_frame_path") else None,
+                    last_frame_path=Path(entry["last_frame_path"]) if entry.get("last_frame_path") else None,
                     source=entry.get("source", "local"),
                     transcode_status=(
                         TranscodeStatus(entry["transcode_status"])
@@ -477,12 +483,27 @@ class FrontendRenderer:
                 )
 
         if removed_ids:
-            removed = self._presentation.remove_items(removed_ids)
-            if removed:
-                logger.info(
-                    "Removed %d items from slideshow "
-                    "(backend playlist: %d, frontend queue: %d)",
-                    removed, len(items), len(self._presentation._queue),
+            # Only prune when the backend playlist has at least as many
+            # items as the frontend queue.  If the backend playlist is
+            # smaller, the backend is likely still building its initial
+            # playlist (e.g. after a cache clear).  Removing items
+            # prematurely would leave the slideshow with an empty queue
+            # and cause a black screen.
+            if len(items) >= len(self._presentation._queue):
+                removed = self._presentation.remove_items(removed_ids)
+                if removed:
+                    logger.info(
+                        "Removed %d items from slideshow "
+                        "(backend playlist: %d, frontend queue: %d)",
+                        removed, len(items), len(self._presentation._queue),
+                    )
+            else:
+                logger.debug(
+                    "Not pruning %d item(s) — backend playlist is still "
+                    "building (%d items vs frontend %d).  Items will be "
+                    "reconciled when the backend finishes processing.",
+                    len(removed_ids), len(items),
+                    len(self._presentation._queue),
                 )
 
         if not new_ids and not removed_ids:

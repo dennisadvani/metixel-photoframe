@@ -212,12 +212,43 @@ class VideoProcessor:
             if not thumb_path.exists():
                 self._extract_thumbnail(source_path, thumb_path)
 
+            # Extract first + last frames for slideshow preload/swap.
+            # These are required by the frontend — videos without cached
+            # frames are excluded from the playlist via is_ready_to_play.
+            first_frame, last_frame = self._extract_video_frames(
+                source_path, file_hash,
+            )
+
+            # If the source is already H.264 and within resolution limits,
+            # skip the expensive transcode step — we already have everything
+            # the frontend needs (thumbnail + first/last frames).
+            codec_name = info.get("codec_name", "")
+            vw = info.get("width", 0) or 0
+            vh = info.get("height", 0) or 0
+            if not VideoProcessor.needs_optimisation(
+                vw, vh,
+                codec_name=codec_name,
+                max_width=self._transcode_max_w,
+                max_height=self._transcode_max_h,
+            ):
+                logger.debug(
+                    "Video already optimal (H.264 %dx%d) — "
+                    "skipping transcode for %s",
+                    vw, vh, source_path.name,
+                )
+                return self._build_item(
+                    source_path, source_path, thumb_path, info, source, file_hash,
+                    status=TranscodeStatus.NOT_TRANSCODED,
+                    first_frame=first_frame, last_frame=last_frame,
+                )
+
             # If transcoding is disabled, use original file
             if not self._transcoding_enabled:
                 logger.debug("Transcoding disabled — using original file for %s", source_path.name)
                 return self._build_item(
                     source_path, source_path, thumb_path, info, source, file_hash,
                     status=TranscodeStatus.NOT_TRANSCODED,
+                    first_frame=first_frame, last_frame=last_frame,
                 )
 
             # If cached file already exists, validate and use it
@@ -227,6 +258,7 @@ class VideoProcessor:
                     return self._build_item(
                         source_path, cached_path, thumb_path, info, source, file_hash,
                         status=TranscodeStatus.TRANSCODED,
+                        first_frame=first_frame, last_frame=last_frame,
                     )
                 else:
                     logger.warning(
@@ -261,6 +293,7 @@ class VideoProcessor:
             return self._build_item(
                 source_path, playback_path, thumb_path, info, source, file_hash,
                 status=status,
+                first_frame=first_frame, last_frame=last_frame,
             )
 
         except Exception:
@@ -508,11 +541,12 @@ class VideoProcessor:
         import json
 
         data = json.loads(result.stdout)
-        info: dict = {"width": 0, "height": 0, "duration": 0.0}
+        info: dict = {"width": 0, "height": 0, "duration": 0.0, "codec_name": ""}
         for stream in data.get("streams", []):
             if stream.get("codec_type") == "video":
                 info["width"] = stream.get("width", 0)
                 info["height"] = stream.get("height", 0)
+                info["codec_name"] = stream.get("codec_name", "")
                 break
         info["duration"] = float(data.get("format", {}).get("duration", 0))
         return info
@@ -571,6 +605,65 @@ class VideoProcessor:
         except (subprocess.TimeoutExpired, OSError):
             return False
 
+    def _extract_video_frames(
+        self, source: Path, file_hash: str,
+    ) -> tuple[Path | None, Path | None]:
+        """Extract first (t=0) and last (``-sseof``) frame JPEGs.
+
+        Returns ``(first_frame_path, last_frame_path)``.  Either may be
+        ``None`` if extraction fails for that frame.
+
+        This is called during Phase 2 (OPTIMISE) so the frontend never
+        needs to run ffmpeg — it just loads the pre-generated cache files.
+        """
+        frame_dir = self._video_cache
+        first_path = frame_dir / f"{file_hash}.1.frame"
+        last_path = frame_dir / f"{file_hash}.2.frame"
+
+        # ── First frame (t=0, keyframe seek) ──────────────────────────
+        if not first_path.exists() or first_path.stat().st_size == 0:
+            cmd = nice_cmd([
+                "ffmpeg", "-y",
+                "-noaccurate_seek", "-ss", "0",
+                "-i", str(source),
+                "-vframes", "1", "-q:v", "2",
+                str(first_path),
+            ])
+            try:
+                subprocess.run(
+                    cmd, check=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=60,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                logger.warning("Failed to extract first frame: %s", source.name)
+                with contextlib.suppress(OSError):
+                    first_path.unlink()
+                first_path = None  # type: ignore[assignment]
+
+        # ── Last frame (sseof -1, decode final second) ────────────────
+        if not last_path.exists() or last_path.stat().st_size == 0:
+            cmd = nice_cmd([
+                "ffmpeg", "-y",
+                "-sseof", "-1",
+                "-i", str(source),
+                "-vframes", "1", "-q:v", "2",
+                str(last_path),
+            ])
+            try:
+                subprocess.run(
+                    cmd, check=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=120,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                logger.warning("Failed to extract last frame: %s", source.name)
+                with contextlib.suppress(OSError):
+                    last_path.unlink()
+                last_path = None  # type: ignore[assignment]
+
+        return first_path, last_path
+
     @staticmethod
     def _cleanup_cached_video(cached_path: Path, thumb_path: Path) -> None:
         """Delete a corrupt cached video and all associated artifacts.
@@ -615,6 +708,8 @@ class VideoProcessor:
         file_hash: str,
         *,
         status: TranscodeStatus,
+        first_frame: Path | None = None,
+        last_frame: Path | None = None,
     ) -> MediaItem:
         return MediaItem(
             id=file_hash,
@@ -625,6 +720,8 @@ class VideoProcessor:
             height=info.get("height", 0),
             duration_seconds=info.get("duration", 0.0),
             thumbnail_path=thumb,
+            first_frame_path=first_frame,
+            last_frame_path=last_frame,
             source=source_name,
             transcode_status=status,
         )

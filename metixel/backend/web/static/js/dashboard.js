@@ -2584,29 +2584,12 @@
             document.getElementById("btn-save-system")?.addEventListener("click", async () => {
                 var logLevel = document.getElementById("cfg-log-level").value;
                 var quietBoot = document.getElementById("cfg-quiet-boot").checked;
-                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
-                var ntpServers = [
-                    document.getElementById("cfg-ntp-server-1").value.trim(),
-                    document.getElementById("cfg-ntp-server-2").value.trim(),
-                    document.getElementById("cfg-ntp-server-3").value.trim(),
-                ].filter(function(s) { return s !== ""; });
                 var sysResult = await apiPut("/config/system", {
                     log_level: logLevel,
                     cache_dir: document.getElementById("cfg-cache-dir").value,
                     quiet_boot: quietBoot,
-                    ntp_enabled: ntpEnabled,
-                    ntp_servers: ntpServers,
                 });
                 var logResult = await apiPost("/logs/level", { level: logLevel });
-                // Apply NTP settings via systemd-timesyncd
-                if (ntpEnabled) {
-                    await apiPost("/config/ntp", {
-                        enabled: true,
-                        servers: ntpServers,
-                    });
-                } else {
-                    await apiPost("/config/ntp", { enabled: false });
-                }
                 // Apply quiet boot change (requires sudo) — always run so the
                 // idempotent script is applied.  Show "Applying…" on the
                 // save button while the script runs (may take a few seconds).
@@ -2642,6 +2625,32 @@
                 } else {
                     showToast("Failed to save system settings", "error");
                 }
+            });
+
+            // Time settings (NTP + timezone are saved immediately; NTP servers
+            // are saved here together so the user can edit all three at once.)
+            document.getElementById("btn-save-time")?.addEventListener("click", async () => {
+                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
+                var ntpServers = [
+                    document.getElementById("cfg-ntp-server-1").value.trim(),
+                    document.getElementById("cfg-ntp-server-2").value.trim(),
+                    document.getElementById("cfg-ntp-server-3").value.trim(),
+                ].filter(function(s) { return s !== ""; });
+                // Persist config
+                await apiPut("/config/system", {
+                    ntp_enabled: ntpEnabled,
+                    ntp_servers: ntpServers,
+                });
+                // Apply NTP settings via systemd-timesyncd
+                if (ntpEnabled) {
+                    await apiPost("/config/ntp", {
+                        enabled: true,
+                        servers: ntpServers,
+                    });
+                } else {
+                    await apiPost("/config/ntp", { enabled: false });
+                }
+                showToast("Time settings saved" + (ntpEnabled ? " — NTP enabled" : ""), "success");
             });
 
             document.getElementById("btn-save-web")?.addEventListener("click", async () => {

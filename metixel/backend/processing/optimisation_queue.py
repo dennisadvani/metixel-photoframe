@@ -436,22 +436,25 @@ class OptimisationQueue:
                     )
                     ready.append(item)
             elif item.media_type == MediaType.VIDEO:
+                # All videos go through the video queue — frame extraction
+                # (first + last frame) is always required, even when the
+                # codec/resolution are already optimal.  VideoProcessor.process()
+                # will skip the actual transcode step for H.264 videos within
+                # resolution limits but still extract frames.
+                codec = (item.exif_data.get("codec_name") or "?")
                 if self._video_needs_optimisation(item):
-                    codec = (item.exif_data.get("codec_name") or "?")
                     logger.debug(
                         "[OPTQ] VID→opt  | %4dx%-4d | %-6s | %s",
                         item.width, item.height, codec,
                         item.original_path.name,
                     )
-                    vid_opt.append(item)
                 else:
-                    codec = (item.exif_data.get("codec_name") or "?")
                     logger.debug(
-                        "[OPTQ] VID→play | %4dx%-4d | %-6s | %s",
+                        "[OPTQ] VID→frame| %4dx%-4d | %-6s | %s",
                         item.width, item.height, codec,
                         item.original_path.name,
                     )
-                    ready.append(item)
+                vid_opt.append(item)
             else:
                 ready.append(item)
 
