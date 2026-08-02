@@ -467,9 +467,11 @@ class FrontendRenderer:
                 and len(self._presentation._queue) > 0
                 and self._presentation._tex[self._presentation._active] is not None
             )
+            queue_size = len(self._presentation._queue) if self._presentation else 0
             self._overlay.update({
                 "video_playing": video_playing,
                 "slideshow_ready": slideshow_ready,
+                "queue_size": queue_size,
             })
             self._overlay.draw(self._backend)
 

@@ -22,7 +22,7 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 | Category | Feature | Status |
 |---|---|---|
-| **Display** | Hardware-accelerated OpenGL ES 2.0 rendering (pi3d + Mesa) | ✅ Phase 1 |
+| **Display** | Hardware-accelerated OpenGL ES 2.0 rendering (pi3d + Mesa) | ✅ |
 | | Smooth crossfade, slide, and fade transitions | ✅ |
 | | Automatic resolution detection | ✅ |
 | **Media** | Local folder watching (auto-detect new files) | ✅ |
@@ -36,17 +36,19 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 ## Hardware Support
 
-| Phase | Models | RAM | SWAP | Capabilities | GPU | Status |
-|---|---|---|---|---|---|---|
-| **Phase 1** | Pi Zero 2 W | 512MB | Required | Images only (no video playback or transcoding) | VideoCore IV | ✅ Active |
-| **Phase 1** | Pi 2, Pi 3 | 1GB | Required | Images + video playback (1080p max; >1080p requires transcoding before being queued) | VideoCore IV | ✅ Active |
+| Phase | Models | RAM | SWAP | Capabilities | GPU |
+|---|---|---|---|---|---|
+| Pi Zero 2 W | 512MB | Required | Images only (no video playback or transcoding) | VideoCore IV | ✅ Active |
+| Pi 2, Pi 3 | 1GB | Required | Images + video playback (1080p max; >1080p requires transcoding before being queued) | VideoCore IV | ✅ Active |
+| **Pi 5** | 2GB+ | Recommended | Images + video playback + transcoding — **recommended platform** | VideoCore VII | ✅ Active |
 
 > **Notes:**
 > - A SWAP file is **required** on all models.
 > - Pi 3 hardware video decoder is limited to **1080p** — higher-resolution video must be transcoded down.
 > - Video playback or transcoding needs at least **1GB RAM** — the Pi Zero 2 W (512MB) is image-only.
+> - **Pi 5 (2GB+)** is the recommended platform — it runs the same Trixie image as Pi 2/3 with no changes.
 
-**Tested on:** Raspberry Pi 3 (1GB RAM) running Debian Trixie (13) Lite.
+**Tested on:** Raspberry Pi 3 (1GB) and Raspberry Pi 5 (2GB) running Debian Trixie (13) Lite.
 
 See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory recommendations.
 
@@ -56,7 +58,7 @@ See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory reco
 
 ### Prerequisites
 
-- Raspberry Pi 3+
+- Raspberry Pi 3+ (Pi 5 with 2GB+ recommended)
 - MicroSD card (8GB+, Class 10 recommended)
 - Debian **Trixie** (13) Lite flashed to the SD card, use [Raspberry Pi Imager](https://www.raspberrypi.com/software/)
 - HDMI display (720p, 1080p or 1200p recommended for RPi 3)
