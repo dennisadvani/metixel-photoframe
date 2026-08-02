@@ -248,8 +248,13 @@ class BackendDaemon:
             )
             self._show_pin_on_screen(pin)
             pre_scan_for_ap()
-            start_ap_mode()
-            ap_was_active = True
+            if start_ap_mode():
+                ap_was_active = True
+            else:
+                logger.error(
+                    "AP fallback activation failed — will retry on next monitor cycle"
+                )
+                ap_was_active = False
 
         # Monitor for connection changes
         while self._running:
@@ -274,8 +279,12 @@ class BackendDaemon:
                     logger.warning("Network lost — reactivating PIN-gated AP fallback (PIN: %s)", pin)
                     self._show_pin_on_screen(pin)
                     pre_scan_for_ap()
-                    start_ap_mode()
-                    ap_was_active = True
+                    if start_ap_mode():
+                        ap_was_active = True
+                    else:
+                        logger.error(
+                            "AP fallback reactivation failed — will retry on next monitor cycle"
+                        )
 
     def _show_pin_on_screen(self, pin: str) -> None:
         """Display the AP security PIN as a persistent message on the frame.
