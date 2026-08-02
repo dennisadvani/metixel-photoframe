@@ -27,4 +27,4 @@
 2. Flash with Raspberry Pi Imager or dd
 3. Run `sudo bash /opt/metixel/scripts/setup_trixie.sh`
 4. Reboot — Metixel auto-starts via systemd
-5. Boot and configure via web dashboard at `http://<ip>:8080`
+5. Boot and configure via web dashboard at `http://<ip>`

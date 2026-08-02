@@ -566,6 +566,27 @@ def start_ap_mode() -> bool:
     Returns False if the services are not installed or fail to start.
     """
     try:
+        # ── Wait for wlan0 to appear ─────────────────────────────────
+        # On a cold boot the Wi-Fi driver may still be initialising when
+        # the network monitor fires.  Poll for the interface so we don't
+        # fail silently and get locked out by the retry guard.
+        wlan_ready = False
+        for _ in range(30):  # up to 30 seconds
+            try:
+                result = subprocess.run(
+                    ["ip", "link", "show", "wlan0"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if "wlan0:" in result.stdout:
+                    wlan_ready = True
+                    break
+            except Exception:
+                pass
+            time.sleep(1.0)
+        if not wlan_ready:
+            logger.error("wlan0 interface not found — AP mode unavailable")
+            return False
+
         # Verify services are installed before trying to start them
         for unit in (HOSTAPD_UNIT, DNSMASQ_UNIT):
             check = subprocess.run(

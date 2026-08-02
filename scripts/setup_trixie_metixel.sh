@@ -216,8 +216,13 @@ address=/#/192.168.42.1
 no-resolv
 DNSMASQEOF
 
-# Disable auto-start — the Metixel NetworkMonitor controls these services
-systemctl disable hostapd dnsmasq 2>/dev/null || true
+# Disable auto-start — the Metixel NetworkMonitor controls these services.
+# If disable fails, log it but don't stop the install — the service may
+# not be fully registered yet (first install).  The NetworkMonitor
+# explicitly stops hostapd before taking control.
+if ! systemctl disable hostapd dnsmasq; then
+    echo "WARNING: Could not disable hostapd/dnsmasq auto-start — may need manual fix"
+fi
 systemctl unmask hostapd dnsmasq 2>/dev/null || true
 
 # -- Samba share (media only) ------------------------------------------------

@@ -206,10 +206,17 @@ class MessageLayer(OverlayLayer):
         target_x = bw - mw - margin
 
         with self._lock:
-            for idx, m in enumerate(self._msgs):
+            # Accumulate Y by summing actual heights of preceding visible
+            # messages — avoids gaps/overlaps when messages have different
+            # body lengths and therefore different computed heights.
+            y_offset = margin
+            for m in self._msgs:
                 if not m.active:
                     continue
-                self._draw_one(backend, m, idx, bw, target_x, margin)
+                mh = self._msg_height(m)
+                m._y = y_offset
+                y_offset += mh + MSG_GAP
+                self._draw_one(backend, m, bw, target_x)
 
     @staticmethod
     def _msg_height(m: _Message) -> int:
@@ -230,22 +237,21 @@ class MessageLayer(OverlayLayer):
         # Ensure minimum height
         return max(h, 60)
 
-    def _draw_one(self, backend, m, idx, bw, target_x, margin):
+    def _draw_one(self, backend, m, bw, target_x):
         # Compute message x position (animated)
         if m.state == "sliding_in":
             t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_IN_MS
             et = 1.0 - (1.0 - min(t, 1.0)) ** 3
-            m._x = bw + margin - (bw + margin - target_x) * et
+            m._x = bw + MSG_MARGIN - (bw + MSG_MARGIN - target_x) * et
         elif m.state == "sliding_out":
             t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_OUT_MS
             et = min(t, 1.0) ** 3
-            m._x = m._from_x + (bw + margin - m._from_x) * et
+            m._x = m._from_x + (bw + MSG_MARGIN - m._from_x) * et
         else:
             m._x = target_x
 
-        # Stack position — compute message height from content
+        # Y position was computed by draw() via accumulated heights above
         mh = self._msg_height(m)
-        m._y = margin + idx * (mh + MSG_GAP)
 
         x, y, alpha = m._x, m._y, m._alpha
         if alpha <= 0.01:
