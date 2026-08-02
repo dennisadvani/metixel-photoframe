@@ -50,16 +50,34 @@ PROCESSING_STATUS_PATH = "/run/metixel/processing_status.json"
 
 
 def _write_progress(phase: str, total: int, processed: int, current_file: str = "") -> None:
-    """Atomically write the processing progress status file."""
+    """Atomically write per-phase processing progress.
+
+    Each phase (``scanning``, ``optimising_images``, ``transcoding``)
+    tracks its own ``total`` / ``processed`` independently so the web
+    UI can show separate progress bars that persist across phase switches
+    instead of flickering between them.
+    """
     try:
         os.makedirs(os.path.dirname(PROCESSING_STATUS_PATH), exist_ok=True)
-        tmp = PROCESSING_STATUS_PATH + ".tmp"
-        data = {
-            "phase": phase,
+
+        # Preserve existing phase data so bars don't reset to zero
+        existing: dict[str, dict] = {}
+        try:
+            if os.path.exists(PROCESSING_STATUS_PATH):
+                with open(PROCESSING_STATUS_PATH, encoding="utf-8") as f:
+                    prev = json.load(f)
+                existing = prev.get("phases", {})
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        existing[phase] = {
             "total": total,
             "processed": processed,
             "current_file": current_file,
         }
+
+        data = {"active": phase, "phases": existing}
+        tmp = PROCESSING_STATUS_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, PROCESSING_STATUS_PATH)
@@ -76,7 +94,7 @@ class OptimisationQueue:
 
     # How many items to flush to the playlist at once (avoids the frontend
     # waiting for ALL files to finish before showing anything).
-    _FLUSH_EVERY = 12
+    _FLUSH_EVERY = 6
 
     #: Known H.264 codec names (lowercase) that skip transcoding when the
     #: video is also within the resolution threshold.
@@ -594,8 +612,13 @@ class OptimisationQueue:
         if processor is None:
             return
 
+        # ── Snapshot memory at batch start ────────────────────────────
+        _mem_before = self._read_mem_used_mb()
+        _batch_start = time.monotonic()
+
         optimised: list[MediaItem] = []
         for idx, item in enumerate(batch):
+            _img_start = time.monotonic()
             logger.debug(
                 "[OPTQ] IMG opt  | %4dx%-4d | (%d/%d) | %s",
                 item.width, item.height,
@@ -604,11 +627,19 @@ class OptimisationQueue:
             )
             try:
                 result = processor.process(item.original_path, source=item.source)
+                _img_elapsed = time.monotonic() - _img_start
                 if result is not None:
                     optimised.append(result)
                     logger.debug(
-                        "[OPTQ] IMG done | %4dx%-4d → cached | %s",
+                        "[OPTQ] IMG done | %4dx%-4d → cached | %5.1fs | %s",
                         result.width, result.height,
+                        _img_elapsed,
+                        item.original_path.name,
+                    )
+                else:
+                    logger.debug(
+                        "[OPTQ] IMG skip | already cached | %5.1fs | %s",
+                        _img_elapsed,
                         item.original_path.name,
                     )
             except Exception:
@@ -619,28 +650,62 @@ class OptimisationQueue:
             # Sleep duration scales with system load to prevent the
             # Pi from becoming unresponsive during batch processing.
             _sleep = 0.05
+            _load1 = 0.0
             try:
                 with open("/proc/loadavg") as f:
                     _load1 = float(f.readline().split()[0])
-                # At load 2.0 → sleep 0.10s, load 4.0 → 0.20s,
-                # load 7.0 → 0.35s.  Caps at 1.0s.
-                _sleep = min(1.0, max(0.05, _load1 * 0.05))
+                # At load 2.0 → sleep 0.40s, load 4.0 → 0.80s,
+                # load 7.0 → 1.00s (capped).  Pi 3 has 4 cores
+                # so load > 4 means processes are waiting.
+                _sleep = min(1.0, max(0.05, _load1 * 0.2))
             except (OSError, ValueError, IndexError):
                 pass
+            logger.debug(
+                "[OPTQ] yield  | load=%.2f  sleep=%.3fs",
+                _load1, _sleep,
+            )
             time.sleep(_sleep)
             _write_progress(
                 "optimising_images",
-                total_remaining,
-                idx + 1,
+                len(batch),       # total = batch size (usually 6)
+                idx + 1,          # current position in batch
                 item.original_path.name,
             )
 
+        # ── Batch summary ─────────────────────────────────────────────
+        _batch_elapsed = time.monotonic() - _batch_start
+        _mem_after = self._read_mem_used_mb()
+        _mem_delta = _mem_after - _mem_before
+
         if optimised:
             self._state.add_playlist_items(optimised)
-            logger.debug(
-                "Image optimisation: %d processed, added to playlist",
-                len(optimised),
-            )
+        logger.debug(
+            "[OPTQ] IMG batch done | %d/%d optimised | "
+            "%.1fs | mem: %+dMB (%d→%d)",
+            len(optimised), len(batch),
+            _batch_elapsed,
+            _mem_delta, _mem_before, _mem_after,
+        )
+
+    @staticmethod
+    def _read_mem_used_mb() -> int:
+        """Read current used memory in MB from /proc/meminfo.
+
+        Returns 0 if /proc/meminfo is unavailable (e.g. Windows).
+        """
+        try:
+            with open("/proc/meminfo") as f:
+                meminfo: dict[str, int] = {}
+                for line in f:
+                    if ":" in line:
+                        key, val = line.split(":", 1)
+                        val = val.strip().split()[0]
+                        meminfo[key.strip()] = int(val)
+            total = meminfo.get("MemTotal", 0) // 1024
+            avail = meminfo.get("MemAvailable", 0) // 1024
+            return total - avail if total > 0 else 0
+        except (OSError, ValueError):
+            return 0
 
     def _process_video_queue(self) -> None:
         """Process items in the video optimisation queue.
@@ -681,11 +746,12 @@ class OptimisationQueue:
         with self._queue_lock:
             remaining = len(self._video_queue) + 1  # +1 for the one we just popped
 
-        logger.debug(
-            "[OPTQ] VID opt  | %4dx%-4d | %-6s | %5.1fs | %s",
+        logger.info(
+            "[OPTQ] VID opt  | %4dx%-4d | %-6s | %5.1fs | mem=%dMB | %s",
             item.width, item.height,
             (item.exif_data.get("codec_name") or "?"),
             item.duration_seconds,
+            self._read_mem_used_mb(),
             item.original_path.name,
         )
         try:

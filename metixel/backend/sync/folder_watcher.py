@@ -46,16 +46,31 @@ PROCESSING_STATUS_PATH = "/run/metixel/processing_status.json"
 
 
 def _write_progress(phase: str, total: int, processed: int, current_file: str = "") -> None:
-    """Atomically write the processing progress status file."""
+    """Atomically write per-phase processing progress.
+
+    Each phase tracks its own total/processed so the web UI can show
+    separate progress bars that persist across phase switches.
+    """
     try:
         os.makedirs(os.path.dirname(PROCESSING_STATUS_PATH), exist_ok=True)
-        tmp = PROCESSING_STATUS_PATH + ".tmp"
-        data = {
-            "phase": phase,
+
+        existing: dict[str, dict] = {}
+        try:
+            if os.path.exists(PROCESSING_STATUS_PATH):
+                with open(PROCESSING_STATUS_PATH, encoding="utf-8") as f:
+                    prev = json.load(f)
+                existing = prev.get("phases", {})
+        except (json.JSONDecodeError, OSError):
+            pass
+
+        existing[phase] = {
             "total": total,
             "processed": processed,
             "current_file": current_file,
         }
+
+        data = {"active": phase, "phases": existing}
+        tmp = PROCESSING_STATUS_PATH + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f)
         os.replace(tmp, PROCESSING_STATUS_PATH)
@@ -342,9 +357,25 @@ class FolderWatcher:
 
             # Push to optimisation queue in batches to avoid holding
             # too many items in memory at once.
-            if len(stubs) >= 24:
+            if len(stubs) >= 6:
                 self._enqueue_stubs(stubs)
                 stubs.clear()
+
+            # ── Yield when the optimiser is busy ────────────────────
+            # Thumbnail generation (above) uses PIL, which competes
+            # with the optimisation queue's own image processing.
+            # When the queue is actively working, pause between files
+            # so the optimiser gets the CPU/memory.  Sleep duration
+            # scales with loadavg — same formula as the optimiser.
+            if self._opt_queue is not None and self._opt_queue.is_busy:
+                _sleep = 0.2
+                try:
+                    with open("/proc/loadavg") as f:
+                        _load1 = float(f.readline().split()[0])
+                    _sleep = min(1.0, max(0.1, _load1 * 0.2))
+                except (OSError, ValueError, IndexError):
+                    pass
+                time.sleep(_sleep)
 
         # Final push
         if stubs:

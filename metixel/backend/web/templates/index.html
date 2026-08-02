@@ -150,9 +150,36 @@
 
                 <div class="card">
                     <h2>Background Processing</h2>
-                    <div id="processing-status">
-                        <span class="processing-phase">Idle</span>
+                    <div id="processing-phases">
+                        <div class="proc-phase" data-phase="scanning" style="margin-bottom:0.6rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">folder</span> Scanning folders</span>
+                                <span class="proc-pct">—</span>
+                            </div>
+                            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                <div class="proc-fill" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
+                            </div>
+                        </div>
+                        <div class="proc-phase" data-phase="optimising_images" style="margin-bottom:0.6rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">image</span> Optimising images</span>
+                                <span class="proc-pct">—</span>
+                            </div>
+                            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                <div class="proc-fill" style="background:#d92626;height:100%;width:0%;transition:width 0.3s"></div>
+                            </div>
+                        </div>
+                        <div class="proc-phase" data-phase="transcoding" style="margin-bottom:0.6rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">movie</span> Transcoding video</span>
+                                <span class="proc-pct">—</span>
+                            </div>
+                            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                <div class="proc-fill" style="background:#d92626;height:100%;width:0%;transition:width 0.3s"></div>
+                            </div>
+                        </div>
                     </div>
+                    <div id="processing-idle" style="font-size:0.82rem;color:var(--text-muted)">Idle — no processing active</div>
                 </div>
 
                 <div class="card">
