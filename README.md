@@ -60,10 +60,10 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 ### RAM Requirements
 
-| RAM | Video Playback | Optimisation | Transcoding |
-|---|---|---|---|
-| 512MB | ❌ | ❌ | ❌ |
-| 1GB+ | ✅ | ✅ | ✅ |
+| RAM | Photo Playback | Video Playback | Optimisation | Transcoding |
+|---|---|---|---|---|
+| 512MB | ✅ | ❌ | ❌ | ❌ |
+| 1GB+ | ✅ | ✅ | ✅ | ✅ |
 
 
 > **Notes:**
