@@ -9,15 +9,16 @@ slideshow in **under 10 minutes**.
 
 | Item | Notes |
 |---|---|
-| Raspberry Pi 3, 4, or 5 | Pi 5 with 2GB+ RAM is recommended |
+| Raspberry Pi 2, 3, 4, or 5 | Pi 5 with 2GB+ RAM is recommended; Pi 4 is supported but untested; Pi 2 requires manual install (no .img) |
 | MicroSD card | 8GB minimum, Class 10 or better |
 | HDMI display + cable | 1080p recommended |
-| 5V USB-C power supply | 3A for Pi 5, 2.5A for Pi 3/4 |
+| 5V power supply | 3A for Pi 5, 2.5A for Pi 2/3/4 |
 | Computer with SD card reader | For flashing the image |
 | Wi-Fi or Ethernet | For initial setup and the web dashboard |
 
-> **Pi Zero 2 W (512MB)?** Metixel runs on it, but video playback and transcoding
-> are disabled — images only. See [`docs/HARDWARE.md`](HARDWARE.md).
+> **Pi Zero 2 W (512MB)?** Metixel runs on it but is **untested**. Images only —
+> no video playback, optimisation, or transcoding. Manual install required
+> (no pre-built .img). See [`docs/HARDWARE.md`](HARDWARE.md).
 
 ---
 

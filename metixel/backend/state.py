@@ -128,6 +128,7 @@ class StateManager:
         img_count, vid_count = self._get_playlist_counts()
 
         cpu_pct = self._get_cpu_percent()
+        cpu_temp = self._get_cpu_temp()
         mem = self._get_memory_stats()
         swap = self._get_swap_stats()
 
@@ -143,6 +144,7 @@ class StateManager:
             "playlist_image_count": img_count,
             "playlist_video_count": vid_count,
             "cpu_percent": cpu_pct,
+            "cpu_temp_c": cpu_temp,
             "memory_percent": mem["percent"],
             "memory_used_gb": mem["used_gb"],
             "memory_total_gb": mem["total_gb"],
@@ -286,6 +288,26 @@ class StateManager:
 
         pct = (1.0 - delta_idle / delta_total) * 100.0
         return round(max(0.0, min(100.0, pct)), 1)
+
+    @staticmethod
+    def _get_cpu_temp() -> float:
+        """Read CPU temperature via ``vcgencmd measure_temp``.
+
+        Returns temperature in degrees Celsius, or 0.0 on failure.
+        """
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["vcgencmd", "measure_temp"],
+                capture_output=True, text=True, timeout=5,
+            )
+            # Output format: "temp=45.0'C\n"
+            out = result.stdout.strip()
+            if out.startswith("temp="):
+                return float(out.split("=")[1].split("'")[0])
+        except Exception:
+            pass
+        return 0.0
 
     @staticmethod
     def _get_memory_stats() -> dict[str, float]:

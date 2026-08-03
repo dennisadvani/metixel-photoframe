@@ -48,19 +48,29 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 ## Hardware Support
 
-| Models | RAM | SWAP | Capabilities | GPU |
-|---|---|---|---|---|
-| Pi Zero 2 W | 512MB | Required | Images only (no video playback, optimisation or transcoding) | VideoCore IV | ✅ Active |
-| Pi 2, Pi 3 | 1GB | Required | Images + video playback (1080p max; >1080p requires transcoding before being queued) | VideoCore IV | ✅ Active |
-| **Pi 5** | 2GB+ | Recommended | Images + video playback + transcoding — **recommended platform** | VideoCore VII | ✅ Active |
+### Supported Models
+
+| Model | GPU | Max Playback | Transcoding | Status | OS | IMG Available |
+|---|---|---|---|---|---|---|
+| Pi 5 | VideoCore VII | 4K | ✅ Hardware H.265 | ✅ | Trixie 13 Lite (64-bit) | ✅ |
+| Pi 4 | VideoCore VI | 4K (untested) | ✅ | ⚠️ Untested | Trixie 13 Lite (64-bit) | ✅ |
+| Pi 3 B/B+ | VideoCore IV | 1080p | ✅ Software only | ✅ Active | Trixie 13 Lite (64-bit) | ✅ |
+| Pi 2 B | VideoCore IV | 1080p | ✅ Software only | ✅ Active | Trixie 13 Lite (32-bit) | ❌ Manual Install |
+| Pi Zero 2 W | VideoCore IV | ❌ (RAM Limit) | ❌ (RAM Limit) | ⚠️ Untested | Trixie 13 Lite (32-bit) | ❌ Manual Install |
+
+### RAM Requirements
+
+| RAM | Video Playback | Optimisation | Transcoding |
+|---|---|---|---|
+| 512MB | ❌ | ❌ | ❌ |
+| 1GB+ | ✅ | ✅ | ✅ |
+
 
 > **Notes:**
 > - A SWAP file is **required** on all models.
-> - Pi 3 hardware video decoder is limited to **1080p** — higher-resolution video must be transcoded down.
-> - Video playback or transcoding needs at least **1GB RAM** — the Pi Zero 2 W (512MB) is image-only.
-> - **Pi 5 (2GB+)** is the recommended platform — it runs the same Trixie image as Pi 2/3 with no changes.
+> - Pi 3 and Pi 2 hardware video decoder is limited to **1080p** — higher-resolution video must be transcoded down.
 
-**Tested on:** Raspberry Pi 3 (1GB) and Raspberry Pi 5 (2GB) running Debian Trixie (13) Lite.
+**Tested on:** Raspberry Pi 2 (1GB), Pi 3 (1GB), and Pi 5 (2GB) running Debian Trixie (13) Lite.
 
 See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory recommendations.
 

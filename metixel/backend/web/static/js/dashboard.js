@@ -110,7 +110,7 @@
     /** Refresh the dashboard health + current media without re-binding controls. */
 
     // -- Sparkline ring buffers (last 20 samples = 60 seconds at 3s poll) --
-    var _sparkBufs = { cpu: [], mem: [], swap: [] };
+    var _sparkBufs = { cpu: [], mem: [], swap: [], temp: [] };
     var _SPARK_MAX = 20;
 
     /** Draw a filled-area sparkline on a canvas element. */
@@ -225,6 +225,14 @@
         if (_sparkBufs.swap.length > _SPARK_MAX) _sparkBufs.swap.shift();
         _drawSparkline("stat-swap-canvas", _sparkBufs.swap, Math.max(swapTotal > 0 ? 100 : 0, 1), "#f59e0b");
 
+        // -- CPU Temperature tile --
+        var cpuTemp = health.cpu_temp_c != null ? health.cpu_temp_c : 0;
+        _setStat("stat-temp-val", cpuTemp.toFixed(1) + "°C");
+        _sparkBufs.temp.push(cpuTemp);
+        if (_sparkBufs.temp.length > _SPARK_MAX) _sparkBufs.temp.shift();
+        // Scale: 0-85°C (Pi throttles at 85)
+        _drawSparkline("stat-temp-canvas", _sparkBufs.temp, 85, "#ef4444");
+
         // -- Existing text-only tiles --
         _setStat("stat-uptime-val", uptimeH + "h " + uptimeM + "m");
         _setStat("stat-disk-val", health.disk_used_gb + " / " + health.disk_total_gb + " GB");
@@ -293,9 +301,9 @@
         if (pauseBtn) {
             var isPaused = cm && cm.paused;
             if (isPaused && pauseBtn.innerHTML.indexOf("Resume") === -1) {
-                pauseBtn.innerHTML = "▶ Resume";
+                pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">play_arrow</span> Resume';
             } else if (!isPaused && pauseBtn.innerHTML.indexOf("Pause") !== -1) {
-                pauseBtn.innerHTML = "⏸ Pause";
+                pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause';
             }
         }
 
@@ -562,14 +570,14 @@
                 await apiPost("/config/control", { cmd: "next" });
                 // Next implicitly resumes — sync the button
                 var pauseBtn = document.getElementById("btn-pause-toggle");
-                if (pauseBtn) pauseBtn.innerHTML = "⏸ Pause";
+                if (pauseBtn) pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause';
                 showToast("Skipped to next", "info");
             });
             document.getElementById("btn-prev")?.addEventListener("click", async () => {
                 await apiPost("/config/control", { cmd: "prev" });
                 // Prev implicitly resumes — sync the button
                 var pauseBtn = document.getElementById("btn-pause-toggle");
-                if (pauseBtn) pauseBtn.innerHTML = "⏸ Pause";
+                if (pauseBtn) pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause';
                 showToast("Went to previous", "info");
             });
             var pauseBtn = document.getElementById("btn-pause-toggle");
@@ -580,11 +588,11 @@
                 var isPaused = health && health.current_media && health.current_media.paused;
                 if (isPaused) {
                     await apiPost("/config/control", { cmd: "resume" });
-                    pauseBtn.innerHTML = "⏸ Pause";
+                    pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause';
                     showToast("Slideshow resumed", "info");
                 } else {
                     await apiPost("/config/control", { cmd: "pause" });
-                    pauseBtn.innerHTML = "▶ Resume";
+                    pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">play_arrow</span> Resume';
                     showToast("Slideshow paused", "info");
                 }
             });
@@ -952,8 +960,8 @@
 
             var hasLock = n.security && n.security !== "--";
             var btnHTML = isConnected
-                ? '<button disabled style="font-size:0.78rem;padding:4px 10px;background:var(--success);color:#fff;border:none;border-radius:4px;cursor:default;opacity:0.8">Connected</button>'
-                : '<button style="font-size:0.78rem;padding:4px 10px;background:var(--primary);color:#fff;border:none;border-radius:4px;cursor:pointer">Connect</button>';
+                ? '<button disabled style="display:inline-flex;align-items:center;font-size:0.78rem;padding:4px 10px;background:var(--success);color:#fff;border:none;border-radius:4px;cursor:default;opacity:0.8">Connected</button>'
+                : '<button style="display:inline-flex;align-items:center;font-size:0.78rem;padding:4px 10px;background:var(--primary);color:#fff;border:none;border-radius:4px;cursor:pointer">Connect</button>';
 
             row.innerHTML =
                 '<span style="flex:1;font-size:0.9rem;font-weight:500">' + escapeHtml(n.ssid) + '</span>'
@@ -1016,6 +1024,13 @@
         var status = await apiGet("/config/processing-status");
         if (!status) return;
 
+        // Check whether image/video optimisation are enabled so
+        // irrelevant progress bars can be hidden.
+        var imgCfg = await apiGet("/config/image");
+        var vidCfg = await apiGet("/config/video");
+        var imgOptEnabled = imgCfg ? imgCfg.optimisation_enabled !== false : true;
+        var vidTranscodeEnabled = vidCfg ? vidCfg.transcoding_enabled !== false : true;
+
         var phases = status.phases || {};
         var active = status.active || null;
         var idleEl = document.getElementById("processing-idle");
@@ -1024,6 +1039,18 @@
         ["scanning", "optimising_images", "transcoding"].forEach(function (phase) {
             var container = document.querySelector('.proc-phase[data-phase="' + phase + '"]');
             if (!container) return;
+
+            // Hide bars for disabled features
+            if (phase === "optimising_images" && !imgOptEnabled) {
+                container.style.display = "none";
+                return;
+            }
+            if (phase === "transcoding" && !vidTranscodeEnabled) {
+                container.style.display = "none";
+                return;
+            }
+            container.style.display = "";
+
             var pctEl = container.querySelector(".proc-pct");
             var fillEl = container.querySelector(".proc-fill");
             var info = phases[phase] || {};

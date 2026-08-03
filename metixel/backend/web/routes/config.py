@@ -78,11 +78,11 @@ def update_config_section(section: str):
         # Trigger a full pipeline reset when config changes affect
         # what media is playable — simpler and more robust than
         # trying to incrementally update items mid-pipeline.
-        # Note: "sync" section is NOT included — Immich config changes
-        # (URL, API key, album) don't affect the playlist, and watch
-        # path changes are handled incrementally by the folder watcher.
+        # "sync" is included so that enabling/disabling watch folders
+        # and toggling local sync on/off clears the playlist and
+        # re-scans with the correct set of active paths.
         daemon = current_app.config.get("METIXEL_DAEMON")
-        if daemon is not None and section in ("video", "image", "display"):
+        if daemon is not None and section in ("video", "image", "display", "sync"):
             try:
                 daemon.reset_pipeline()
             except Exception:

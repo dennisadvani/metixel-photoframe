@@ -1,6 +1,8 @@
 # Installation Guide
 
-Two paths to a running Metixel frame. Both work on Raspberry Pi 3, 4, and 5.
+Two paths to a running Metixel frame. Both work on Raspberry Pi 2, 3, 4, and 5.
+
+> Pi 4 is supported but **untested**. Pi 2 is **manual install only** (no pre-built .img — 32-bit). Pi Zero 2 W is **untested** and manual install only.
 
 | | Path A: Pre-built image | Path B: Manual install |
 |---|---|---|
