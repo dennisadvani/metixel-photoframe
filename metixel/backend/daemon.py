@@ -42,6 +42,8 @@ class BackendDaemon:
         # Set by the web API when the frontend signals that the
         # slideshow has started — used to defer network checks.
         self._slideshow_started = threading.Event()
+        # Display power state — tracked by scheduler, read by Web UI
+        self._display_on: bool = True
 
     # -- Service lifecycle ---------------------------------------------------
 
@@ -82,6 +84,31 @@ class BackendDaemon:
                 self._update_mgr.shutdown()
             except Exception:
                 pass
+
+    def reset_pipeline(self) -> None:
+        """Clear all queues and restart the media pipeline from scratch.
+
+        Called when config changes affect what media is playable
+        (watch folders, video playback toggle, resolution thresholds).
+        Triggers the folder watcher to re-scan on its next cycle.
+        """
+        logger.info("Pipeline reset requested — clearing all queues")
+
+        # 1. Clear the slideshow playlist
+        self._state.clear_playlist()
+
+        # 2. Drain the optimisation queue (all pending items)
+        opt_queue = getattr(self, "_opt_queue", None)
+        if opt_queue is not None:
+            opt_queue.pause()
+            logger.info("Optimisation queue drained")
+
+        # 3. Reset folder watcher snapshot so the next scan
+        #    re-discovers all files with the new config
+        watcher = getattr(self, "_folder_watcher", None)
+        if watcher is not None:
+            watcher.reset_snapshot()
+            logger.info("Folder watcher snapshot reset — will re-scan")
 
     # -- Service starters ----------------------------------------------------
 
@@ -129,6 +156,7 @@ class BackendDaemon:
                 self._state,
                 opt_queue=getattr(self, "_opt_queue", None),
             )
+            self._folder_watcher = watcher
             t = threading.Thread(target=watcher.run, name="folder-watcher", daemon=True)
             t.start()
             self._threads.append(t)
@@ -196,35 +224,32 @@ class BackendDaemon:
     def _network_monitor_loop(self) -> None:
         """Background loop: monitor connectivity and manage AP fallback.
 
-        All AP activations are PIN-gated.  A random 4-digit PIN is shown
-        on the frame display and must be entered on the captive portal
-        before Wi-Fi reconfiguration is allowed.
+        Delegates all state decisions to :class:`NetworkController` so
+        the monitor thread and Flask request threads share a single
+        source of truth for PIN/AP state.
         """
-        from metixel.backend.network_manager import (
-            clear_ap_pin,
-            generate_ap_pin,
-            is_ap_mode_active,
-            is_connected,
-            pre_scan_for_ap,
-            start_ap_mode,
-            stop_ap_mode,
+        from metixel.backend.network_controller import (
+            NetworkController,
+            NetworkPhase,
         )
 
         config = self._state.config
+        controller = NetworkController(config.network)
+        self._network_controller = controller  # Expose for web routes
+
         timeout = config.network.get("ap_timeout_seconds", 60)
 
-        # ── Wait for the frontend to signal that the slideshow has ──
-        # started before beginning the network check countdown.  This
-        # prevents the network monitor from competing for CPU / I/O
-        # during the initial media processing phase.  If the frontend
-        # never signals (crash/failure), fall through after 5 minutes.
+        # ── Wait for slideshow start signal ────────────────────────
         logger.info("Network monitor waiting for slideshow start signal")
         self._slideshow_started.wait(timeout=300.0)
         if not self._running:
             return
-        logger.info("Slideshow started — network monitor beginning countdown (%ds)", timeout)
+        logger.info(
+            "Slideshow started — network monitor beginning countdown (%ds)",
+            timeout,
+        )
 
-        # Wait for the initial timeout before checking
+        # ── Initial boot: wait timeout, then check connectivity ────
         waited = 0
         while self._running and waited < timeout:
             time.sleep(5)
@@ -233,58 +258,79 @@ class BackendDaemon:
         if not self._running:
             return
 
-        if is_connected():
+        # Let the controller handle the initial state
+        phase, pin = controller.tick()
+
+        if phase == NetworkPhase.MONITORING:
             logger.info("Network connected — AP fallback not needed")
-            ap_was_active = False
-            # On first run with a network connection, show the welcome
-            # overlay on the frame display and in the web dashboard.
             self._show_first_run_welcome()
-        else:
-            # ── No connection — activate PIN-gated AP fallback ───────
-            pin = generate_ap_pin()
+        elif phase == NetworkPhase.AP_ACTIVE and pin:
             logger.warning(
                 "No network after %ds — activating PIN-gated AP fallback (PIN: %s)",
                 timeout, pin,
             )
             self._show_pin_on_screen(pin)
-            pre_scan_for_ap()
-            if start_ap_mode():
-                ap_was_active = True
-            else:
-                logger.error(
-                    "AP fallback activation failed — will retry on next monitor cycle"
-                )
-                ap_was_active = False
+            controller.mark_pin_displayed()
 
-        # Monitor for connection changes
+        # ── Main monitoring loop ───────────────────────────────────
+        last_phase = phase
+
         while self._running:
             time.sleep(10)
             if not self._running:
                 break
 
-            if is_connected():
-                if ap_was_active:
-                    logger.info("Network connected — deactivating AP fallback")
-                    stop_ap_mode()
-                    clear_ap_pin()
-                    ap_was_active = False
+            phase, pin = controller.tick()
+
+            # ── Handle phase transitions ──────────────────────────
+            if phase != last_phase:
+                if phase == NetworkPhase.AP_EXHAUSTED:
+                    logger.info(
+                        "AP exhausted — will not reactivate until reboot"
+                    )
                     self._dismiss_pin_message()
-                    self._show_connected_message()
-                    # If this is a first run, also show the welcome overlay
-                    # now that the network is available.
-                    self._show_first_run_welcome()
-            else:
-                if not ap_was_active and not is_ap_mode_active():
-                    pin = generate_ap_pin()
-                    logger.warning("Network lost — reactivating PIN-gated AP fallback (PIN: %s)", pin)
+                    controller.mark_pin_dismissed()
+                    # Show a brief message that AP gave up
+                    try:
+                        from metixel.shared.ipc import ControlMessage
+                        self._ipc.send(ControlMessage(
+                            cmd="show_message",
+                            args={
+                                "title": "WiFi Offline",
+                                "body": (
+                                    "Could not reconnect. The WiFi setup portal "
+                                    "will not appear again until the frame is "
+                                    "rebooted."
+                                ),
+                                "severity": "warning",
+                                "duration": 120,
+                            },
+                        ))
+                    except Exception:
+                        pass
+
+                elif phase == NetworkPhase.AP_ACTIVE and pin:
+                    logger.warning(
+                        "Activating AP fallback (PIN: %s)", pin,
+                    )
                     self._show_pin_on_screen(pin)
-                    pre_scan_for_ap()
-                    if start_ap_mode():
-                        ap_was_active = True
-                    else:
-                        logger.error(
-                            "AP fallback reactivation failed — will retry on next monitor cycle"
-                        )
+                    controller.mark_pin_displayed()
+
+                elif phase == NetworkPhase.MONITORING and last_phase in (
+                    NetworkPhase.AP_ACTIVE,
+                    NetworkPhase.AP_EXHAUSTED,
+                    NetworkPhase.GRACE_PERIOD,
+                ):
+                    logger.info("Network connected — deactivating AP fallback")
+                    self._dismiss_pin_message()
+                    controller.mark_pin_dismissed()
+                    self._show_connected_message()
+                    self._show_first_run_welcome()
+
+                elif phase == NetworkPhase.GRACE_PERIOD:
+                    logger.info("Network lost — grace period active")
+
+            last_phase = phase
 
     def _show_pin_on_screen(self, pin: str) -> None:
         """Display the AP security PIN as a persistent message on the frame.
@@ -469,6 +515,7 @@ class BackendDaemon:
 
                     if should_be_on != last_state:
                         last_state = should_be_on
+                        self._display_on = should_be_on  # Expose for Web UI
                         if should_be_on:
                             logger.info(
                                 "Display scheduler: turning ON (scheduled %s–%s)",

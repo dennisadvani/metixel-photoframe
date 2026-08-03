@@ -104,8 +104,13 @@ def generate_image_thumbnail(
                 thumb_path.unlink()
 
         with Image.open(source_path) as img:
-            # Convert to RGB if needed (handles RGBA, P, CMYK, etc.)
-            if img.mode not in ("RGB", "L"):
+            # Composite transparent images onto black before converting
+            # to RGB — otherwise transparent areas render as white.
+            if img.mode in ("RGBA", "PA"):
+                bg = Image.new("RGB", img.size, (0, 0, 0))
+                bg.paste(img, img)
+                img = bg
+            elif img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
             thumb = img.copy()
             thumb.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), Image.LANCZOS)

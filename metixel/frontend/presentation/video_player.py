@@ -257,7 +257,7 @@ class VlcVideoPlayer:
             cmd.insert(1, f"--aspect-ratio={display_ratio}")
         # "contain": nothing — VLC's default letterbox/pillarbox
 
-        logger.info(
+        logger.debug(
             "VlcVideoPlayer (subprocess): %s (hw_codecs=%s, fit=%s)",
             video_path,
             ", ".join(self._hw_codecs) if self._hw_codecs else "auto",

@@ -137,8 +137,13 @@ def _process(args: argparse.Namespace) -> dict:
             except Exception:
                 pass
 
-            # Convert to RGB
-            if img.mode not in ("RGB", "L"):
+            # Convert to RGB — composite transparent images onto black
+            # first so alpha areas don't render as white.
+            if img.mode in ("RGBA", "PA"):
+                bg = PILImage.new("RGB", img.size, (0, 0, 0))
+                bg.paste(img, img)
+                img = bg
+            elif img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
 
             # Resize to screen resolution (maintain aspect ratio)

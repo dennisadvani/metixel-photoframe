@@ -103,6 +103,11 @@ class BootLayer(OverlayLayer):
         # on cached restarts where items process instantly.
         self._progress_hidden: bool = False
 
+        # Reset mode — skips the 3s minimum display and progress bar.
+        # Set by reactivate() when the pipeline resets (config change)
+        # so the boot screen fades out as soon as new items are ready.
+        self._reset_mode: bool = False
+
     # -- Properties ----------------------------------------------------------
 
     @property
@@ -114,6 +119,33 @@ class BootLayer(OverlayLayer):
     def is_fading(self) -> bool:
         """True during the fade-out animation."""
         return self._state == "fading"
+
+    def reactivate(self) -> None:
+        """Re-show the boot screen after a pipeline reset.
+
+        Resets all state so the logo + spinner + progress bar render
+        again.  Called when the slideshow queue is cleared by a config
+        change (watch folders, video toggle, etc.).
+        """
+        if self._state == "active":
+            return  # Already showing
+        self._state = "active"
+        self.visible = True
+        self._alpha = 1.0
+        self._spinner_angle = 0.0
+        self._start_time = 0.0  # Will be set on first draw
+        self._fade_start = 0.0
+        self._progress_pct = 0.0
+        self._progress_hidden = False
+        # Textures were freed by _finish() — force a reload on next draw
+        self._tex_loaded = False
+        self._bg_tex = None
+        self._logo_tex = None
+        self._spinner_tex = None
+        self._progress_bg_tex = None
+        self._progress_fill_tex = None
+        self._reset_mode = True
+        logger.info("Boot layer reactivated — pipeline is rebuilding")
 
     # -- OverlayLayer interface ----------------------------------------------
 
@@ -152,18 +184,25 @@ class BootLayer(OverlayLayer):
         # passes ``slideshow_ready`` via shared_state once the
         # background queue loader thread has finished.
         if self._state == "active" and self._start_time > 0:
-            min_elapsed = (now - self._start_time) >= _MIN_DISPLAY
+            min_elapsed = (
+                self._reset_mode  # Skip 3s wait during pipeline resets
+                or (now - self._start_time) >= _MIN_DISPLAY
+            )
             slideshow_ready = (shared_state or {}).get("slideshow_ready", False)
 
             # ── Update progress bar from backend status file ──────────
-            self._progress_pct = self._read_progress_pct()
+            # Skip during pipeline resets — progress bar is for cold boot
+            # where the user expects a multi-minute wait.
+            if not self._reset_mode:
+                self._progress_pct = self._read_progress_pct()
 
             # Hide the progress bar once enough items are queued for a
             # meaningful slideshow.  On cached restarts the optimisation
             # queue processes items instantly, making the bar jump to
             # 100% repeatedly — confusing and unnecessary.
+            # Always hidden during pipeline resets (reset_mode).
             queue_size = (shared_state or {}).get("queue_size", 0)
-            if queue_size >= 6:
+            if queue_size >= 6 or self._reset_mode:
                 self._progress_hidden = True
 
             if slideshow_ready and min_elapsed:

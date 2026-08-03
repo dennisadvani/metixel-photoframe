@@ -591,11 +591,15 @@ class FrontendRenderer:
             return
 
         if not items:
-            # Playlist is empty — typically after a cache clear.
-            # Reset the queue completely so stale entries with dead
-            # cache paths don't cause FileNotFoundError in the engine.
+            # Playlist is empty — typically after a pipeline reset or
+            # cache clear.  Reset the slideshow queue and re-show the
+            # boot screen so the user sees the spinner instead of a
+            # black screen while the pipeline rebuilds.
             logger.info("Backend playlist is empty — resetting slideshow queue")
             self._presentation.set_queue([])
+            if getattr(self, '_boot_layer', None) is not None:
+                self._boot_layer.reactivate()
+                self._boot_was_active = True
             return
 
         if not self._presentation._queue:
