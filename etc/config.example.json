@@ -26,7 +26,7 @@
     "transcode_use_software_encoder": true,
     "transcode_timeout_seconds": 7200,
     "cpu_throttle_enabled": true,
-    "cpu_throttle_percent": 50
+    "cpu_throttle_percent": 300
   },
   "image": {
     "optimisation_enabled": true,

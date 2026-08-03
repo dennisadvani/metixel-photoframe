@@ -1303,7 +1303,7 @@ class PresentationEngine:
             rc = self._video_proc.poll()
             if rc is not None:
                 # VLC exited (normally or crashed)
-                logger.info("VLC exited with code %s: %s", rc, self._video_path)
+                logger.debug("VLC exited with code %s: %s", rc, self._video_path)
                 self._video_finish()
                 return
 

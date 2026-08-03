@@ -761,6 +761,20 @@
         var cfg = await apiGet("/config/network");
         if (cfg) {
             setChecked("cfg-ap-enabled", cfg.ap_fallback_enabled !== false);
+            var countryEl = document.getElementById("cfg-wifi-country");
+            if (countryEl) {
+                countryEl.value = cfg.wifi_country || "";
+                // Save on blur or Enter
+                countryEl.addEventListener("change", async function () {
+                    var code = this.value.trim().toUpperCase().slice(0, 2);
+                    this.value = code;
+                    if (code && code.length === 2) {
+                        await apiPut("/config/network", { wifi_country: code });
+                        // Also apply immediately via the backend
+                        await apiGet("/config/network?apply_wifi_country=" + encodeURIComponent(code));
+                    }
+                });
+            }
         }
         var msgCfg = await apiGet("/config/messages");
         if (msgCfg) {

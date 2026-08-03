@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 network_bp = Blueprint("network", __name__)
 
 
+def _get_controller() -> object | None:
+    """Return the NetworkController from the daemon, or None if unavailable."""
+    daemon = current_app.config.get("METIXEL_DAEMON")
+    if daemon is not None:
+        return getattr(daemon, "_network_controller", None)
+    return None
+
+
 @network_bp.route("/network/status", methods=["GET"])
 def network_status():
     """Get current Wi-Fi connection status and AP mode state.
@@ -75,9 +83,13 @@ def network_connect():
 
     success, message = connect_to_network(ssid, password)
     if success:
-        # Immediately clear the PIN gate so the dashboard is accessible
-        from metixel.backend.network_manager import clear_ap_pin
-        clear_ap_pin()
+        # Notify the controller so it resets AP/PIN state atomically
+        controller = _get_controller()
+        if controller is not None:
+            controller.on_wifi_connected()
+        else:
+            from metixel.backend.network_manager import clear_ap_pin
+            clear_ap_pin()
         # Tell the frontend to dismiss the PIN message
         ipc = current_app.config.get("METIXEL_IPC")
         if ipc is not None:
@@ -156,7 +168,13 @@ def validate_pin():
     if not candidate or len(candidate) != 4 or not candidate.isdigit():
         return jsonify({"valid": False, "message": "Enter a 4-digit PIN"}), 400
 
-    valid, message = validate_ap_pin(candidate)
+    # Prefer the controller (single source of truth), fall back to legacy
+    controller = _get_controller()
+    if controller is not None:
+        valid, message = controller.validate_pin(candidate)
+    else:
+        valid, message = validate_ap_pin(candidate)
+
     if valid:
         return jsonify({"valid": True, "message": "PIN accepted"})
     else:

@@ -32,6 +32,20 @@ def get_config_section(section: str):
     config = state.config
     if section not in config.to_dict():
         return jsonify({"error": f"Unknown config section: {section}"}), 404
+
+    # If the caller asked to apply a WiFi country code, run iw reg set
+    # immediately so the radio uses correct channels without a reboot.
+    country = request.args.get("apply_wifi_country", "").strip().upper()
+    if section == "network" and country and len(country) == 2:
+        try:
+            subprocess.run(
+                ["sudo", "iw", "reg", "set", country],
+                capture_output=True, timeout=5,
+            )
+            logger.info("WiFi regulatory domain set to: %s", country)
+        except Exception:
+            logger.warning("Failed to set WiFi country to %s", country, exc_info=True)
+
     return jsonify(config.to_dict()[section])
 
 
@@ -60,6 +74,16 @@ def update_config_section(section: str):
                 opt_queue.reload_config()
             except Exception:
                 logger.debug("OptimisationQueue reload failed", exc_info=True)
+
+        # Trigger a full pipeline reset when config changes affect
+        # what media is playable — simpler and more robust than
+        # trying to incrementally update items mid-pipeline.
+        daemon = current_app.config.get("METIXEL_DAEMON")
+        if daemon is not None and section in ("video", "image", "display", "sync"):
+            try:
+                daemon.reset_pipeline()
+            except Exception:
+                logger.debug("Pipeline reset failed", exc_info=True)
 
         return jsonify({
             "status": "ok",

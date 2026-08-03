@@ -56,7 +56,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "transcode_use_software_encoder": True,  # libx264 (best quality); False = try hardware first
         "transcode_timeout_seconds": 7200,  # max time per transcode (2 hours)
         "cpu_throttle_enabled": True,
-        "cpu_throttle_percent": 50,  # 0-100, percentage of CPU to leave idle
+        "cpu_throttle_percent": 300,  # 0-100 or >100 for multi-core (300 = 3 cores)
     },
     "sync": {
         "immich": {
@@ -106,6 +106,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "wifi_country": "",
         "ap_fallback_enabled": True,
         "ap_timeout_seconds": 60,
+        "ap_grace_period_seconds": 300,
+        "ap_max_duration_seconds": 600,
         "connection_check_url": "http://connectivity-check.ubuntu.com",
     },
     "system": {

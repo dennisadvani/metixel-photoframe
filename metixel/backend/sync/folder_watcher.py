@@ -213,6 +213,17 @@ class FolderWatcher:
         """Signal the watch loop to stop."""
         self._running = False
 
+    def reset_snapshot(self) -> None:
+        """Reset the known-files snapshot so the next scan re-discovers everything.
+
+        Called when config changes affect the pipeline (watch paths
+        changed, video playback toggled, etc.).  The next call to
+        ``_scan()`` will treat all files as new and re-gather metadata.
+        """
+        self._known_files.clear()
+        self._initial_scan_done = False
+        logger.info("Folder watcher snapshot reset — will re-scan all paths")
+
     # -- Scanning ------------------------------------------------------------
 
     def _scan(self) -> None:

@@ -194,6 +194,39 @@ tee /etc/NetworkManager/conf.d/wifi-powersave-off.conf > /dev/null <<'NMPOWEREOF
 wifi.powersave = 2
 NMPOWEREOF
 
+# Set WiFi regulatory domain — required for channels 12/13 (common in
+# EU/AU/ NZ) and ensures the radio uses the correct frequencies for the
+# region.  Without this the Pi stays in "world" domain (limited channels).
+echo ""
+echo "WiFi country code (e.g. AU, US, GB, DE, NZ):"
+echo "  This sets the regulatory domain for correct channel availability."
+read -p "  Country code [AU]: " WIFI_COUNTRY
+WIFI_COUNTRY="${WIFI_COUNTRY:-AU}"
+WIFI_COUNTRY=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
+
+# Apply at system level (immediate) and persist in Metixel config
+if command -v iw &>/dev/null; then
+    iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
+    echo "     WiFi regulatory domain set to: $WIFI_COUNTRY"
+fi
+# Also set via cfg80211 module parameter for persistence across reboots
+if [ -f /etc/modprobe.d/cfg80211.conf ]; then
+    sed -i "s/^options cfg80211 ieee80211_regdom=.*/options cfg80211 ieee80211_regdom=$WIFI_COUNTRY/" /etc/modprobe.d/cfg80211.conf 2>/dev/null || true
+else
+    echo "options cfg80211 ieee80211_regdom=$WIFI_COUNTRY" > /etc/modprobe.d/cfg80211.conf
+fi
+# Write to Metixel config so the Web UI reflects it
+python3 -c "
+import json, os
+cfg_path = '/opt/metixel/etc/config.json'
+if os.path.exists(cfg_path):
+    with open(cfg_path) as f:
+        cfg = json.load(f)
+    cfg.setdefault('network', {})['wifi_country'] = '$WIFI_COUNTRY'
+    with open(cfg_path, 'w') as f:
+        json.dump(cfg, f, indent=2)
+" 2>/dev/null || true
+
 # -- Captive Portal (AP mode) -----------------------------------------------
 echo "[7/9] Configuring Wi-Fi captive portal (AP fallback)..."
 # Configure hostapd (open network "Metixel-Setup")
