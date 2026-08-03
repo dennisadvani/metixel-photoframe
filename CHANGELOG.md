@@ -35,6 +35,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   image via cage + XWayland; now the recommended platform over Pi 3
 - **Immich network connectivity gate** — syncer checks `is_connected()` before
   attempting API calls, avoiding wasted time on doomed requests when offline
+- **Network Controller** (`network_controller.py`) — single-owner state machine
+  for WiFi/AP management; eliminates race conditions between network monitor
+  thread and Flask request threads via ``threading.Lock``
+- **WiFi AP grace period** — 5‑minute silent retry of saved WiFi before
+  activating the captive portal; handles transient router reboots without
+  user intervention
+- **WiFi AP exhaustion** — AP auto‑stops after 10 minutes if no user connects;
+  never reactivates until next reboot, preventing continuous AP cycling on
+  permanent WiFi loss
+- **WiFi AP crash detection** — controller detects when hostapd dies
+  unexpectedly and transitions to exhausted state rather than lying about
+  the AP being active
+- **WiFi regulatory domain** — configurable country code in setup script and
+  Web UI; persists via ``cfg80211.ieee80211_regdom`` module parameter
+- **WiFi power management disabled** — setup script writes NetworkManager
+  config (``wifi.powersave = 2``), fixing Pi 3 WiFi unreliability
+- **Pipeline reset on config change** — changes to video, image, or display
+  settings clear all queues and re‑scan; boot layer reactivates with spinner
+  during rebuild instead of showing a black screen
+- **Boot layer reactivation** — ``reactivate()`` method re‑shows logo + spinner
+  on pipeline reset; reset mode skips 3 s minimum display and progress bar
+- **Documentation overhaul** — new ``GETTING_STARTED.md``, ``WIFI_SETUP.md``,
+  ``INSTALLATION.md``; README restructured with logo, showcase images, and
+  two‑path quick‑start section
+- **Contributing link** — README Contributing section links to dev setup guide
+  in ``INSTALLATION.md#path-c-development-setup-remote-via-samba``
+- **Cumulative progress tracking** — image and video optimisation progress bars
+  now show total backlog across all batches instead of resetting every 6 items
+- **Folder watcher scanning progress** — incremental scans (new files added to
+  watch folders) now report progress to the Web UI bar, not just the initial scan
 
 ### Changed
 
@@ -60,6 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Release scripts** (`release.ps1`, `release.sh`): merge strategy changed
   from `--ff-only` to `--no-ff` for cleaner release history
 - **Web UI** scanning label updated to "Scanning folders and generating thumbnails"
+- **WiFi AP state machine** — daemon's ``_network_monitor_loop`` now delegates
+  to ``NetworkController`` with phase‑based transitions (``MONITORING``,
+  ``GRACE_PERIOD``, ``AP_ACTIVE``, ``AP_EXHAUSTED``)
+- **Video transcode CPU limit default** — increased from 50 % to 300 %
+  (3 full cores on Pi 5/3)
+- **VLC playback messages** — changed from ``INFO`` to ``DEBUG`` log level
+- **Immich test connection** — saves server URL and API key on successful test
+  so Fetch Albums works immediately without a separate save step
+- **Quiet boot hint** — removed "Requires a reboot to take effect" from Web UI
 
 ### Fixed
 
@@ -80,6 +119,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   switches away from `optimising_images`
 - **Boot layer duplicate docstring** — removed dead duplicate of
   `_read_progress_pct` that shadowed the real implementation
+- **WiFi captive portal not appearing on first boot** — ``start_ap_mode()``
+  return value now checked; ``ap_was_active`` only set on success; wlan0
+  readiness polled (up to 30 s) before starting AP; hostapd no longer
+  auto‑starts at boot
+- **AP fallback retry deadlock** — retry guard now checks ``is_ap_mode_active()``
+  as source of truth instead of a stale ``ap_was_active`` boolean
+- **PIN validation race** — PIN validated against cleared state (passed any
+  input); now owned by ``NetworkController`` with ``threading.Lock``; never
+  passes when no PIN is active
+- **Transparent PNG rendering** — RGBA/PA images composited onto black
+  background before RGB conversion; fixes white artifacts in transparent areas
+  for both thumbnails and optimised images
+- **Display power button state** — Web UI button now reads actual display state
+  from daemon via health endpoint instead of using a local toggle guess
+- **Media library CPU spike** — removed on‑the‑fly thumbnail generation from
+  ``/api/media/list``; relies on FolderWatcher‑generated thumbnails only
+- **Log viewer follow mode** — auto‑follow now jumps to last page when new
+  entries arrive; scroll target corrected to ``#log-viewer`` container
+- **On‑screen message spacing** — Y‑position now accumulated from actual
+  heights of preceding messages instead of ``index × current_height``,
+  eliminating gaps and overlaps between differently‑sized popups
 
 ### Removed
 
