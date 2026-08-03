@@ -3,8 +3,8 @@
 ## Project Summary
 
 **Metixel Photoframe** is a custom, open-source Digital Photo Frame operating system and application suite targeting:
-- **Phase 1:** Raspberry Pi 2, 3, Zero 2 W, and Pi 5 (512MB–8GB RAM, Mesa/DRM on Trixie). Pi 5 is the recommended platform at 2GB+.
-- **Phase 2:** Raspberry Pi 4 and non-Pi SBCs like the Radxa Zero 3W (Mesa/DRM/Wayland)
+- **Phase 1:** Raspberry Pi 2, 3, 4, 5, and Zero 2 W (Mesa/DRM on Trixie). Pi 5 (2GB+) is the recommended platform. Pi 4 is supported but untested. Pi 2 and Pi Zero 2 W are 32‑bit manual‑install only — no pre‑built image available. Pi Zero 2 W (512MB) is untested and image‑only (no video, optimisation, or transcoding).
+- **Phase 2:** Non-Pi SBCs like the Radxa Zero 3W (Mesa/DRM/Wayland)
 
 The application is written in **Python 3** with a display backend abstraction that isolates the rendering layer (pi3d on Phase 1, PyOpenGL on Phase 2) from the presentation logic. The `Pi3dBackend` works on any Pi with pi3d installed — it runs under cage (minimal Wayland compositor) + XWayland on Trixie/Bookworm.
 
@@ -44,7 +44,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
    - Process media one file at a time in a subprocess that exits to release memory
    - Call `gc.collect()` after large image processing
    - Cap the render loop at 30 FPS (not 60)
-   - The Pi Zero 2 W (512MB) is the tightest constraint — test there for memory regressions
+   - Pi Zero 2 W (512MB) is untested — not a current deployment target
 
 6. **Display protection is mandatory.** All screens can burn in. Implement:
    - Configurable pixel shifting (±2px cyclic offset every N minutes)

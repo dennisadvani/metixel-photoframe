@@ -2,8 +2,8 @@
 
 > **Version:** 1.1.0
 > **Status:** Implementation Phase 1
-> **Target Hardware Phase 1:** Raspberry Pi 2, 3, Zero 2 W (512MB–1GB RAM, VideoCore IV)
-> **Target Hardware Phase 2:** Raspberry Pi 4, 5, Radxa Zero 3W (1GB–8GB RAM, VideoCore VI/VII, Mali G52)
+> **Target Hardware Phase 1:** Raspberry Pi 2, 3, 4, 5, Zero 2 W (Mesa/DRM on Trixie). Pi 5 (2GB+) recommended. Pi 4 untested. Pi 2 and Pi Zero 2 W are 32‑bit manual‑install only.
+> **Target Hardware Phase 2:** Non-Pi SBCs like the Radxa Zero 3W (Mesa/DRM/Wayland)
 
 ---
 
@@ -51,10 +51,13 @@ metixel/
 
 ### 1.3 Per-Model OS & Graphics Strategy
 
-| Model | CPU | RAM | OS | Graphics Path | Display Surface |
+| Model | CPU | RAM | Image | Graphics Path | Display Surface |
 |---|---|---|---|---|---|
-| **Pi Zero 2 W / Pi 2 / Pi 3** | ARMv7/v8 | 512MB–1GB | Trixie Lite | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
-| **Pi 4 / Pi 5** | ARMv8 | 1–8GB | Trixie Lite | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
+| **Pi 5** | ARMv8 | 2–8GB | 64-bit `.img` | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
+| **Pi 4** | ARMv8 | 1–8GB | 64-bit `.img` | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
+| **Pi 3** | ARMv8 | 1GB | 64-bit `.img` | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
+| **Pi 2** | ARMv7 | 1GB | 32-bit manual install | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
+| **Pi Zero 2 W** | ARMv8 | 512MB | 32-bit manual install | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
 | **Radxa Zero 3W** | ARMv8 | 1–4GB | Debian/Ubuntu | Mesa → KMS/DRM → cage/XWayland → pi3d or PyOpenGL | Wayland + XWayland shim |
 
 **Key insight:** On Trixie, pi3d needs an X11 surface — but you don't need the full `xorg` server. Just `xwayland` (~10MB) plus a minimal Wayland compositor like `cage`. The compositor owns the display via DRM/KMS, XWayland provides the X11 compatibility layer pi3d needs, and pi3d renders via Mesa EGL.
@@ -360,13 +363,14 @@ Next frame reflects change
 4. Write the `DisplayBackend` ABC with all methods documented
 5. Set up GitHub Actions for linting (ruff), type checking (mypy), and unit tests
 
-### Phase 1: Core on Raspberry Pi 2/3/Zero 2 W (Trixie)
+### Phase 1: Core on Raspberry Pi 2/3/4/5 (Trixie)
 
-**Duration:** 6–8 weeks  
-**Goal:** Working digital photo frame on Pi Zero 2 W (512MB) and Pi 3 (1GB).
+**Duration:** Complete (v1.0.1-beta.1)  
+**Goal:** Working digital photo frame on Pi 2 (1GB), Pi 3 (1GB), and Pi 5 (2GB+). Pi 4 supported but untested. Pi Zero 2 W (512MB) is untested — images only, no video or optimisation.
 
 #### Step 1.1: OS Image & Quiet Boot
-- Trixie Lite base image
+- Trixie Lite base image (64-bit for Pi 3/4/5; 32-bit for Pi 2/Zero 2 W)
+- Pre-built `.img` available for 64-bit models; manual install for 32-bit
 - `config.txt`: `dtoverlay=vc4-kms-v3d`, `gpu_mem=16`, `disable_splash=1`
 - `cmdline.txt`: `console=tty3 quiet loglevel=3 logo.nologo`
 - Plymouth splash screen with metixel logo (optional)
@@ -375,7 +379,7 @@ Next frame reflects change
 #### Step 1.2: Display Backend (pi3d via cage/XWayland)
 - `dispmanx_backend.py` wrapping pi3d — pi3d auto-detects Mesa EGL on Trixie
 - Memory: `Texture(free_after_load=True)`, `GL_RGB565` format, max 3 GPU textures
-- Verify 30 FPS on Pi Zero 2 W with 512MB
+- Verify 30 FPS on Pi 3 and Pi 5
 - Launch via `cage --` for Wayland + XWayland surface
 
 #### Step 1.3: Presentation Engine
@@ -405,10 +409,10 @@ Next frame reflects change
 - Screen off timer: `vcgencmd display_power 0`
 - Configurable on/off schedule
 
-### Phase 2: Modern Hardware (RPi 4/5, Radxa Zero 3W)
+### Phase 2: Non-Pi SBCs (Radxa Zero 3W, etc.)
 
-**Duration:** 4–6 weeks  
-**Goal:** Adapt Phase 1 codebase to Wayland/KMS.
+**Duration:** Future
+**Goal:** Adapt Phase 1 codebase to Wayland/KMS on non-Pi hardware.
 
 #### Step 2.1: Wayland Display Backend
 - Implement `wayland_backend.py` using PyOpenGL + EGL/GBM/DRM
@@ -506,7 +510,7 @@ Next frame reflects change
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**RAM budget for Phase 1 (512MB Pi Zero W):**
+**RAM budget for Phase 1 (512MB Pi Zero 2 W — untested):**
 - Linux + systemd: ~80MB
 - Backend daemon (Python): ~60MB
 - Frontend renderer (Python + pi3d): ~80MB
@@ -611,10 +615,10 @@ Update flow:
 
 ## Appendix A: Key Technical Constraints
 
-| Constraint | Pi Zero W (Phase 1 worst case) | Mitigation |
+| Constraint | Pi Zero 2 W — 512MB (untested) | Mitigation |
 |---|---|---|
 | RAM | 512MB (shared via split) | `gpu_mem=128`; one file at a time; subprocess for heavy work |
-| CPU | Single-core ARM11 @ 1GHz | HW video decode; no real-time video effects |
+| CPU | Quad-core ARM Cortex-A53 @ 1GHz | HW video decode; image-only (no video on 512MB) |
 | GPU | VideoCore IV @ 400MHz | Max 3 GPU textures; GL_RGB565; 30 FPS cap |
 | Storage | SD card (8–32GB) | Aggressive caching; LRU eviction; warn if <500MB |
 | Network | 2.4GHz Wi-Fi 4 | Background downloads; process locally at low priority |
@@ -626,7 +630,7 @@ Update flow:
 | No X11/Wayland (Phase 1) | ✅ | ✅ | ❌ | ❌ |
 | Immich integration | ✅ native | ❌ | ❌ | ❌ (3rd party) |
 | Home Assistant MQTT | ✅ native | ❌ | ❌ | ✅ |
-| Pi Zero W support | ✅ target | ✅ | ❌ | ❌ |
+| Pi Zero 2 W support | ⚠️ Untested | ✅ | ❌ | ❌ |
 | Video playback | ✅ HW accel | ❌ | ❌ | ✅ |
 | Hot reload config | ✅ | ❌ | ❌ | ❌ |
 | OLED protection | ✅ | ❌ | ❌ | ❌ |

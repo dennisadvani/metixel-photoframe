@@ -5,6 +5,46 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.2-beta.2]
+
+### Added
+
+- **CPU temperature tile** — sparkline graph on the System Status
+  dashboard card using ``vcgencmd measure_temp``; scaled 0–85°C in red
+- **``libopenblas0``** added to setup script package list — resolves NumPy
+  import failures on Pi 2 (32-bit) where the shared library was missing
+- **Hardware documentation** — separated Models table from RAM Requirements
+  table in README; added 64‑bit vs 32‑bit image availability per model;
+  Pi 4 promoted to Phase 1 (untested); Pi Zero 2 W marked as untested
+
+### Changed
+
+- **Video transcode CPU limit default** — reduced from 300 % to 200 %
+- **Pause button** — switched from Unicode characters (⏸/▶) to Material
+  Symbols icons (``pause`` / ``play_arrow``) for consistent rendering
+- **Progress bar colours** — optimising images and transcoding bars now
+  use ``var(--primary)`` (theme red), matching the scanning bar
+- **WiFi Country Code** — hint text repositioned below the input field
+  using ``form-group--stack`` layout
+- **Connected button** — vertically centered in network list rows via
+  ``display:inline-flex;align-items:center``
+- **Background processing bars** — hidden when their respective feature
+  is disabled (image optimisation off → hide optimising bar; video
+  transcoding off → hide transcoding bar)
+- **README** — hardware section restructured with separate Supported
+  Models and RAM Requirements tables; Pi 2 marked active (32-bit manual
+  install); Pi 4 marked untested; Pi Zero 2 W marked untested
+
+### Fixed
+
+- **Pipeline reset on sync changes** — enabling/disabling local watch
+  folders now triggers a full pipeline reset (``"sync"`` re‑added to the
+  config route trigger list)
+- **Hardware docs consistency** — ``CLAUDE.md``, ``HARDWARE.md``,
+  ``ARCHITECTURE.md``, ``GETTING_STARTED.md``, ``INSTALLATION.md``, and
+  ``FEATURES.md`` updated to match README hardware tables (Pi 4 in
+  Phase 1, Pi Zero 2 W untested, 32‑bit vs 64‑bit, manual install notes)
+
 ## [1.0.1-beta.1]
 
 ### Added

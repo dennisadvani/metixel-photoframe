@@ -101,7 +101,7 @@ class VideoProcessor:
         self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
-        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 300)
+        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 200)
 
         # Track currently transcoding files (by hash) so we can check guardrails
         self._transcoding: set[str] = set()
@@ -140,7 +140,7 @@ class VideoProcessor:
         self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
-        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 300)
+        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 200)
         logger.debug(
             "VideoProcessor config updated: transcode=%s, max=%dx%d, quality=%d, "
             "sw_encoder=%s, cpu_throttle=%s (%d%%)",

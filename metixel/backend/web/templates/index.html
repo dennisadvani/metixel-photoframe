@@ -132,6 +132,11 @@
                             <div class="stat-value" id="stat-swap-val">--</div>
                             <canvas class="stat-sparkline" id="stat-swap-canvas"></canvas>
                         </div>
+                        <div class="stat-item stat-graph" id="stat-temp">
+                            <div class="stat-label">CPU Temp</div>
+                            <div class="stat-value" id="stat-temp-val">--</div>
+                            <canvas class="stat-sparkline" id="stat-temp-canvas"></canvas>
+                        </div>
                     </div>
                 </div>
 
@@ -143,7 +148,7 @@
                     <h2>Controls</h2>
                     <div class="controls-row">
                         <button id="btn-prev">◀</button>
-                        <button id="btn-pause-toggle">⏸</button>
+                        <button id="btn-pause-toggle"><span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause</button>
                         <button id="btn-next">▶</button>
                     </div>
                 </div>
@@ -166,7 +171,7 @@
                                 <span class="proc-pct">—</span>
                             </div>
                             <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
-                                <div class="proc-fill" style="background:#d92626;height:100%;width:0%;transition:width 0.3s"></div>
+                                <div class="proc-fill" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
                             </div>
                         </div>
                         <div class="proc-phase" data-phase="transcoding" style="margin-bottom:0.6rem">
@@ -175,7 +180,7 @@
                                 <span class="proc-pct">—</span>
                             </div>
                             <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
-                                <div class="proc-fill" style="background:#d92626;height:100%;width:0%;transition:width 0.3s"></div>
+                                <div class="proc-fill" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
                             </div>
                         </div>
                     </div>
@@ -471,7 +476,7 @@
                 <div class="card">
                     <h2>Access Point (Captive Portal)</h2>
                     <p class="hint">When no Wi-Fi is available, the frame creates its own hotspot "Metixel-Setup" so you can connect with your phone and configure Wi-Fi.</p>
-                    <div class="form-group">
+                    <div class="form-group form-group--stack">
                         <span class="form-label">WiFi Country Code</span>
                         <input type="text" id="cfg-wifi-country" placeholder="AU" maxlength="2" style="width:80px;text-transform:uppercase" autocomplete="off">
                         <p class="hint" style="margin-top:0.15rem">Two-letter ISO 3166-1 code (AU, US, GB, DE, etc.). Sets the regulatory domain for correct channel availability. Requires reboot to take full effect.</p>
