@@ -170,9 +170,19 @@
         if (el) el.textContent = value;
     }
 
+    /** Sync the display power button with the actual state. */
+    function _updatePowerButton(on) {
+        var btn = document.getElementById("btn-display-power");
+        if (!btn) return;
+        btn.innerHTML = on ? "⏻ Turn Display Off" : "⏻ Turn Display On";
+        btn.classList.toggle("btn--danger", !on);
+    }
+
     async function refreshDashboard() {
         const health = await apiGet("/config/health");
         if (!health) return;
+
+        _updatePowerButton(health.display_on !== false);
 
         var uptimeH = Math.floor(health.uptime_seconds / 3600);
         var uptimeM = Math.floor((health.uptime_seconds % 3600) / 60);
@@ -1719,6 +1729,14 @@
                 if (data.ok) {
                     if (resultEl) { resultEl.textContent = "✅ " + data.message; resultEl.style.color = "var(--success)"; }
                     showToast("Connection successful!", "success");
+                    // Save server URL and API key so Fetch Albums works
+                    // immediately without a separate save step.
+                    await apiPut("/config/sync", {
+                        immich: {
+                            server_url: document.getElementById("cfg-immich-url").value,
+                            api_key: document.getElementById("cfg-immich-key").value,
+                        },
+                    });
                 } else {
                     if (resultEl) { resultEl.textContent = "❌ " + (data.error || "Unknown error"); resultEl.style.color = "var(--danger)"; }
                     showToast("Connection failed: " + data.error, "error", 5000);
@@ -2279,7 +2297,16 @@
 
     function _updateLogPagination() {
         if (!_logList) return;
-        _logCurrentPage = 1;
+        var totalPages = Math.ceil(_logList.matchingItems.length / _logPageSize) || 1;
+        // If auto-follow is enabled, always jump to the last page so
+        // the newest log entries are visible.  Otherwise keep the
+        // current page (clamped to the new total).
+        var follow = document.getElementById("log-follow");
+        if (follow && follow.checked) {
+            _logCurrentPage = totalPages;
+        } else {
+            _logCurrentPage = Math.min(_logCurrentPage, totalPages);
+        }
         _renderLogPage();
     }
 
@@ -2391,8 +2418,8 @@
     function _scrollToBottomIfFollowing() {
         var follow = document.getElementById("log-follow");
         if (follow && follow.checked) {
-            var el = document.getElementById("log-output");
-            if (el) el.scrollTop = el.scrollHeight;
+            var viewer = document.getElementById("log-viewer");
+            if (viewer) viewer.scrollTop = viewer.scrollHeight;
         }
     }
 
@@ -2562,16 +2589,21 @@
                 }
             });
 
-            // Display power toggle
+            // Display power toggle — reads actual state from health endpoint
             var powerBtn = document.getElementById("btn-display-power");
-            var _displayOn = true;
             powerBtn?.addEventListener("click", async () => {
-                _displayOn = !_displayOn;
-                await apiPost("/config/control", { cmd: _displayOn ? "power_on" : "power_off" });
-                powerBtn.innerHTML = _displayOn ? "⏻ Turn Display Off" : "⏻ Turn Display On";
-                powerBtn.classList.toggle("btn--danger", !_displayOn);
-                showToast(_displayOn ? "Display turned on" : "Display turned off", "info");
+                var health = await apiGet("/config/health");
+                var currentlyOn = health ? health.display_on !== false : true;
+                var newState = !currentlyOn;
+                await apiPost("/config/control", { cmd: newState ? "power_on" : "power_off" });
+                _updatePowerButton(newState);
+                showToast(newState ? "Display turned on" : "Display turned off", "info");
             });
+            // Initial state from health poll
+            (async function _initPowerBtn() {
+                var health = await apiGet("/config/health");
+                _updatePowerButton(health ? health.display_on !== false : true);
+            })();
 
             document.getElementById("btn-save-system")?.addEventListener("click", async () => {
                 var logLevel = document.getElementById("cfg-log-level").value;

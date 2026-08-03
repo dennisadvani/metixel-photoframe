@@ -42,6 +42,8 @@ class BackendDaemon:
         # Set by the web API when the frontend signals that the
         # slideshow has started — used to defer network checks.
         self._slideshow_started = threading.Event()
+        # Display power state — tracked by scheduler, read by Web UI
+        self._display_on: bool = True
 
     # -- Service lifecycle ---------------------------------------------------
 
@@ -513,6 +515,7 @@ class BackendDaemon:
 
                     if should_be_on != last_state:
                         last_state = should_be_on
+                        self._display_on = should_be_on  # Expose for Web UI
                         if should_be_on:
                             logger.info(
                                 "Display scheduler: turning ON (scheduled %s–%s)",

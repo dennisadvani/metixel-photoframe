@@ -337,6 +337,10 @@ class FolderWatcher:
         """
         # Resolve cache directory from live config (for thumbnail output)
         cache_dir = Path(self._state.config.system.get("cache_dir", "cache/"))
+        # Always show scanning progress so the UI updates when new
+        # files are added to watch folders (not just on initial scan).
+        total = len(paths)
+        _write_progress("scanning", total, 0, "" if not paths else paths[0].name)
 
         # Sort: images first so the optimisation queue can prioritise them.
         paths.sort(key=lambda p: (0 if p.suffix.lower() in IMAGE_EXTENSIONS else 1, p))
@@ -347,8 +351,7 @@ class FolderWatcher:
         for idx, path in enumerate(paths):
             suffix = path.suffix.lower()
             try:
-                if is_initial:
-                    _write_progress("scanning", total, idx + 1, path.name)
+                _write_progress("scanning", total, idx + 1, path.name)
 
                 if suffix in IMAGE_EXTENSIONS:
                     stub = self._gather_image_metadata(path, cache_dir)
@@ -392,12 +395,12 @@ class FolderWatcher:
         if stubs:
             self._enqueue_stubs(stubs)
 
-        if is_initial:
-            _write_progress("complete", total, total, "")
-            logger.info(
-                "Initial metadata scan complete: %d files discovered",
-                total,
-            )
+        _write_progress("complete", total, total, "")
+        logger.info(
+            "%s scan complete: %d files discovered",
+            "Initial metadata" if is_initial else "Incremental",
+            total,
+        )
 
     def _enqueue_stubs(self, stubs: list[MediaItem]) -> None:
         """Push metadata stubs to the OptimisationQueue — or directly to the playlist.

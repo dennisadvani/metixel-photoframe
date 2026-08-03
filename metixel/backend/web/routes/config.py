@@ -78,8 +78,11 @@ def update_config_section(section: str):
         # Trigger a full pipeline reset when config changes affect
         # what media is playable — simpler and more robust than
         # trying to incrementally update items mid-pipeline.
+        # Note: "sync" section is NOT included — Immich config changes
+        # (URL, API key, album) don't affect the playlist, and watch
+        # path changes are handled incrementally by the folder watcher.
         daemon = current_app.config.get("METIXEL_DAEMON")
-        if daemon is not None and section in ("video", "image", "display", "sync"):
+        if daemon is not None and section in ("video", "image", "display"):
             try:
                 daemon.reset_pipeline()
             except Exception:
@@ -474,6 +477,12 @@ def send_control():
     else:
         logger.warning("IPC not available — control command '%s' ignored", cmd)
 
+    # Update daemon's display state so the Web UI button reflects reality
+    if cmd in ("power_on", "power_off"):
+        daemon = current_app.config.get("METIXEL_DAEMON")
+        if daemon is not None:
+            daemon._display_on = (cmd == "power_on")
+
     return jsonify({"status": "ok", "cmd": cmd})
 
 
@@ -485,6 +494,10 @@ def health_check():
     # Read current media info from the frontend's state file
     health["current_media"] = _read_current_media()
     health["config_path"] = str(state.config_path)
+    # Include display power state so the Web UI button reflects
+    # the actual state (e.g. when the schedule turns it off).
+    daemon = current_app.config.get("METIXEL_DAEMON")
+    health["display_on"] = getattr(daemon, "_display_on", True) if daemon else True
     return jsonify(health)
 
 

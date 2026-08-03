@@ -132,6 +132,12 @@ class OptimisationQueue:
         # Track whether initial processing is done
         self._initial_done: bool = False
 
+        # Cumulative progress counters — track total backlog across
+        # batches so progress bars show the full queue, not just the
+        # current batch of 6.
+        self._img_processed = 0  # total images processed in current run
+        self._vid_processed = 0  # total videos processed in current run
+
     # -- Public API ----------------------------------------------------------
 
     def run(self) -> None:
@@ -203,6 +209,8 @@ class OptimisationQueue:
         with self._queue_lock:
             self._image_queue.clear()
             self._video_queue.clear()
+        self._img_processed = 0
+        self._vid_processed = 0
         logger.debug("OptimisationQueue paused — all queues drained")
 
     def enqueue(self, items: list[MediaItem]) -> None:
@@ -665,10 +673,17 @@ class OptimisationQueue:
                 _load1, _sleep,
             )
             time.sleep(_sleep)
+            # Cumulative progress — uses the full queue backlog
+            # (batch + remaining queue + already processed) so the
+            # bar doesn't reset every 6 items.
+            with self._queue_lock:
+                queue_remaining = len(self._image_queue)
+            _total = self._img_processed + len(batch) + queue_remaining
+            _current = self._img_processed + idx + 1
             _write_progress(
                 "optimising_images",
-                len(batch),       # total = batch size (usually 6)
-                idx + 1,          # current position in batch
+                _total,
+                _current,
                 item.original_path.name,
             )
 
@@ -676,6 +691,7 @@ class OptimisationQueue:
         _batch_elapsed = time.monotonic() - _batch_start
         _mem_after = self._read_mem_used_mb()
         _mem_delta = _mem_after - _mem_before
+        self._img_processed += len(batch)
 
         if optimised:
             self._state.add_playlist_items(optimised)
@@ -742,9 +758,11 @@ class OptimisationQueue:
                 self._video_queue.append(item)
             return
 
-        # Count remaining videos (including this one) for progress reporting
+        # Count remaining videos for progress reporting (cumulative)
         with self._queue_lock:
-            remaining = len(self._video_queue) + 1  # +1 for the one we just popped
+            queue_remaining = len(self._video_queue)
+        _total = self._vid_processed + 1 + queue_remaining
+        _current = self._vid_processed + 1
 
         logger.info(
             "[OPTQ] VID opt  | %4dx%-4d | %-6s | %5.1fs | mem=%dMB | %s",
@@ -756,7 +774,7 @@ class OptimisationQueue:
         )
         try:
             _write_progress(
-                "transcoding", remaining, 0, item.original_path.name,
+                "transcoding", _total, _current - 1, item.original_path.name,
             )
             result = processor.process(item.original_path, source=item.source)
             if result is not None:
@@ -780,9 +798,8 @@ class OptimisationQueue:
                         cached.name,
                         cached.stat().st_size if cached.is_file() else 0,
                     )
-            with self._queue_lock:
-                still_remaining = len(self._video_queue)
-            _write_progress("transcoding", remaining, remaining - still_remaining, "")
+            self._vid_processed += 1
+            _write_progress("transcoding", _total, _current, "")
         except Exception:
             logger.exception(
                 "Failed to optimise video: %s", item.original_path,
