@@ -16,9 +16,9 @@
     "shuffle": true
   },
   "video": {
-    "playback_enabled": false,
+    "playback_enabled": true,
     "player_backend": "auto",
-    "max_duration_seconds": 120,
+    "max_duration_seconds": 0,
     "transcoding_enabled": true,
     "transcode_max_width": 0,
     "transcode_max_height": 0,
