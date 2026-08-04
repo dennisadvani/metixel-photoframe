@@ -251,16 +251,30 @@ class BackendDaemon:
             timeout,
         )
 
-        # ── Initial boot: wait timeout, then check connectivity ────
-        waited = 0
-        while self._running and waited < timeout:
-            time.sleep(5)
-            waited += 5
+        # ── Initial boot: only wait if NOT already connected ──────
+        # If Ethernet or saved WiFi is already up, show the welcome
+        # message immediately.  Only delay when there's no network
+        # (giving NetworkManager time to auto-connect saved WiFi).
+        state, pin, actions = controller.tick()
+        if state != NetworkState.CLIENT_CONNECTED:
+            logger.info(
+                "No network at boot — waiting %ds for auto-connect",
+                timeout,
+            )
+            waited = 0
+            while self._running and waited < timeout:
+                time.sleep(5)
+                waited += 5
+                # Stop early if WiFi connects during the wait
+                state, pin, actions = controller.tick()
+                if state == NetworkState.CLIENT_CONNECTED:
+                    logger.info("Network connected during countdown")
+                    break
 
-        if not self._running:
-            return
+            if not self._running:
+                return
 
-        # Let the controller handle the initial state
+        # Re-evaluate state after any wait
         state, pin, actions = controller.tick()
 
         if state == NetworkState.CLIENT_CONNECTED:

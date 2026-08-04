@@ -17,6 +17,10 @@ several ways to get it online — pick the one that fits your situation.
 
 All methods produce the same result — a Pi connected to your home Wi-Fi.
 
+> **Note:** The setup script asks for your WiFi country code during
+> installation. If you need to change it later, use the Web UI
+> (Settings → Network → WiFi Country Code) or run `sudo iw reg set XX`.
+
 ---
 
 ## Method 1: Captive Portal AP (default)

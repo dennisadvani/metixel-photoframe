@@ -133,6 +133,25 @@ def network_connect():
                     ))
             except Exception:
                 pass
+        elif ipc is not None and not success:
+            try:
+                from metixel.shared.ipc import ControlMessage
+                ipc.send(ControlMessage(
+                    cmd="show_message",
+                    args={
+                        "title": "WiFi Connection Failed",
+                        "body": (
+                            f"Could not connect to \"{ssid}\". "
+                            "Check the password and try again or the WiFi "
+                            "may use an unsupported configuration such as "
+                            "WPA3-only."
+                        ),
+                        "severity": "error",
+                        "duration": 30,
+                    },
+                ))
+            except Exception:
+                pass
 
     threading.Thread(target=_do_connect, name="wifi-connect", daemon=True).start()
     return response

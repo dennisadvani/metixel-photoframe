@@ -270,16 +270,25 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
         if result.returncode == 0:
             logger.info("Connected to Wi-Fi network: %s", ssid)
             return True, f"Connected to {ssid}"
-        else:
-            err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-            logger.warning("Failed to connect to %s: %s", ssid, err)
-            # Restart the AP if the connection failed — otherwise the
-            # controller detects the missing AP as a crash, marks
-            # AP_EXHAUSTED permanently, and the user is locked out.
-            if ap_was_active:
-                logger.info("Restarting AP after failed connection attempt")
-                start_ap_mode()
-            return False, _friendly_error(err)
+
+        err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+        logger.warning("Failed to connect to %s: %s", ssid, err)
+
+        # Fallback: if one-shot connect failed with "key-mgmt", try creating
+        # a connection profile explicitly (more reliable for mixed-mode routers)
+        if password and "key-mgmt" in err.lower():
+            logger.info("Retrying with explicit connection profile for %s", ssid)
+            success, msg = _connect_with_profile(ssid, password)
+            if success:
+                return True, msg
+
+        # Restart the AP if the connection failed — otherwise the
+        # controller detects the missing AP as a crash, marks
+        # AP_EXHAUSTED permanently, and the user is locked out.
+        if ap_was_active:
+            logger.info("Restarting AP after failed connection attempt")
+            start_ap_mode()
+        return False, _friendly_error(err)
     except subprocess.TimeoutExpired:
         logger.warning("Connection attempt to %s timed out", ssid)
         if ap_was_active:
@@ -618,6 +627,59 @@ def is_ap_mode_active() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _connect_with_profile(ssid: str, password: str) -> tuple[bool, str]:
+    """Connect by creating an explicit connection profile.
+
+    Some routers (mixed WPA2/WPA3, certain TP-Link/ASUS models) don't
+    advertise key-mgmt in their beacon, causing the one-shot
+    ``nmcli device wifi connect`` to fail with "key-mgmt property is
+    missing".  Creating a profile with explicit WPA2-PSK settings
+    avoids this.
+    """
+    con_name = f"Metixel-{ssid}"
+    try:
+        # Remove any stale profile from a previous attempt
+        subprocess.run(
+            ["sudo", "nmcli", "connection", "delete", con_name],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+    try:
+        subprocess.run(
+            [
+                "sudo", "nmcli", "connection", "add",
+                "type", "wifi",
+                "con-name", con_name,
+                "ifname", "wlan0",
+                "ssid", ssid,
+                "wifi-sec.key-mgmt", "wpa-psk",
+                "wifi-sec.psk", password,
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        result = subprocess.run(
+            ["sudo", "nmcli", "connection", "up", con_name],
+            capture_output=True, text=True, timeout=CONNECT_TIMEOUT + 10,
+        )
+        if result.returncode == 0:
+            logger.info("Connected to %s via explicit profile", ssid)
+            return True, f"Connected to {ssid}"
+        else:
+            err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            logger.warning("Profile connection to %s failed: %s", ssid, err)
+            # Clean up the failed profile
+            subprocess.run(
+                ["sudo", "nmcli", "connection", "delete", con_name],
+                capture_output=True, timeout=10,
+            )
+            return False, _friendly_error(err)
+    except Exception:
+        logger.exception("Profile connection to %s failed", ssid)
+        return False, "Connection failed — please try again"
+
+
 def _friendly_error(raw: str) -> str:
     """Convert nmcli error messages into user-friendly strings."""
     raw_lower = raw.lower()
@@ -629,6 +691,11 @@ def _friendly_error(raw: str) -> str:
         return "Connection timed out — please check the password and try again"
     if "already connected" in raw_lower:
         return "Already connected to a network"
+    if "key-mgmt" in raw_lower:
+        return (
+            "Network security type not recognised — the router may use "
+            "an unsupported configuration such as WPA3-only"
+        )
     # Return first meaningful line of the error
     for line in raw.splitlines():
         line = line.strip()

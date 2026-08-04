@@ -5,6 +5,42 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.4-beta.4]
+
+### Added
+
+- **WiFi connection failed popup** — when the captive portal WiFi connection
+  fails (wrong password, out of range, etc.), an error message now appears on
+  the photo frame display with guidance to check the password or try a
+  different network (30 s auto-dismiss)
+- **WiFi connection profile fallback** — if the one-shot ``nmcli device wifi
+  connect`` fails with a "key-mgmt property is missing" error (common on
+  routers with mixed WPA2/WPA3 or certain TP-Link/ASUS models), the code
+  now creates an explicit connection profile with WPA2-PSK settings and
+  retries automatically
+- **Setup script channel prompt** — asks for ``stable`` or ``beta`` channel
+  before installing; stable pins to the latest non-prerelease ``v*`` tag,
+  beta tracks the ``dev`` branch
+- **Setup script WiFi country prompt** — asks for the regulatory domain
+  (e.g. ``AU``, ``US``, ``GB``) upfront alongside the channel choice; both
+  answers are written to ``config.json`` for the Web UI
+
+### Changed
+
+- **Boot welcome delay eliminated** — the network monitor no longer waits
+  ``ap_timeout_seconds`` when a network is already connected at boot; the
+  welcome message appears as soon as the slideshow is ready instead of
+  60+ seconds later
+- **Captive portal error messaging** — the WiFi failure popup on the frame
+  display uses a single clean message instead of concatenating the raw
+  nmcli error with boilerplate text
+
+### Fixed
+
+- **Setup script CRLF line endings** — ``.gitattributes`` now enforces
+  ``eol=lf`` for ``*.sh`` files; the setup script was renormalized so it
+  runs correctly when downloaded from GitHub raw on a Pi
+
 ## [1.0.3-beta.3]
 
 ### Changed

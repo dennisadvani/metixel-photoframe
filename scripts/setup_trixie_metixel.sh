@@ -46,8 +46,8 @@ fi
 
 if [ "${INSIDE_REPO}" = false ]; then
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     Metixel Photoframe — Bootstrap                         ║"
-    echo "║     Cloning repository before running full setup...        ║"
+    echo "║     Metixel Photoframe — Bootstrap                           ║"
+    echo "║     Cloning repository before running full setup...          ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 
@@ -90,10 +90,72 @@ fi
 # ============================================================================
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║     Metixel Photoframe — Trixie Setup                      ║"
+echo "║     Metixel Photoframe — Trixie Setup                        ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo "Project root: ${METIXEL_DIR}"
-echo "Target: Raspberry Pi 2/3/Zero 2 W (Trixie + KMS)"
+echo "Target: Raspberry Pi 2/3/4/5 (Trixie)"
+echo ""
+
+# -- Upfront prompts (before any packages are installed) ---------------------
+
+echo "Release channel:"
+echo "  stable = Latest stable release (recommended)"
+echo "  beta   = Pre-release with latest features"
+read -p "  Channel [stable]: " RELEASE_CHANNEL
+RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
+case "$RELEASE_CHANNEL" in
+    stable|beta) ;;
+    *)
+        echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
+        RELEASE_CHANNEL="stable"
+        ;;
+esac
+echo "  → Using ${RELEASE_CHANNEL} channel"
+
+# Switch the repository to the correct version before installing anything.
+cd "${METIXEL_DIR}"
+git fetch origin --tags 2>/dev/null || true
+
+if [ "${RELEASE_CHANNEL}" = "stable" ]; then
+    # Pin to the latest non-prerelease semantic version tag (e.g. v1.0.0).
+    # Only tags matching v<number>.<number>.<number> are considered — beta/rc
+    # pre-release tags (v1.0.3-beta.3) are excluded.
+    LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]' \
+        | grep -v -- '-' \
+        | sort -V \
+        | tail -1)
+    if [ -n "${LATEST_TAG}" ]; then
+        git checkout "${LATEST_TAG}" 2>/dev/null || true
+        echo "  → Pinned to ${LATEST_TAG} (stable)"
+    else
+        echo "  → No stable tag found — falling back to main branch"
+        git checkout main 2>/dev/null || true
+        git pull --ff-only 2>/dev/null || true
+    fi
+else
+    # Beta tracks the dev branch — always gets the latest commit
+    if git show-ref --verify --quiet "refs/remotes/origin/dev"; then
+        git checkout dev 2>/dev/null || true
+        git pull --ff-only 2>/dev/null || true
+        echo "  → Tracking dev branch (beta)"
+    else
+        echo "  → dev branch not found — staying on current branch"
+    fi
+fi
+
+echo ""
+
+echo "WiFi country code (e.g. AU, US, GB, DE, NZ):"
+echo "  This sets the regulatory domain for correct channel availability."
+read -p "  Country code [AU]: " WIFI_COUNTRY
+WIFI_COUNTRY="${WIFI_COUNTRY:-AU}"
+WIFI_COUNTRY=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
+echo "  → WiFi country: ${WIFI_COUNTRY}"
+
+echo ""
+echo "Ready to install. This will take several minutes."
+read -p "Press Enter to continue or Ctrl+C to cancel..."
+
 echo ""
 
 # -- System packages ---------------------------------------------------------
@@ -196,17 +258,7 @@ tee /etc/NetworkManager/conf.d/wifi-powersave-off.conf > /dev/null <<'NMPOWEREOF
 wifi.powersave = 2
 NMPOWEREOF
 
-# Set WiFi regulatory domain — required for channels 12/13 (common in
-# EU/AU/ NZ) and ensures the radio uses the correct frequencies for the
-# region.  Without this the Pi stays in "world" domain (limited channels).
-echo ""
-echo "WiFi country code (e.g. AU, US, GB, DE, NZ):"
-echo "  This sets the regulatory domain for correct channel availability."
-read -p "  Country code [AU]: " WIFI_COUNTRY
-WIFI_COUNTRY="${WIFI_COUNTRY:-AU}"
-WIFI_COUNTRY=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
-
-# Apply at system level (immediate) and persist in Metixel config
+# Apply WiFi regulatory domain — prompted upfront, applied here
 if command -v iw &>/dev/null; then
     iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
     echo "     WiFi regulatory domain set to: $WIFI_COUNTRY"
@@ -225,6 +277,7 @@ if os.path.exists(cfg_path):
     with open(cfg_path) as f:
         cfg = json.load(f)
     cfg.setdefault('network', {})['wifi_country'] = '$WIFI_COUNTRY'
+    cfg.setdefault('update', {})['channel'] = '$RELEASE_CHANNEL'
     with open(cfg_path, 'w') as f:
         json.dump(cfg, f, indent=2)
 " 2>/dev/null || true
@@ -337,11 +390,11 @@ fi
 # ============================================================================
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║     Setup Complete!                                        ║"
+echo "║     Setup Complete!                                          ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "After reboot, Metixel will auto-start."
-echo "Access the dashboard at: http://<pi-ip-address>:8080"
+echo "Access the dashboard at: http://<pi-ip-address>"
 echo ""
 echo "Rebooting in 10 seconds... (press Ctrl+C to cancel)"
 
