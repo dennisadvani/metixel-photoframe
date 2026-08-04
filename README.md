@@ -100,6 +100,9 @@ Two ways to install — both work on Raspberry Pi 3, 4, and 5.
 | **Method** | Download .img.zip → flash with Pi Imager → boot | Flash Trixie Lite → run setup script → reboot |
 | **Guide** | [Getting Started](docs/GETTING_STARTED.md) | [Installation Guide](docs/INSTALLATION.md) |
 
+The manual setup script prompts for your **release channel** (stable/beta)
+and **WiFi country code** before installing — no config file editing needed.
+
 After installation, connect to Wi-Fi using one of several methods — see
 **[WiFi Setup Guide →](docs/WIFI_SETUP.md)**
 

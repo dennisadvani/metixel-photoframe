@@ -80,7 +80,14 @@ wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scri
 sudo bash setup_trixie_metixel.sh
 ```
 
-The script runs for 30–60 minutes and handles everything:
+The script asks two questions upfront before installing anything:
+
+- **Release channel** — `stable` (pins to the latest tagged release) or
+  `beta` (tracks the dev branch with the newest features)
+- **WiFi country code** — sets the regulatory domain (e.g. `AU`, `US`,
+  `GB`) so the radio uses the correct channels for your region
+
+After answering, press Enter to begin. The script runs for 30–60 minutes:
 
 | Step | What it does |
 |---|---|
@@ -89,7 +96,7 @@ The script runs for 30–60 minutes and handles everything:
 | 3 | Installs Python packages (pi3d, Flask, Pillow, etc.) |
 | 4 | Creates directory structure under `/opt/metixel` |
 | 5 | Installs and enables systemd services (`metixel-backend`, `metixel-cage`) |
-| 6 | Enables Wi-Fi (rfkill unblock, nmcli radio on) |
+| 6 | Enables Wi-Fi and applies the chosen country code (rfkill unblock, iw reg set) |
 | 7 | Configures the captive portal (hostapd + dnsmasq) |
 | 8 | Sets up the Samba share for easy media upload |
 | 9 | Configures quiet boot (no kernel messages on screen) |

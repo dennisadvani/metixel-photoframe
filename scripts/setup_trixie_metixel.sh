@@ -46,8 +46,8 @@ fi
 
 if [ "${INSIDE_REPO}" = false ]; then
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     Metixel Photoframe — Bootstrap                         ║"
-    echo "║     Cloning repository before running full setup...        ║"
+    echo "║     Metixel Photoframe — Bootstrap                           ║"
+    echo "║     Cloning repository before running full setup...          ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 
@@ -90,7 +90,7 @@ fi
 # ============================================================================
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║     Metixel Photoframe — Trixie Setup                      ║"
+echo "║     Metixel Photoframe — Trixie Setup                        ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo "Project root: ${METIXEL_DIR}"
 echo "Target: Raspberry Pi 2/3/4/5 (Trixie)"
