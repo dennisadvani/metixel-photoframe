@@ -22,34 +22,27 @@ logger = logging.getLogger(__name__)
 def _is_ap_mode() -> bool:
     """Check whether the captive portal PIN gate is active.
 
-    Shows the captive portal ONLY when the AP is actually running (or a
-    PIN is set) AND there is no real network connection.  The primary
-    gate is the AP state — connectivity is only checked as a safety net
-    for lingering/stale AP instances.
+    Serves the captive portal whenever the AP is running or a PIN is
+    active.  The NetworkController manages AP lifecycle — if a real
+    connection exists, the controller will have already stopped the AP
+    and cleared the PIN, so there is no stale-AP case to guard against.
 
-    Logic:
-        1. AP not active + no PIN → dashboard (normal operation)
-        2. AP/PIN active + real connection → dashboard (safety net)
-        3. AP/PIN active + no connection → captive portal (setup needed)
+    Calling is_connected() on every HTTP request spawns nmcli, which
+    can time out under CPU load and cause the captive portal to flip
+    back to the dashboard mid-session.
     """
     try:
-        from metixel.backend.network_manager import (
-            is_ap_mode_active,
-            is_connected,
-            is_pin_required,
-        )
+        from metixel.backend.network_manager import is_ap_mode_active
 
-        # Fast path: nothing AP-related is active → dashboard
-        if not is_ap_mode_active() and not is_pin_required():
-            return False
+        # Check controller PIN first (fast, in-memory)
+        app = current_app._get_current_object()  # type: ignore[attr-defined]
+        daemon = app.config.get("METIXEL_DAEMON") if app else None
+        if daemon is not None:
+            controller = getattr(daemon, "_network_controller", None)
+            if controller is not None and controller.pin:
+                return True
 
-        # AP or PIN is active — but we have a real connection, so the AP
-        # is stale/lingering.  Serve the dashboard anyway.
-        if is_connected():
-            return False
-
-        # AP/PIN active + genuinely offline → captive portal for setup
-        return True
+        return is_ap_mode_active()
     except Exception:
         return False
 

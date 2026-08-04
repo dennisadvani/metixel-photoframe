@@ -237,22 +237,22 @@
             if (e.key === "Enter") doConnect();
         });
 
-        // ── Check if PIN is required on page load ──────────────────
-        (async function init() {
-            try {
-                var resp = await fetch("/api/network/status");
-                var data = await resp.json();
-                if (!data.require_pin) {
-                    // No PIN active — skip to scan (shouldn't happen in AP mode,
-                    // but handle gracefully)
-                    pinValidated = true;
-                    document.getElementById("step-pin").style.display = "none";
-                    document.getElementById("step-scan").style.display = "";
-                }
-            } catch (e) {
-                // Can't reach API — show PIN screen as safe default
-            }
-        })();
+        // ── PIN screen is the default — we know we're in AP mode ───
+        // Don't call /api/network/status on page load — nmcli queries
+        // can interfere with the wlan0 radio while hostapd is running,
+        // causing the captive portal to glitch and the PIN input to
+        // become unresponsive.
+        // (async function init() {
+        //     try {
+        //         var resp = await fetch("/api/network/status");
+        //         var data = await resp.json();
+        //         if (!data.require_pin) {
+        //             pinValidated = true;
+        //             document.getElementById("step-pin").style.display = "none";
+        //             document.getElementById("step-scan").style.display = "";
+        //         }
+        //     } catch (e) { }
+        // })();
 
         // ── PIN validation ─────────────────────────────────────────
         async function doValidatePin() {
@@ -418,14 +418,14 @@
                     status.textContent = data.message;
                     showDone();
                 } else {
-                    status.className = "status-msg error";
-                    status.textContent = data.message || "Connection failed";
+                    // Connection failed — re-enable the button silently.
+                    // The user can check the photo frame screen for feedback.
                     btn.disabled = false;
                     btn.textContent = "Try Again";
                 }
             } catch (e) {
-                status.className = "status-msg error";
-                status.textContent = "Connection failed — please try again";
+                // Network error (e.g. AP torn down before response).
+                // Re-enable silently — feedback is on the frame display.
                 btn.disabled = false;
                 btn.textContent = "Try Again";
             }

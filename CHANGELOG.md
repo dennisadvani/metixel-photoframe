@@ -5,6 +5,62 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.3-beta.3]
+
+### Changed
+
+- **Network Controller rewritten** — `NetworkPhase` flag-based state machine
+  replaced with `NetworkState` enum (``CLIENT_CONNECTED``,
+  ``CLIENT_DISCONNECTED``, ``AP_ACTIVE``, ``AP_EXHAUSTED``); all transitions
+  go through a single ``_transition_to()`` method under lock; monitor loop
+  drains a pending-actions queue instead of comparing phase snapshots.
+  Ethernet connectivity is checked independently from WiFi and is always
+  safe (different radio) — nmcli is never queried for WiFi while the AP
+  is active, preventing hostapd beacon disruption.
+- **WiFi connection deferred to background thread** — the captive portal's
+  ``/api/network/connect`` endpoint now returns a response immediately
+  (before the AP is torn down) and spawns a background thread for the
+  actual AP-stop + scan + nmcli-connect sequence.  The phone receives the
+  HTTP response while still associated with the AP.
+- **WiFi scan delay after AP stop** — ``connect_to_network()`` now performs a
+  ``nmcli device wifi rescan`` and waits 5 s after stopping the AP before
+  attempting the connection.  Without a fresh scan wlan0 has no visible
+  SSID list and nmcli fails with "No network with SSID 'X' found."
+- **Controller connection guard** — new ``begin_connection()`` /
+  ``end_connection()`` methods prevent the monitor thread from treating an
+  intentionally-stopped AP as "unexpectedly dead" during the scan gap
+- **AP_EXHAUSTED sudo reduction** — ``_stop_ap()`` now guarded by
+  ``is_ap_mode_active()`` check; no longer runs unnecessary sudo commands
+  on every monitor tick when the AP is already down
+
+### Fixed
+
+- **WiFi connection failing after captive portal** — the AP was torn down
+  during the HTTP request, severing the client's TCP connection before the
+  response arrived; the phone showed a network error instead of success
+- **"WiFi Offline" popup flashing during WiFi connection** — the monitor
+  tick saw the AP was down during the scan delay and marked it as
+  ``AP_EXHAUSTED``, triggering an on-screen warning that was dismissed
+  seconds later when the connection succeeded
+- **Captive portal error messages removed** — the password field no longer
+  displays error text on failure; all feedback is shown on the photo frame
+  display where it is always visible even after the phone disconnects from
+  the AP
+
+### Removed
+
+- **Legacy PIN state** — ``_pin_state`` module-level dict and all legacy PIN
+  functions (``generate_ap_pin``, ``clear_ap_pin``, ``validate_ap_pin``,
+  ``is_pin_required``, ``get_active_pin``) removed from
+  ``network_manager.py``; PIN management is now exclusively owned by
+  ``NetworkController`` with proper thread safety
+- **``SCAN_CACHE_TTL``** constant and ``force_live`` parameter — scan cache
+  is now served indefinitely while the AP is active; live scan toggle no
+  longer exposed to the web API
+- **Legacy PIN fallbacks in web routes** — all ``is_pin_required()`` and
+  ``validate_ap_pin()`` fallback paths removed; the controller is the sole
+  source of truth
+
 ## [1.0.2-beta.2]
 
 ### Added

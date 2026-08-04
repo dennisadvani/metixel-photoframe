@@ -226,11 +226,13 @@ class BackendDaemon:
 
         Delegates all state decisions to :class:`NetworkController` so
         the monitor thread and Flask request threads share a single
-        source of truth for PIN/AP state.
+        source of truth for PIN/AP state.  The controller returns a
+        list of *pending actions* — state transitions that happened
+        (possibly on another thread) — and this loop drains them.
         """
         from metixel.backend.network_controller import (
             NetworkController,
-            NetworkPhase,
+            NetworkState,
         )
 
         config = self._state.config
@@ -259,12 +261,12 @@ class BackendDaemon:
             return
 
         # Let the controller handle the initial state
-        phase, pin = controller.tick()
+        state, pin, actions = controller.tick()
 
-        if phase == NetworkPhase.MONITORING:
+        if state == NetworkState.CLIENT_CONNECTED:
             logger.info("Network connected — AP fallback not needed")
             self._show_first_run_welcome()
-        elif phase == NetworkPhase.AP_ACTIVE and pin:
+        elif state == NetworkState.AP_ACTIVE and pin:
             logger.warning(
                 "No network after %ds — activating PIN-gated AP fallback (PIN: %s)",
                 timeout, pin,
@@ -272,65 +274,77 @@ class BackendDaemon:
             self._show_pin_on_screen(pin)
             controller.mark_pin_displayed()
 
-        # ── Main monitoring loop ───────────────────────────────────
-        last_phase = phase
+        # ── Drain initial actions (usually empty, but safe) ────────
+        self._drain_actions(controller, actions)
 
+        # ── Main monitoring loop ───────────────────────────────────
         while self._running:
-            time.sleep(10)
+            time.sleep(5)
             if not self._running:
                 break
 
-            phase, pin = controller.tick()
+            state, pin, actions = controller.tick()
+            self._drain_actions(controller, actions)
 
-            # ── Handle phase transitions ──────────────────────────
-            if phase != last_phase:
-                if phase == NetworkPhase.AP_EXHAUSTED:
-                    logger.info(
-                        "AP exhausted — will not reactivate until reboot"
-                    )
-                    self._dismiss_pin_message()
-                    controller.mark_pin_dismissed()
-                    # Show a brief message that AP gave up
-                    try:
-                        from metixel.shared.ipc import ControlMessage
-                        self._ipc.send(ControlMessage(
-                            cmd="show_message",
-                            args={
-                                "title": "WiFi Offline",
-                                "body": (
-                                    "Could not reconnect. The WiFi setup portal "
-                                    "will not appear again until the frame is "
-                                    "rebooted."
-                                ),
-                                "severity": "warning",
-                                "duration": 120,
-                            },
-                        ))
-                    except Exception:
-                        pass
+            # Safety net: dismiss PIN if we're connected but the
+            # overlay is still showing (covers IPC delivery failures).
+            if state == NetworkState.CLIENT_CONNECTED and controller.pin_displayed:
+                self._dismiss_pin_message()
+                controller.mark_pin_dismissed()
 
-                elif phase == NetworkPhase.AP_ACTIVE and pin:
-                    logger.warning(
-                        "Activating AP fallback (PIN: %s)", pin,
-                    )
+    # -- Action drainer ----------------------------------------------------
+
+    def _drain_actions(
+        self,
+        controller: "NetworkController",
+        actions: list["NetworkState"],
+    ) -> None:
+        """Execute side effects for each pending state transition."""
+        from metixel.backend.network_controller import NetworkState
+
+        for action in actions:
+            if action == NetworkState.CLIENT_CONNECTED:
+                logger.info("Network connected — deactivating AP fallback")
+                self._dismiss_pin_message()
+                controller.mark_pin_dismissed()
+                self._show_connected_message()
+                self._show_first_run_welcome()
+
+            elif action == NetworkState.AP_ACTIVE:
+                pin = controller.pin
+                logger.warning("Activating AP fallback (PIN: %s)", pin)
+                if pin:
                     self._show_pin_on_screen(pin)
                     controller.mark_pin_displayed()
 
-                elif phase == NetworkPhase.MONITORING and last_phase in (
-                    NetworkPhase.AP_ACTIVE,
-                    NetworkPhase.AP_EXHAUSTED,
-                    NetworkPhase.GRACE_PERIOD,
-                ):
-                    logger.info("Network connected — deactivating AP fallback")
-                    self._dismiss_pin_message()
-                    controller.mark_pin_dismissed()
-                    self._show_connected_message()
-                    self._show_first_run_welcome()
+            elif action == NetworkState.AP_EXHAUSTED:
+                logger.info("AP exhausted — will not reactivate until reboot")
+                self._dismiss_pin_message()
+                controller.mark_pin_dismissed()
+                try:
+                    from metixel.shared.ipc import ControlMessage
+                    self._ipc.send(ControlMessage(
+                        cmd="show_message",
+                        args={
+                            "title": "WiFi Offline",
+                            "body": (
+                                "Could not reconnect. The WiFi setup portal "
+                                "will not appear again until the frame is "
+                                "rebooted."
+                            ),
+                            "severity": "warning",
+                            "duration": 120,
+                        },
+                    ))
+                except Exception:
+                    pass
 
-                elif phase == NetworkPhase.GRACE_PERIOD:
-                    logger.info("Network lost — grace period active")
+            elif action == NetworkState.CLIENT_DISCONNECTED:
+                logger.info("Network lost — grace period active")
+                # No UI action — just waiting.  The boot layer or an
+                # existing message can stay on screen.
 
-            last_phase = phase
+    # -- On-screen helpers ------------------------------------------------
 
     def _show_pin_on_screen(self, pin: str) -> None:
         """Display the AP security PIN as a persistent message on the frame.
@@ -379,7 +393,10 @@ class BackendDaemon:
 
             from metixel.backend.network_manager import get_connection_status
             status = get_connection_status()
-            ip = status.get("ip", "unknown")
+            ip = status.get("ip", "")
+            if not ip or ip.startswith("192.168.42."):
+                logger.debug("No real IP — skipping connected message")
+                return
             iface_type = status.get("interface_type", "")
             label = "WiFi" if iface_type == "wifi" else "Ethernet"
 
@@ -418,7 +435,14 @@ class BackendDaemon:
 
             from metixel.backend.network_manager import get_connection_status
             status = get_connection_status()
-            ip = status.get("ip", "unknown")
+            ip = status.get("ip", "")
+
+            # Don't show welcome messages if there's no real IP —
+            # is_connected() can return false positives under CPU load
+            # when nmcli times out.
+            if not ip or ip.startswith("192.168.42."):
+                logger.debug("No real IP — skipping first-run welcome")
+                return
 
             from metixel.shared.ipc import ControlMessage
 

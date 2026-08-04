@@ -19,11 +19,7 @@ from metixel.backend.network_manager import (
     get_connection_status,
     is_ap_mode_active,
     is_connected,
-    is_pin_required,
     scan_networks,
-    start_ap_mode,
-    stop_ap_mode,
-    validate_ap_pin,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,13 +39,14 @@ def _get_controller() -> object | None:
 def network_status():
     """Get current Wi-Fi connection status and AP mode state.
 
-    AP mode is only reported as active when the AP (or PIN) is actually
-    running AND there is no real network connection — matching the
-    captive-portal logic in the web server.
+    AP mode is only reported as active when the AP is running AND there
+    is no real network connection — matching the captive-portal logic
+    in the web server.
     """
     status = get_connection_status()
-    ap_or_pin = is_ap_mode_active() or is_pin_required()
-    status["ap_mode_active"] = ap_or_pin and not is_connected()
+    controller = _get_controller()
+    ap_active = is_ap_mode_active() or bool(controller and controller.pin)
+    status["ap_mode_active"] = ap_active and not is_connected()
     return jsonify(status)
 
 
@@ -57,14 +54,12 @@ def network_status():
 def network_scan():
     """Scan for visible Wi-Fi networks.
 
-    By default serves cached results from a pre-AP scan (the Pi's WiFi
-    chip can't scan while in AP mode).  Pass ``?force=1`` to perform a
-    live scan — this will briefly drop the AP, disconnecting captive
-    portal clients.  Use with a warning to the user.
+    When the AP is active, returns cached pre-scan results (the Pi's
+    WiFi chip can't scan while in AP mode).  When the AP is not active,
+    performs a live scan.
     """
-    force = request.args.get("force", "0") == "1"
-    networks = scan_networks(force_live=force)
-    return jsonify({"networks": networks, "cached": not force and is_ap_mode_active()})
+    networks = scan_networks()
+    return jsonify({"networks": networks, "cached": is_ap_mode_active()})
 
 
 @network_bp.route("/network/connect", methods=["POST"])
@@ -73,6 +68,11 @@ def network_connect():
 
     Accepts JSON: ``{"ssid": "MyWiFi", "password": "passphrase"}``.
     Empty password is allowed for open networks.
+
+    Returns immediately so the response reaches the client BEFORE the
+    AP is torn down.  The actual connection happens in a background
+    thread — the phone will lose its AP connection when hostapd stops,
+    but by then it has already received the HTTP response.
     """
     data = request.get_json(silent=True) or {}
     ssid = data.get("ssid", "").strip()
@@ -81,26 +81,61 @@ def network_connect():
     if not ssid:
         return jsonify({"error": "SSID is required"}), 400
 
-    success, message = connect_to_network(ssid, password)
-    if success:
-        # Notify the controller so it resets AP/PIN state atomically
-        controller = _get_controller()
+    # Tell the controller a connection is in progress so the monitor
+    # thread doesn't panic when it sees the AP go down.
+    controller = _get_controller()
+    if controller is not None:
+        controller.begin_connection()
+
+    # Capture references BEFORE the request context ends.  The
+    # background thread runs after the response is sent — Flask
+    # proxies (current_app, request) are unavailable.
+    ipc = current_app.config.get("METIXEL_IPC")
+
+    # Return the response NOW — before stopping the AP.  Once hostapd
+    # is killed the client's TCP connection dies, so we must flush the
+    # response while the AP is still up.
+    response = jsonify({
+        "status": "ok",
+        "message": f"Connecting to {ssid} — your device will switch networks.",
+    })
+
+    # Spawn a background thread to do the actual work
+    import threading
+
+    def _do_connect() -> None:
+        success, msg = connect_to_network(ssid, password)
         if controller is not None:
-            controller.on_wifi_connected()
-        else:
-            from metixel.backend.network_manager import clear_ap_pin
-            clear_ap_pin()
-        # Tell the frontend to dismiss the PIN message
-        ipc = current_app.config.get("METIXEL_IPC")
-        if ipc is not None:
+            controller.end_connection()
+            if success:
+                controller.on_wifi_connected()
+        if ipc is not None and success:
             try:
                 from metixel.shared.ipc import ControlMessage
+                # Dismiss any PIN/welcome messages
                 ipc.send(ControlMessage(cmd="dismiss_all_messages"))
+                # Show a WiFi-connected popup with the IP address
+                from metixel.backend.network_manager import get_connection_status
+                status = get_connection_status()
+                ip_addr = status.get("ip", "")
+                if ip_addr and not ip_addr.startswith("192.168.42."):
+                    ipc.send(ControlMessage(
+                        cmd="show_message",
+                        args={
+                            "title": f"Connected to {ssid}",
+                            "body": (
+                                f"WiFi connected. Access Metixel at "
+                                f"http://metixel.local or http://{ip_addr}"
+                            ),
+                            "severity": "success",
+                            "duration": 60,
+                        },
+                    ))
             except Exception:
                 pass
-        return jsonify({"status": "ok", "message": message})
-    else:
-        return jsonify({"status": "error", "message": message}), 400
+
+    threading.Thread(target=_do_connect, name="wifi-connect", daemon=True).start()
+    return response
 
 
 @network_bp.route("/network/forget", methods=["POST"])
@@ -124,18 +159,20 @@ def network_forget():
 
 @network_bp.route("/network/ap-status", methods=["GET"])
 def ap_status():
-    """Check whether the access point (captive portal) is currently active.
-
-    Only reports active when the AP (or PIN) is running AND there is no
-    real network connection — matching the captive-portal logic.
-    """
-    ap_or_pin = is_ap_mode_active() or is_pin_required()
+    """Check whether the access point (captive portal) is currently active."""
+    controller = _get_controller()
+    ap_or_pin = is_ap_mode_active() or bool(controller and controller.pin)
     return jsonify({"active": ap_or_pin and not is_connected()})
 
 
 @network_bp.route("/network/ap-start", methods=["POST"])
 def ap_start():
-    """Manually start the access point (captive portal)."""
+    """Manually start the access point (captive portal).
+
+    Note: Manual AP start is discouraged — the NetworkController manages
+    AP lifecycle automatically.  This endpoint exists for debugging.
+    """
+    from metixel.backend.network_manager import start_ap_mode
     ok = start_ap_mode()
     if ok:
         return jsonify({"status": "ok", "message": "AP mode started"})
@@ -145,7 +182,12 @@ def ap_start():
 
 @network_bp.route("/network/ap-stop", methods=["POST"])
 def ap_stop():
-    """Manually stop the access point."""
+    """Manually stop the access point.
+
+    Note: Manual AP stop is discouraged — the NetworkController manages
+    AP lifecycle automatically.  This endpoint exists for debugging.
+    """
+    from metixel.backend.network_manager import stop_ap_mode
     ok = stop_ap_mode()
     if ok:
         return jsonify({"status": "ok", "message": "AP mode stopped"})
@@ -168,12 +210,11 @@ def validate_pin():
     if not candidate or len(candidate) != 4 or not candidate.isdigit():
         return jsonify({"valid": False, "message": "Enter a 4-digit PIN"}), 400
 
-    # Prefer the controller (single source of truth), fall back to legacy
     controller = _get_controller()
-    if controller is not None:
-        valid, message = controller.validate_pin(candidate)
-    else:
-        valid, message = validate_ap_pin(candidate)
+    if controller is None:
+        return jsonify({"valid": False, "message": "Network controller unavailable"}), 503
+
+    valid, message = controller.validate_pin(candidate)
 
     if valid:
         return jsonify({"valid": True, "message": "PIN accepted"})

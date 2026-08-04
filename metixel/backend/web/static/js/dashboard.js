@@ -782,15 +782,22 @@
             var countryEl = document.getElementById("cfg-wifi-country");
             if (countryEl) {
                 countryEl.value = cfg.wifi_country || "";
-                // Save on blur or Enter
-                countryEl.addEventListener("change", async function () {
-                    var code = this.value.trim().toUpperCase().slice(0, 2);
-                    this.value = code;
+
+                async function _saveWifiCountry() {
+                    var code = countryEl.value.trim().toUpperCase().slice(0, 2);
+                    countryEl.value = code;
                     if (code && code.length === 2) {
                         await apiPut("/config/network", { wifi_country: code });
-                        // Also apply immediately via the backend
                         await apiGet("/config/network?apply_wifi_country=" + encodeURIComponent(code));
+                        showToast("WiFi country set to " + code, "success");
                     }
+                }
+
+                // Save button
+                document.getElementById("btn-save-wifi-country")?.addEventListener("click", _saveWifiCountry);
+                // Also save on Enter
+                countryEl.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") { e.preventDefault(); _saveWifiCountry(); }
                 });
             }
         }

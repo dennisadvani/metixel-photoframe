@@ -6,12 +6,18 @@ All AP activation/deactivation and PIN management flows through this
 class.  No other module may start/stop hostapd or mutate PIN state
 directly — this eliminates the race conditions between the network
 monitor thread and Flask web request threads.
+
+WiFi hardware constraint (enforced by this controller):
+    wlan0 can be in client mode OR master (AP) mode — never both.
+    ``is_connected()`` (nmcli) is NOT called while AP_ACTIVE because
+    it can interact with the radio and disrupt hostapd beacons.
 """
 
 from __future__ import annotations
 
 import logging
 import random
+import subprocess
 import threading
 import time
 from enum import Enum
@@ -20,26 +26,23 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-class NetworkPhase(Enum):
-    """Current phase of the network state machine."""
-    MONITORING = "monitoring"        # Normal — WiFi connected, nothing to do
-    GRACE_PERIOD = "grace_period"    # WiFi lost — retrying before activating AP
-    AP_ACTIVE = "ap_active"          # AP broadcasting, PIN on screen
-    AP_EXHAUSTED = "ap_exhausted"    # AP timed out — never again until reboot
+class NetworkState(Enum):
+    """Exclusive states — the WiFi radio can only be in one mode at a time."""
+    CLIENT_CONNECTED = "client_connected"          # WiFi client or Ethernet up
+    CLIENT_DISCONNECTED = "client_disconnected"    # No connection, grace period
+    AP_ACTIVE = "ap_active"                        # WiFi in master mode, PIN on screen
+    AP_EXHAUSTED = "ap_exhausted"                  # AP timed out, client mode, terminal
 
 
 # ---------------------------------------------------------------------------
-# Imports from network_manager for low-level operations
+# Low-level operations from network_manager (no state, just CLI wrappers)
 # ---------------------------------------------------------------------------
 
 from metixel.backend.network_manager import (  # noqa: E402
     connect_to_network,
-    forget_network,
-    get_connection_status,
     has_saved_wifi_networks,
     is_ap_mode_active,
     is_connected,
-    is_wifi_radio_enabled,
     pre_scan_for_ap,
     scan_networks,
     start_ap_mode as _start_ap,
@@ -53,46 +56,49 @@ PIN_COOLDOWN_SECONDS = 600  # 10 minutes
 class NetworkController:
     """Single owner of WiFi/AP state.
 
-    All state mutations happen under an internal lock.  The monitor
-    thread calls :meth:`tick` every ~10 seconds; Flask routes call
-    :meth:`validate_pin` and :meth:`on_wifi_connected` from request
-    threads.
+    All state mutations go through :meth:`_transition_to`, which runs
+    under an internal lock.  Side effects (start/stop AP, generate PIN,
+    dismiss popups) are queued as *pending actions* and drained by the
+    monitor loop.
 
-    The state machine::
-
-        MONITORING ──(WiFi lost)──► GRACE_PERIOD ──(5 min)──► AP_ACTIVE
-            ▲                          │                          │
-            │                          │ (WiFi back)              │ (10 min timeout,
-            │                          ▼                          │  no user connected)
-            └──────────────────────────┘                          ▼
-                                                          AP_EXHAUSTED
-                                                          (terminal until reboot)
+    Thread safety:
+        - :meth:`tick` — called by monitor thread (~5s)
+        - :meth:`validate_pin`, :meth:`on_wifi_connected` — called by
+          Flask request threads
+        - All share ``self._lock``
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._lock = threading.Lock()
         self._config = config
 
-        # ── PIN state ──────────────────────────────────────────────
+        # ── State machine ──────────────────────────────────────────
+        self._state: NetworkState = NetworkState.CLIENT_CONNECTED
+        self._state_entered: float = time.monotonic()
+
+        # ── PIN ────────────────────────────────────────────────────
         self._pin: str = ""
         self._pin_attempts: int = 0
         self._pin_locked_until: float = 0.0
 
-        # ── Phase state ────────────────────────────────────────────
-        self._phase: NetworkPhase = NetworkPhase.MONITORING
-        self._grace_start: float = 0.0       # monotonic; 0 = not in grace
-        self._ap_start: float = 0.0           # monotonic; 0 = AP not active
-        self._exhausted: bool = False         # AP timed out — never again
+        # ── Actions pending for the monitor thread ─────────────────
+        self._pending_actions: list[NetworkState] = []
 
-        # ── Display tracking (for the monitor's use) ───────────────
-        self._pin_displayed: bool = False     # PIN message is on screen
+        # ── Connection-in-progress guard ───────────────────────────
+        # Set by begin_connection() before stopping the AP for a WiFi
+        # connection attempt.  Prevents the monitor tick from seeing
+        # the AP as "unexpectedly dead" during the scan delay.
+        self._connecting: bool = False
+
+        # ── Display tracking ───────────────────────────────────────
+        self._pin_displayed: bool = False
 
     # -- Properties (thread-safe reads) ------------------------------------
 
     @property
-    def phase(self) -> NetworkPhase:
+    def state(self) -> NetworkState:
         with self._lock:
-            return self._phase
+            return self._state
 
     @property
     def pin(self) -> str:
@@ -100,135 +106,159 @@ class NetworkController:
             return self._pin
 
     @property
-    def exhausted(self) -> bool:
+    def pin_displayed(self) -> bool:
         with self._lock:
-            return self._exhausted
+            return self._pin_displayed
 
-    # -- Tick — called by the monitor thread every ~10s --------------------
+    # -- Tick — called by monitor thread every ~5s ------------------------
 
-    def tick(self) -> tuple[NetworkPhase, str]:
-        """Advance the state machine.  Call from the monitor thread.
+    def tick(self) -> tuple[NetworkState, str, list[NetworkState]]:
+        """Advance the state machine.
 
         Returns:
-            (current_phase, active_pin_or_empty_string)
+            (current_state, active_pin, list_of_actions_for_monitor)
         """
         with self._lock:
-            if is_connected():
-                self._on_connected()
-            else:
-                self._on_disconnected()
-            return (self._phase, self._pin)
+            self._pending_actions.clear()
 
-    def _on_connected(self) -> None:
-        """Called when a real upstream connection is detected."""
-        # If AP is active, tear it down
-        if is_ap_mode_active():
-            _stop_ap()
+            if self._state == NetworkState.CLIENT_CONNECTED:
+                if not self._is_any_connected():
+                    self._transition_to(NetworkState.CLIENT_DISCONNECTED)
 
-        # Reset all AP-related state (but NOT exhausted — only reboot clears that)
-        self._pin = ""
-        self._pin_attempts = 0
-        self._pin_locked_until = 0.0
-        self._grace_start = 0.0
-        self._ap_start = 0.0
-        self._phase = NetworkPhase.MONITORING
-        self._pin_displayed = False
+            elif self._state == NetworkState.CLIENT_DISCONNECTED:
+                if self._is_any_connected():
+                    self._transition_to(NetworkState.CLIENT_CONNECTED)
+                elif not has_saved_wifi_networks():
+                    # Nothing to retry — AP immediately
+                    self._transition_to(NetworkState.AP_ACTIVE)
+                elif self._elapsed() >= self._config.get(
+                    "ap_grace_period_seconds", 300,
+                ):
+                    self._transition_to(NetworkState.AP_ACTIVE)
 
-    def _on_disconnected(self) -> None:
-        """Called when no upstream connection is found."""
-        now = time.monotonic()
+            elif self._state == NetworkState.AP_ACTIVE:
+                # Ethernet can be checked safely — it's a different radio
+                if self._is_ethernet_connected():
+                    self._transition_to(NetworkState.CLIENT_CONNECTED)
+                elif self._connecting:
+                    # connect_to_network() intentionally stopped the AP
+                    # for a scan+connect cycle — do NOT treat this as a
+                    # crash.  The connection thread will call
+                    # end_connection() + on_wifi_connected() when done.
+                    pass
+                elif not is_ap_mode_active():
+                    logger.warning("AP died unexpectedly — marking exhausted")
+                    self._transition_to(NetworkState.AP_EXHAUSTED)
+                elif self._elapsed() >= self._config.get(
+                    "ap_max_duration_seconds", 600,
+                ):
+                    logger.warning(
+                        "AP auto-stop after %ds", int(self._elapsed()),
+                    )
+                    self._transition_to(NetworkState.AP_EXHAUSTED)
 
-        # ── Terminal state: AP already exhausted ──────────────────
-        if self._exhausted:
-            # Ensure wlan0 is in managed mode so NetworkManager can
-            # auto-connect to saved WiFi (if any).  _stop_ap is
-            # idempotent — safe to call even if AP is already down.
-            _stop_ap()
+            elif self._state == NetworkState.AP_EXHAUSTED:
+                # Still check connectivity — WiFi may come back
+                if self._is_any_connected():
+                    self._transition_to(NetworkState.CLIENT_CONNECTED)
+                elif is_ap_mode_active():
+                    # Guard: only run sudo commands when actually needed
+                    _stop_ap()
+
+            return (
+                self._state,
+                self._pin,
+                list(self._pending_actions),
+            )
+
+    # -- Transition (single writer under lock) -----------------------------
+
+    def _transition_to(self, new_state: NetworkState) -> None:
+        """Move to *new_state*, performing all side effects atomically.
+
+        Queues the new state as a pending action so the monitor thread
+        can show/hide the appropriate popups regardless of which thread
+        triggered the transition.
+        """
+        old = self._state
+        if old == new_state:
             return
 
-        # ── AP is currently active — check for timeout ────────────
-        if self._ap_start > 0:
-            # AP crashed or was killed externally (OOM, driver error,
-            # someone ran `systemctl stop hostapd`).  Treat the same
-            # as a timeout — stop the AP (returns wlan0 to managed
-            # mode) and never reactivate.
-            if not is_ap_mode_active():
-                logger.warning(
-                    "AP died unexpectedly — stopping and marking exhausted"
-                )
-                _stop_ap()  # Ensure wlan0 returns to managed mode
+        self._state = new_state
+        self._state_entered = time.monotonic()
+        self._pending_actions.append(new_state)
+
+        # ── Enter CLIENT_CONNECTED ─────────────────────────────────
+        if new_state == NetworkState.CLIENT_CONNECTED:
+            if is_ap_mode_active():
+                _stop_ap()
+            self._pin = ""
+            self._pin_attempts = 0
+            self._pin_locked_until = 0.0
+            self._pin_displayed = False
+
+        # ── Enter AP_ACTIVE ────────────────────────────────────────
+        elif new_state == NetworkState.AP_ACTIVE:
+            self._pin = f"{random.randint(0, 9999):04d}"
+            self._pin_attempts = 0
+            self._pin_locked_until = 0.0
+            logger.info("AP PIN generated: %s", self._pin)
+            pre_scan_for_ap()
+            if not _start_ap():
+                logger.error("AP start failed — will retry next tick")
                 self._pin = ""
-                self._pin_attempts = 0
-                self._exhausted = True
-                self._ap_start = 0.0
-                self._grace_start = 0.0
-                self._phase = NetworkPhase.AP_EXHAUSTED
-                self._pin_displayed = False
+                self._state = old
+                self._pending_actions.pop()
                 return
 
-            elapsed = now - self._ap_start
-            max_duration = self._config.get("ap_max_duration_seconds", 600)
-            if elapsed >= max_duration:
-                logger.warning(
-                    "AP auto-stop after %ds — no user connected; "
-                    "AP will not reactivate until next reboot",
-                    int(elapsed),
-                )
-                _stop_ap()
-                self._pin = ""
-                self._pin_attempts = 0
-                self._exhausted = True
-                self._ap_start = 0.0
-                self._grace_start = 0.0
-                self._phase = NetworkPhase.AP_EXHAUSTED
-                self._pin_displayed = False
-                # wlan0 is now back in managed mode (stop_ap_mode did it).
-                # NetworkManager will auto-connect to any saved network.
-            return
-
-        # ── No saved networks?  Skip grace, go straight to AP ─────
-        if not has_saved_wifi_networks():
-            self._activate_ap()
-            return
-
-        # ── Start or continue grace period ─────────────────────────
-        if self._grace_start == 0.0:
-            self._grace_start = now
-            self._phase = NetworkPhase.GRACE_PERIOD
-            logger.info(
-                "Network lost — entering grace period (%ds)",
-                self._config.get("ap_grace_period_seconds", 300),
-            )
-            return
-
-        grace_elapsed = now - self._grace_start
-        grace_limit = self._config.get("ap_grace_period_seconds", 300)
-        if grace_elapsed >= grace_limit:
-            logger.warning(
-                "Grace period expired after %ds — activating AP fallback",
-                int(grace_elapsed),
-            )
-            self._activate_ap()
-
-    def _activate_ap(self) -> None:
-        """Activate the AP fallback with a fresh PIN."""
-        if is_ap_mode_active():
-            return  # Already active
-
-        self._pin = f"{random.randint(0, 9999):04d}"
-        self._pin_attempts = 0
-        self._pin_locked_until = 0.0
-        logger.info("AP PIN generated: %s", self._pin)
-
-        pre_scan_for_ap()
-        if _start_ap():
-            self._ap_start = time.monotonic()
-            self._phase = NetworkPhase.AP_ACTIVE
-            self._grace_start = 0.0
-            logger.info("AP fallback activated (PIN: %s)", self._pin)
-        else:
-            logger.error("AP fallback activation failed — will retry on next tick")
+        # ── Enter AP_EXHAUSTED ─────────────────────────────────────
+        elif new_state == NetworkState.AP_EXHAUSTED:
+            _stop_ap()
             self._pin = ""
+            self._pin_attempts = 0
+            self._pin_displayed = False
+
+        # ── Enter CLIENT_DISCONNECTED (no side effects) ────────────
+        # Just start the grace-period clock.  No AP yet.
+
+        logger.info("State: %s → %s", old.value, new_state.value)
+
+    # -- Connectivity helpers (called under lock) --------------------------
+
+    def _is_any_connected(self) -> bool:
+        """Check for any upstream connection, gated by current state.
+
+        Ethernet is always safe to check.  WiFi nmcli queries are
+        blocked while the AP is active to avoid radio disruption.
+        """
+        if self._is_ethernet_connected():
+            return True
+        if self._state != NetworkState.AP_ACTIVE:
+            return is_connected()
+        return False
+
+    @staticmethod
+    def _is_ethernet_connected() -> bool:
+        """Check specifically for an active Ethernet connection.
+
+        Uses nmcli but only queries Ethernet — safe alongside an AP.
+        """
+        try:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"],
+                capture_output=True, text=True, timeout=5,
+            )
+            for line in result.stdout.strip().splitlines():
+                parts = line.split(":")
+                if len(parts) >= 3 and parts[1] == "ethernet" and parts[2] == "connected":
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def _elapsed(self) -> float:
+        """Seconds since the current state was entered."""
+        return time.monotonic() - self._state_entered
 
     # -- PIN validation — called from Flask request threads ----------------
 
@@ -239,24 +269,20 @@ class NetworkController:
             (valid, message) tuple.
         """
         with self._lock:
-            # Never pass when no PIN is active
             if not self._pin:
                 return False, "No PIN active — network may have reconnected"
 
             now = time.monotonic()
 
-            # Cooldown check
             if self._pin_locked_until > 0 and now < self._pin_locked_until:
                 remaining = int(self._pin_locked_until - now)
                 return False, f"Too many attempts. Try again in {remaining}s."
 
-            # Validate
             if candidate == self._pin:
                 self._pin_attempts = 0
                 logger.info("AP PIN validated successfully")
                 return True, "ok"
 
-            # Wrong PIN
             self._pin_attempts += 1
             remaining = MAX_PIN_ATTEMPTS - self._pin_attempts
 
@@ -275,27 +301,28 @@ class NetworkController:
             )
             return False, f"Incorrect PIN. {remaining} attempt(s) remaining."
 
-    def clear_pin(self) -> None:
-        """Clear the active PIN (called when WiFi connects)."""
-        with self._lock:
-            self._pin = ""
-            self._pin_attempts = 0
-            self._pin_locked_until = 0.0
-
-    # -- Called by web routes after a successful WiFi connection ------------
+    # -- Called by web routes -------------------------------------------------
 
     def on_wifi_connected(self) -> None:
-        """Notify the controller that WiFi has been connected via the API."""
+        """Notify that WiFi has been connected via the captive portal or API."""
         with self._lock:
-            if is_ap_mode_active():
-                _stop_ap()
-            self._pin = ""
-            self._pin_attempts = 0
-            self._pin_locked_until = 0.0
-            self._grace_start = 0.0
-            self._ap_start = 0.0
-            self._phase = NetworkPhase.MONITORING
-            self._pin_displayed = False
+            self._transition_to(NetworkState.CLIENT_CONNECTED)
+
+    # -- Connection-in-progress guard --------------------------------------
+
+    def begin_connection(self) -> None:
+        """Tell the controller a WiFi connection attempt is about to start.
+
+        The AP will be intentionally stopped for scanning — the monitor
+        tick must NOT treat this as an unexpected AP death.
+        """
+        with self._lock:
+            self._connecting = True
+
+    def end_connection(self) -> None:
+        """Clear the connection-in-progress flag (success or failure)."""
+        with self._lock:
+            self._connecting = False
 
     # -- Display helpers (for the monitor's use) ---------------------------
 
@@ -308,8 +335,3 @@ class NetworkController:
         """Called by the monitor after dismissing the PIN from screen."""
         with self._lock:
             self._pin_displayed = False
-
-    @property
-    def pin_displayed(self) -> bool:
-        with self._lock:
-            return self._pin_displayed
