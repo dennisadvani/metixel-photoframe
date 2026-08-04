@@ -5,6 +5,39 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.5-beta.5]
+
+### Added
+
+- **Pi 2 / Ethernet-only support** — ``is_wifi_hardware_present()`` check
+  prevents the controller from attempting AP activation on devices without
+  WiFi hardware; the controller stays in ``CLIENT_CONNECTED`` or
+  ``CLIENT_DISCONNECTED`` based on Ethernet state and never retries AP
+- **Stale AP cleanup on boot** — the controller now kills any leftover
+  hostapd instance on initialisation, preventing the captive portal from
+  blocking the web dashboard after an unclean shutdown
+
+### Changed
+
+- **AP startup delay eliminated** — removed the daemon's forced
+  ``ap_timeout_seconds`` wait on boot; the controller now owns all timing
+  (immediate AP when no saved networks, 5‑minute grace period when saved
+  WiFi exists)
+- **Boot screen message timing** — 10 s delay after slideshow start ensures
+  the boot screen fade-out completes before welcome or PIN messages appear
+- **Setup script prompts before install** — channel and WiFi country
+  questions are now asked before git is installed; answers flow through
+  to Phase 1 via environment variables so the user is never re‑prompted
+- **Beta channel pins to pre-release tags** — the setup script now checks
+  out the latest ``v*-beta.*`` tag on ``main`` for beta channel installs
+  instead of tracking the ``dev`` branch, matching the OTA updater's
+  behaviour
+
+### Fixed
+
+- **Captive portal blocking dashboard after reboot** — hostapd left running
+  from a previous AP session is now stopped at controller init
+
 ## [1.0.4-beta.4]
 
 ### Added

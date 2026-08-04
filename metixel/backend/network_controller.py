@@ -43,6 +43,7 @@ from metixel.backend.network_manager import (  # noqa: E402
     has_saved_wifi_networks,
     is_ap_mode_active,
     is_connected,
+    is_wifi_hardware_present,
     pre_scan_for_ap,
     scan_networks,
     start_ap_mode as _start_ap,
@@ -93,6 +94,16 @@ class NetworkController:
         # ── Display tracking ───────────────────────────────────────
         self._pin_displayed: bool = False
 
+        # ── Clean up stale AP from previous boot ───────────────────
+        # If the Pi was powered off while in AP mode, hostapd may still
+        # be running on next boot.  The controller initialises as
+        # CLIENT_CONNECTED and never calls _transition_to if the state
+        # doesn't change, so the stale AP is never stopped — and the
+        # captive portal blocks the dashboard.  Kill it on init.
+        if is_ap_mode_active():
+            logger.warning("Stale AP detected at init — stopping")
+            _stop_ap()
+
     # -- Properties (thread-safe reads) ------------------------------------
 
     @property
@@ -120,6 +131,21 @@ class NetworkController:
         """
         with self._lock:
             self._pending_actions.clear()
+
+            # ── Ethernet-only device (Pi 2, no wlan0) ──────────
+            # Skip all WiFi/AP logic — the device can never create
+            # an access point.  Just track Ethernet connectivity.
+            if not is_wifi_hardware_present():
+                if self._is_any_connected():
+                    if self._state != NetworkState.CLIENT_CONNECTED:
+                        self._transition_to(NetworkState.CLIENT_CONNECTED)
+                elif self._state != NetworkState.CLIENT_DISCONNECTED:
+                    self._transition_to(NetworkState.CLIENT_DISCONNECTED)
+                return (
+                    self._state,
+                    self._pin,
+                    list(self._pending_actions),
+                )
 
             if self._state == NetworkState.CLIENT_CONNECTED:
                 if not self._is_any_connected():
