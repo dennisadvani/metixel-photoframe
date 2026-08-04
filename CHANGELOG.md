@@ -5,6 +5,27 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Welcome messages not auto-dismissing** — the message layer timer was
+  being reset every frame while a video played, preventing the 2‑minute
+  auto-dismiss from ever firing; now tracks accumulated visible time with
+  proper pause/resume during video playback
+- **Web UI welcome dismiss not clearing on‑screen messages** — dismissing
+  the welcome banner in the dashboard now sends ``dismiss_all_messages``
+  IPC to the frontend so the frame display popups disappear immediately
+- **``config.example.json`` video defaults** — ``playback_enabled``
+  corrected from ``false`` to ``true`` and ``max_duration_seconds`` from
+  ``120`` to ``0`` (unlimited), matching the Python defaults
+
+### Added
+
+- **User Guide** — new ``docs/USER_GUIDE.md`` covering first‑time setup,
+  getting online, adding media, the dashboard, customisation, updates, and
+  troubleshooting
+
 ## [1.0.5-beta.5]
 
 ### Added

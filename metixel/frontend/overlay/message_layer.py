@@ -70,7 +70,8 @@ class _Message:
     """Internal message state."""
     __slots__ = ("id", "icon", "title", "body", "severity", "duration",
                  "created_at", "state", "_anim_start", "_from_x", "_to_x",
-                 "_x", "_alpha", "_y")
+                 "_x", "_alpha", "_y", "_visible_start", "_paused_since",
+                 "_paused_total")
     def __init__(self, msg_id, icon, title, body, severity, duration):
         self.id = msg_id
         self.icon = icon
@@ -86,6 +87,9 @@ class _Message:
         self._x = 0.0
         self._alpha = 0.0
         self._y = 0.0
+        self._visible_start = 0.0   # when the message became visible
+        self._paused_since = 0.0    # monotonic; 0 = not paused by video
+        self._paused_total = 0.0    # accumulated seconds paused by video
 
     @property
     def active(self) -> bool:
@@ -172,17 +176,29 @@ class MessageLayer(OverlayLayer):
             if t >= 1.0:
                 m.state = "visible"
                 m._alpha = 1.0
-                m._anim_start = now
+                m._visible_start = now
+                m._paused_since = 0.0
+                m._paused_total = 0.0
             else:
                 # ease_out_cubic
                 et = 1.0 - (1.0 - t) ** 3
                 m._alpha = min(1.0, t / 0.5)
         elif m.state == "visible":
             if self._video_playing:
-                # Reset timer while VLC covers the screen
-                m._anim_start = now
-            elif m.duration > 0 and (now - m._anim_start) >= m.duration:
-                self._start_dismiss(m)
+                # Pause the auto-dismiss timer while a video covers the
+                # screen — the user can't see the message.  Accumulate
+                # paused time instead of resetting the clock (old bug:
+                # resetting _anim_start every frame meant messages
+                # never dismissed if any video played).
+                if m._paused_since == 0.0:
+                    m._paused_since = now
+            else:
+                if m._paused_since > 0.0:
+                    m._paused_total += now - m._paused_since
+                    m._paused_since = 0.0
+                effective = (now - m._visible_start - m._paused_total)
+                if m.duration > 0 and effective >= m.duration:
+                    self._start_dismiss(m)
         elif m.state == "sliding_out":
             t = (now - m._anim_start) * 1000.0 / SLIDE_OUT_MS
             if t >= 1.0:

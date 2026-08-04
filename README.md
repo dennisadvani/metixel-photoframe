@@ -131,6 +131,7 @@ sudo journalctl -u metixel-backend -f    # Follow logs
 
 | Document | Content |
 |---|---|
+| **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** | Full user guide — setup, adding media, customising, troubleshooting |
 | **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** | Quick-start guide — 10 minutes to first slideshow |
 | **[docs/INSTALLATION.md](docs/INSTALLATION.md)** | Both install methods in detail (image + manual) |
 | **[docs/WIFI_SETUP.md](docs/WIFI_SETUP.md)** | All Wi-Fi connection methods (captive portal, Ethernet, SSH, etc.) |
