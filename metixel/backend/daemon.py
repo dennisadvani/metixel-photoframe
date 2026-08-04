@@ -251,6 +251,11 @@ class BackendDaemon:
             timeout,
         )
 
+        # Give the boot screen time to finish its fade-out animation
+        # before showing any messages (welcome, PIN, etc.).  The fade
+        # takes ~0.8s — 2s is a safe buffer.
+        time.sleep(10.0)
+
         # ── Initial boot: only wait if NOT already connected ──────
         # If Ethernet or saved WiFi is already up, show the welcome
         # message immediately.  Only delay when there's no network

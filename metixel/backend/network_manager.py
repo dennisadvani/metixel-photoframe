@@ -84,6 +84,24 @@ def has_saved_wifi_networks() -> bool:
         return False
 
 
+def is_wifi_hardware_present() -> bool:
+    """Check whether WiFi hardware exists on this device.
+
+    Returns False on models without built-in WiFi (e.g. Pi 2) or when
+    the interface is absent.  The controller uses this to skip AP
+    activation entirely rather than retrying indefinitely on devices
+    that can never create an access point.
+    """
+    try:
+        result = subprocess.run(
+            ["ip", "link", "show", "wlan0"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return "wlan0:" in result.stdout
+    except Exception:
+        return False
+
+
 def is_connected() -> bool:
     """Quick check: do we have a real network connection?
 

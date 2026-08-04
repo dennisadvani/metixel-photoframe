@@ -46,8 +46,42 @@ fi
 
 if [ "${INSIDE_REPO}" = false ]; then
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     Metixel Photoframe — Bootstrap                           ║"
-    echo "║     Cloning repository before running full setup...          ║"
+    echo "║     Metixel Photoframe — Setup                              ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # ── Ask questions BEFORE touching the system ──────────────────
+    # Nothing is installed or modified until the user confirms below.
+
+    echo "Release channel:"
+    echo "  stable = Latest stable release (recommended)"
+    echo "  beta   = Pre-release with latest features"
+    read -p "  Channel [stable]: " RELEASE_CHANNEL
+    RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
+    case "$RELEASE_CHANNEL" in
+        stable|beta) ;;
+        *)
+            echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
+            RELEASE_CHANNEL="stable"
+            ;;
+    esac
+    echo "  → Using ${RELEASE_CHANNEL} channel"
+    echo ""
+
+    echo "WiFi country code (e.g. AU, US, GB, DE, NZ):"
+    echo "  This sets the regulatory domain for correct channel availability."
+    read -p "  Country code [AU]: " WIFI_COUNTRY
+    WIFI_COUNTRY="${WIFI_COUNTRY:-AU}"
+    WIFI_COUNTRY=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
+    echo "  → WiFi country: ${WIFI_COUNTRY}"
+    echo ""
+
+    echo "Ready to install. This will take 30–60 minutes."
+    read -p "Press Enter to continue or Ctrl+C to cancel..."
+    echo ""
+
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║     Cloning repository and running full setup...            ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 
@@ -80,7 +114,10 @@ if [ "${INSIDE_REPO}" = false ]; then
 
     echo "[bootstrap] Repository ready. Running full setup..."
     echo ""
-    exec bash /opt/metixel/scripts/setup_trixie_metixel.sh
+    # Pass answers through environment variables so Phase 1 doesn't re-prompt
+    exec env METIXEL_CHANNEL="${RELEASE_CHANNEL}" \
+             METIXEL_WIFI_COUNTRY="${WIFI_COUNTRY}" \
+        bash /opt/metixel/scripts/setup_trixie_metixel.sh
     # exec replaces this process — we never reach here
     exit 0
 fi
@@ -96,21 +133,39 @@ echo "Project root: ${METIXEL_DIR}"
 echo "Target: Raspberry Pi 2/3/4/5 (Trixie)"
 echo ""
 
-# -- Upfront prompts (before any packages are installed) ---------------------
+# -- Release channel & WiFi country (from env or prompt) --------------------
 
-echo "Release channel:"
-echo "  stable = Latest stable release (recommended)"
-echo "  beta   = Pre-release with latest features"
-read -p "  Channel [stable]: " RELEASE_CHANNEL
-RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
-case "$RELEASE_CHANNEL" in
-    stable|beta) ;;
-    *)
-        echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
-        RELEASE_CHANNEL="stable"
-        ;;
-esac
+# If passed via environment from Phase 0 bootstrap, use those values.
+# Otherwise prompt (e.g. when running the script directly from the repo).
+RELEASE_CHANNEL="${METIXEL_CHANNEL:-}"
+WIFI_COUNTRY="${METIXEL_WIFI_COUNTRY:-}"
+
+if [ -z "${RELEASE_CHANNEL}" ]; then
+    echo "Release channel:"
+    echo "  stable = Latest stable release (recommended)"
+    echo "  beta   = Pre-release with latest features"
+    read -p "  Channel [stable]: " RELEASE_CHANNEL
+    RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
+    case "$RELEASE_CHANNEL" in
+        stable|beta) ;;
+        *)
+            echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
+            RELEASE_CHANNEL="stable"
+            ;;
+    esac
+fi
 echo "  → Using ${RELEASE_CHANNEL} channel"
+
+if [ -z "${WIFI_COUNTRY}" ]; then
+    echo ""
+    echo "WiFi country code (e.g. AU, US, GB, DE, NZ):"
+    echo "  This sets the regulatory domain for correct channel availability."
+    read -p "  Country code [AU]: " WIFI_COUNTRY
+    WIFI_COUNTRY="${WIFI_COUNTRY:-AU}"
+    WIFI_COUNTRY=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
+fi
+echo "  → WiFi country: ${WIFI_COUNTRY}"
+echo ""
 
 # Switch the repository to the correct version before installing anything.
 # Both channels pin to the latest release tag on the main branch —
@@ -142,21 +197,6 @@ if [ -n "${LATEST_TAG}" ]; then
 else
     echo "  → No ${RELEASE_CHANNEL} tag found — staying on main branch HEAD"
 fi
-
-echo ""
-
-echo "WiFi country code (e.g. AU, US, GB, DE, NZ):"
-echo "  This sets the regulatory domain for correct channel availability."
-read -p "  Country code [AU]: " WIFI_COUNTRY
-WIFI_COUNTRY="${WIFI_COUNTRY:-AU}"
-WIFI_COUNTRY=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
-echo "  → WiFi country: ${WIFI_COUNTRY}"
-
-echo ""
-echo "Ready to install. This will take several minutes."
-read -p "Press Enter to continue or Ctrl+C to cancel..."
-
-echo ""
 
 # -- System packages ---------------------------------------------------------
 # -- System packages ---------------------------------------------------------
