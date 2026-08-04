@@ -113,34 +113,34 @@ esac
 echo "  → Using ${RELEASE_CHANNEL} channel"
 
 # Switch the repository to the correct version before installing anything.
+# Both channels pin to the latest release tag on the main branch —
+# stable uses non-prerelease tags (v1.0.0), beta uses pre-release tags
+# (v1.0.4-beta.4).
 cd "${METIXEL_DIR}"
 git fetch origin --tags 2>/dev/null || true
 
+# Ensure we're on main before looking for tags
+git checkout main 2>/dev/null || true
+git pull --ff-only 2>/dev/null || true
+
 if [ "${RELEASE_CHANNEL}" = "stable" ]; then
-    # Pin to the latest non-prerelease semantic version tag (e.g. v1.0.0).
-    # Only tags matching v<number>.<number>.<number> are considered — beta/rc
-    # pre-release tags (v1.0.3-beta.3) are excluded.
+    # Latest non-prerelease tag (e.g. v1.0.0) — excludes tags with "-"
     LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]' \
         | grep -v -- '-' \
         | sort -V \
         | tail -1)
-    if [ -n "${LATEST_TAG}" ]; then
-        git checkout "${LATEST_TAG}" 2>/dev/null || true
-        echo "  → Pinned to ${LATEST_TAG} (stable)"
-    else
-        echo "  → No stable tag found — falling back to main branch"
-        git checkout main 2>/dev/null || true
-        git pull --ff-only 2>/dev/null || true
-    fi
 else
-    # Beta tracks the dev branch — always gets the latest commit
-    if git show-ref --verify --quiet "refs/remotes/origin/dev"; then
-        git checkout dev 2>/dev/null || true
-        git pull --ff-only 2>/dev/null || true
-        echo "  → Tracking dev branch (beta)"
-    else
-        echo "  → dev branch not found — staying on current branch"
-    fi
+    # Latest pre-release tag (e.g. v1.0.4-beta.4)
+    LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]-*' \
+        | sort -V \
+        | tail -1)
+fi
+
+if [ -n "${LATEST_TAG}" ]; then
+    git checkout "${LATEST_TAG}" 2>/dev/null || true
+    echo "  → Pinned to ${LATEST_TAG} (${RELEASE_CHANNEL})"
+else
+    echo "  → No ${RELEASE_CHANNEL} tag found — staying on main branch HEAD"
 fi
 
 echo ""
