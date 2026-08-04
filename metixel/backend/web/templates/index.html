@@ -478,7 +478,10 @@
                     <p class="hint">When no Wi-Fi is available, the frame creates its own hotspot "Metixel-Setup" so you can connect with your phone and configure Wi-Fi.</p>
                     <div class="form-group form-group--stack">
                         <span class="form-label">WiFi Country Code</span>
-                        <input type="text" id="cfg-wifi-country" placeholder="AU" maxlength="2" style="width:80px;text-transform:uppercase" autocomplete="off">
+                        <div style="display:flex;gap:0.4rem;align-items:center">
+                            <input type="text" id="cfg-wifi-country" placeholder="AU" maxlength="2" style="width:80px;text-transform:uppercase" autocomplete="off">
+                            <button id="btn-save-wifi-country" class="btn--sm btn--primary" style="font-size:0.78rem;padding:3px 8px">Save</button>
+                        </div>
                         <p class="hint" style="margin-top:0.15rem">Two-letter ISO 3166-1 code (AU, US, GB, DE, etc.). Sets the regulatory domain for correct channel availability. Requires reboot to take full effect.</p>
                     </div>
                     <label class="checkbox-row">

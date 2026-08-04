@@ -13,7 +13,6 @@ dnsmasq, which are configured by ``scripts/setup_ap.sh``.
 from __future__ import annotations
 
 import logging
-import random
 import subprocess
 import time
 from typing import Any
@@ -39,21 +38,6 @@ DEFAULT_CONNECTIVITY_URL = "http://connectivity-check.ubuntu.com"
 
 _cached_scan: list[dict[str, Any]] = []
 _cached_scan_time: float = 0.0
-SCAN_CACHE_TTL = 300  # 5 minutes
-
-# ---------------------------------------------------------------------------
-# PIN-based security for AP re-activation
-# ---------------------------------------------------------------------------
-
-MAX_PIN_ATTEMPTS = 3
-PIN_COOLDOWN_SECONDS = 600  # 10 minutes
-
-_pin_state: dict[str, Any] = {
-    "pin": "",           # current valid 4-digit PIN (empty = no PIN required)
-    "attempts": 0,        # failed attempts since last reset
-    "locked_until": 0.0,  # monotonic timestamp; 0 = not locked
-}
-
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -98,89 +82,6 @@ def has_saved_wifi_networks() -> bool:
     except Exception:
         logger.debug("Saved Wi-Fi check failed", exc_info=True)
         return False
-
-
-# -- PIN management (security gate for AP re-activation) ------------------
-
-
-def generate_ap_pin() -> str:
-    """Generate a new random 4-digit PIN for AP re-activation security.
-
-    When the frame was previously configured with Wi-Fi and the network
-    drops, the AP falls back with a PIN gate.  The PIN is displayed on
-    the frame's screen and must be entered on the captive portal before
-    Wi-Fi reconfiguration is allowed.
-
-    Returns the new PIN string.
-    """
-    pin = f"{random.randint(0, 9999):04d}"
-    _pin_state["pin"] = pin
-    _pin_state["attempts"] = 0
-    _pin_state["locked_until"] = 0.0
-    logger.info("AP PIN generated: %s", pin)
-    return pin
-
-
-def clear_ap_pin() -> None:
-    """Clear the current AP PIN (e.g. when network reconnects)."""
-    _pin_state["pin"] = ""
-    _pin_state["attempts"] = 0
-    _pin_state["locked_until"] = 0.0
-
-
-def get_active_pin() -> str:
-    """Return the currently active PIN, or empty string if none is set."""
-    return _pin_state["pin"]
-
-
-def is_pin_required() -> bool:
-    """Check whether PIN validation is required for AP reconfiguration.
-
-    Returns True whenever a PIN is active.  All AP fallback activations
-    are PIN-gated — fresh install or re-activation, same flow.
-    """
-    return bool(_pin_state["pin"])
-
-
-def validate_ap_pin(candidate: str) -> tuple[bool, str]:
-    """Validate a PIN entered on the captive portal.
-
-    Args:
-        candidate: The 4-digit PIN entered by the user.
-
-    Returns:
-        (valid, message) tuple.  After MAX_PIN_ATTEMPTS failures the PIN
-        is locked for PIN_COOLDOWN_SECONDS.
-    """
-    active = _pin_state["pin"]
-    if not active:
-        return True, "ok"  # No PIN active — allow through (fresh install)
-
-    now = time.monotonic()
-
-    # Check cooldown
-    if _pin_state["locked_until"] > 0 and now < _pin_state["locked_until"]:
-        remaining = int(_pin_state["locked_until"] - now)
-        return False, f"Too many attempts. Try again in {remaining} seconds."
-
-    # Check PIN
-    if candidate == active:
-        _pin_state["attempts"] = 0
-        logger.info("AP PIN validated successfully")
-        return True, "ok"
-
-    # Wrong PIN
-    _pin_state["attempts"] += 1
-    remaining = MAX_PIN_ATTEMPTS - _pin_state["attempts"]
-
-    if _pin_state["attempts"] >= MAX_PIN_ATTEMPTS:
-        _pin_state["locked_until"] = now + PIN_COOLDOWN_SECONDS
-        _pin_state["attempts"] = 0
-        logger.warning("AP PIN locked after %d failed attempts", MAX_PIN_ATTEMPTS)
-        return False, f"Too many attempts. Try again in {PIN_COOLDOWN_SECONDS} seconds."
-
-    logger.warning("AP PIN validation failed (%d/%d attempts)", _pin_state["attempts"], MAX_PIN_ATTEMPTS)
-    return False, f"Incorrect PIN. {remaining} attempt(s) remaining."
 
 
 def is_connected() -> bool:
@@ -255,39 +156,28 @@ def pre_scan_for_ap() -> None:
         logger.warning("Pre-scan for AP failed", exc_info=True)
 
 
-def scan_networks(force_live: bool = False) -> list[dict[str, Any]]:
+def scan_networks() -> list[dict[str, Any]]:
     """Scan for visible Wi-Fi networks.
 
-    Uses a pre-AP cached scan when available (the Pi's WiFi chip can't
-    scan while in AP mode).  Set ``force_live=True`` to bypass the cache
-    — this will briefly drop the AP, disconnecting captive portal clients.
+    When the AP is active, returns cached pre-scan data (the Pi's WiFi
+    chip can't scan while in AP mode).  When the AP is not active,
+    performs a live scan.
 
     Returns a list of dicts with keys:
         ssid, signal (0-100), security (e.g. "WPA2"), freq (MHz)
     """
     global _cached_scan, _cached_scan_time
 
-    # Serve cached results when AP is active (avoid disconnecting clients)
-    if not force_live and is_ap_mode_active():
-        if _cached_scan and (time.monotonic() - _cached_scan_time) < SCAN_CACHE_TTL:
+    # Serve cached results when AP is active (avoid disconnecting clients).
+    # NEVER do a live scan while the AP is broadcasting — it tears down
+    # hostapd, drops connected clients, and kills the captive portal.
+    # Pre-scan data (captured before AP activation) is served indefinitely.
+    if is_ap_mode_active():
+        if _cached_scan:
             logger.debug("Serving %d cached scan result(s)", len(_cached_scan))
-            return list(_cached_scan)
-        # Cache expired or empty — do a live scan (will briefly drop AP)
-        logger.info("Scan cache expired — performing live scan (AP will drop briefly)")
+        return list(_cached_scan) if _cached_scan else []
 
-    # If AP is running and we need a live scan, stop it temporarily
-    ap_was_active = is_ap_mode_active()
-    if ap_was_active:
-        subprocess.run(
-            ["sudo", "systemctl", "stop", HOSTAPD_UNIT],
-            capture_output=True, timeout=5,
-        )
-        subprocess.run(
-            ["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"],
-            capture_output=True, timeout=5,
-        )
-        time.sleep(1.0)
-
+    # AP is NOT active — safe to do a live scan
     try:
         subprocess.run(
             ["nmcli", "device", "wifi", "rescan"],
@@ -303,16 +193,6 @@ def scan_networks(force_live: bool = False) -> list[dict[str, Any]]:
     except Exception:
         logger.warning("Wi-Fi scan failed", exc_info=True)
         return list(_cached_scan) if _cached_scan else []
-    finally:
-        if ap_was_active:
-            subprocess.run(
-                ["sudo", "nmcli", "device", "set", "wlan0", "managed", "no"],
-                capture_output=True, timeout=5,
-            )
-            subprocess.run(
-                ["sudo", "systemctl", "start", HOSTAPD_UNIT],
-                capture_output=True, timeout=5,
-            )
 
 
 def _parse_scan_results() -> list[dict[str, Any]]:
@@ -372,7 +252,14 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
     ap_was_active = is_ap_mode_active()
     if ap_was_active:
         stop_ap_mode()
-        time.sleep(1.0)
+        # After leaving AP mode, wlan0 needs a scan to discover networks.
+        # Without this, nmcli fails with "No network with SSID 'X' found."
+        time.sleep(2.0)
+        subprocess.run(
+            ["nmcli", "device", "wifi", "rescan"],
+            capture_output=True, timeout=15,
+        )
+        time.sleep(3.0)  # Wait for scan results to populate
 
     try:
         cmd = ["sudo", "nmcli", "-w", str(CONNECT_TIMEOUT), "device", "wifi", "connect", ssid]
@@ -385,14 +272,23 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
             return True, f"Connected to {ssid}"
         else:
             err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
-            # nmcli often puts useful messages in stdout even on failure
             logger.warning("Failed to connect to %s: %s", ssid, err)
+            # Restart the AP if the connection failed — otherwise the
+            # controller detects the missing AP as a crash, marks
+            # AP_EXHAUSTED permanently, and the user is locked out.
+            if ap_was_active:
+                logger.info("Restarting AP after failed connection attempt")
+                start_ap_mode()
             return False, _friendly_error(err)
     except subprocess.TimeoutExpired:
         logger.warning("Connection attempt to %s timed out", ssid)
+        if ap_was_active:
+            start_ap_mode()
         return False, "Connection timed out — please check the password and try again"
     except Exception:
         logger.exception("Connection attempt to %s failed", ssid)
+        if ap_was_active:
+            start_ap_mode()
         return False, "Connection failed — please try again"
 
 
@@ -450,7 +346,6 @@ def get_connection_status() -> dict[str, Any]:
         "security": "",
         "wifi_radio_enabled": is_wifi_radio_enabled(),
         "has_saved_wifi": has_saved_wifi_networks(),
-        "require_pin": is_pin_required(),
     }
 
     try:
@@ -613,6 +508,16 @@ def start_ap_mode() -> bool:
         )
         subprocess.run(
             ["sudo", "ip", "link", "set", "wlan0", "down"],
+            capture_output=True, timeout=5,
+        )
+
+        # Disable kernel-level WiFi power management BEFORE starting
+        # hostapd.  The brcmfmac driver has its own power saving that
+        # suppresses beacons when enabled — the AP shows AP-ENABLED
+        # but NO-CARRIER and is invisible to phones.  Must happen
+        # before hostapd starts so it initialises with beacons on.
+        subprocess.run(
+            ["sudo", "iw", "dev", "wlan0", "set", "power_save", "off"],
             capture_output=True, timeout=5,
         )
 

@@ -121,7 +121,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     samba \
     iptables-persistent \
     hostapd \
-    dnsmasq
+    dnsmasq \
+    iw
 
 # Redirect port 80 → 8080 so the web dashboard is reachable without a port
 # number and the captive portal detection works on port 80.
