@@ -7,12 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.0.3-beta.3]
 
-### Added
-
-- **WiFi-connected system popup** — after a successful WiFi connection via the
-  captive portal, a success message with SSID and IP address now appears on the
-  photo frame display (60 s auto-dismiss)
-
 ### Changed
 
 - **Network Controller rewritten** — `NetworkPhase` flag-based state machine
