@@ -88,6 +88,17 @@ def update_config_section(section: str):
             except Exception:
                 logger.debug("Pipeline reset failed", exc_info=True)
 
+        # When the welcome banner is dismissed (system.first_run → false),
+        # also dismiss all on-screen welcome messages so they don't linger.
+        ipc = current_app.config.get("METIXEL_IPC")
+        if ipc is not None and section == "system" and data.get("first_run") is False:
+            try:
+                from metixel.shared.ipc import ControlMessage
+                ipc.send(ControlMessage(cmd="dismiss_all_messages"))
+                logger.info("Welcome banner dismissed — clearing on-screen messages")
+            except Exception:
+                pass
+
         return jsonify({
             "status": "ok",
             "section": section,
