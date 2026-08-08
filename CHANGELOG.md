@@ -5,6 +5,59 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.8-beta.2]
+
+### Added
+
+- **USB keyboard / wireless remote input handler** — evdev-based listener
+  with learn mode for custom key mapping; supports ``next``, ``prev``,
+  ``pause``, ``resume``, ``toggle_pause``, ``screen_on``, and
+  ``screen_off`` commands; mappings persisted in ``config.json`` under
+  ``input.keyboard_map``
+- **Keyboard/Remote Control card** in Web UI Advanced page — per‑command
+  learn and clear buttons with live key‑code display; learn mode polls
+  for the next keypress and persists the mapping automatically
+- **``toggle_pause`` IPC command** — single‑key pause/resume toggle for
+  keyboard remotes and the Web UI control endpoint; frontend shows a
+  brief "Paused" / "Resumed" feedback popup on the frame display
+- **``_show_feedback()`` helper** in the frontend renderer — on‑screen
+  popup messages for pause, resume, and toggle_pause actions using the
+  existing message layer
+- **OTA system package support** — new ``requirements-system.txt`` lists
+  required system packages (``python3-evdev``); ``UpdateManager``
+  installs any missing packages before the pip step during OTA updates
+- **``input`` config section** — ``keyboard_enabled`` toggle and
+  ``keyboard_map`` dictionary for storing learned key bindings
+
+### Changed
+
+- **Web UI polling** — ``dashboard.js`` switched from ``setInterval`` to
+  ``setTimeout`` chains for dashboard refresh, sync status, log viewer,
+  and processing progress; prevents request‑queue buildup when the
+  browser tab is backgrounded on mobile
+- **``screen_on`` / ``screen_off`` renamed** — display power commands
+  renamed from legacy names across all input handlers (CEC, IR,
+  keyboard, MQTT), IPC protocol, frontend renderer, and the Web UI
+  control endpoint for consistent naming
+- **Pi 3 H.264 Level lowered** — ``h264_level`` reduced from ``4.2`` to
+  ``4.0`` in the Pi 3 transcoding profile to stay within VideoCore IV
+  hardware decode limits (max Level 4.1)
+- **Keyboard handler thread** — started by the backend daemon alongside
+  other input handlers; uses ``selectors``‑based blocking I/O instead of
+  busy‑polling so CPU usage is near‑zero when no keys are pressed
+
+### Fixed
+
+- **Pi 3 video stuttering / 100 % CPU** — videos transcoded at H.264
+  Level 4.2 exceeded VideoCore IV hardware decoder capabilities, causing
+  VLC to fall back to software decode on all 4 cores; re‑transcoding at
+  Level 4.0 enables hardware decode (~5–10 % CPU)
+- **Keyboard learn clear button** — clearing a key mapping via the Web UI
+  now properly removes the defaults for that command instead of wiping
+  all default key bindings; ``set_key_map()`` merges config overrides
+  with defaults, treating an empty list as "clear this command"
+
+
 ## [1.0.8-beta.1]
 
 ### Added
