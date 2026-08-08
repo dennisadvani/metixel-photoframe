@@ -315,10 +315,11 @@ class VideoProcessor:
         if max_fps and src_fps > max_fps:
             return True
 
-        # Bitrate (Mbps)
+        # Bitrate (Mbps) — allow 10 % tolerance because CRF encoding
+        # cannot precisely target an average bitrate.
         max_br = profile.get("max_bitrate", 0)
         src_br = probe_info.get("bitrate", 0) or 0
-        if max_br and src_br > max_br:
+        if max_br and src_br > int(max_br * 1.1):
             return True
 
         # Color depth
