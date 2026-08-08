@@ -422,25 +422,24 @@ if [ -f "${BOOT_CONFIG}" ]; then
         echo "" | tee -a "${BOOT_CONFIG}"
         echo "# Metixel Photoframe — KMS driver for GPU" | tee -a "${BOOT_CONFIG}"
         echo "dtoverlay=vc4-kms-v3d" | tee -a "${BOOT_CONFIG}"
-        # With vc4-kms-v3d, 3D/display use CMA (dynamic).  gpu_mem controls
-        # memory reserved for the hardware video codec block (H.264/MPEG-2).
-        # 16 MB is enough for the KMS display stack but far too low for 1080p
-        # hardware video decode — VideoCore IV needs 128 MB minimum for that.
-        echo "gpu_mem=128" | tee -a "${BOOT_CONFIG}"
+        # Metixel uses software video decode (libVLC + FFmpeg) rather than
+        # the GPU hardware codec block.  16 MB is enough for the KMS display
+        # stack — the remaining RAM goes to the ARM cores for decoding.
+        echo "gpu_mem=16" | tee -a "${BOOT_CONFIG}"
     fi
 
-    # If KMS overlay is already present, still ensure gpu_mem is at least
-    # 128 MB for hardware video decode (the old setup script wrote gpu_mem=16,
-    # and some images like Trixie default to ~8 MB or omit the setting entirely).
+    # If KMS overlay is already present, still ensure gpu_mem is set to
+    # 16 MB.  Some images default to 64–128 MB or omit the setting entirely;
+    # that memory is better used by the CPU for software video decode.
     if grep -q "^gpu_mem=" "${BOOT_CONFIG}"; then
         CURRENT_GPU_MEM=$(grep "^gpu_mem=" "${BOOT_CONFIG}" | head -1 | cut -d= -f2)
-        if [ "${CURRENT_GPU_MEM}" -lt 128 ] 2>/dev/null; then
-            echo "  Upgrading gpu_mem from ${CURRENT_GPU_MEM} to 128 for video decode..."
-            sed -i 's/^gpu_mem=.*/gpu_mem=128/' "${BOOT_CONFIG}"
+        if [ "${CURRENT_GPU_MEM}" -ne 16 ] 2>/dev/null; then
+            echo "  Setting gpu_mem to 16 (was ${CURRENT_GPU_MEM}) for software decode..."
+            sed -i 's/^gpu_mem=.*/gpu_mem=16/' "${BOOT_CONFIG}"
         fi
     else
-        echo "  Adding gpu_mem=128 for hardware video decode..."
-        echo "gpu_mem=128" | tee -a "${BOOT_CONFIG}"
+        echo "  Adding gpu_mem=16 for software decode..."
+        echo "gpu_mem=16" | tee -a "${BOOT_CONFIG}"
     fi
 fi
 
