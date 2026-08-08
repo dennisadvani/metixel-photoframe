@@ -116,7 +116,8 @@ class VideoProcessor:
             "max_width": 1920,
             "max_height": 1080,
             "max_fps": 30,
-            "max_bitrate": 10,   # Mbps
+            "max_bitrate": 8,   # Mbps
+            "bitrate_target": True,  # Use -b:v (target bitrate) instead of CRF
             "h264_profile": "high",
             "h264_level": "4.0",
             "color_depth": 8,
@@ -129,7 +130,8 @@ class VideoProcessor:
             "max_width": 1920,
             "max_height": 1080,
             "max_fps": 30,        # Hard limit — see project requirements
-            "max_bitrate": 20,
+            "max_bitrate": 8,      # Software decode limit: ARM cores tap out ~8-10 Mbps
+            "bitrate_target": True,  # Use -b:v (target bitrate) instead of CRF
             "h264_profile": "high",
             "h264_level": "4.0",   # Pi 3 VideoCore IV HW decode limit: Level 4.1
             "color_depth": 8,
@@ -556,7 +558,17 @@ class VideoProcessor:
                         preset = "ultrafast"
                     else:
                         preset = "superfast"
-                cmd += ["-preset", preset, "-crf", str(crf)]
+
+                # Profiles with ``bitrate_target`` (Pi 2/3, software decode)
+                # use targeted bitrate encoding instead of CRF.  CRF cannot
+                # reliably cap average bitrate — the output can exceed the
+                # profile limit by 30-50 %, choking software decode.
+                if profile.get("bitrate_target"):
+                    target_br = profile.get("max_bitrate", 10)
+                    cmd += ["-preset", preset, "-b:v", f"{target_br}M"]
+                else:
+                    cmd += ["-preset", preset, "-crf", str(crf)]
+
                 if thread_limit is not None and thread_limit > 0:
                     param_key = "-x264-params" if encoder == "libx264" else "-x265-params"
                     cmd += [param_key, f"threads={thread_limit}"]

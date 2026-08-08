@@ -5,6 +5,38 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.11-beta.4]
+
+### Changed
+
+- **Software video decode strategy** — Pi 2/3 now use CPU software decode
+  (libVLC) instead of GPU hardware decode.  ``gpu_mem`` returned to
+  ``16`` MB (1.0.10-beta.3 briefly raised it to ``128``) so more RAM is
+  available to the ARM cores.  Pi 4/5 are unaffected — they continue to
+  use hardware decode via ``rpi-hevc-dec`` / ``drm_avcodec``.
+- **Pi 3 transcode bitrate** — ``max_bitrate`` lowered from ``20`` →
+  ``8`` Mbps, matching the ~8 Mbps software decode ceiling of the
+  Cortex‑A53 cores (measured: 5.6 & 7.7 Mbps play smoothly, ≥10.9 Mbps
+  drops frames).
+- **Bitrate‑targeted encoding for Pi 2/3** — profiles with
+  ``bitrate_target: true`` now use ``-b:v {max_bitrate}M`` (target
+  average bitrate) instead of ``-crf``.  CRF with ``-maxrate`` only caps
+  peaks — the average can still overshoot by 30–50 %, exceeding the
+  software decode ceiling.  ``-b:v`` produces predictable output at the
+  target rate.
+- **Setup script** — ``gpu_mem=16`` for all Pi models, enforced on both
+  fresh installs and existing configs regardless of prior value.
+
+### Fixed
+
+- **Pi 3 choppy video at 10–22 Mbps** — CRF‑encoded files for
+  ``14947567`` (10.9 Mbps) and ``17815074`` (21.5 Mbps) regularly
+  exceeded the ARM software decode ceiling (~8 Mbps), causing frame
+  drops.  Bitrate‑targeted encoding reliably produces ≤8 Mbps output.
+- **Inconsistent ``gpu_mem`` on upgraded installs** — the 1.0.10-beta.3
+  setup script would upgrade ``gpu_mem`` to ``128`` on existing installs;
+  now reverted to ``16``.
+
 ## [1.0.10-beta.3]
 
 ### Fixed
