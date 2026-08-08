@@ -60,7 +60,7 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 ### RAM Requirements
 
-| RAM | Photo Playback | Video Playback | Optimisation | Transcoding |
+| RAM | Photo Playback | Video Playback | Image Optimisation | Video Transcoding |
 |---|---|---|---|---|
 | 512MB | ✅ | ❌ | ❌ | ❌ |
 | 1GB | ✅ | ✅ | ✅ | ✅ Up to 1080p H.264 |
@@ -70,6 +70,7 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 > **Notes:**
 > - A SWAP file is **required** on all models.
 > - Pi 3 and Pi 2 hardware video decoder is limited to **1080p** — higher-resolution video must be transcoded down.
+> - Exhausting memory and swap will cause the Raspberry Pi to lock up and eventually reboot.
 
 **Tested on:** Raspberry Pi 2 (1GB), Pi 3 (1GB), and Pi 5 (2GB) running Debian Trixie (13) Lite.
 

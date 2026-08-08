@@ -224,7 +224,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     iptables-persistent \
     hostapd \
     dnsmasq \
-    iw
+    iw \
+    python3-evdev
 
 # Redirect port 80 → 8080 so the web dashboard is reachable without a port
 # number and the captive portal detection works on port 80.

@@ -434,6 +434,21 @@ git fetch --tags --force origin || echo "WARNING: git fetch failed (continuing)"
 echo "Checking out $REF…"
 git reset --hard "$REF" || echo "WARNING: git checkout failed (continuing)"
 
+# ── Install missing system packages ──
+# New releases may require additional apt packages (e.g. python3-evdev).
+# This is idempotent — already-installed packages are skipped.
+if [ -f "$REPO/requirements-system.txt" ]; then
+    echo "Checking system packages…"
+    while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        [[ "$pkg" =~ ^# ]] && continue
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+            echo "  Installing: $pkg"
+            sudo -n apt-get install -y -qq "$pkg" 2>/dev/null || echo "  WARNING: failed to install $pkg"
+        fi
+    done < "$REPO/requirements-system.txt"
+fi
+
 # ── Reinstall Python package ──
 echo "Reinstalling Python package…"
 pip install --break-system-packages -e "$REPO" || echo "WARNING: pip install failed (continuing)"

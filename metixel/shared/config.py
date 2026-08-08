@@ -97,6 +97,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cec_enabled": True,
         "ir_enabled": False,
         "ir_device": "/dev/lirc0",
+        "keyboard_enabled": True,
+        "keyboard_map": {},  # {code: cmd} — populated by learn mode
     },
     "messages": {
         "enabled": True,

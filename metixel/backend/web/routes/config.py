@@ -506,6 +506,87 @@ def toggle_quiet_boot():
         return jsonify({"status": "error", "message": str(exc)}), 500
 
 
+@config_bp.route("/input/keyboard/map", methods=["GET"])
+def keyboard_map():
+    """Get the current keyboard key mapping."""
+    state = current_app.config["METIXEL_STATE"]
+    input_cfg = state.config.input
+    stored = input_cfg.get("keyboard_map", {}) or {}
+
+    # Include default key names for display
+    result: dict[str, list[dict]] = {}
+    for cmd, codes in stored.items():
+        result[cmd] = []
+        for code in codes:
+            name = _key_name(code)
+            result[cmd].append({"code": code, "name": name})
+    return jsonify({"map": result})
+
+
+@config_bp.route("/input/keyboard/learn", methods=["POST"])
+def keyboard_learn():
+    """Start or check keyboard learn mode.
+
+    POST {"cmd": "start", "target": "pause"} — begin learning.
+    POST {"cmd": "check"} — poll for result.
+    POST {"cmd": "cancel"} — cancel learning.
+    """
+    data = request.get_json(silent=True) or {}
+    action = data.get("cmd", "")
+
+    daemon = current_app.config.get("METIXEL_DAEMON")
+    if not daemon:
+        return jsonify({"error": "Daemon not available"}), 503
+
+    handler = getattr(daemon, "_keyboard_handler", None)
+    if not handler:
+        return jsonify({"error": "Keyboard handler not running"}), 503
+
+    if action == "start":
+        target = data.get("target", "")
+        try:
+            handler.start_learn(target)
+            return jsonify({"status": "learning", "target": target})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+    elif action == "check":
+        result = handler.get_learn_result()
+        if result:
+            code, name = result
+            # Persist the mapping
+            state = current_app.config["METIXEL_STATE"]
+            stored = dict(state.config.input.get("keyboard_map", {}) or {})
+            target = handler._learn_target  # The command being mapped
+            if target and target in stored:
+                codes = list(stored[target])
+            else:
+                codes = []
+            if code not in codes:
+                codes.append(code)
+            if target:
+                stored[target] = codes
+            state.update_config("input", {"keyboard_map": stored})
+            handler.set_key_map(stored)
+            return jsonify({"status": "learned", "code": code, "name": name, "command": target})
+        return jsonify({"status": "waiting"})
+
+    elif action == "cancel":
+        handler.cancel_learn()
+        return jsonify({"status": "cancelled"})
+
+    return jsonify({"error": "Unknown action"}), 400
+
+
+def _key_name(code: int) -> str:
+    """Get a human-readable name for a Linux key code."""
+    try:
+        import evdev
+        return str(evdev.ecodes.KEY.get(code, f"Key {code}"))
+    except ImportError:
+        return f"Key {code}"
+
+
 @config_bp.route("/control", methods=["POST"])
 def send_control():
     """Send a real-time control command to the frontend via IPC.

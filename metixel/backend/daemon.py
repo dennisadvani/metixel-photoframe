@@ -194,6 +194,20 @@ class BackendDaemon:
             t.start()
             self._threads.append(t)
 
+        if config.input.get("keyboard_enabled", True):
+            from metixel.backend.input_handlers.keyboard import KeyboardHandler
+
+            self._keyboard_handler = KeyboardHandler(
+                config=config.input, ipc=self._ipc,
+            )
+            t = threading.Thread(
+                target=self._keyboard_handler.run,
+                name="kbd-handler", daemon=True,
+            )
+            t.start()
+            self._threads.append(t)
+            logger.info("Keyboard input handler started")
+
     def _start_network_monitor(self) -> None:
         """Start the network monitor thread.
 
