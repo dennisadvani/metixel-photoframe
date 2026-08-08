@@ -1301,7 +1301,7 @@
                 transcode_use_software_encoder: true,
                 transcode_timeout_seconds: 7200,
                 cpu_throttle_enabled: true,
-                cpu_throttle_percent: 50,
+                cpu_throttle_percent: 100,
             };
         }
         setChecked("cfg-video-enabled", v.playback_enabled === true);
@@ -1323,9 +1323,9 @@
         setChecked("cfg-transcode-software-encoder", v.transcode_use_software_encoder !== false);
         setValue("cfg-transcode-timeout", v.transcode_timeout_seconds || 7200);
         setChecked("cfg-cpu-throttle-enabled", v.cpu_throttle_enabled !== false);
-        setValue("cfg-cpu-throttle-pct", v.cpu_throttle_percent || 50);
+        setValue("cfg-cpu-throttle-pct", v.cpu_throttle_percent || 100);
         var cpLabel = document.getElementById("cfg-cpu-throttle-pct-label");
-        if (cpLabel) cpLabel.textContent = (v.cpu_throttle_percent || 50) + "%";
+        if (cpLabel) cpLabel.textContent = (v.cpu_throttle_percent || 100) + "%";
         _toggleTranscodeSettings(v.transcoding_enabled !== false);
         _toggleCpuThrottleGroup(v.cpu_throttle_enabled !== false);
 
@@ -1414,7 +1414,7 @@
                     transcode_use_software_encoder: document.getElementById("cfg-transcode-software-encoder").checked,
                     transcode_timeout_seconds: sanitizeInt(document.getElementById("cfg-transcode-timeout").value, 7200),
                     cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
-                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 50),
+                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 100),
                 });
                 if (result) {
                     showToast("Video settings saved!", "success");

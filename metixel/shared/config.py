@@ -58,7 +58,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "transcode_use_software_encoder": True,  # libx264 (best quality); False = try hardware first
         "transcode_timeout_seconds": 7200,  # max time per transcode (2 hours)
         "cpu_throttle_enabled": True,
-        "cpu_throttle_percent": 200,  # 0-100 or >100 for multi-core (200 = 2 cores)
+        "cpu_throttle_percent": 100,  # 0-100 or >100 for multi-core (100 = 1 core)
     },
     "sync": {
         "immich": {
@@ -197,7 +197,7 @@ class Config:
                 "transcode_use_software_encoder": True,
                 "transcode_timeout_seconds": 7200,
                 "cpu_throttle_enabled": True,
-                "cpu_throttle_percent": 200,
+                "cpu_throttle_percent": 100,
             }
             self._data["video"] = v
 

@@ -187,7 +187,7 @@ class VideoProcessor:
         self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
-        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 200)
+        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 100)
 
         # Track currently transcoding files (by hash) so we can check guardrails
         self._transcoding: set[str] = set()
@@ -257,7 +257,7 @@ class VideoProcessor:
         self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
-        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 200)
+        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 100)
         logger.debug(
             "VideoProcessor config updated: transcode=%s, max=%dx%d, quality=%d, "
             "sw_encoder=%s, cpu_throttle=%s (%d%%)",
@@ -445,7 +445,7 @@ class VideoProcessor:
             # Mark as transcoding, then transcode
             self._transcoding.add(file_hash)
             try:
-                self._transcode(source_path, cached_path)
+                self._transcode(source_path, cached_path, info)
                 status = TranscodeStatus.TRANSCODED
                 playback_path = cached_path
                 logger.info(
@@ -480,7 +480,7 @@ class VideoProcessor:
     # this is available, skip transcoding and fall back to the original file.
     _MIN_FREE_RAM_FOR_TRANSCODE: int = 192 * 1024 * 1024  # 192 MB
 
-    def _transcode(self, source: Path, dest: Path) -> None:
+    def _transcode(self, source: Path, dest: Path, info: dict | None = None) -> None:
         """Transcode video to the profile's optimal format."""
         profile = self._resolve_profile()
         if profile is None:
@@ -508,7 +508,11 @@ class VideoProcessor:
             f":force_original_aspect_ratio=decrease"
             f",pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
         )
-        if color_depth >= 10:
+        # Color depth: use source depth, capped to profile limit.
+        # Never upscale 8-bit → 10-bit — just wastes bitrate.
+        src_depth = (info or {}).get("color_depth", 8) or 8
+        out_depth = min(src_depth, color_depth)
+        if out_depth >= 10:
             scale_filter += ",format=yuv420p10le"
         else:
             scale_filter += ",format=yuv420p"
@@ -568,8 +572,11 @@ class VideoProcessor:
             if encoder in ("libx264", "libx265"):
                 cmd += ["-refs", "2", "-bf", "0", "-g", "30"]
 
-            # Framerate cap
-            if max_fps and max_fps > 0:
+            # Framerate cap — only reduce, never increase
+            # A 30fps source should not be upscaled to 60fps by -r.
+            # Only apply the cap when the source exceeds max_fps.
+            src_fps = info.get("fps", 0) or 0
+            if max_fps and max_fps > 0 and src_fps > max_fps:
                 cmd += ["-r", str(max_fps)]
 
             # Audio: keep or strip
