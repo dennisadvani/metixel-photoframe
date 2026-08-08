@@ -49,6 +49,47 @@ def get_config_section(section: str):
     return jsonify(config.to_dict()[section])
 
 
+@config_bp.route("/video/profiles", methods=["GET"])
+def video_profiles():
+    """Return available transcoding profiles with current selection."""
+    from metixel.backend.processing.video import VideoProcessor, _detect_pi_model
+    state = current_app.config["METIXEL_STATE"]
+    video_cfg = state.config.video
+    profiles = []
+    for key, prof in VideoProcessor.PROFILES.items():
+        profiles.append({
+            "key": key,
+            "label": prof["label"],
+            "codec": prof["codec"],
+            "max_width": prof["max_width"],
+            "max_height": prof["max_height"],
+            "max_fps": prof["max_fps"],
+            "max_bitrate": prof["max_bitrate"],
+            "h264_profile": prof["h264_profile"],
+            "h264_level": prof["h264_level"],
+            "color_depth": prof["color_depth"],
+            "hdr_support": prof["hdr_support"],
+        })
+    # Add custom
+    profiles.append({"key": "custom", "label": "Custom"})
+    return jsonify({
+        "profiles": profiles,
+        "current": video_cfg.get("transcoding_profile", ""),
+        "detected_model": _detect_pi_model(),
+        "keep_audio": video_cfg.get("keep_audio", False),
+        "custom_settings": {
+            "transcode_max_width": video_cfg.get("transcode_max_width", 0),
+            "transcode_max_height": video_cfg.get("transcode_max_height", 0),
+            "transcode_quality": video_cfg.get("transcode_quality", 23),
+            "transcode_use_software_encoder": video_cfg.get("transcode_use_software_encoder", True),
+            "transcode_timeout_seconds": video_cfg.get("transcode_timeout_seconds", 7200),
+            "cpu_throttle_enabled": video_cfg.get("cpu_throttle_enabled", True),
+            "cpu_throttle_percent": video_cfg.get("cpu_throttle_percent", 200),
+            "transcoding_enabled": video_cfg.get("transcoding_enabled", True),
+        },
+    })
+
+
 @config_bp.route("/<section>", methods=["PUT"])
 def update_config_section(section: str):
     """Update a config section. Triggers hot reload in the frontend."""

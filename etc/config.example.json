@@ -20,6 +20,8 @@
     "player_backend": "auto",
     "max_duration_seconds": 0,
     "transcoding_enabled": true,
+    "transcoding_profile": "",
+    "keep_audio": false,
     "transcode_max_width": 0,
     "transcode_max_height": 0,
     "transcode_quality": 23,
