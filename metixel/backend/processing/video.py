@@ -532,7 +532,26 @@ class VideoProcessor:
 
             if encoder in ("libx264", "libx265"):
                 crf = max(0, min(51, self._transcode_quality))
-                cmd += ["-preset", "fast", "-crf", str(crf)]
+                preset = "fast"
+                if encoder == "libx265":
+                    # libx265 uses 2-3× more RAM than libx264 at the same
+                    # preset.  Use a lighter preset on memory-constrained
+                    # devices (Pi with ≤2GB) to avoid OOM.
+                    avail = _get_available_ram_bytes()
+                    total_ram = 0
+                    try:
+                        with open("/proc/meminfo") as f:
+                            for line in f:
+                                if line.startswith("MemTotal:"):
+                                    total_ram = int(line.split()[1]) * 1024
+                                    break
+                    except Exception:
+                        pass
+                    if total_ram > 0 and total_ram <= 3 * 1024 * 1024 * 1024:  # ≤3GB
+                        preset = "ultrafast"
+                    else:
+                        preset = "superfast"
+                cmd += ["-preset", preset, "-crf", str(crf)]
                 if thread_limit is not None and thread_limit > 0:
                     param_key = "-x264-params" if encoder == "libx264" else "-x265-params"
                     cmd += [param_key, f"threads={thread_limit}"]

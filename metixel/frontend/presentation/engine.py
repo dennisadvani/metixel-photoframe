@@ -521,6 +521,16 @@ class PresentationEngine:
         self._paused = False
         self._advance()
 
+        # If the new item is a video, launch it immediately instead of
+        # waiting for the slide timer to expire.  Without this, the
+        # video sits on its first frame for its full duration because
+        # _advance() resets _item_start_time and the render loop won't
+        # trigger video launch until elapsed >= duration.
+        if self._current_idx >= 0 and self._current_idx < len(self._queue):
+            new_item = self._queue[self._current_idx]
+            if new_item.media_type == MediaType.VIDEO:
+                self._video_launch(new_item)
+
     def prev_item(self) -> None:
         """Go back to the previous item in the queue.
 
