@@ -63,8 +63,9 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 | RAM | Photo Playback | Video Playback | Optimisation | Transcoding |
 |---|---|---|---|---|
 | 512MB | ✅ | ❌ | ❌ | ❌ |
-| 1GB+ | ✅ | ✅ | ✅ | ✅ |
-
+| 1GB | ✅ | ✅ | ✅ | ✅ Up to 1080p H.264 |
+| 2GB | ✅ | ✅ | ✅ | ✅ Up to 4k H.265 (Ultrafast) |
+| 4GB+ | ✅ | ✅ | ✅ | ✅ 4k H.265 at Higher Qualities  |
 
 > **Notes:**
 > - A SWAP file is **required** on all models.
