@@ -613,12 +613,39 @@ class FrontendRenderer:
             self._notify_slideshow_started()
             return
 
-        # ── Incremental diff: add new, remove stale ──────────────────
-        backend_ids = {item.id for item in items}
+        # ── Incremental diff: add new, update existing, remove stale ──
+        backend_items = {item.id: item for item in items}
         frontend_ids = {item.id for item in self._presentation._queue}
 
-        new_ids = backend_ids - frontend_ids
-        removed_ids = frontend_ids - backend_ids
+        new_ids = set(backend_items.keys()) - frontend_ids
+        removed_ids = frontend_ids - set(backend_items.keys())
+
+        # Update metadata for items that exist in both — the backend
+        # may have re-processed them (new dimensions, new frame paths
+        # after re-transcode, etc.).  Without this, stale width/height/
+        # first_frame_path/last_frame_path cause aspect ratio mismatches
+        # and black frames during video transitions.
+        updated = 0
+        for item in self._presentation._queue:
+            if item.id in backend_items:
+                src = backend_items[item.id]
+                if src.width > 0 and src.width != item.width:
+                    item.width = src.width
+                    updated += 1
+                if src.height > 0 and src.height != item.height:
+                    item.height = src.height
+                    updated += 1
+                if src.first_frame_path is not None and src.first_frame_path != item.first_frame_path:
+                    item.first_frame_path = src.first_frame_path
+                    updated += 1
+                if src.last_frame_path is not None and src.last_frame_path != item.last_frame_path:
+                    item.last_frame_path = src.last_frame_path
+                    updated += 1
+                if src.cached_path != item.cached_path:
+                    item.cached_path = src.cached_path
+                    updated += 1
+        if updated:
+            logger.info("Updated metadata for %d existing item(s)", updated)
 
         if new_ids:
             new_items = [item for item in items if item.id in new_ids]

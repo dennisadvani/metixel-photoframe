@@ -50,13 +50,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "player_backend": "auto",  # auto, vlc, ffmpeg
         "max_duration_seconds": 0,  # 0 = unlimited
         "transcoding_enabled": True,
-        "transcode_max_width": 0,  # 0 = use display width
-        "transcode_max_height": 0,  # 0 = use display height
+        "transcoding_profile": "",  # pi2, pi3, pi4, pi5, custom — empty = auto-detect
+        "keep_audio": False,  # True = preserve audio track, False = strip audio
+        "transcode_max_width": 0,  # 0 = use profile limit; overridden by profile/custom
+        "transcode_max_height": 0,
         "transcode_quality": 23,  # CRF value (lower = better, 18-28 typical)
         "transcode_use_software_encoder": True,  # libx264 (best quality); False = try hardware first
         "transcode_timeout_seconds": 7200,  # max time per transcode (2 hours)
         "cpu_throttle_enabled": True,
-        "cpu_throttle_percent": 200,  # 0-100 or >100 for multi-core (200 = 2 cores)
+        "cpu_throttle_percent": 100,  # 0-100 or >100 for multi-core (100 = 1 core)
     },
     "sync": {
         "immich": {
@@ -182,23 +184,66 @@ class Config:
         s = self._data.get("slideshow", {})
 
         if not v:
-            # First access on an older config — synthesize from slideshow
             v = {
                 "playback_enabled": s.get("video_playback_enabled", True),
                 "player_backend": s.get("video_player_backend", "auto"),
                 "max_duration_seconds": s.get("video_max_duration_seconds", 0),
                 "transcoding_enabled": True,
+                "transcoding_profile": "",
+                "keep_audio": False,
                 "transcode_max_width": 0,
                 "transcode_max_height": 0,
                 "transcode_quality": 23,
                 "transcode_use_software_encoder": True,
                 "transcode_timeout_seconds": 7200,
                 "cpu_throttle_enabled": True,
-                "cpu_throttle_percent": 50,
+                "cpu_throttle_percent": 100,
             }
             self._data["video"] = v
 
         return v
+
+    def get_resolved_transcoding_profile(self) -> dict[str, Any]:
+        """Return the effective transcoding profile with all values resolved.
+
+        If ``transcoding_profile`` is set to ``custom``, returns the
+        raw config values.  If set to a Pi model (or empty = auto-detect),
+        merges the profile defaults with any overrides the user has set.
+        """
+        from metixel.backend.processing.video import _detect_pi_model
+
+        v = self._data.get("video", {})
+        profile_key = v.get("transcoding_profile", "") or None
+
+        # Auto-detect on first run
+        if profile_key is None or profile_key == "":
+            profile_key = _detect_pi_model() or "pi3"
+            # Persist the detected profile so the user can see it
+            v["transcoding_profile"] = profile_key
+            self._data["video"] = v
+
+        if profile_key == "custom":
+            # Return raw config values directly
+            return {
+                "profile": "custom",
+                "label": "Custom",
+                "codec": v.get("transcode_codec", "h264"),
+                "encoder": "libx264" if v.get("transcode_codec", "h264") == "h264" else "libx265",
+                "max_width": v.get("transcode_max_width", 1920),
+                "max_height": v.get("transcode_max_height", 1080),
+                "max_fps": v.get("transcode_max_fps", 30),
+                "max_bitrate": v.get("transcode_max_bitrate", 20),
+                "h264_profile": v.get("transcode_h264_profile", "high"),
+                "h264_level": str(v.get("transcode_h264_level", "4.2")),
+                "color_depth": v.get("transcode_color_depth", 8),
+                "hdr_support": v.get("transcode_hdr_support", False),
+            }
+
+        # Use predefined profile from VideoProcessor
+        from metixel.backend.processing.video import VideoProcessor
+        prof = dict(VideoProcessor.PROFILES.get(profile_key, VideoProcessor.PROFILES["pi3"]))
+        prof["profile"] = profile_key
+        return prof
 
     @property
     def sync(self) -> dict[str, Any]:

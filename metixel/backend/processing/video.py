@@ -51,6 +51,32 @@ def _get_available_ram_bytes() -> int | None:
     return None
 
 
+def _detect_pi_model() -> str | None:
+    """Detect the Raspberry Pi model from ``/proc/device-tree/model``.
+
+    Returns the profile key (``pi2``, ``pi3``, ``pi4``, ``pi5``) or
+    ``None`` if the model can't be determined.
+    """
+    try:
+        with open("/proc/device-tree/model") as f:
+            model = f.read().strip("\x00").strip()
+    except (OSError, FileNotFoundError):
+        return None
+
+    model_lower = model.lower()
+    if "raspberry pi 5" in model_lower:
+        return "pi5"
+    if "raspberry pi 4" in model_lower or "raspberry pi 400" in model_lower:
+        return "pi4"
+    if "raspberry pi 3" in model_lower:
+        return "pi3"
+    if "raspberry pi 2" in model_lower:
+        return "pi2"
+    if "raspberry pi zero 2" in model_lower:
+        return "pi3"   # Zero 2 W has similar VideoCore IV to Pi 3
+    return None
+
+
 class VideoProcessor:
     """Processes video files for display: transcode, extract thumbnail.
 
@@ -77,6 +103,66 @@ class VideoProcessor:
     #: Known H.264 codec names that skip transcoding when within limits.
     H264_CODECS = {"h264", "avc", "avc1", "h.264", "avc1."}
 
+    #: Known H.265 / HEVC codec names.
+    HEVC_CODECS = {"hevc", "h265", "h.265", "hev1", "hvc1"}
+
+    # -- Transcoding profiles -------------------------------------------------
+
+    PROFILES: dict[str, dict[str, Any]] = {
+        "pi2": {
+            "label": "Raspberry Pi 2",
+            "codec": "h264",
+            "encoder": "libx264",
+            "max_width": 1920,
+            "max_height": 1080,
+            "max_fps": 30,
+            "max_bitrate": 10,   # Mbps
+            "h264_profile": "high",
+            "h264_level": "4.1",
+            "color_depth": 8,
+            "hdr_support": False,
+        },
+        "pi3": {
+            "label": "Raspberry Pi 3 / 3B+",
+            "codec": "h264",
+            "encoder": "libx264",
+            "max_width": 1920,
+            "max_height": 1080,
+            "max_fps": 30,        # Hard limit — see project requirements
+            "max_bitrate": 20,
+            "h264_profile": "high",
+            "h264_level": "4.2",
+            "color_depth": 8,
+            "hdr_support": False,
+        },
+        "pi4": {
+            "label": "Raspberry Pi 4 / 400",
+            "codec": "h265",
+            "encoder": "libx265",
+            "max_width": 3840,
+            "max_height": 2160,
+            "max_fps": 60,
+            "max_bitrate": 40,
+            "h264_profile": "high",    # Not used for H.265, informational
+            "h264_level": "5.1",
+            "color_depth": 10,
+            "hdr_support": True,
+        },
+        "pi5": {
+            "label": "Raspberry Pi 5",
+            "codec": "h265",
+            "encoder": "libx265",
+            "max_width": 3840,
+            "max_height": 2160,
+            "max_fps": 60,
+            "max_bitrate": 80,
+            "h264_profile": "high",
+            "h264_level": "5.2",
+            "color_depth": 10,
+            "hdr_support": True,
+        },
+    }
+
     def __init__(
         self,
         cache_dir: Path,
@@ -101,7 +187,7 @@ class VideoProcessor:
         self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
-        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 200)
+        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 100)
 
         # Track currently transcoding files (by hash) so we can check guardrails
         self._transcoding: set[str] = set()
@@ -124,6 +210,37 @@ class VideoProcessor:
     def transcoding_enabled(self) -> bool:
         return self._transcoding_enabled
 
+    def _resolve_profile(self) -> dict[str, Any] | None:
+        """Resolve the effective transcoding profile from config.
+
+        Returns the full profile dict (with codec, max_width, etc.) or
+        None if transcoding is disabled or no profile is configured.
+        """
+        if not self._transcoding_enabled:
+            return None
+
+        profile_key = (self._cfg.get("transcoding_profile") or "").strip()
+        if not profile_key:
+            profile_key = _detect_pi_model() or "pi3"
+
+        if profile_key == "custom":
+            return {
+                "profile": "custom",
+                "label": "Custom",
+                "codec": self._cfg.get("transcode_codec", "h264"),
+                "encoder": "libx264" if self._cfg.get("transcode_codec", "h264") == "h264" else "libx265",
+                "max_width": self._cfg.get("transcode_max_width", 0) or self._screen_w,
+                "max_height": self._cfg.get("transcode_max_height", 0) or self._screen_h,
+                "max_fps": self._cfg.get("transcode_max_fps", 30),
+                "max_bitrate": self._cfg.get("transcode_max_bitrate", 20),
+                "h264_profile": self._cfg.get("transcode_h264_profile", "high"),
+                "h264_level": str(self._cfg.get("transcode_h264_level", "4.2")),
+                "color_depth": self._cfg.get("transcode_color_depth", 8),
+                "hdr_support": self._cfg.get("transcode_hdr_support", False),
+            }
+
+        return dict(VideoProcessor.PROFILES.get(profile_key, VideoProcessor.PROFILES["pi3"]))
+
     def update_config(self, video_config: dict[str, Any]) -> None:
         """Update transcoding settings at runtime without recreating the processor.
 
@@ -140,7 +257,7 @@ class VideoProcessor:
         self._force_software_encoder = self._cfg.get("transcode_use_software_encoder", True)
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
-        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 200)
+        self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 100)
         logger.debug(
             "VideoProcessor config updated: transcode=%s, max=%dx%d, quality=%d, "
             "sw_encoder=%s, cpu_throttle=%s (%d%%)",
@@ -151,35 +268,84 @@ class VideoProcessor:
 
     @staticmethod
     def needs_optimisation(
-        width: int, height: int,
-        codec_name: str = "",
-        max_width: int = 0, max_height: int = 0,
+        probe_info: dict,
+        profile: dict[str, Any] | None = None,
     ) -> bool:
-        """Check whether a video needs transcoding.
+        """Check whether a video needs transcoding against profile limits.
 
         Args:
-            width: Video pixel width.
-            height: Video pixel height.
-            codec_name: Video codec (e.g. "h264", "hevc").  Videos already
-                in H.264 skip transcoding when within resolution limits.
-            max_width: Threshold width (0 = use display width).
-            max_height: Threshold height (0 = use display height).
+            probe_info: Dict from ``_probe()`` with width, height, codec_name,
+                        fps, bitrate, color_depth, h264_profile, h264_level,
+                        color_primaries, color_trc, colorspace, pix_fmt.
+            profile: Resolved transcoding profile dict.  If None, falls back
+                     to basic H.264 + resolution check.
 
         Returns:
-            True if the video should be transcoded, False if it's already
-            in a compatible format within limits.
+            True if the video needs transcoding.
         """
-        if width <= 0 or height <= 0:
-            return True  # Unknown dimensions — transcode to be safe
-        if max_width > 0 and width > max_width:
+        w = probe_info.get("width", 0) or 0
+        h = probe_info.get("height", 0) or 0
+        if w <= 0 or h <= 0:
             return True
-        if max_height > 0 and height > max_height:
+
+        # Basic check (no profile — legacy behaviour)
+        if profile is None:
+            codec_lower = (probe_info.get("codec_name", "") or "").lower()
+            return codec_lower not in VideoProcessor.H264_CODECS
+
+        # ── Profile-based check ───────────────────────────────────
+        target_codec = profile.get("codec", "h264")
+        source_codec = (probe_info.get("codec_name", "") or "").lower()
+
+        # Codec check
+        if target_codec == "h264" and source_codec not in VideoProcessor.H264_CODECS:
             return True
-        # If the codec is already H.264, no need to transcode
-        codec_lower = codec_name.lower()
-        if codec_lower and codec_lower not in VideoProcessor.H264_CODECS:
+        if target_codec == "h265" and source_codec not in VideoProcessor.HEVC_CODECS:
             return True
-        # Within limits AND H.264 — no optimisation needed
+
+        # Resolution
+        if profile.get("max_width", 0) and w > profile["max_width"]:
+            return True
+        if profile.get("max_height", 0) and h > profile["max_height"]:
+            return True
+
+        # Framerate
+        max_fps = profile.get("max_fps", 0)
+        src_fps = probe_info.get("fps", 0) or 0
+        if max_fps and src_fps > max_fps:
+            return True
+
+        # Bitrate (Mbps)
+        max_br = profile.get("max_bitrate", 0)
+        src_br = probe_info.get("bitrate", 0) or 0
+        if max_br and src_br > max_br:
+            return True
+
+        # Color depth
+        target_depth = profile.get("color_depth", 8)
+        src_depth = probe_info.get("color_depth", 8) or 8
+        if src_depth > target_depth:
+            return True
+
+        # HDR → SDR downgrade
+        if not profile.get("hdr_support", False) and probe_info.get("color_trc", ""):
+            trc = probe_info["color_trc"]
+            if trc in ("smpte2084", "arib-std-b67", "smpte428", "bt2020-10"):
+                return True  # HDR source on non-HDR-capable Pi
+
+        # H.264 Profile/Level check (for H.264 sources on H.264 profiles)
+        if target_codec == "h264" and source_codec in VideoProcessor.H264_CODECS:
+            target_level = profile.get("h264_level", "")
+            src_level = probe_info.get("h264_level", "") or ""
+            if target_level and src_level:
+                # Compare numeric level (e.g. "4.2" > "4.0" → needs transcode)
+                try:
+                    if float(src_level) > float(target_level):
+                        return True
+                except (ValueError, TypeError):
+                    pass
+
+        # Within all limits — no optimisation needed
         return False
 
     def process(self, source_path: Path, source: str = "local") -> MediaItem | None:
@@ -219,22 +385,21 @@ class VideoProcessor:
                 source_path, file_hash,
             )
 
-            # If the source is already H.264 and within resolution limits,
-            # skip the expensive transcode step — we already have everything
-            # the frontend needs (thumbnail + first/last frames).
+            # If the source is within all profile limits, skip transcode.
             codec_name = info.get("codec_name", "")
             vw = info.get("width", 0) or 0
             vh = info.get("height", 0) or 0
-            if not VideoProcessor.needs_optimisation(
-                vw, vh,
-                codec_name=codec_name,
-                max_width=self._transcode_max_w,
-                max_height=self._transcode_max_h,
-            ):
+
+            # Resolve the effective transcoding profile
+            profile = self._resolve_profile()
+
+            # Determine if optimised enough
+            needs_opt = VideoProcessor.needs_optimisation(info, profile)
+            if not needs_opt:
                 logger.debug(
-                    "Video already optimal (H.264 %dx%d) — "
+                    "Video already optimal (%s %dx%d) — "
                     "skipping transcode for %s",
-                    vw, vh, source_path.name,
+                    codec_name, vw, vh, source_path.name,
                 )
                 return self._build_item(
                     source_path, source_path, thumb_path, info, source, file_hash,
@@ -251,29 +416,36 @@ class VideoProcessor:
                     first_frame=first_frame, last_frame=last_frame,
                 )
 
-            # If cached file already exists, validate and use it
+            # If cached file already exists, validate it against the current
+            # profile.  A profile change (e.g. Pi 4 → Pi 3) makes previously
+            # cached files too large / wrong codec — they must be re-transcoded.
             if cached_path.exists():
                 if self._validate_cached_video(cached_path):
-                    logger.debug("Video already cached (transcoded): %s", file_hash)
-                    return self._build_item(
-                        source_path, cached_path, thumb_path, info, source, file_hash,
-                        status=TranscodeStatus.TRANSCODED,
-                        first_frame=first_frame, last_frame=last_frame,
-                    )
+                    cached_info = self._probe(cached_path)
+                    if not VideoProcessor.needs_optimisation(cached_info, profile):
+                        logger.debug("Cached video still valid for current profile: %s", file_hash)
+                        return self._build_item(
+                            source_path, cached_path, thumb_path, info, source, file_hash,
+                            status=TranscodeStatus.TRANSCODED,
+                            first_frame=first_frame, last_frame=last_frame,
+                        )
+                    else:
+                        logger.info(
+                            "Cached video exceeds new profile limits — re-transcoding: %s",
+                            cached_path.name,
+                        )
+                        self._cleanup_cached_video(cached_path, thumb_path)
                 else:
                     logger.warning(
                         "Cached video is corrupt — will re-transcode: %s",
                         cached_path.name,
                     )
-                    # Delete the corrupt video AND its stale frame files /
-                    # thumbnail so they don't show the wrong content after
-                    # re-transcode.
                     self._cleanup_cached_video(cached_path, thumb_path)
 
             # Mark as transcoding, then transcode
             self._transcoding.add(file_hash)
             try:
-                self._transcode(source_path, cached_path)
+                self._transcode(source_path, cached_path, info)
                 status = TranscodeStatus.TRANSCODED
                 playback_path = cached_path
                 logger.info(
@@ -308,21 +480,12 @@ class VideoProcessor:
     # this is available, skip transcoding and fall back to the original file.
     _MIN_FREE_RAM_FOR_TRANSCODE: int = 192 * 1024 * 1024  # 192 MB
 
-    def _transcode(self, source: Path, dest: Path) -> None:
-        """Transcode video to H.264 at configured resolution and quality.
+    def _transcode(self, source: Path, dest: Path, info: dict | None = None) -> None:
+        """Transcode video to the profile's optimal format."""
+        profile = self._resolve_profile()
+        if profile is None:
+            profile = VideoProcessor.PROFILES.get("pi3", VideoProcessor.PROFILES["pi3"])
 
-        Uses software libx264 by default for the best quality.  Hardware
-        encoders (h264_v4l2m2m on Pi) are available as an opt-in alternative
-        when speed is preferred over quality.
-
-        The source framerate is always preserved — no forced FPS conversion.
-
-        CPU throttling uses a layered strategy:
-        1. ``cpulimit`` — percentage-based limit (requires ``apt install cpulimit``)
-        2. ``nice`` + ffmpeg ``-threads`` — priority + thread cap (no extra deps)
-        3. ffmpeg ``-threads`` alone — limits decoder/encoder parallelism
-        """
-        # ── Pre-flight memory check ───────────────────────────────
         avail = _get_available_ram_bytes()
         if avail is not None and avail < self._MIN_FREE_RAM_FOR_TRANSCODE:
             raise RuntimeError(
@@ -331,21 +494,36 @@ class VideoProcessor:
                 f"need: {self._MIN_FREE_RAM_FOR_TRANSCODE // (1024*1024)} MB)"
             )
 
-        encoders = self._select_encoders()
+        max_w = profile.get("max_width", self._transcode_max_w)
+        max_h = profile.get("max_height", self._transcode_max_h)
+        max_fps = profile.get("max_fps", 0)
+        target_encoder = profile.get("encoder", "libx264")
+        h264_level = str(profile.get("h264_level", ""))
+        h264_profile = profile.get("h264_profile", "high")
+        color_depth = profile.get("color_depth", 8)
+        hdr_support = profile.get("hdr_support", False)
 
-        # Build scale filter: scale to fit within target dimensions,
-        # preserve aspect ratio, pad to even dimensions.
-        max_w = self._transcode_max_w
-        max_h = self._transcode_max_h
         scale_filter = (
             f"scale='min({max_w},iw)':'min({max_h},ih)'"
             f":force_original_aspect_ratio=decrease"
             f",pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
-            f",format=yuv420p"
         )
+        # Color depth: use source depth, capped to profile limit.
+        # Never upscale 8-bit → 10-bit — just wastes bitrate.
+        src_depth = (info or {}).get("color_depth", 8) or 8
+        out_depth = min(src_depth, color_depth)
+        if out_depth >= 10:
+            scale_filter += ",format=yuv420p10le"
+        else:
+            scale_filter += ",format=yuv420p"
 
-        # Determine thread limit from throttle percentage
         thread_limit = self._compute_thread_limit()
+
+        encoders = [target_encoder]
+        if target_encoder not in ("libx264", "libx265"):
+            encoders.append("libx264")
+        if "libx264" not in encoders:
+            encoders.append("libx264")
 
         for encoder in encoders:
             cmd = [
@@ -356,43 +534,78 @@ class VideoProcessor:
                 "-vf", scale_filter,
             ]
 
-            # Quality: CRF for software, bitrate for hardware
-            if encoder == "libx264":
+            if encoder in ("libx264", "libx265"):
                 crf = max(0, min(51, self._transcode_quality))
-                cmd += ["-preset", "fast", "-crf", str(crf)]
-                # Apply thread limit to x264 encoder if throttling is active.
+                preset = "fast"
+                if encoder == "libx265":
+                    # libx265 uses 2-3× more RAM than libx264 at the same
+                    # preset.  Use a lighter preset on memory-constrained
+                    # devices (Pi with ≤2GB) to avoid OOM.
+                    avail = _get_available_ram_bytes()
+                    total_ram = 0
+                    try:
+                        with open("/proc/meminfo") as f:
+                            for line in f:
+                                if line.startswith("MemTotal:"):
+                                    total_ram = int(line.split()[1]) * 1024
+                                    break
+                    except Exception:
+                        pass
+                    if total_ram > 0 and total_ram <= 3 * 1024 * 1024 * 1024:  # ≤3GB
+                        preset = "ultrafast"
+                    else:
+                        preset = "superfast"
+                cmd += ["-preset", preset, "-crf", str(crf)]
                 if thread_limit is not None and thread_limit > 0:
-                    cmd += ["-x264-params", f"threads={thread_limit}"]
+                    param_key = "-x264-params" if encoder == "libx264" else "-x265-params"
+                    cmd += [param_key, f"threads={thread_limit}"]
             else:
-                # Map CRF-like quality to bitrate: lower CRF → higher bitrate
                 q = self._transcode_quality
-                if q <= 20:
-                    bitrate = "4M"
-                elif q <= 24:
-                    bitrate = "2M"
-                else:
-                    bitrate = "1M"
+                bitrate = "2M" if q <= 24 else "1M"
                 cmd += ["-b:v", bitrate]
 
+            # Profile constraints for smooth Pi playback
+            if encoder == "libx264" and h264_level:
+                cmd += ["-level", h264_level]
+            if encoder == "libx264" and h264_profile:
+                cmd += ["-profile:v", h264_profile]
+            if encoder in ("libx264", "libx265"):
+                cmd += ["-refs", "2", "-bf", "0", "-g", "30"]
+
+            # Framerate cap — only reduce, never increase
+            # A 30fps source should not be upscaled to 60fps by -r.
+            # Only apply the cap when the source exceeds max_fps.
+            src_fps = info.get("fps", 0) or 0
+            if max_fps and max_fps > 0 and src_fps > max_fps:
+                cmd += ["-r", str(max_fps)]
+
+            # Audio: keep or strip
+            keep_audio = self._cfg.get("keep_audio", False)
+            if not keep_audio:
+                cmd += ["-an"]
+
+            # HDR → SDR downgrade
+            if not hdr_support:
+                cmd += [
+                    "-colorspace", "bt709",
+                    "-color_primaries", "bt709",
+                    "-color_trc", "bt709",
+                ]
+
+            # Max bitrate constraint
+            max_br = profile.get("max_bitrate", 0)
+            if max_br and max_br > 0:
+                cmd += ["-maxrate", f"{max_br}M", "-bufsize", f"{max_br * 2}M"]
+
             cmd += [
-                "-an",  # Strip audio (photo frame doesn't need it)
                 "-movflags", "+faststart",
-                "-pix_fmt", "yuv420p",
                 str(dest),
             ]
 
-            # Apply CPU throttling wrapper (cpulimit or nice)
             final_cmd = self._wrap_with_throttle(cmd)
-
             timeout = max(60, self._transcode_timeout)
+
             try:
-                # MEMORY-SAFE: redirect stdout+stderr to DEVNULL instead
-                # of capturing them in RAM.  ffmpeg writes extensive
-                # progress lines (frame count, fps, bitrate, …) to stderr
-                # — for a long transcode (up to 2 hours) this could
-                # accumulate hundreds of MB in memory on a Pi with only
-                # 512 MB RAM.  The actual video output goes to a file, so
-                # nothing of value is lost.
                 subprocess.run(
                     final_cmd, check=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -402,24 +615,16 @@ class VideoProcessor:
                     "Transcoded with %s (threads=%s, timeout=%ds): %s",
                     encoder, thread_limit, timeout, source.name,
                 )
-                return  # Success — done
+                return
             except subprocess.CalledProcessError as e:
-                logger.warning(
-                    "Encoder %s failed for %s (rc=%d)",
-                    encoder, source.name, e.returncode,
-                )
-                # Clean up partial output
+                logger.warning("Encoder %s failed for %s (rc=%d)", encoder, source.name, e.returncode)
                 if dest.exists():
                     try:
                         dest.unlink()
                     except OSError:
                         pass
-                # Continue to next encoder
             except subprocess.TimeoutExpired:
-                logger.warning(
-                    "Encoder %s timed out for %s (%ds limit)",
-                    encoder, source.name, timeout,
-                )
+                logger.warning("Encoder %s timed out for %s (%ds limit)", encoder, source.name, timeout)
                 if dest.exists():
                     try:
                         dest.unlink()
@@ -528,7 +733,12 @@ class VideoProcessor:
         )
 
     def _probe(self, path: Path) -> dict:
-        """Probe video file for metadata using ffprobe."""
+        """Probe video file for metadata using ffprobe.
+
+        Returns a dict with keys: width, height, duration, codec_name,
+        fps, bitrate, color_depth, h264_profile, h264_level,
+        color_primaries, color_trc, colorspace, pix_fmt.
+        """
         cmd = nice_cmd([
             "ffprobe",
             "-v", "quiet",
@@ -541,14 +751,51 @@ class VideoProcessor:
         import json
 
         data = json.loads(result.stdout)
-        info: dict = {"width": 0, "height": 0, "duration": 0.0, "codec_name": ""}
+        info: dict = {
+            "width": 0, "height": 0, "duration": 0.0,
+            "codec_name": "", "fps": 0.0, "bitrate": 0,
+            "color_depth": 8, "h264_profile": "", "h264_level": "",
+            "color_primaries": "", "color_trc": "", "colorspace": "",
+            "pix_fmt": "",
+        }
         for stream in data.get("streams", []):
             if stream.get("codec_type") == "video":
                 info["width"] = stream.get("width", 0)
                 info["height"] = stream.get("height", 0)
                 info["codec_name"] = stream.get("codec_name", "")
+                info["pix_fmt"] = stream.get("pix_fmt", "")
+                info["h264_profile"] = stream.get("profile", "")
+                info["h264_level"] = stream.get("level", "")
+                info["color_primaries"] = stream.get("color_primaries", "")
+                info["color_trc"] = stream.get("color_transfer", "")
+                info["colorspace"] = stream.get("color_space", "")
+
+                # Framerate
+                fps_str = stream.get("r_frame_rate", "0/1")
+                try:
+                    num, den = fps_str.split("/")
+                    info["fps"] = round(float(num) / float(den), 2)
+                except (ValueError, ZeroDivisionError):
+                    info["fps"] = 0.0
+
+                # Bitrate (prefer stream-level, fall back to format-level)
+                if stream.get("bit_rate"):
+                    info["bitrate"] = int(stream["bit_rate"]) // 1_000_000
                 break
-        info["duration"] = float(data.get("format", {}).get("duration", 0))
+
+        # Format-level bitrate fallback
+        fmt = data.get("format", {})
+        if info["bitrate"] == 0 and fmt.get("bit_rate"):
+            info["bitrate"] = int(fmt["bit_rate"]) // 1_000_000
+        info["duration"] = float(fmt.get("duration", 0))
+
+        # Detect color depth from pixel format
+        pf = info["pix_fmt"]
+        if pf and "10" in pf:
+            info["color_depth"] = 10
+        elif pf and "12" in pf:
+            info["color_depth"] = 12
+
         return info
 
     def _select_encoders(self) -> list[str]:

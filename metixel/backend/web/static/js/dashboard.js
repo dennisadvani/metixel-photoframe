@@ -400,6 +400,115 @@
     }
 
     /**
+     * Load transcoding profiles from the API and populate the dropdown.
+     * Auto-selects the detected Pi model on first run.
+     * @param {object} videoCfg - Current video config section.
+     */
+    async function _loadTranscodingProfiles(videoCfg) {
+        try {
+            var resp = await fetch("/api/config/video/profiles");
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var sel = document.getElementById("cfg-transcoding-profile");
+            if (!sel) return;
+
+            // Build a map of profile key → details for populating fields
+            var profileMap = {};
+            (data.profiles || []).forEach(function (p) {
+                profileMap[p.key] = p;
+            });
+
+            // Populate options
+            sel.innerHTML = '<option value="">Auto-detect</option>';
+            (data.profiles || []).forEach(function (p) {
+                var opt = document.createElement("option");
+                opt.value = p.key;
+                opt.textContent = p.label;
+                sel.appendChild(opt);
+            });
+
+            // Determine which profile is active
+            var activeProfile = data.current;
+            if (!activeProfile && data.detected_model) {
+                activeProfile = data.detected_model;
+            }
+
+            // Select the active profile in the dropdown
+            if (activeProfile) {
+                for (var i = 0; i < sel.options.length; i++) {
+                    if (sel.options[i].value === activeProfile) {
+                        sel.options[i].selected = true;
+                        break;
+                    }
+                }
+            }
+
+            // Populate fields from the active profile (or custom settings)
+            _applyProfileToFields(activeProfile, profileMap, data.custom_settings);
+
+            // Handle change event
+            sel.addEventListener("change", function () {
+                _applyProfileToFields(this.value, profileMap, data.custom_settings);
+            });
+        } catch (e) {
+            // Profiles API not available — fall back to legacy behaviour
+        }
+    }
+
+    /**
+     * Populate the profile fields from the selected profile or custom settings.
+     * @param {string} profileKey - Selected profile key or "custom" or "".
+     * @param {object} profileMap - Map of profile key → details from API.
+     * @param {object} customSettings - Saved custom override values.
+     */
+    function _applyProfileToFields(profileKey, profileMap, customSettings) {
+        var isCustom = (profileKey === "custom");
+        var prof = profileMap[profileKey] || {};
+
+        // Enable/disable fields
+        var fieldsDiv = document.getElementById("profile-fields");
+        if (fieldsDiv) {
+            fieldsDiv.querySelectorAll("input, select").forEach(function (el) {
+                el.disabled = !isCustom;
+            });
+        }
+
+        // Determine values to display
+        var vals;
+        if (isCustom) {
+            vals = customSettings || {};
+            setValue("cfg-transcode-max-width", vals.transcode_max_width || 0);
+            setValue("cfg-transcode-max-height", vals.transcode_max_height || 0);
+            setValue("cfg-transcode-max-fps", vals.transcode_max_fps || 30);
+            setValue("cfg-transcode-max-bitrate", vals.transcode_max_bitrate || 20);
+            setValue("cfg-transcode-codec", vals.transcode_codec || "h264");
+            setValue("cfg-transcode-h264-profile", vals.transcode_h264_profile || "high");
+            setValue("cfg-transcode-h264-level", vals.transcode_h264_level || "4.2");
+            setValue("cfg-transcode-color-depth", vals.transcode_color_depth || 8);
+            setChecked("cfg-transcode-hdr", vals.transcode_hdr_support || false);
+        } else {
+            // Use profile defaults for display
+            setValue("cfg-transcode-max-width", prof.max_width || 1920);
+            setValue("cfg-transcode-max-height", prof.max_height || 1080);
+            setValue("cfg-transcode-max-fps", prof.max_fps || 30);
+            setValue("cfg-transcode-max-bitrate", prof.max_bitrate || 20);
+            setValue("cfg-transcode-codec", prof.codec || "h264");
+            setValue("cfg-transcode-h264-profile", prof.h264_profile || "high");
+            setValue("cfg-transcode-h264-level", prof.h264_level || "4.2");
+            setValue("cfg-transcode-color-depth", prof.color_depth || 8);
+            setChecked("cfg-transcode-hdr", prof.hdr_support || false);
+        }
+
+        // Update hint text
+        var hint = document.getElementById("profile-hint");
+        if (hint) {
+            hint.textContent = isCustom
+                ? "Custom settings enabled — you control all parameters below."
+                : "Profile sets optimal defaults for your Pi model. Override with Custom.";
+        }
+    }
+
+    /**
      * Show or hide the CPU throttle percentage slider.
      * @param {boolean} enabled - Whether CPU throttling is enabled.
      */
@@ -1192,7 +1301,7 @@
                 transcode_use_software_encoder: true,
                 transcode_timeout_seconds: 7200,
                 cpu_throttle_enabled: true,
-                cpu_throttle_percent: 50,
+                cpu_throttle_percent: 100,
             };
         }
         setChecked("cfg-video-enabled", v.playback_enabled === true);
@@ -1201,6 +1310,9 @@
         setChecked("cfg-transcode-enabled", v.transcoding_enabled !== false);
         setValue("cfg-transcode-max-width", v.transcode_max_width || 0);
         setValue("cfg-transcode-max-height", v.transcode_max_height || 0);
+        setChecked("cfg-keep-audio", v.keep_audio === true);
+        // Profile dropdown loaded via API (includes pi model auto-detection)
+        _loadTranscodingProfiles(v);
         var q = v.transcode_quality !== undefined ? v.transcode_quality : 23;
         setValue("cfg-transcode-quality", q);
         var qLabel = document.getElementById("cfg-transcode-quality-label");
@@ -1211,9 +1323,9 @@
         setChecked("cfg-transcode-software-encoder", v.transcode_use_software_encoder !== false);
         setValue("cfg-transcode-timeout", v.transcode_timeout_seconds || 7200);
         setChecked("cfg-cpu-throttle-enabled", v.cpu_throttle_enabled !== false);
-        setValue("cfg-cpu-throttle-pct", v.cpu_throttle_percent || 50);
+        setValue("cfg-cpu-throttle-pct", v.cpu_throttle_percent || 100);
         var cpLabel = document.getElementById("cfg-cpu-throttle-pct-label");
-        if (cpLabel) cpLabel.textContent = (v.cpu_throttle_percent || 50) + "%";
+        if (cpLabel) cpLabel.textContent = (v.cpu_throttle_percent || 100) + "%";
         _toggleTranscodeSettings(v.transcoding_enabled !== false);
         _toggleCpuThrottleGroup(v.cpu_throttle_enabled !== false);
 
@@ -1302,7 +1414,7 @@
                     transcode_use_software_encoder: document.getElementById("cfg-transcode-software-encoder").checked,
                     transcode_timeout_seconds: sanitizeInt(document.getElementById("cfg-transcode-timeout").value, 7200),
                     cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
-                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 50),
+                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 100),
                 });
                 if (result) {
                     showToast("Video settings saved!", "success");
@@ -1313,19 +1425,29 @@
 
             // ── Video Optimisation save ────────────────────────────────
             document.getElementById("btn-save-transcode")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/video", {
-                    playback_enabled: document.getElementById("cfg-video-enabled").checked,
-                    player_backend: document.getElementById("cfg-video-player-backend").value,
-                    max_duration_seconds: sanitizeInt(document.getElementById("cfg-video-max-duration").value, 0),
+                var profile = document.getElementById("cfg-transcoding-profile")?.value || "";
+                var payload = {
                     transcoding_enabled: document.getElementById("cfg-transcode-enabled").checked,
-                    transcode_max_width: sanitizeInt(document.getElementById("cfg-transcode-max-width").value, 0),
-                    transcode_max_height: sanitizeInt(document.getElementById("cfg-transcode-max-height").value, 0),
+                    transcoding_profile: profile,
+                    keep_audio: document.getElementById("cfg-keep-audio").checked,
                     transcode_quality: sanitizeInt(document.getElementById("cfg-transcode-quality").value, 23),
                     transcode_use_software_encoder: document.getElementById("cfg-transcode-software-encoder").checked,
                     transcode_timeout_seconds: sanitizeInt(document.getElementById("cfg-transcode-timeout").value, 7200),
                     cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
-                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 50),
-                });
+                    cpu_throttle_percent: sanitizeInt(document.getElementById("cfg-cpu-throttle-pct").value, 200),
+                };
+                if (profile === "custom") {
+                    payload.transcode_max_width = sanitizeInt(document.getElementById("cfg-transcode-max-width").value, 0);
+                    payload.transcode_max_height = sanitizeInt(document.getElementById("cfg-transcode-max-height").value, 0);
+                    payload.transcode_max_fps = sanitizeInt(document.getElementById("cfg-transcode-max-fps").value, 30);
+                    payload.transcode_max_bitrate = sanitizeInt(document.getElementById("cfg-transcode-max-bitrate").value, 20);
+                    payload.transcode_codec = document.getElementById("cfg-transcode-codec").value;
+                    payload.transcode_h264_profile = document.getElementById("cfg-transcode-h264-profile").value;
+                    payload.transcode_h264_level = document.getElementById("cfg-transcode-h264-level").value;
+                    payload.transcode_color_depth = parseInt(document.getElementById("cfg-transcode-color-depth").value, 10);
+                    payload.transcode_hdr_support = document.getElementById("cfg-transcode-hdr").checked;
+                }
+                var result = await apiPut("/config/video", payload);
                 if (result) {
                     showToast("Video optimisation saved!", "success");
                 } else {
