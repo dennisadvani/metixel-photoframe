@@ -5,6 +5,64 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.8-beta.8]
+
+### Added
+
+- **Transcoding profiles** — four Pi‑model‑specific profiles (Pi 2, Pi 3,
+  Pi 4, Pi 5) with optimal codec, resolution, framerate, bitrate, H.264
+  profile/level, colour depth, and HDR support limits.  Profile is
+  auto‑detected on first run from ``/proc/device-tree/model``.
+- **Custom profile mode** — allows overriding every transcode parameter
+  individually; all profile fields visible in the Web UI, editable only
+  when Custom is selected
+- **Keep Audio global setting** — preserves the audio track when enabled
+  (stripped by default)
+- **Profile‑based cached‑video re‑validation** — switching profiles
+  re‑probes existing cached videos and re‑transcodes any that exceed the
+  new limits
+- **Extended video metadata extraction** — ffprobe now captures framerate,
+  bitrate, colour depth, H.264 profile/level, and HDR colour info
+- **Profile‑based optimisation gating** — ``needs_optimisation()`` checks
+  all profile limits (codec, resolution, fps, bitrate, colour depth, HDR,
+  H.264 level) instead of only H.264 + resolution
+- **Web UI Video Optimisation card** — profile dropdown with auto‑detect,
+  custom parameter fields, keep‑audio checkbox, and global quality/encoder/
+  timeout/CPU‑limit controls
+
+### Changed
+
+- **Transcode encodes to profile target codec** — Pi 4/5 target H.265
+  (HEVC) for hardware decode; Pi 2/3 target H.264
+- **Transcode enforces H.264 level/profile** — adds ``-level``,
+  ``-profile:v``, ``-refs 2``, ``-bf 0``, ``-g 30`` for smooth Pi
+  playback
+- **Transcode framerate cap** — ``-r`` only applied when source FPS
+  exceeds the profile limit; never upscales 30 fps → 60 fps
+- **Transcode colour depth cap** — output depth is ``min(src, profile)``;
+  never upscales 8‑bit → 10‑bit
+- **Transcode HDR → SDR downgrade** — forces BT.709 colour space on
+  non‑HDR‑capable Pi models
+- **Transcode max bitrate enforcement** — ``-maxrate`` + ``-bufsize``
+  applied from profile limits
+- **libx265 RAM optimisation** — uses ``ultrafast`` preset on ≤3 GB
+  devices (Pi 4/5 with 2 GB) to avoid OOM; ``superfast`` on >3 GB
+- **CPU throttle default** — reduced from 200 % to 100 % (1 core)
+- **Playlist hot‑reload refreshes metadata** — frontend now updates
+  ``width``, ``height``, ``first_frame_path``, ``last_frame_path``, and
+  ``cached_path`` for existing items when the backend updates the
+  playlist, fixing aspect‑ratio mismatches and black frame glitches after
+  re‑transcode
+
+### Fixed
+
+- **Next‑item video playback** — pressing Next to a video now launches VLC
+  immediately instead of sitting on the first frame until the slide timer
+  expires
+- **``config.example.json`` video defaults** — ``playback_enabled``
+  corrected to ``true``, ``max_duration_seconds`` to ``0``, CPU throttle
+  to ``100``
+
 ## [1.0.7]
 
 ### Fixed
