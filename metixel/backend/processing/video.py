@@ -118,7 +118,7 @@ class VideoProcessor:
             "max_fps": 30,
             "max_bitrate": 10,   # Mbps
             "h264_profile": "high",
-            "h264_level": "4.1",
+            "h264_level": "4.0",
             "color_depth": 8,
             "hdr_support": False,
         },
@@ -131,7 +131,7 @@ class VideoProcessor:
             "max_fps": 30,        # Hard limit — see project requirements
             "max_bitrate": 20,
             "h264_profile": "high",
-            "h264_level": "4.2",
+            "h264_level": "4.0",   # Pi 3 VideoCore IV HW decode limit: Level 4.1
             "color_depth": 8,
             "hdr_support": False,
         },

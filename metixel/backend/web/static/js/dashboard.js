@@ -519,6 +519,98 @@
         }
     }
 
+    // -- Keyboard Input Mapping ----------------------------------------------
+
+    var _kbdCommands = ["next", "prev", "pause", "resume", "toggle_pause", "screen_on", "screen_off"];
+
+    async function _loadKeyboardMap() {
+        try {
+            var resp = await fetch("/api/config/input/keyboard/map?_=" + Date.now());
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var tbody = document.getElementById("kbd-map-body");
+            if (!tbody) return;
+
+            var map = data.map || {};
+            tbody.innerHTML = "";
+            _kbdCommands.forEach(function (cmd) {
+                var keys = map[cmd] || [];
+                var keyNames = keys.map(function (k) {
+                    return '<span style="display:inline-block;background:var(--bg-hover);padding:0.15rem 0.4rem;border-radius:3px;margin:0.1rem;font-size:0.8rem;font-family:monospace">' +
+                        (k.name || ("Key " + k.code)) + '</span>';
+                }).join("") || '<span style="color:var(--text-muted);font-size:0.8rem">—</span>';
+
+                var row = document.createElement("tr");
+                row.style.borderBottom = "1px solid var(--border)";
+                row.innerHTML =
+                    '<td style="padding:0.4rem 0.5rem;font-size:0.9rem">' + cmd + '</td>' +
+                    '<td style="padding:0.4rem 0.5rem" id="kbd-keys-' + cmd + '">' + keyNames + '</td>' +
+                    '<td style="padding:0.4rem 0.5rem;text-align:right">' +
+                    '<button class="btn--sm btn--secondary kbd-learn-btn" data-cmd="' + cmd + '">Learn</button>' +
+                    '<button class="btn--sm btn--danger kbd-clear-btn" data-cmd="' + cmd + '" style="margin-left:0.2rem;display:' + (keys.length ? '' : 'none') + '">✕</button>' +
+                    '</td>';
+                tbody.appendChild(row);
+            });
+        } catch (e) { /* API not available */ }
+    }
+
+    var _kbdPollTimer = null;
+    var _kbdLearningCmd = null;
+
+    function _bindKeyboardLearn() {
+        document.getElementById("kbd-map-body")?.addEventListener("click", async function (e) {
+            var learnBtn = e.target.closest(".kbd-learn-btn");
+            var clearBtn = e.target.closest(".kbd-clear-btn");
+            if (!learnBtn && !clearBtn) return;
+
+            var cmd = (learnBtn || clearBtn).dataset.cmd;
+
+            if (clearBtn) {
+                // Clear all mappings for this command
+                await apiPost("/config/input/keyboard/learn", { cmd: "clear", target: cmd });
+                _loadKeyboardMap();
+                return;
+            }
+
+            // Start learn mode
+            var status = document.getElementById("kbd-learn-status");
+            if (status) {
+                status.style.display = "";
+                status.style.background = "rgba(59,130,246,0.15)";
+                status.style.color = "var(--primary)";
+                status.textContent = 'Listening for key for "' + cmd + '" — press a key on your remote…';
+            }
+
+            _kbdLearningCmd = cmd;
+            await apiPost("/config/input/keyboard/learn", { cmd: "start", target: cmd });
+
+            // Poll for result
+            if (_kbdPollTimer) clearInterval(_kbdPollTimer);
+            _kbdPollTimer = setInterval(async function () {
+                var result = await apiPost("/config/input/keyboard/learn", { cmd: "check" });
+                if (!result) return;
+
+                if (result.status === "learned") {
+                    clearInterval(_kbdPollTimer);
+                    _kbdPollTimer = null;
+                    if (status) {
+                        status.style.background = "rgba(34,197,94,0.15)";
+                        status.style.color = "var(--success)";
+                        status.textContent = 'Mapped ' + result.name + ' → ' + result.command;
+                        setTimeout(function () { status.style.display = "none"; }, 3000);
+                    }
+                    _loadKeyboardMap();
+                } else if (result.status === "cancelled" || result.error) {
+                    clearInterval(_kbdPollTimer);
+                    _kbdPollTimer = null;
+                    if (status) {
+                        status.style.display = "none";
+                    }
+                }
+            }, 300);
+        });
+    }
+
     /**
      * Parse an input value as an integer, returning a safe fallback.
      * Prevents NaN from leaking into JSON payloads (NaN → null in JSON).
@@ -648,7 +740,7 @@
     async function loadDashboard() {
         // Clear any existing polling timer
         if (_dashboardTimer) {
-            clearInterval(_dashboardTimer);
+            clearTimeout(_dashboardTimer);
             _dashboardTimer = null;
         }
 
@@ -660,17 +752,21 @@
         // Show welcome banner on first run
         _checkWelcomeBanner();
 
-        // Poll every 3 seconds for live updates
-        _dashboardTimer = setInterval(async function () {
-            if (document.getElementById("page-dashboard").classList.contains("active")) {
-                await refreshDashboard();
-                await refreshProcessing();
-                _refreshDashSyncStatus();
-            } else if (_dashboardTimer) {
-                clearInterval(_dashboardTimer);
-                _dashboardTimer = null;
-            }
-        }, 3000);
+        // Poll every 3 seconds — use setTimeout chain to prevent
+        // queue buildup when the browser tab is backgrounded on mobile.
+        function _scheduleDashboardPoll() {
+            _dashboardTimer = setTimeout(async function () {
+                if (document.getElementById("page-dashboard").classList.contains("active")) {
+                    await refreshDashboard();
+                    await refreshProcessing();
+                    _refreshDashSyncStatus();
+                    _scheduleDashboardPoll();
+                } else {
+                    _dashboardTimer = null;
+                }
+            }, 3000);
+        }
+        _scheduleDashboardPoll();
 
         // Quick controls — bind once
         if (!_dashboardBound) {
@@ -1544,23 +1640,18 @@
 
     function startSyncPolling() {
         if (_syncPollTimer) return;
-        _syncPollTimer = setInterval(async function () {
-            // Single API call per tick — refreshSyncStatus() renders
-            // both the progress bar AND the last-sync summary from
-            // the same response, avoiding a race where the progress
-            // file is deleted between two separate calls.
-            await refreshSyncStatus();
-
-            // Check if sync has finished (progress bar hidden by
-            // refreshSyncStatus when syncing=false).  We can't use
-            // a separate call here because the progress file is
-            // atomically deleted after the sync completes.
-        }, 1500);
+        function _poll() {
+            _syncPollTimer = setTimeout(async function () {
+                await refreshSyncStatus();
+                _poll();
+            }, 1500);
+        }
+        _poll();
     }
 
     function stopSyncPolling() {
         if (_syncPollTimer) {
-            clearInterval(_syncPollTimer);
+            clearTimeout(_syncPollTimer);
             _syncPollTimer = null;
         }
         var cancelBtn = document.getElementById("btn-cancel-sync");
@@ -2642,18 +2733,21 @@
 
         // Start log polling (moved from Dashboard)
         if (_advancedLogTimer) {
-            clearInterval(_advancedLogTimer);
+            clearTimeout(_advancedLogTimer);
             _advancedLogTimer = null;
         }
         await refreshLogs();
-        _advancedLogTimer = setInterval(async function () {
-            if (document.getElementById("page-advanced").classList.contains("active")) {
-                await refreshLogs();
-            } else if (_advancedLogTimer) {
-                clearInterval(_advancedLogTimer);
-                _advancedLogTimer = null;
-            }
-        }, 3000);
+        function _scheduleLogPoll() {
+            _advancedLogTimer = setTimeout(async function () {
+                if (document.getElementById("page-advanced").classList.contains("active")) {
+                    await refreshLogs();
+                    _scheduleLogPoll();
+                } else {
+                    _advancedLogTimer = null;
+                }
+            }, 3000);
+        }
+        _scheduleLogPoll();
 
         // Display Settings (moved from Settings page)
         const d = config.display || {};
@@ -2751,7 +2845,7 @@
                 var health = await apiGet("/config/health");
                 var currentlyOn = health ? health.display_on !== false : true;
                 var newState = !currentlyOn;
-                await apiPost("/config/control", { cmd: newState ? "power_on" : "power_off" });
+                await apiPost("/config/control", { cmd: newState ? "screen_on" : "screen_off" });
                 _updatePowerButton(newState);
                 showToast(newState ? "Display turned on" : "Display turned off", "info");
             });
@@ -2923,6 +3017,10 @@
                     // Expected — the system is going down
                 }
             });
+
+            // ── Keyboard Input ─────────────────────────────────────
+            _loadKeyboardMap();
+            _bindKeyboardLearn();
 
             // ── Update Controls ──────────────────────────────────────
             bindUpdateControls();

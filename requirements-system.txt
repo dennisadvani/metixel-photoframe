@@ -1,0 +1,5 @@
+# System packages required by Metixel Photoframe.
+# The OTA updater installs any missing packages from this list before
+# the pip install step.  Already-installed packages are skipped.
+# New releases may add to this list — the updater handles it idempotently.
+python3-evdev

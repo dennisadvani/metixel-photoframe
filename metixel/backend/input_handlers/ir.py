@@ -29,7 +29,7 @@ class IRHandler:
         "KEY_PAUSE": "pause",
         "KEY_NEXT": "next",
         "KEY_PREVIOUS": "prev",
-        "KEY_POWER": "power_on",  # Toggle handled at app level
+        "KEY_POWER": "screen_on",  # Toggle handled at app level
         "KEY_OK": "resume",
         "KEY_UP": "next",
         "KEY_DOWN": "prev",
