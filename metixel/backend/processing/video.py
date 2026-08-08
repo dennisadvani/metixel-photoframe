@@ -712,7 +712,7 @@ class VideoProcessor:
         generous timeout accommodates heavy 4K sources on a Pi 2/3
         where software decode of a single frame can take >30 seconds.
         """
-        cmd = nice_cmd([
+        cmd = self._wrap_with_throttle([
             "ffmpeg",
             "-y",
             "-noaccurate_seek",
@@ -869,7 +869,7 @@ class VideoProcessor:
 
         # ── First frame (t=0, keyframe seek) ──────────────────────────
         if not first_path.exists() or first_path.stat().st_size == 0:
-            cmd = nice_cmd([
+            cmd = self._wrap_with_throttle([
                 "ffmpeg", "-y",
                 "-noaccurate_seek", "-ss", "0",
                 "-i", str(source),
@@ -900,7 +900,7 @@ class VideoProcessor:
         # before the real end — causing a visible jitter when VLC
         # exits and the last frame appears underneath.
         if not last_path.exists() or last_path.stat().st_size == 0:
-            cmd = nice_cmd([
+            cmd = self._wrap_with_throttle([
                 "ffmpeg", "-y",
                 "-sseof", "-1",
                 "-i", str(source),
