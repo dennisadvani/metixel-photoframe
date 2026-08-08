@@ -31,8 +31,8 @@ class CECHandler:
         0x44: "prev",       # Previous
         0x45: "next",       # Forward
         0x46: "prev",       # Backward
-        0x41: "power_on",   # Power On
-        0x42: "power_off",  # Power Off
+        0x41: "screen_on",   # Screen On
+        0x42: "screen_off",  # Screen Off
         0x60: "next",       # Play (alternative)
         0x00: "resume",     # Select / OK → resume
     }

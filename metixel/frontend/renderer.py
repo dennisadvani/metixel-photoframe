@@ -27,6 +27,15 @@ from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 logger = logging.getLogger(__name__)
 
 
+def _show_feedback(overlay: OverlayManager | None, title: str, body: str, duration: float) -> None:
+    """Show a brief feedback popup on the frame display."""
+    if overlay is None:
+        return
+    msgs = overlay.get_layer("messages")
+    if msgs is not None:
+        msgs.show(title=title, body=body, severity="info", duration=duration)
+
+
 class FrontendRenderer:
     """Main frontend process — owns the GPU context and render loop.
 
@@ -752,12 +761,21 @@ class FrontendRenderer:
             self._presentation.prev_item()
         elif msg.cmd == "pause":
             self._presentation.pause()
+            _show_feedback(self._overlay, "Paused", "Slideshow paused", 3.0)
         elif msg.cmd == "resume":
             self._presentation.resume()
-        elif msg.cmd == "power_off":
+            _show_feedback(self._overlay, "Resumed", "Slideshow resumed", 3.0)
+        elif msg.cmd == "toggle_pause":
+            if self._presentation._paused:
+                self._presentation.resume()
+                _show_feedback(self._overlay, "Resumed", "Slideshow resumed", 3.0)
+            else:
+                self._presentation.pause()
+                _show_feedback(self._overlay, "Paused", "Slideshow paused", 3.0)
+        elif msg.cmd == "screen_off":
             if self._backend:
                 self._backend.display_power(False)
-        elif msg.cmd == "power_on":
+        elif msg.cmd == "screen_on":
             if self._backend:
                 self._backend.display_power(True)
         elif msg.cmd == "switch_album":

@@ -28,15 +28,15 @@ DEFAULT_KEY_MAP: dict[int, str] = {
     108: "next",     # KEY_DOWN
     105: "prev",     # KEY_LEFT
     106: "prev",     # KEY_RIGHT
-    28:  "resume",   # KEY_ENTER / OK
+    28:  "toggle_pause",  # KEY_ENTER / OK — toggles pause/resume
     57:  "pause",    # KEY_SPACE
-    116: "power_off",  # KEY_POWER (only if NOT handled by systemd)
+    116: "screen_off",  # KEY_POWER (screen off, NOT Pi shutdown)
 }
 
 # -- Valid commands that can be mapped ---------------------------------------
 
-VALID_COMMANDS = {"next", "prev", "pause", "resume",
-                  "power_on", "power_off", "switch_album"}
+VALID_COMMANDS = {"next", "prev", "pause", "resume", "toggle_pause",
+                  "screen_on", "screen_off", "switch_album"}
 
 
 class KeyboardHandler:
@@ -106,17 +106,28 @@ class KeyboardHandler:
             self._learn_result = None
 
     def set_key_map(self, cmd_map: dict[str, list[int]]) -> None:
-        """Replace the entire key mapping."""
-        self._key_map.clear()
+        """Replace the key mapping, merging config overrides with defaults.
+
+        Config entries with an empty list `[]` mean "clear all keys for
+        this command" (removes the defaults too).
+        """
+        # Start from defaults
+        self._key_map = dict(DEFAULT_KEY_MAP)
+        # Overlay config entries
         for cmd, codes in cmd_map.items():
-            if cmd in VALID_COMMANDS:
-                for code in codes:
-                    self._key_map[code] = cmd
+            if cmd not in VALID_COMMANDS:
+                continue
+            # Remove existing mappings for this command (from defaults)
+            self._key_map = {k: v for k, v in self._key_map.items() if v != cmd}
+            # Add new mappings
+            for code in codes:
+                self._key_map[code] = cmd
 
     def run(self) -> None:
         """Find keyboard devices and process key events.  Blocks."""
         try:
             import evdev  # type: ignore[import-untyped]
+            import selectors
         except ImportError:
             logger.warning("python3-evdev not installed — keyboard input disabled")
             return
@@ -129,43 +140,55 @@ class KeyboardHandler:
             logger.debug("No keyboard input devices found")
             return
 
+        # Build a selector so we block until a key event arrives,
+        # rather than busy-polling read_one() which misses events.
+        sel = selectors.DefaultSelector()
+        fd_to_kbd: dict[int, evdev.InputDevice] = {}
+        for kbd in keyboards:
+            try:
+                sel.register(kbd.fd, selectors.EVENT_READ)
+                fd_to_kbd[kbd.fd] = kbd
+            except Exception:
+                pass
+
         names = [k.name for k in keyboards]
         logger.info("Keyboard handler listening on: %s", names)
 
         self._running = True
         while self._running:
             try:
-                for kbd in keyboards:
+                for key, _ in sel.select(timeout=1.0):
+                    kbd = fd_to_kbd.get(key.fileobj)
+                    if kbd is None:
+                        continue
                     try:
-                        event = kbd.read_one()
-                        if event is None:
-                            continue
+                        events = kbd.read()
                     except OSError:
                         continue
-
-                    if event.type != evdev.ecodes.EV_KEY:
-                        continue
-                    if event.value != 1:  # key-down only
-                        continue
-
-                    key_name = evdev.ecodes.KEY.get(event.code, f"code={event.code}")
-
-                    # Learn mode?
-                    with self._learn_lock:
-                        if self._learn_mode:
-                            self._learn_result = (event.code, str(key_name))
-                            self._learn_mode = False
-                            logger.info(
-                                "Learned: key %s (%s) → %s",
-                                event.code, key_name, self._learn_target,
-                            )
+                    for event in events:
+                        if event.type != evdev.ecodes.EV_KEY:
+                            continue
+                        if event.value != 1:  # key-down only
                             continue
 
-                    # Normal mode — lookup and execute
-                    cmd = self._key_map.get(event.code)
-                    if cmd and self._ipc:
-                        logger.debug("Key %s (%s) → %s", event.code, key_name, cmd)
-                        self._ipc.send(ControlMessage(cmd=cmd))
+                        key_name = evdev.ecodes.KEY.get(event.code, f"code={event.code}")
+
+                        # ── Learn mode ──────────────────────────
+                        with self._learn_lock:
+                            if self._learn_mode:
+                                self._learn_result = (event.code, str(key_name))
+                                self._learn_mode = False
+                                logger.info(
+                                    "Learned: key %s (%s) → %s",
+                                    event.code, key_name, self._learn_target,
+                                )
+                                continue
+
+                        # ── Normal mode ─────────────────────────
+                        cmd = self._key_map.get(event.code)
+                        if cmd and self._ipc:
+                            logger.debug("Key %s (%s) → %s", event.code, key_name, cmd)
+                            self._ipc.send(ControlMessage(cmd=cmd))
 
             except Exception:
                 time.sleep(0.1)

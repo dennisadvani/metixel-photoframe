@@ -575,6 +575,20 @@ def keyboard_learn():
         handler.cancel_learn()
         return jsonify({"status": "cancelled"})
 
+    elif action == "clear":
+        target = data.get("target", "")
+        if not target:
+            return jsonify({"error": "Missing target command"}), 400
+        state = current_app.config["METIXEL_STATE"]
+        stored = dict(state.config.input.get("keyboard_map", {}) or {})
+        # Remove the command from config and set it to empty list
+        # so the handler knows to clear all keys for this command
+        # (including any defaults that were overridden).
+        stored[target] = []
+        state.update_config("input", {"keyboard_map": stored})
+        handler.set_key_map(stored)
+        return jsonify({"status": "cleared", "command": target})
+
     return jsonify({"error": "Unknown action"}), 400
 
 
@@ -591,7 +605,7 @@ def _key_name(code: int) -> str:
 def send_control():
     """Send a real-time control command to the frontend via IPC.
 
-    Accepts JSON: {"cmd": "next|prev|pause|resume|switch_album|power_off|power_on"}
+    Accepts JSON: {"cmd": "next|prev|pause|resume|switch_album|screen_off|screen_on"}
     """
     ipc = current_app.config.get("METIXEL_IPC")
     data = request.get_json(silent=True)
@@ -599,7 +613,7 @@ def send_control():
         return jsonify({"error": "Missing 'cmd' in JSON body"}), 400
 
     cmd = data["cmd"]
-    valid_cmds = {"next", "prev", "pause", "resume", "switch_album", "power_off", "power_on", "show_message", "dismiss_message", "dismiss_all_messages"}
+    valid_cmds = {"next", "prev", "pause", "resume", "toggle_pause", "switch_album", "screen_off", "screen_on", "show_message", "dismiss_message", "dismiss_all_messages"}
     if cmd not in valid_cmds:
         return jsonify({"error": f"Unknown command: {cmd}. Valid: {sorted(valid_cmds)}"}), 400
 
@@ -611,10 +625,10 @@ def send_control():
         logger.warning("IPC not available — control command '%s' ignored", cmd)
 
     # Update daemon's display state so the Web UI button reflects reality
-    if cmd in ("power_on", "power_off"):
+    if cmd in ("screen_on", "screen_off"):
         daemon = current_app.config.get("METIXEL_DAEMON")
         if daemon is not None:
-            daemon._display_on = (cmd == "power_on")
+            daemon._display_on = (cmd == "screen_on")
 
     return jsonify({"status": "ok", "cmd": cmd})
 

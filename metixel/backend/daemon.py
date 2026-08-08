@@ -538,7 +538,7 @@ class BackendDaemon:
         """Start the display power scheduler in a background thread.
 
         Checks the configured on/off schedule every 30 seconds and sends
-        ``power_on`` / ``power_off`` IPC commands to the frontend when
+        ``screen_on`` / ``screen_off`` IPC commands to the frontend when
         the display should change state.
         """
         from metixel.shared.ipc import ControlMessage
@@ -578,13 +578,13 @@ class BackendDaemon:
                                 "Display scheduler: turning ON (scheduled %s–%s)",
                                 on_str, off_str,
                             )
-                            self._ipc.send(ControlMessage(cmd="power_on"))
+                            self._ipc.send(ControlMessage(cmd="screen_on"))
                         else:
                             logger.info(
                                 "Display scheduler: turning OFF (scheduled %s–%s)",
                                 on_str, off_str,
                             )
-                            self._ipc.send(ControlMessage(cmd="power_off"))
+                            self._ipc.send(ControlMessage(cmd="screen_off"))
                 except Exception:
                     logger.debug("Display scheduler error", exc_info=True)
 

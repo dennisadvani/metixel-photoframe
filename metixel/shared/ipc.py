@@ -25,7 +25,7 @@ DEFAULT_SOCKET_PATH = "/run/metixel/control.sock"
 class ControlMessage:
     """A JSON-serializable control message."""
 
-    cmd: str  # "next", "prev", "pause", "resume", "switch_album", "power_off", "power_on"
+    cmd: str  # "next", "prev", "pause", "resume", "toggle_pause", "switch_album", "screen_off", "screen_on"
     args: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> str:

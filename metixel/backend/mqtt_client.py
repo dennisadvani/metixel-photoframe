@@ -110,8 +110,8 @@ class MQTTClient:
             "prev": "prev",
             "pause": "pause",
             "resume": "resume",
-            "power_off": "power_off",
-            "power_on": "power_on",
+            "power_off": "screen_off",
+            "power_on": "screen_on",
         }
         cmd = cmd_map.get(command.lower(), "")
         if cmd:
