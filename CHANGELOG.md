@@ -5,7 +5,35 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.0.8-beta.2]
+## [1.0.10-beta.3]
+
+### Fixed
+
+- **Pi 3 hardware video decode broken by low GPU memory** — the setup
+  script was setting ``gpu_mem=16`` MB which prevented VideoCore IV from
+  loading the H.264 codec firmware, forcing VLC into 100 % CPU software
+  decode even with correctly‑transcoded Level 4.0 files.  Raised to
+  ``gpu_mem=128`` MB for Pi 2/3 (Pi 4/5 use kernel‑managed CMA and don't
+  need this).
+- **Infinite re‑transcode loop on Pi 5** — CRF encoding produced files
+  ~3 Mbps above the profile bitrate limit, triggering a re‑transcode on
+  every reboot that produced the same overshoot.  ``needs_optimisation()``
+  now allows 10 % tolerance on bitrate checks.
+- **Frame‑extraction ffmpeg processes not throttled** — first‑frame,
+  last‑frame, and thumbnail extraction ran under ``nice`` only, ignoring
+  the CPU throttle setting.  Now uses ``_wrap_with_throttle()`` so they
+  also get ``cpulimit`` when CPU throttling is enabled.
+- **Missing ``gpu_mem`` on Pi 4/5 Trixie images** — some images ship
+  without any ``gpu_mem`` line in ``config.txt``; the setup script now
+  adds ``gpu_mem=128`` when the setting is absent.
+
+### Changed
+
+- **Setup script GPU memory** — ``gpu_mem=128`` (was ``16``) for new
+  installs; existing installs are auto‑upgraded from ``<128`` or have
+  the setting added if missing entirely
+
+## [1.0.9-beta.2]
 
 ### Added
 
