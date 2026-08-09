@@ -884,6 +884,10 @@ class VideoProcessor:
 
         Runs a quick ``ffprobe`` to verify the file has a readable video
         stream.  Returns ``True`` if the file is valid.
+
+        The timeout is generous (60 s) because on CPU-starved Pi 2/3
+        hardware, ffprobe can take 20–30 s just to open a file when
+        another transcode is saturating the I/O and CPU.
         """
         try:
             result = subprocess.run(
@@ -891,10 +895,16 @@ class VideoProcessor:
                  "-show_entries", "stream=codec_type",
                  "-of", "csv=p=0",
                  str(path)]),
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=60,
             )
             return result.returncode == 0 and "video" in result.stdout.lower()
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "ffprobe timed out validating cached video — "
+                "system may be overloaded: %s", path.name,
+            )
+            return False
+        except OSError:
             return False
 
     def _extract_video_frames(

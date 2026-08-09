@@ -520,25 +520,30 @@ class Pi3dBackend(DisplayBackend):
         """Load an image into a GPU texture via pi3d.
 
         Uses ``blend=True, m_repeat=True`` matching picframe's proven
-        approach.  No ``free_after_load`` for numpy arrays to avoid
-        async-upload race on slower Pi GPUs.  No ``i_format`` override
-        — let pi3d auto-detect from the numpy array shape.
+        approach.  Callers may override ``free_after_load`` (default
+        ``True`` for file paths, ``False`` for numpy arrays) and
+        ``i_format`` via keyword arguments.
         """
         if self._pi3d is None:
             raise RuntimeError("Display not initialized — call create() first")
 
-        i_format = GPU_TEXTURE_FORMAT_GL_RGB if GPU_TEXTURE_FORMAT_GL_RGB else None
+        # Let kwargs override the defaults so callers can force
+        # free_after_load=False for latency-sensitive preloads.
+        free_after_load = kwargs.pop("free_after_load", True)
+        i_format = kwargs.pop("i_format", None)
+        if i_format is None:
+            i_format = GPU_TEXTURE_FORMAT_GL_RGB if GPU_TEXTURE_FORMAT_GL_RGB else None
 
         if isinstance(path, np.ndarray):
-            # Let pi3d detect format from array shape — forcing i_format
-            # can conflict with pi3d 2.55+ internal format detection.
             texture = self._pi3d.Texture(
                 path, blend=True, m_repeat=True,
+                i_format=i_format, **kwargs,
             )
         else:
             texture = self._pi3d.Texture(
-                str(path), blend=True, m_repeat=True, free_after_load=True,
-                i_format=i_format, **kwargs
+                str(path), blend=True, m_repeat=True,
+                free_after_load=free_after_load,
+                i_format=i_format, **kwargs,
             )
 
         logger.debug(

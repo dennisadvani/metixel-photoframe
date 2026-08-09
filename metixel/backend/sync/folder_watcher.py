@@ -734,14 +734,11 @@ class FolderWatcher:
             cache_dir = Path("/opt/metixel") / cache_dir
 
         for file_hash in item_ids:
-            # Remove thumbnail
-            thumb = cache_dir / "thumbnails" / f"{file_hash}.jpg"
-            if thumb.is_file():
-                try:
-                    thumb.unlink()
-                    logger.debug("Cleaned up thumbnail: %s", thumb.name)
-                except OSError:
-                    pass
+            # Thumbnails are NOT deleted — they're small (~50 KB),
+            # generated from the source file, and harmless to keep.
+            # Deleting them causes unnecessary regeneration when a
+            # source file temporarily disappears (sync, re-download)
+            # or when a cached video is re-transcoded.
             # Remove cached image
             img_cache = cache_dir / "images" / f"{file_hash}.jpg"
             if img_cache.is_file():

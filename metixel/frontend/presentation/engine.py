@@ -53,7 +53,7 @@ _VIDEO_PLAYING = 2
 #: Last frame has been swapped under VLC; waiting for VLC to exit.
 _VIDEO_SWAPPED = 3
 #: Max seconds to wait for VLC to confirm it has started (CPU contention).
-_VLC_START_TIMEOUT = 5.0
+_VLC_START_TIMEOUT = 30.0
 
 
 def _hash_image_file(path: Path) -> str:
@@ -1292,27 +1292,17 @@ class PresentationEngine:
         # when VLC exits.  The preloaded texture is held for the swap so
         # no disk I/O or GPU allocation is needed mid-playback.
         #
-        # We load the JPEG manually with PIL and pass a numpy array to
-        # the backend rather than a file path.  This avoids pi3d's
-        # ``free_after_load=True`` path which can release the CPU buffer
-        # before the VideoCore IV DMA transfer completes — producing a
-        # black texture on Pi 2/3.
+        # ``free_after_load=False`` prevents pi3d from releasing the
+        # CPU-side buffer before the VideoCore IV DMA transfer completes.
+        # ``flush_gpu()`` (glFinish) ensures the GPU pipeline drains
+        # before the function returns, so the texture is fully uploaded
+        # and the CPU buffer can safely go out of scope.
         self._video_last_frame_tex = None
         if item.last_frame_path is not None and item.last_frame_path.exists():
             try:
-                from PIL import Image
-                img = Image.open(item.last_frame_path)
-                img = ImageOps.exif_transpose(img)
-                if img.mode == "RGBA":
-                    bg = Image.new("RGB", img.size, (0, 0, 0))
-                    bg.paste(img, mask=img.split()[3])
-                    img = bg
-                elif img.mode != "RGB":
-                    img = img.convert("RGB")
-                arr = np.asarray(img, dtype=np.uint8)
-                img.close()
-
-                self._video_last_frame_tex = self._backend.load_texture(arr)
+                self._video_last_frame_tex = self._backend.load_texture(
+                    item.last_frame_path, free_after_load=False,
+                )
                 self._backend.flush_gpu()
                 tex_id = getattr(self._video_last_frame_tex, '_tex', None)
                 tex_size = getattr(self._video_last_frame_tex, 'size', None)
@@ -1403,12 +1393,7 @@ class PresentationEngine:
             player = getattr(self, "_video_player", None)
             started = player is not None and player.is_playing
             waited = now - self._video_launch_at
-            if started or waited >= _VLC_START_TIMEOUT:
-                if not started:
-                    logger.warning(
-                        "VLC start timeout (%.1fs) — proceeding anyway",
-                        waited,
-                    )
+            if started:
                 # Swap the last frame at 50% of video playtime — early
                 # enough that VLC is still running on slow hardware,
                 # late enough that the viewer has seen most of the video.
@@ -1421,6 +1406,14 @@ class PresentationEngine:
                     "(swap_at=%.1f, duration=%.1f, vlc_startup=%.1fs)",
                     self._video_swap_at, duration, waited,
                 )
+            elif waited >= _VLC_START_TIMEOUT:
+                # VLC never confirmed playback — skip the video.
+                logger.warning(
+                    "VLC start timeout (%.1fs) — skipping video: %s",
+                    waited, self._video_path,
+                )
+                self._video_stop()
+                self._advance()
 
         elif self._video_state == _VIDEO_PLAYING:
             # --- Phase 1: VLC running, wait for swap time ---------------
