@@ -173,6 +173,7 @@ class VideoProcessor:
         screen_width: int = 1920,
         screen_height: int = 1080,
         video_config: dict[str, Any] | None = None,
+        timeouts: dict[str, Any] | None = None,
     ) -> None:
         self._cache_dir = cache_dir
         self._video_cache = cache_dir / "videos"
@@ -192,6 +193,13 @@ class VideoProcessor:
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
         self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 100)
+
+        # Centralised timeouts (from config.timeouts, with defaults)
+        self._t = timeouts or {}
+        def _to(key: str, fallback: int) -> int:
+            v = int(self._t.get(key, fallback))
+            return v if v > 0 else fallback
+        self._timeout = _to  # helper: self._timeout("key", default)
 
         # Track currently transcoding files (by hash) so we can check guardrails
         self._transcoding: set[str] = set()
@@ -766,7 +774,7 @@ class VideoProcessor:
         subprocess.run(
             cmd, check=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=120,
+            timeout=self._timeout("thumbnail_extract", 300),
         )
 
     def _probe(self, path: Path) -> dict:
@@ -784,7 +792,7 @@ class VideoProcessor:
             "-show_streams",
             str(path),
         ])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=self._timeout("ffprobe_probe", 120))
         import json
 
         data = json.loads(result.stdout)
@@ -863,7 +871,7 @@ class VideoProcessor:
         try:
             result = subprocess.run(
                 ["ffmpeg", "-encoders"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=self._timeout("hw_codec_detect", 30),
             )
             if "h264_v4l2m2m" in result.stdout:
                 encoders.append("h264_v4l2m2m")
@@ -895,7 +903,7 @@ class VideoProcessor:
                  "-show_entries", "stream=codec_type",
                  "-of", "csv=p=0",
                  str(path)]),
-                capture_output=True, text=True, timeout=60,
+                capture_output=True, text=True, timeout=self._timeout("ffprobe_validate", 60),
             )
             return result.returncode == 0 and "video" in result.stdout.lower()
         except subprocess.TimeoutExpired:
@@ -946,7 +954,7 @@ class VideoProcessor:
                 subprocess.run(
                     cmd, check=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=60,
+                    timeout=self._timeout("frame_extract_first", 180),
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 logger.warning("Failed to extract first frame: %s", source.name)
@@ -979,7 +987,7 @@ class VideoProcessor:
                 subprocess.run(
                     cmd, check=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=120,
+                    timeout=self._timeout("frame_extract_last", 120),
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 logger.warning("Failed to extract last frame: %s", source.name)

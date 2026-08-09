@@ -393,6 +393,7 @@ class OptimisationQueue:
         )
         self._video_processor = VideoProcessor(
             cache_dir, screen_width=sw, screen_height=sh, video_config=video_cfg,
+            timeouts=config.timeouts,
         )
         logger.info(
             "OptimisationQueue processors initialised: cache=%s, screen=%dx%d, "

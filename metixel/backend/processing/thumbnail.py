@@ -140,9 +140,9 @@ def generate_video_thumbnail(
     """Extract a thumbnail frame at 2 seconds into a video.
 
     Uses fast keyframe seeking (``-ss`` before ``-i`` with
-    ``-noaccurate_seek``).  A generous 120 s timeout accommodates
+    ``-noaccurate_seek``).  A generous 300 s timeout accommodates
     heavy 4K sources on a Pi 2/3 where software decode of a single
-    frame can take > 30 seconds.
+    frame can take > 120 seconds under CPU contention.
 
     Args:
         source_path: Path to the source video.
@@ -179,7 +179,7 @@ def generate_video_thumbnail(
         subprocess.run(
             cmd, check=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=120,
+            timeout=300,
         )
 
         # Validate the generated thumbnail
@@ -195,7 +195,7 @@ def generate_video_thumbnail(
 
     except subprocess.TimeoutExpired:
         logger.warning(
-            "Thumbnail generation timed out (120 s) for: %s", source_path.name,
+            "Thumbnail generation timed out (300 s) for: %s", source_path.name,
         )
         return None
     except subprocess.CalledProcessError:
