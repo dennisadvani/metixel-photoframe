@@ -507,7 +507,7 @@ def main() -> None:
     if not args.push:
         print()
         print("To deploy to the Pi:")
-        print(f"  scp {video_dir}/*.mp4 {video_dir}/*.frame pi@<ip>:/opt/metixel/cache/videos/")
+        print(f"  scp {video_dir}/*.mp4 {video_dir}/*.frame.jpg pi@<ip>:/opt/metixel/cache/videos/")
         print(f"  scp {thumb_dir}/*.jpg pi@<ip>:/opt/metixel/cache/thumbnails/")
 
 

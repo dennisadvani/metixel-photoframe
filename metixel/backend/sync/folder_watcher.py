@@ -760,7 +760,7 @@ class FolderWatcher:
                     pass
             # Remove video frame caches
             for frame in (1, 2):
-                frame_cache = cache_dir / "videos" / f"{file_hash}.{frame}.frame"
+                frame_cache = cache_dir / "videos" / f"{file_hash}.{frame}.frame.jpg"
                 if frame_cache.is_file():
                     try:
                         frame_cache.unlink()

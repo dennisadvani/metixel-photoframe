@@ -437,6 +437,23 @@ class FrontendRenderer:
                 swap_used, swap_total,
                 load[0], load[1], load[2],
             )
+
+            # ── GPU memory (Pi only) ─────────────────────────────────
+            if self._backend:
+                gpu = self._backend.gpu_memory_info()
+                if gpu and "gpu_total_mb" in gpu:
+                    reloc = gpu.get("reloc_used_mb", 0)
+                    total = gpu["gpu_total_mb"]
+                    pct = (reloc / total * 100) if total > 0 else 0.0
+                    logger.debug(
+                        "GPU: %d/%dMB (%.0f%%) | V3D: %skb/%sBOs | "
+                        "textures: %s/%s",
+                        reloc, total, pct,
+                        gpu.get("v3d_bo_kb", "?"),
+                        gpu.get("v3d_bo_count", "?"),
+                        gpu.get("texture_count", "?"),
+                        gpu.get("max_textures", "?"),
+                    )
         except (OSError, ValueError, IndexError):
             pass  # Non-Linux or /proc not available
 

@@ -456,13 +456,13 @@ class VideoProcessor:
                             "Cached video exceeds new profile limits — re-transcoding: %s",
                             cached_path.name,
                         )
-                        self._cleanup_cached_video(cached_path, thumb_path)
+                        self._cleanup_cached_video(cached_path, thumb_path, file_hash)
                 else:
                     logger.warning(
                         "Cached video is corrupt — will re-transcode: %s",
                         cached_path.name,
                     )
-                    self._cleanup_cached_video(cached_path, thumb_path)
+                    self._cleanup_cached_video(cached_path, thumb_path, file_hash)
 
             # Mark as transcoding, then transcode
             self._transcoding.add(file_hash)
@@ -980,7 +980,7 @@ class VideoProcessor:
         return first_path, last_path
 
     @staticmethod
-    def _cleanup_cached_video(cached_path: Path, thumb_path: Path) -> None:
+    def _cleanup_cached_video(cached_path: Path, thumb_path: Path, file_hash: str) -> None:
         """Delete a corrupt cached video and its frame cache files.
 
         The thumbnail is NOT deleted — it's generated from the source
@@ -989,12 +989,11 @@ class VideoProcessor:
         # Delete the corrupt video
         with contextlib.suppress(OSError):
             cached_path.unlink()
-        # Delete frame files (stored in the same directory with a
-        # path-based hash that differs from the content hash).
+        # Delete frame files (named with the content hash, same as
+        # _extract_video_frames uses).
         frame_dir = cached_path.parent
-        path_hash = hashlib.sha256(str(cached_path).encode()).hexdigest()[:16]
         for frame_num in (1, 2):
-            frame_file = frame_dir / f"{path_hash}.{frame_num}.frame.jpg"
+            frame_file = frame_dir / f"{file_hash}.{frame_num}.frame.jpg"
             if frame_file.exists():
                 with contextlib.suppress(OSError):
                     frame_file.unlink()

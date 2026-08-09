@@ -5,6 +5,79 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.12-beta.5]
+
+### Added
+
+- **Per‑profile CRF field** — ``crf`` is now a first‑class profile setting
+  (Pi 2/3: ``28`` for software decode, Pi 4/5: ``23`` for hardware decode).
+  Exposed in the API, Web UI profile fields (locked for built‑in profiles,
+  editable in Custom mode), and config as ``transcode_crf``.
+- **Diagnostic logging** in ``needs_optimisation()`` — every check that
+  triggers a transcode now logs exactly which limit was exceeded (codec,
+  width, height, fps, bitrate, color depth, HDR, H.264 level) at INFO
+  level for easy troubleshooting.
+- **Workstation precache script** — ``scripts/precache_videos.py``
+  transcodes videos on a fast desktop using the exact same profile,
+  hash, and encoding logic as the Pi, then pushes results via SSH.
+  Supports ``--host`` to pull media, ``--push`` to deploy.
+- **``_VIDEO_WAITING`` state** in the video state machine — the 50 %
+  last‑frame swap timer now starts after VLC confirms it has begun
+  rendering (``MediaPlayerPlaying`` event), not at launch.  Prevents
+  black frames when VLC startup is delayed by CPU contention.
+
+### Changed
+
+- **CRF replaces bitrate‑targeted encoding** — Pi 2/3 profiles now use
+  ``-crf 28`` (was ``-b:v 8M`` ABR).  CRF distributes bits intelligently
+  across simple and complex scenes, producing more decode‑friendly output
+  than constant‑bitrate ABR.
+- **Pi 2/3 max bitrate** lowered from ``8 → 7`` Mbps for more headroom
+  below the ~8 Mbps ARM software decode ceiling.
+- **FPS always explicit** — ``-r`` is now always set to
+  ``min(source_fps, max_fps)``, preventing ffmpeg from silently
+  upscaling 23.98 fps → 29.97 fps.
+- **B‑frames restored** — removed ``-bf 0`` from transcode command.
+  B‑frames break the P‑frame dependency chain and are actually easier
+  to decode in software than a chain of pure P‑frames.
+- **Max bitrate capped to source quality** — ``-maxrate`` now uses
+  ``min(source_bitrate, profile_max)`` so a 5.5 Mbps source never
+  gets upscaled to the 7 Mbps profile cap.
+- **Frame extraction downscaled** — thumbnails, first frames, and last
+  frames are now downscaled to the display resolution (same as image
+  optimisation) instead of being extracted at the source's native 4K
+  resolution, saving ~20 MB GPU memory per texture on low‑RAM Pis.
+- **Frame file extension** — ``.1.frame`` / ``.2.frame`` → ``.1.frame.jpg`` /
+  ``.2.frame.jpg`` for consistency with JPEG content.
+- **Last‑frame swap** at 50 % of video duration (was 20 %, then 80 %)
+  — balances VLC startup time with completing before VLC exits.
+- **Web UI quality slider removed** — replaced by the per‑profile CRF
+  numeric field in the profile settings section.
+
+### Fixed
+
+- **H.264 level comparison** — ffprobe returns level as integer (``40``
+  for Level 4.0) but the profile stored it as string ``"4.0"``, causing
+  ``float(40) > float("4.0")`` to always be true.  Probe now normalises
+  to float (``40 → 4.0``).
+- **Folder watcher silently dropping videos** — ``ffprobe`` timeout was
+  ``10`` s, too short for a CPU‑starved Pi 2; raised to ``120`` s.
+  Failures now log at WARNING level instead of DEBUG.
+- **Thumbnail cache deleted on re‑transcode** — ``_cleanup_cached_video``
+  was deleting thumbnails alongside corrupt cached videos; thumbnails
+  now survive cache invalidation.
+- **Frame extraction throttling reverted** — single‑frame extraction
+  (thumbnails, first/last frames) now uses ``nice`` only (no
+  ``cpulimit``) to avoid 120 s timeouts on slow hardware.
+- **Last‑frame texture load race** — the old GPU texture is now kept
+  until the new one is confirmed loaded, preventing a black screen if
+  the upload fails.
+- **ffmpeg 8.x compatibility** — ``-vframes`` ordering (after ``-i``),
+  ``-update 1`` as muxer option (after ``-f image2``), ``-f mjpeg``
+  for single‑frame output.
+- **Media route filter** — ``.frame.jpg`` extension recognised for
+  exclusion from media listings.
+
 ## [1.0.11-beta.4]
 
 ### Changed

@@ -149,6 +149,7 @@ class PresentationEngine:
         self._video_duration: float = 0.0
         self._video_paused: bool = False       # True when SIGSTOP sent to VLC
         self._video_last_frame_loaded: bool = False
+        self._video_last_frame_tex: Any | None = None  # preloaded before VLC starts
 
     # ------------------------------------------------------------------
     # Properties
@@ -741,13 +742,26 @@ class PresentationEngine:
         if texture is None:
             tex = self._tex[self._active]
             if tex is None and self._current_idx >= 0:
+                gpu_info = self._backend.gpu_memory_info()
                 logger.warning(
                     "Active slot %d has no texture — attempting sync load for %s",
                     self._active, getattr(item, 'original_path', item),
                 )
+                if gpu_info:
+                    logger.debug(
+                        "GPU mem at sync load: total=%sM reloc=%sM V3D=%skb/%sBOs "
+                        "textures=%s/%s",
+                        gpu_info.get("gpu_total_mb", "?"),
+                        gpu_info.get("reloc_used_mb", "?"),
+                        gpu_info.get("v3d_bo_kb", "?"),
+                        gpu_info.get("v3d_bo_count", "?"),
+                        gpu_info.get("texture_count", "?"),
+                        gpu_info.get("max_textures", "?"),
+                    )
                 self._load_texture_for_slot(self._active, item)
                 tex = self._tex[self._active]
             if tex is None:
+                gpu_info = self._backend.gpu_memory_info()
                 logger.warning(
                     "No texture for active slot %d (item=%s, idx=%d) — "
                     "rendering blank frame (black screen)",
@@ -755,6 +769,17 @@ class PresentationEngine:
                     getattr(item, 'original_path', item),
                     self._current_idx,
                 )
+                if gpu_info:
+                    logger.warning(
+                        "GPU mem at black screen: total=%sM reloc=%sM "
+                        "V3D=%skb/%sBOs textures=%s/%s",
+                        gpu_info.get("gpu_total_mb", "?"),
+                        gpu_info.get("reloc_used_mb", "?"),
+                        gpu_info.get("v3d_bo_kb", "?"),
+                        gpu_info.get("v3d_bo_count", "?"),
+                        gpu_info.get("texture_count", "?"),
+                        gpu_info.get("max_textures", "?"),
+                    )
                 return
             texture = tex
 
@@ -892,12 +917,20 @@ class PresentationEngine:
 
         For images: loads + downscales the JPEG.
         For videos: launches VLC via the non-blocking state machine.
+
+        Loads the new texture BEFORE unloading the old one — if the load
+        fails, the slot retains its previous texture rather than going
+        black.  This is critical on memory-constrained hardware where
+        GPU allocations can fail under fragmentation pressure.
         """
         if item.media_type == MediaType.VIDEO:
             self._video_launch(item)
             return
-        self._tex[slot] = self._load_texture_for_item(item)
-        self._tex_item[slot] = item
+        new_tex = self._load_texture_for_item(item)
+        if new_tex is not None:
+            self._unload_texture(self._tex[slot])
+            self._tex[slot] = new_tex
+            self._tex_item[slot] = item
 
     def _load_texture_for_item(self, item: MediaItem) -> Any:
         """Load an image as a GPU texture (videos are handled elsewhere).
@@ -1253,12 +1286,51 @@ class PresentationEngine:
                 video_path,
             )
 
-        # --- Verify last frame cache exists (backend responsibility) -----
-        last_cached = (
-            item.last_frame_path is not None
-            and item.last_frame_path.exists()
-        )
-        if not last_cached:
+        # --- Preload last frame texture BEFORE launching VLC -----------
+        # If the last frame can't be loaded now (corrupt file, GPU memory
+        # exhaustion), skip the video rather than risking a black screen
+        # when VLC exits.  The preloaded texture is held for the swap so
+        # no disk I/O or GPU allocation is needed mid-playback.
+        #
+        # We load the JPEG manually with PIL and pass a numpy array to
+        # the backend rather than a file path.  This avoids pi3d's
+        # ``free_after_load=True`` path which can release the CPU buffer
+        # before the VideoCore IV DMA transfer completes — producing a
+        # black texture on Pi 2/3.
+        self._video_last_frame_tex = None
+        if item.last_frame_path is not None and item.last_frame_path.exists():
+            try:
+                from PIL import Image
+                img = Image.open(item.last_frame_path)
+                img = ImageOps.exif_transpose(img)
+                if img.mode == "RGBA":
+                    bg = Image.new("RGB", img.size, (0, 0, 0))
+                    bg.paste(img, mask=img.split()[3])
+                    img = bg
+                elif img.mode != "RGB":
+                    img = img.convert("RGB")
+                arr = np.asarray(img, dtype=np.uint8)
+                img.close()
+
+                self._video_last_frame_tex = self._backend.load_texture(arr)
+                self._backend.flush_gpu()
+                tex_id = getattr(self._video_last_frame_tex, '_tex', None)
+                tex_size = getattr(self._video_last_frame_tex, 'size', None)
+                logger.debug(
+                    "Last frame preloaded for %s: %s "
+                    "(pi3d_id=%s gl_id=%s size=%s)",
+                    video_path, item.last_frame_path,
+                    id(self._video_last_frame_tex), tex_id, tex_size,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to preload last frame for %s: %s — "
+                    "skipping video to avoid black screen on VLC exit",
+                    video_path, item.last_frame_path,
+                )
+                self._advance()
+                return
+        else:
             logger.warning(
                 "Last frame not cached for %s — "
                 "backend should have pre-generated this during OPTIMISE. "
@@ -1281,6 +1353,9 @@ class PresentationEngine:
         )
         if vlc_proc is None:
             logger.warning("VLC failed to start: %s", video_path)
+            if self._video_last_frame_tex is not None:
+                self._unload_texture(self._video_last_frame_tex)
+                self._video_last_frame_tex = None
             self._advance()
             return
 
@@ -1301,8 +1376,8 @@ class PresentationEngine:
         self._video_swap_at = 0.0
         logger.debug(
             "Video state machine: WAITING (duration=%.1f, "
-            "last_frame_cached=%s)",
-            duration, last_cached,
+            "last_frame_preloaded=%s)",
+            duration, self._video_last_frame_tex is not None,
         )
 
     def _video_tick(self) -> None:
@@ -1367,46 +1442,38 @@ class PresentationEngine:
         self, item: MediaItem, video_path: str,
         video_vw: int, video_vh: int, video_duration: float,
     ) -> bool:
-        """Load the pre-generated last frame into the active texture slot.
+        """Swap the preloaded last-frame texture into the active slot.
 
-        Frame extraction is a backend (Phase 2 OPTIMISE) responsibility.
-        The frontend simply loads the cache file from ``item.last_frame_path``
-        — no ffmpeg/ffprobe here.
+        The last-frame texture was preloaded in :meth:`_video_launch_vlc`
+        BEFORE VLC started — this method simply swaps it in under the
+        still-running VLC window.  No disk I/O or GPU allocation here.
 
-        Returns ``True`` on success, ``False`` if the frame file is missing.
-        Does **not** modify ``_video_state`` or ``_video_last_frame_loaded``
-        — callers are responsible for state management.
+        Returns ``True`` on success, ``False`` if the preloaded texture
+        is missing (e.g. file wasn't cached by the backend).
         """
-        if item.last_frame_path is None or not item.last_frame_path.exists():
+        new_tex = self._video_last_frame_tex
+        if new_tex is None:
             logger.warning(
-                "No last frame cached for %s (path=%s, exists=%s) — "
+                "No preloaded last frame for %s — "
                 "backend should have pre-generated this during OPTIMISE. "
                 "First frame will persist after video ends.",
                 video_path,
-                item.last_frame_path,
-                item.last_frame_path.exists() if item.last_frame_path else False,
             )
             return False
 
-        last_cache = item.last_frame_path
-
-        # Load the new texture BEFORE unloading the old one — if the
-        # load fails, the slot still has the original frame rather
-        # than going black.
-        new_tex = None
-        try:
-            new_tex = self._backend.load_texture(last_cache)
-        except Exception:
-            logger.exception(
-                "Failed to upload last-frame texture for %s: %s",
-                video_path, last_cache,
-            )
-            return False
-
-        # Now safe to swap — new texture is confirmed valid.
+        # Swap: unload the old first-frame texture, install the last frame.
         self._unload_texture(self._tex[self._active])
         self._tex[self._active] = new_tex
         self._tex_item[self._active] = item
+        self._video_last_frame_tex = None  # ownership transferred
+
+        # Log the texture internals for black-screen diagnostics.
+        tex_id = getattr(new_tex, '_tex', None) if new_tex is not None else None
+        tex_size = getattr(new_tex, 'size', None) if new_tex is not None else None
+        logger.debug(
+            "Last-frame texture: pi3d_id=%s gl_id=%s size=%s → slot %d",
+            id(new_tex), tex_id, tex_size, self._active,
+        )
 
         # Draw to front buffer, swap, then draw to back buffer
         # so both hold the last frame (avoids first-frame flash
@@ -1485,6 +1552,12 @@ class PresentationEngine:
                 )
 
         # --- Clear video state -----------------------------------------
+        # If the last-frame texture was preloaded but never consumed
+        # (e.g. VLC crashed before the swap), unload it now.
+        if self._video_last_frame_tex is not None:
+            self._unload_texture(self._video_last_frame_tex)
+            self._video_last_frame_tex = None
+
         self._video_state = _VIDEO_IDLE
         self._video_proc = None
         self._video_item = None
@@ -1551,6 +1624,9 @@ class PresentationEngine:
         self._video_path = ""
         self._video_paused = False
         self._video_last_frame_loaded = False
+        if self._video_last_frame_tex is not None:
+            self._unload_texture(self._video_last_frame_tex)
+            self._video_last_frame_tex = None
 
     # ------------------------------------------------------------------
     # Helpers
