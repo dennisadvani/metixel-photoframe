@@ -46,10 +46,14 @@ logger = logging.getLogger(__name__)
 
 #: No video is playing.
 _VIDEO_IDLE = 0
+#: VLC launched; waiting for first frame before starting swap timer.
+_VIDEO_WAITING = 1
 #: VLC is running; waiting for the last-frame swap time.
-_VIDEO_PLAYING = 1
+_VIDEO_PLAYING = 2
 #: Last frame has been swapped under VLC; waiting for VLC to exit.
-_VIDEO_SWAPPED = 2
+_VIDEO_SWAPPED = 3
+#: Max seconds to wait for VLC to confirm it has started (CPU contention).
+_VLC_START_TIMEOUT = 5.0
 
 
 def _hash_image_file(path: Path) -> str:
@@ -135,6 +139,8 @@ class PresentationEngine:
         # --- Non-blocking video state machine ---
         self._video_state: int = _VIDEO_IDLE
         self._video_proc: subprocess.Popen[bytes] | None = None
+        self._video_player: Any = None          # VlcVideoPlayer instance
+        self._video_launch_at: float = 0.0      # monotonic when VLC launched
         self._video_swap_at: float = 0.0      # monotonic timestamp for last-frame swap
         self._video_item: MediaItem | None = None
         self._video_path: str = ""
@@ -1279,8 +1285,10 @@ class PresentationEngine:
             return
 
         # --- Enter state machine ----------------------------------------
-        self._video_state = _VIDEO_PLAYING
+        self._video_state = _VIDEO_WAITING
         self._video_proc = vlc_proc
+        self._video_player = vlc_player
+        self._video_launch_at = time.monotonic()
         self._video_item = item
         self._video_path = video_path
         self._video_vw = vw
@@ -1288,15 +1296,13 @@ class PresentationEngine:
         self._video_duration = duration
         self._video_paused = False
         self._video_last_frame_loaded = False
-        # Swap the last frame at 20% of video playtime — early enough
-        # that VLC is guaranteed to still be running and the last frame
-        # was pre-cached before launch (cache hit → no blocking ffmpeg).
-        swap_delay = duration * 0.20 if duration > 0 else 0.6
-        self._video_swap_at = time.monotonic() + swap_delay
+        # Swap timer starts when VLC confirms it's rendering (see
+        # _video_tick WAITING→PLAYING transition), not at launch.
+        self._video_swap_at = 0.0
         logger.debug(
-            "Video state machine: PLAYING (swap_at=%.1f, duration=%.1f, "
+            "Video state machine: WAITING (duration=%.1f, "
             "last_frame_cached=%s)",
-            self._video_swap_at, duration, last_cached,
+            duration, last_cached,
         )
 
     def _video_tick(self) -> None:
@@ -1317,7 +1323,31 @@ class PresentationEngine:
                 self._video_finish()
                 return
 
-        if self._video_state == _VIDEO_PLAYING:
+        if self._video_state == _VIDEO_WAITING:
+            # --- Phase 0: Waiting for VLC to confirm playback started ---
+            player = getattr(self, "_video_player", None)
+            started = player is not None and player.is_playing
+            waited = now - self._video_launch_at
+            if started or waited >= _VLC_START_TIMEOUT:
+                if not started:
+                    logger.warning(
+                        "VLC start timeout (%.1fs) — proceeding anyway",
+                        waited,
+                    )
+                # Swap the last frame at 50% of video playtime — early
+                # enough that VLC is still running on slow hardware,
+                # late enough that the viewer has seen most of the video.
+                duration = self._video_duration
+                swap_delay = duration * 0.50 if duration > 0 else 0.6
+                self._video_swap_at = now + swap_delay
+                self._video_state = _VIDEO_PLAYING
+                logger.debug(
+                    "Video state machine: PLAYING "
+                    "(swap_at=%.1f, duration=%.1f, vlc_startup=%.1fs)",
+                    self._video_swap_at, duration, waited,
+                )
+
+        elif self._video_state == _VIDEO_PLAYING:
             # --- Phase 1: VLC running, wait for swap time ---------------
             if now >= self._video_swap_at:
                 self._video_do_last_frame_swap()
@@ -1349,25 +1379,33 @@ class PresentationEngine:
         """
         if item.last_frame_path is None or not item.last_frame_path.exists():
             logger.warning(
-                "No last frame cached for %s — "
+                "No last frame cached for %s (path=%s, exists=%s) — "
                 "backend should have pre-generated this during OPTIMISE. "
                 "First frame will persist after video ends.",
                 video_path,
+                item.last_frame_path,
+                item.last_frame_path.exists() if item.last_frame_path else False,
             )
             return False
 
         last_cache = item.last_frame_path
 
-        self._unload_texture(self._tex[self._active])
+        # Load the new texture BEFORE unloading the old one — if the
+        # load fails, the slot still has the original frame rather
+        # than going black.
+        new_tex = None
         try:
-            self._tex[self._active] = self._backend.load_texture(last_cache)
+            new_tex = self._backend.load_texture(last_cache)
         except Exception:
             logger.exception(
                 "Failed to upload last-frame texture for %s: %s",
                 video_path, last_cache,
             )
-            self._tex[self._active] = None
             return False
+
+        # Now safe to swap — new texture is confirmed valid.
+        self._unload_texture(self._tex[self._active])
+        self._tex[self._active] = new_tex
         self._tex_item[self._active] = item
 
         # Draw to front buffer, swap, then draw to back buffer

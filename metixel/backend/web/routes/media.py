@@ -71,7 +71,7 @@ def serve_thumbnail(filename: str):
 
     # Security: only allow known safe extensions
     if not (safe_name.endswith(".jpg") or safe_name.endswith(".jpeg")
-            or safe_name.endswith(".frame")):
+            or safe_name.endswith(".frame.jpg")):
         return jsonify({"error": "Invalid file type"}), 403
 
     # 1. Try the thumbnail cache directory (already 320 px)

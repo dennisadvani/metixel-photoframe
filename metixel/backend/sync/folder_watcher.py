@@ -524,7 +524,7 @@ class FolderWatcher:
                     "-of", "json",
                     str(path),
                 ]),
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=120,
             )
             if result.returncode != 0:
                 logger.debug("ffprobe failed for %s", path.name)
@@ -566,8 +566,15 @@ class FolderWatcher:
                 exif_data={"codec_name": codec},
                 source="local",
             )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "ffprobe timed out for %s — video will be retried on next scan",
+                path.name,
+            )
+            return None
         except Exception:
-            logger.debug("Cannot read video metadata: %s", path.name)
+            logger.warning("Cannot read video metadata: %s", path.name, exc_info=True)
+            return None
             return None
 
     def _resolve_cached_path(self, item: MediaItem) -> Path:
