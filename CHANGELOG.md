@@ -5,7 +5,77 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.0.12-beta.5]
+## [1.0.13-beta.6]
+
+### Added
+
+- **GPU memory introspection** — ``DisplayBackend.gpu_memory_info()`` and
+  ``flush_gpu()`` methods.  ``Pi3dBackend`` reads ``vcgencmd get_mem`` and
+  DRM ``bo_stats`` debugfs for V3D buffer object counts and heap usage.
+  Periodic GPU memory logged every 30 s alongside CPU/memory stats.
+  GPU state logged on texture allocation failure for diagnostics.
+- **Guaranteed no‑black‑screen video architecture** — the last‑frame texture
+  is fully loaded, uploaded to the GPU, and verified BEFORE VLC is launched.
+  See `ARCHITECTURE.md` → "Video Playback Architecture" for the 8‑step
+  state machine diagram.
+- **VLC RC TCP playback detection** — VLC is launched with ``--extraintf rc
+  --rc‑host localhost:<port>`` (LUA CLI).  ``is_playing`` now queries VLC's
+  TCP interface for a real "is rendering" signal instead of guessing with
+  timers.  Supports Pi 2's slow VLC startup without premature swap.
+- **Centralised timeout configuration** — new ``timeouts`` section in
+  ``config.json`` with ``Config.timeout(key, fallback)`` helper.  All
+  critical timeouts (ffprobe, frame extraction, thumbnail generation,
+  transcode, VLC start) now editable in one place.
+
+### Changed
+
+- **GPU memory raised to 128 MB for Pi 2/3** — setup script now detects Pi
+  model and sets ``gpu_mem=128`` for Pi ≤3 (static GPU partition needs room
+  for framebuffer ~8 MB + pi3d textures ~4 MB each).  Pi ≥4 stay at
+  ``gpu_mem=16`` (CMA dynamic allocation).
+- **Timeout increases across the board** for CPU‑starved Pi 2/3 hardware:
+  ffprobe metadata probe 30→120 s, cached‑video validation 15→60 s,
+  thumbnail extraction 120→300 s, first‑frame extract 60→180 s, HW codec
+  detection 10→30 s, VLC start 5→30 s.
+- **Last‑frame swap timer** now starts from VLC's confirmed playback time
+  (via RC interface), not subprocess launch.  Eliminates the swap‑before‑
+  VLC‑appears race on slow hardware.
+
+### Fixed
+
+- **Black last‑frame screen (root cause)** — pi3d ``Texture(file_path)`` does
+  NOT eagerly create the GL texture (``opengl_loaded=False``).  You must
+  call ``tex.load_opengl()`` followed by ``glFinish()`` (ctypes → libGLESv2)
+  to drain the VideoCore IV DMA pipeline before pi3d's ``free_after_load``
+  releases the CPU buffer.  Without the flush, DMA reads freed memory →
+  black pixels.
+- **``_load_texture_for_slot`` unload‑before‑load** — the old texture was
+  destroyed before the new one was confirmed loaded.  If the new load
+  failed (GPU memory full), the slot went permanently black.  Now loads
+  first, only unloads old on success.
+- **Cache hash mismatch** — ``_cleanup_cached_video`` used a path‑based
+  hash to find frame files, but ``_extract_video_frames`` named them with
+  a content‑based hash.  Frame files were never cleaned up on re‑transcode.
+  Both now use the content hash (``file_hash``).
+- **Orphaned frame files never deleted** — folder watcher's
+  ``_cleanup_cached_for_deleted`` was missing the ``.jpg`` extension when
+  looking for ``{hash}.1.frame`` files (should be ``{hash}.1.frame.jpg``).
+- **Thumbnails deleted on cache invalidation** — folder watcher cleanup
+  was deleting thumbnails alongside cached videos.  Thumbnails now survive
+  cleanup; they're only ~50 KB and regenerating them on every re‑transcode
+  wastes CPU.
+- **``_validate_cached_video`` crash** — still decorated ``@staticmethod``
+  after adding ``self._timeout()`` call, causing ``NameError`` on every
+  invocation.  All three precached videos silently failed validation and
+  never reached the playlist.
+- **``free_after_load`` kwarg conflict** — ``load_texture()`` hardcoded
+  ``free_after_load=True`` while the engine passed ``free_after_load=False``
+  via ``**kwargs``, causing ``TypeError: multiple values``.  ``load_texture``
+  now pops the kwarg to let callers override the default.
+- **``gpu_mem=16`` on Pi 3** — the setup script was applying 16 MB GPU
+  memory to Pi 3 (which uses a static partition), leaving only 8 MB for
+  textures after the framebuffer.  Videos rendered as black because the
+  GPU couldn't allocate texture memory.
 
 ### Added
 

@@ -886,8 +886,7 @@ class VideoProcessor:
         logger.debug("Available video encoders: %s", encoders)
         return encoders
 
-    @staticmethod
-    def _validate_cached_video(path: Path) -> bool:
+    def _validate_cached_video(self, path: Path) -> bool:
         """Check that a cached video file is valid (not corrupt/partial).
 
         Runs a quick ``ffprobe`` to verify the file has a readable video
