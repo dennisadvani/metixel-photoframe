@@ -5,6 +5,149 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.0.13-beta.6]
+
+### Added
+
+- **GPU memory introspection** — ``DisplayBackend.gpu_memory_info()`` and
+  ``flush_gpu()`` methods.  ``Pi3dBackend`` reads ``vcgencmd get_mem`` and
+  DRM ``bo_stats`` debugfs for V3D buffer object counts and heap usage.
+  Periodic GPU memory logged every 30 s alongside CPU/memory stats.
+  GPU state logged on texture allocation failure for diagnostics.
+- **Guaranteed no‑black‑screen video architecture** — the last‑frame texture
+  is fully loaded, uploaded to the GPU, and verified BEFORE VLC is launched.
+  See `ARCHITECTURE.md` → "Video Playback Architecture" for the 8‑step
+  state machine diagram.
+- **VLC RC TCP playback detection** — VLC is launched with ``--extraintf rc
+  --rc‑host localhost:<port>`` (LUA CLI).  ``is_playing`` now queries VLC's
+  TCP interface for a real "is rendering" signal instead of guessing with
+  timers.  Supports Pi 2's slow VLC startup without premature swap.
+- **Centralised timeout configuration** — new ``timeouts`` section in
+  ``config.json`` with ``Config.timeout(key, fallback)`` helper.  All
+  critical timeouts (ffprobe, frame extraction, thumbnail generation,
+  transcode, VLC start) now editable in one place.
+
+### Changed
+
+- **GPU memory raised to 128 MB for Pi 2/3** — setup script now detects Pi
+  model and sets ``gpu_mem=128`` for Pi ≤3 (static GPU partition needs room
+  for framebuffer ~8 MB + pi3d textures ~4 MB each).  Pi ≥4 stay at
+  ``gpu_mem=16`` (CMA dynamic allocation).
+- **Timeout increases across the board** for CPU‑starved Pi 2/3 hardware:
+  ffprobe metadata probe 30→120 s, cached‑video validation 15→60 s,
+  thumbnail extraction 120→300 s, first‑frame extract 60→180 s, HW codec
+  detection 10→30 s, VLC start 5→30 s.
+- **Last‑frame swap timer** now starts from VLC's confirmed playback time
+  (via RC interface), not subprocess launch.  Eliminates the swap‑before‑
+  VLC‑appears race on slow hardware.
+
+### Fixed
+
+- **Black last‑frame screen (root cause)** — pi3d ``Texture(file_path)`` does
+  NOT eagerly create the GL texture (``opengl_loaded=False``).  You must
+  call ``tex.load_opengl()`` followed by ``glFinish()`` (ctypes → libGLESv2)
+  to drain the VideoCore IV DMA pipeline before pi3d's ``free_after_load``
+  releases the CPU buffer.  Without the flush, DMA reads freed memory →
+  black pixels.
+- **``_load_texture_for_slot`` unload‑before‑load** — the old texture was
+  destroyed before the new one was confirmed loaded.  If the new load
+  failed (GPU memory full), the slot went permanently black.  Now loads
+  first, only unloads old on success.
+- **Cache hash mismatch** — ``_cleanup_cached_video`` used a path‑based
+  hash to find frame files, but ``_extract_video_frames`` named them with
+  a content‑based hash.  Frame files were never cleaned up on re‑transcode.
+  Both now use the content hash (``file_hash``).
+- **Orphaned frame files never deleted** — folder watcher's
+  ``_cleanup_cached_for_deleted`` was missing the ``.jpg`` extension when
+  looking for ``{hash}.1.frame`` files (should be ``{hash}.1.frame.jpg``).
+- **Thumbnails deleted on cache invalidation** — folder watcher cleanup
+  was deleting thumbnails alongside cached videos.  Thumbnails now survive
+  cleanup; they're only ~50 KB and regenerating them on every re‑transcode
+  wastes CPU.
+- **``_validate_cached_video`` crash** — still decorated ``@staticmethod``
+  after adding ``self._timeout()`` call, causing ``NameError`` on every
+  invocation.  All three precached videos silently failed validation and
+  never reached the playlist.
+- **``free_after_load`` kwarg conflict** — ``load_texture()`` hardcoded
+  ``free_after_load=True`` while the engine passed ``free_after_load=False``
+  via ``**kwargs``, causing ``TypeError: multiple values``.  ``load_texture``
+  now pops the kwarg to let callers override the default.
+- **``gpu_mem=16`` on Pi 3** — the setup script was applying 16 MB GPU
+  memory to Pi 3 (which uses a static partition), leaving only 8 MB for
+  textures after the framebuffer.  Videos rendered as black because the
+  GPU couldn't allocate texture memory.
+
+### Added
+
+- **Per‑profile CRF field** — ``crf`` is now a first‑class profile setting
+  (Pi 2/3: ``28`` for software decode, Pi 4/5: ``23`` for hardware decode).
+  Exposed in the API, Web UI profile fields (locked for built‑in profiles,
+  editable in Custom mode), and config as ``transcode_crf``.
+- **Diagnostic logging** in ``needs_optimisation()`` — every check that
+  triggers a transcode now logs exactly which limit was exceeded (codec,
+  width, height, fps, bitrate, color depth, HDR, H.264 level) at INFO
+  level for easy troubleshooting.
+- **Workstation precache script** — ``scripts/precache_videos.py``
+  transcodes videos on a fast desktop using the exact same profile,
+  hash, and encoding logic as the Pi, then pushes results via SSH.
+  Supports ``--host`` to pull media, ``--push`` to deploy.
+- **``_VIDEO_WAITING`` state** in the video state machine — the 50 %
+  last‑frame swap timer now starts after VLC confirms it has begun
+  rendering (``MediaPlayerPlaying`` event), not at launch.  Prevents
+  black frames when VLC startup is delayed by CPU contention.
+
+### Changed
+
+- **CRF replaces bitrate‑targeted encoding** — Pi 2/3 profiles now use
+  ``-crf 28`` (was ``-b:v 8M`` ABR).  CRF distributes bits intelligently
+  across simple and complex scenes, producing more decode‑friendly output
+  than constant‑bitrate ABR.
+- **Pi 2/3 max bitrate** lowered from ``8 → 7`` Mbps for more headroom
+  below the ~8 Mbps ARM software decode ceiling.
+- **FPS always explicit** — ``-r`` is now always set to
+  ``min(source_fps, max_fps)``, preventing ffmpeg from silently
+  upscaling 23.98 fps → 29.97 fps.
+- **B‑frames restored** — removed ``-bf 0`` from transcode command.
+  B‑frames break the P‑frame dependency chain and are actually easier
+  to decode in software than a chain of pure P‑frames.
+- **Max bitrate capped to source quality** — ``-maxrate`` now uses
+  ``min(source_bitrate, profile_max)`` so a 5.5 Mbps source never
+  gets upscaled to the 7 Mbps profile cap.
+- **Frame extraction downscaled** — thumbnails, first frames, and last
+  frames are now downscaled to the display resolution (same as image
+  optimisation) instead of being extracted at the source's native 4K
+  resolution, saving ~20 MB GPU memory per texture on low‑RAM Pis.
+- **Frame file extension** — ``.1.frame`` / ``.2.frame`` → ``.1.frame.jpg`` /
+  ``.2.frame.jpg`` for consistency with JPEG content.
+- **Last‑frame swap** at 50 % of video duration (was 20 %, then 80 %)
+  — balances VLC startup time with completing before VLC exits.
+- **Web UI quality slider removed** — replaced by the per‑profile CRF
+  numeric field in the profile settings section.
+
+### Fixed
+
+- **H.264 level comparison** — ffprobe returns level as integer (``40``
+  for Level 4.0) but the profile stored it as string ``"4.0"``, causing
+  ``float(40) > float("4.0")`` to always be true.  Probe now normalises
+  to float (``40 → 4.0``).
+- **Folder watcher silently dropping videos** — ``ffprobe`` timeout was
+  ``10`` s, too short for a CPU‑starved Pi 2; raised to ``120`` s.
+  Failures now log at WARNING level instead of DEBUG.
+- **Thumbnail cache deleted on re‑transcode** — ``_cleanup_cached_video``
+  was deleting thumbnails alongside corrupt cached videos; thumbnails
+  now survive cache invalidation.
+- **Frame extraction throttling reverted** — single‑frame extraction
+  (thumbnails, first/last frames) now uses ``nice`` only (no
+  ``cpulimit``) to avoid 120 s timeouts on slow hardware.
+- **Last‑frame texture load race** — the old GPU texture is now kept
+  until the new one is confirmed loaded, preventing a black screen if
+  the upload fails.
+- **ffmpeg 8.x compatibility** — ``-vframes`` ordering (after ``-i``),
+  ``-update 1`` as muxer option (after ``-f image2``), ``-f mjpeg``
+  for single‑frame output.
+- **Media route filter** — ``.frame.jpg`` extension recognised for
+  exclusion from media listings.
+
 ## [1.0.11-beta.4]
 
 ### Changed

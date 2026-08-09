@@ -117,6 +117,10 @@ class VlcVideoPlayer:
         self._screen_h: int = 1080
         self._hw_codecs: list[str] = []
 
+        # RC interface for querying VLC playback status via TCP.
+        # Port 0 means "not configured" — VLC hasn't been launched yet.
+        self._rc_port: int = 0
+
         # VLC event-callback driven state
         self._vlc_playing_event = threading.Event()
         self._vlc_ended_event = threading.Event()
@@ -223,6 +227,7 @@ class VlcVideoPlayer:
         transition (picframe approach).
         """
         import shutil
+        import socket as _socket
 
         # Find the VLC binary
         vlc_bin = shutil.which("vlc")
@@ -237,12 +242,23 @@ class VlcVideoPlayer:
             self._screen_w, self._screen_h,
         )
 
+        # Pick a free TCP port for VLC's RC interface.
+        # VLC 3.x LUA CLI uses --rc-host (TCP), not --rc-unix (Unix).
+        # Bind port 0 → OS assigns a free port → close → pass to VLC.
+        _tmp = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        _tmp.bind(("127.0.0.1", 0))
+        self._rc_port: int = _tmp.getsockname()[1]
+        _tmp.close()
+
         cmd = [
             vlc_bin,
             "--no-audio",
             "--play-and-exit",
             "--no-video-title-show",
             "--intf", "dummy",       # No interactive interface
+            "--extraintf", "rc",      # LUA CLI for status queries
+            "--rc-host", f"localhost:{self._rc_port}",
+            "--rc-fake-tty",          # No TTY needed
             video_path,
         ]
 
@@ -264,9 +280,12 @@ class VlcVideoPlayer:
             fit_mode,
         )
 
-        self._playing = True
         self._finished = False
         self._start_time = time.monotonic()
+        # _playing is NOT preset to True — the is_playing property
+        # queries VLC's RC Unix socket for real playback status.
+        # VLC may take 1-3 seconds to create the socket and start
+        # rendering, which is handled by the engine's WAITING state.
 
         try:
             env = os.environ.copy()
@@ -371,8 +390,76 @@ class VlcVideoPlayer:
 
     @property
     def is_playing(self) -> bool:
-        """Whether a video is currently loaded and playing."""
-        return self._playing
+        """Whether VLC is actually rendering frames.
+
+        Queries VLC's RC TCP interface for the canonical playback
+        status.  Returns ``False`` if VLC hasn't started its RC
+        listener yet, the query fails, or VLC reports it's not playing.
+        """
+        if not self._rc_port:
+            return False
+        try:
+            return self._query_rc("is_playing") == "1"
+        except (OSError, TimeoutError, ValueError):
+            return False
+
+    def _query_rc(self, command: str, timeout: float = 0.5) -> str:
+        """Send a command to VLC's RC TCP interface and return the response.
+
+        VLC 3.x LUA CLI listens on a TCP port (``--rc-host``).  The
+        protocol is line-based: connect, read the welcome banner
+        (discard lines until the ``> `` prompt), send the command, and
+        read the first non-empty response line.
+
+        Args:
+            command: RC command to send (e.g. ``"is_playing"``).
+            timeout: Socket timeout in seconds.
+
+        Returns:
+            The first line of the response, stripped of whitespace.
+
+        Raises:
+            OSError: If VLC isn't listening on the expected port.
+            TimeoutError: If VLC doesn't respond within *timeout*.
+            ValueError: If the response is unexpected.
+        """
+        import socket as _socket
+
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            sock.connect(("127.0.0.1", self._rc_port))
+            # ── Consume welcome banner until prompt ──────────────────
+            banner = b""
+            while b"> " not in banner:
+                chunk = sock.recv(256)
+                if not chunk:
+                    raise OSError("VLC closed RC connection during banner")
+                banner += chunk
+            # ── Send command ─────────────────────────────────────────
+            sock.sendall((command + "\n").encode())
+            # ── Read response ────────────────────────────────────────
+            response = b""
+            while True:
+                try:
+                    sock.settimeout(0.3)
+                    chunk = sock.recv(256)
+                    if not chunk:
+                        break
+                    response += chunk
+                    if b"\n" in response:
+                        break
+                except _socket.timeout:
+                    break
+        finally:
+            sock.close()
+
+        # Parse: first non-empty, non-prompt line
+        for line in response.decode(errors="replace").splitlines():
+            line = line.strip()
+            if line and line != ">" and not line.startswith(">"):
+                return line
+        raise ValueError(f"Empty RC response for '{command}'")
 
     @property
     def is_finished(self) -> bool:
@@ -968,6 +1055,9 @@ class VlcVideoPlayer:
         """Release VLC and SDL2 resources."""
         # Unregister VLC callbacks to avoid stale references
         self._vlc_callbacks_registered = False
+
+        # Reset RC port (TCP — no filesystem cleanup needed)
+        self._rc_port = 0
 
         if self._player:
             try:

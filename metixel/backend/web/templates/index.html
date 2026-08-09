@@ -370,6 +370,11 @@
                             </div>
                             <p class="hint">Mbps</p>
                             <div class="form-group">
+                                <span class="form-label">Quality (CRF)</span>
+                                <input type="number" id="cfg-transcode-crf" min="0" max="51" value="23" disabled>
+                            </div>
+                            <p class="hint">Lower = better quality / larger files. 18 = near-lossless, 23 = good balance, 28 = smaller files.</p>
+                            <div class="form-group">
                                 <span class="form-label">Target Codec</span>
                                 <select id="cfg-transcode-codec" disabled>
                                     <option value="h264">H.264 (AVC)</option>
@@ -410,12 +415,6 @@
                             <input type="checkbox" id="cfg-transcode-software-encoder" checked> Use Software Encoder (libx264 / libx265)
                         </label>
                         <p class="hint">Best quality — uses CPU instead of Pi hardware encoder. Disable for faster (but lower quality) hardware encoding.</p>
-                        <div class="form-group" style="margin-top:0.5rem">
-                            <span class="form-label">Quality</span>
-                            <input type="range" id="cfg-transcode-quality" min="18" max="30" step="1" value="23">
-                            <span class="range-value" id="cfg-transcode-quality-label">23 (good balance)</span>
-                        </div>
-                        <p class="hint">Lower = better quality / larger files. 18 = near-lossless, 23 = good balance, 28 = smaller files.</p>
                         <div class="form-group">
                             <span class="form-label">Transcode Timeout</span>
                             <input type="number" id="cfg-transcode-timeout" min="60" max="86400" step="60" value="7200">

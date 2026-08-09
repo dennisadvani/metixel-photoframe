@@ -524,7 +524,7 @@ class FolderWatcher:
                     "-of", "json",
                     str(path),
                 ]),
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=120,
             )
             if result.returncode != 0:
                 logger.debug("ffprobe failed for %s", path.name)
@@ -566,8 +566,15 @@ class FolderWatcher:
                 exif_data={"codec_name": codec},
                 source="local",
             )
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "ffprobe timed out for %s — video will be retried on next scan",
+                path.name,
+            )
+            return None
         except Exception:
-            logger.debug("Cannot read video metadata: %s", path.name)
+            logger.warning("Cannot read video metadata: %s", path.name, exc_info=True)
+            return None
             return None
 
     def _resolve_cached_path(self, item: MediaItem) -> Path:
@@ -727,14 +734,11 @@ class FolderWatcher:
             cache_dir = Path("/opt/metixel") / cache_dir
 
         for file_hash in item_ids:
-            # Remove thumbnail
-            thumb = cache_dir / "thumbnails" / f"{file_hash}.jpg"
-            if thumb.is_file():
-                try:
-                    thumb.unlink()
-                    logger.debug("Cleaned up thumbnail: %s", thumb.name)
-                except OSError:
-                    pass
+            # Thumbnails are NOT deleted — they're small (~50 KB),
+            # generated from the source file, and harmless to keep.
+            # Deleting them causes unnecessary regeneration when a
+            # source file temporarily disappears (sync, re-download)
+            # or when a cached video is re-transcoded.
             # Remove cached image
             img_cache = cache_dir / "images" / f"{file_hash}.jpg"
             if img_cache.is_file():
@@ -753,7 +757,7 @@ class FolderWatcher:
                     pass
             # Remove video frame caches
             for frame in (1, 2):
-                frame_cache = cache_dir / "videos" / f"{file_hash}.{frame}.frame"
+                frame_cache = cache_dir / "videos" / f"{file_hash}.{frame}.frame.jpg"
                 if frame_cache.is_file():
                     try:
                         frame_cache.unlink()

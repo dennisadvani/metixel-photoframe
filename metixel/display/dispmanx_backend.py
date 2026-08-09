@@ -520,25 +520,30 @@ class Pi3dBackend(DisplayBackend):
         """Load an image into a GPU texture via pi3d.
 
         Uses ``blend=True, m_repeat=True`` matching picframe's proven
-        approach.  No ``free_after_load`` for numpy arrays to avoid
-        async-upload race on slower Pi GPUs.  No ``i_format`` override
-        — let pi3d auto-detect from the numpy array shape.
+        approach.  Callers may override ``free_after_load`` (default
+        ``True`` for file paths, ``False`` for numpy arrays) and
+        ``i_format`` via keyword arguments.
         """
         if self._pi3d is None:
             raise RuntimeError("Display not initialized — call create() first")
 
-        i_format = GPU_TEXTURE_FORMAT_GL_RGB if GPU_TEXTURE_FORMAT_GL_RGB else None
+        # Let kwargs override the defaults so callers can force
+        # free_after_load=False for latency-sensitive preloads.
+        free_after_load = kwargs.pop("free_after_load", True)
+        i_format = kwargs.pop("i_format", None)
+        if i_format is None:
+            i_format = GPU_TEXTURE_FORMAT_GL_RGB if GPU_TEXTURE_FORMAT_GL_RGB else None
 
         if isinstance(path, np.ndarray):
-            # Let pi3d detect format from array shape — forcing i_format
-            # can conflict with pi3d 2.55+ internal format detection.
             texture = self._pi3d.Texture(
                 path, blend=True, m_repeat=True,
+                i_format=i_format, **kwargs,
             )
         else:
             texture = self._pi3d.Texture(
-                str(path), blend=True, m_repeat=True, free_after_load=True,
-                i_format=i_format, **kwargs
+                str(path), blend=True, m_repeat=True,
+                free_after_load=free_after_load,
+                i_format=i_format, **kwargs,
             )
 
         logger.debug(
@@ -550,11 +555,16 @@ class Pi3dBackend(DisplayBackend):
         self._texture_count += 1
 
         if self._texture_count > self._max_textures:
+            gpu_info = self.gpu_memory_info()
+            reloc_mb = gpu_info.get("reloc_used_mb", "?") if gpu_info else "?"
+            total_mb = gpu_info.get("gpu_total_mb", "?") if gpu_info else "?"
             logger.warning(
                 "GPU texture count (%d) exceeds recommended max (%d) — "
-                "risk of memory exhaustion on low-RAM Pi",
+                "GPU heap: %s/%sMB reloc — risk of memory exhaustion on low-RAM Pi",
                 self._texture_count,
                 self._max_textures,
+                reloc_mb,
+                total_mb,
             )
 
         return texture
@@ -566,6 +576,116 @@ class Pi3dBackend(DisplayBackend):
             del texture
         self._texture_count = max(0, self._texture_count - 1)
         gc.collect()
+
+    # -- GPU memory introspection -------------------------------------------
+
+    # Cache the last GPU memory read to avoid spawning vcgencmd every frame.
+    _gpu_mem_cache: dict[str, Any] | None = None
+    _gpu_mem_cache_time: float = 0.0
+    _GPU_MEM_CACHE_TTL: float = 5.0  # seconds
+
+    def gpu_memory_info(self) -> dict[str, Any] | None:
+        """Read GPU memory usage from ``vcgencmd`` and DRM debugfs.
+
+        Results are cached for ``_GPU_MEM_CACHE_TTL`` seconds because
+        ``vcgencmd`` is a subprocess call and debugfs reads are sysfs I/O
+        — neither should be done at frame rate.
+
+        Returns:
+            Dict with ``gpu_total_mb``, ``reloc_used_mb``,
+            ``malloc_used_mb``, ``v3d_bo_count``, ``v3d_bo_kb``,
+            ``texture_count``, or ``None`` if the tools are unavailable.
+        """
+        now = time.monotonic()
+        if (
+            Pi3dBackend._gpu_mem_cache is not None
+            and (now - Pi3dBackend._gpu_mem_cache_time) < Pi3dBackend._GPU_MEM_CACHE_TTL
+        ):
+            return Pi3dBackend._gpu_mem_cache
+
+        info: dict[str, Any] = {
+            "texture_count": self._texture_count,
+            "max_textures": self._max_textures,
+        }
+
+        try:
+            # ── vcgencmd get_mem gpu ──────────────────────────────────
+            result = subprocess.run(
+                ["vcgencmd", "get_mem", "gpu"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0 and "=" in result.stdout:
+                val = result.stdout.strip().split("=")[-1].rstrip("M")
+                info["gpu_total_mb"] = int(val)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+
+        try:
+            # ── vcgencmd get_mem reloc ────────────────────────────────
+            result = subprocess.run(
+                ["vcgencmd", "get_mem", "reloc"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0 and "=" in result.stdout:
+                val = result.stdout.strip().split("=")[-1].rstrip("M")
+                info["reloc_used_mb"] = int(val)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+
+        try:
+            # ── vcgencmd get_mem malloc ───────────────────────────────
+            result = subprocess.run(
+                ["vcgencmd", "get_mem", "malloc"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode == 0 and "=" in result.stdout:
+                val = result.stdout.strip().split("=")[-1].rstrip("M")
+                info["malloc_used_mb"] = int(val)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+
+        try:
+            # ── /sys/kernel/debug/dri/0/bo_stats ──────────────────────
+            with open("/sys/kernel/debug/dri/0/bo_stats") as f:
+                for line in f:
+                    # Line format (leading spaces): "V3D:  107292kb BOs (34)"
+                    stripped = line.strip()
+                    if stripped.startswith("V3D:") and "kb BOs" in stripped:
+                        parts = stripped.split()
+                        if len(parts) >= 4:
+                            kb_str = parts[1].rstrip("kb")
+                            count_str = parts[3].lstrip("(").rstrip(")")
+                            info["v3d_bo_kb"] = int(kb_str)
+                            info["v3d_bo_count"] = int(count_str)
+                        break
+        except (OSError, ValueError, IndexError):
+            pass
+
+        Pi3dBackend._gpu_mem_cache = info
+        Pi3dBackend._gpu_mem_cache_time = now
+        return info
+
+    def flush_gpu(self) -> None:
+        """Block until the GPU command queue drains.
+
+        On VideoCore IV (Pi 2/3), pi3d's ``free_after_load=True`` can
+        release the CPU-side numpy array before the DMA upload to GPU
+        completes, resulting in black textures.  ``glFinish()`` forces
+        the GPU to finish all pending work before the CPU proceeds.
+
+        Uses ctypes to call ``glFinish`` from the system's GLESv2
+        library — no PyOpenGL dependency required.
+        """
+        try:
+            from ctypes import cdll, util
+            lib_name = util.find_library("GLESv2")
+            if lib_name is None:
+                logger.debug("flush_gpu: GLESv2 library not found — skipping")
+                return
+            gl = cdll.LoadLibrary(lib_name)
+            gl.glFinish()
+        except Exception:
+            pass  # Non-Pi or GL not available
 
     def update_texture(self, texture: Any, data: np.ndarray) -> None:
         """Update an existing pi3d Texture with new pixel data in-place.

@@ -510,6 +510,61 @@ Next frame reflects change
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Video Playback Architecture (Frontend)
+
+Video playback in the presentation engine follows a **guaranteed-no-black-screen** order.
+The last frame is fully loaded and verified on the GPU **before** VLC is launched.  VLC
+renders on top via its own X11 window, so the GPU upload is invisible.
+
+```
+┌─ ① First frame already in active texture slot (normal preload → advance flow)
+
+│ ② LOAD last frame from disk → force GL upload → glFinish → verify GL texture
+│    If ANY step fails → skip video, advance.  No VLC launched = no black screen.
+│
+│ ③ Draw first frame to BOTH pi3d buffers (overwrites GL state from step ②)
+│
+│ ④ Launch VLC subprocess with RC TCP interface (--extraintf rc --rc-host)
+│    VLC creates its own X11 window on top of the pi3d display.
+│
+│ ⑤ WAITING state: poll VLC's RC socket (is_playing) until VLC confirms
+│    playback has started.  No timers — real signal from VLC.
+│
+│ ⑥ PLAYING state: swap timer = now + (duration × 0.50)
+│
+│ ⑦ SWAP at 50 %: move preloaded last-frame texture into active slot under
+│    VLC.  No I/O, no GL work — just a pointer swap.  VLC covers everything.
+│
+│ ⑧ VLC exits → last frame revealed → crossfade to next slide
+└───────────────────────────────────────────────────────────────
+
+Key invariants
+    • pi3d Texture objects do NOT create OpenGL textures eagerly.
+      ``load_texture(path)`` only loads the JPEG into a numpy array
+      (``disk_loaded=True, opengl_loaded=False``).  You MUST call
+      ``tex.load_opengl()`` to force the GPU upload, followed by
+      a backend ``flush_gpu()`` (``glFinish`` via ctypes) to ensure
+      the DMA transfer completes before pi3d's ``free_after_load``
+      releases the CPU buffer.  Without the flush, VideoCore IV DMA
+      can read freed memory → black texture.
+
+    • Never pass ``free_after_load=False`` to pi3d — it blocks eager
+      GL texture creation entirely (``_tex`` stays ``c_ulong(0)``).
+
+    • The VLC RC interface uses TCP (``--rc-host localhost:<port>``),
+      NOT Unix sockets.  VLC 3.x LUA CLI ignores ``--rc-unix``.
+
+    • ``_load_texture_for_slot`` loads the new texture BEFORE unloading
+      the old one.  If the load fails, the slot keeps its previous
+      texture rather than going black.
+
+GPU memory on Pi 2/3
+    Pi 2/3 use a STATIC GPU memory partition (``gpu_mem`` in config.txt).
+    Set ``gpu_mem=128`` for these models — the framebuffer alone needs
+    ~8 MB at 1080p, and pi3d textures consume ~4 MB each (RGB565).
+    Pi 4/5 use CMA dynamic allocation — ``gpu_mem=16`` is sufficient.
+```
+
 **RAM budget for Phase 1 (512MB Pi Zero 2 W — untested):**
 - Linux + systemd: ~80MB
 - Backend daemon (Python): ~60MB

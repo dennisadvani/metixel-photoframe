@@ -132,6 +132,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "last_check": None,
         "last_update": None,
     },
+    "timeouts": {
+        # ── ffprobe / metadata ──────────────────────────────────────
+        "ffprobe_probe": 120,           # ffprobe metadata probe (video.py _probe)
+        "ffprobe_validate": 60,         # ffprobe cached-video validation
+        "folder_watcher_probe": 120,    # folder watcher ffprobe metadata scan
+        "hw_codec_detect": 30,          # ffmpeg HW codec detection
+        # ── Extraction / processing ──────────────────────────────────
+        "thumbnail_extract": 300,       # thumbnail frame extraction (ffmpeg)
+        "frame_extract_first": 180,     # first-frame JPEG extraction
+        "frame_extract_last": 120,      # last-frame JPEG extraction (decodes final 1s)
+        "image_process": 120,           # image optimisation subprocess
+        "transcode": 7200,              # video transcode (2 hours)
+        # ── Playback ─────────────────────────────────────────────────
+        "vlc_start": 30,                # VLC playback confirmation
+    },
 }
 
 
@@ -204,6 +219,30 @@ class Config:
             self._data["video"] = v
 
         return v
+
+    @property
+    def timeouts(self) -> dict[str, Any]:
+        """Centralised timeout settings with defaults for every value.
+
+        Returns the ``timeouts`` dict, filling in any missing keys from
+        the global defaults so callers never get KeyError.
+        """
+        t = self._data.setdefault("timeouts", {})
+        defaults = DEFAULT_CONFIG.get("timeouts", {})
+        for key, val in defaults.items():
+            t.setdefault(key, val)
+        return t
+
+    def timeout(self, key: str, fallback: int) -> int:
+        """Read a single timeout value, falling back to *fallback* if
+        the key is missing or the value is non-positive.
+        """
+        val = self.timeouts.get(key, fallback)
+        try:
+            ival = int(val)
+            return ival if ival > 0 else fallback
+        except (TypeError, ValueError):
+            return fallback
 
     def get_resolved_transcoding_profile(self) -> dict[str, Any]:
         """Return the effective transcoding profile with all values resolved.

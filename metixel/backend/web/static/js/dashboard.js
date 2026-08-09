@@ -481,6 +481,7 @@
             setValue("cfg-transcode-max-height", vals.transcode_max_height || 0);
             setValue("cfg-transcode-max-fps", vals.transcode_max_fps || 30);
             setValue("cfg-transcode-max-bitrate", vals.transcode_max_bitrate || 20);
+            setValue("cfg-transcode-crf", vals.transcode_crf || 23);
             setValue("cfg-transcode-codec", vals.transcode_codec || "h264");
             setValue("cfg-transcode-h264-profile", vals.transcode_h264_profile || "high");
             setValue("cfg-transcode-h264-level", vals.transcode_h264_level || "4.2");
@@ -492,6 +493,7 @@
             setValue("cfg-transcode-max-height", prof.max_height || 1080);
             setValue("cfg-transcode-max-fps", prof.max_fps || 30);
             setValue("cfg-transcode-max-bitrate", prof.max_bitrate || 20);
+            setValue("cfg-transcode-crf", prof.crf || 23);
             setValue("cfg-transcode-codec", prof.codec || "h264");
             setValue("cfg-transcode-h264-profile", prof.h264_profile || "high");
             setValue("cfg-transcode-h264-level", prof.h264_level || "4.2");
@@ -1407,15 +1409,8 @@
         setValue("cfg-transcode-max-width", v.transcode_max_width || 0);
         setValue("cfg-transcode-max-height", v.transcode_max_height || 0);
         setChecked("cfg-keep-audio", v.keep_audio === true);
-        // Profile dropdown loaded via API (includes pi model auto-detection)
+        // Profile dropdown loaded via API (includes pi model auto-detection and CRF)
         _loadTranscodingProfiles(v);
-        var q = v.transcode_quality !== undefined ? v.transcode_quality : 23;
-        setValue("cfg-transcode-quality", q);
-        var qLabel = document.getElementById("cfg-transcode-quality-label");
-        if (qLabel) {
-            var qDesc = q <= 20 ? " (high quality)" : q <= 26 ? " (good balance)" : " (smaller files)";
-            qLabel.textContent = q + qDesc;
-        }
         setChecked("cfg-transcode-software-encoder", v.transcode_use_software_encoder !== false);
         setValue("cfg-transcode-timeout", v.transcode_timeout_seconds || 7200);
         setChecked("cfg-cpu-throttle-enabled", v.cpu_throttle_enabled !== false);
@@ -1474,12 +1469,6 @@
             document.getElementById("cfg-cpu-throttle-enabled")?.addEventListener("change", function () {
                 _toggleCpuThrottleGroup(this.checked);
             });
-            document.getElementById("cfg-transcode-quality")?.addEventListener("input", function () {
-                var q = parseInt(this.value, 10);
-                var qDesc = q <= 20 ? " (high quality)" : q <= 26 ? " (good balance)" : " (smaller files)";
-                var lbl = document.getElementById("cfg-transcode-quality-label");
-                if (lbl) lbl.textContent = q + qDesc;
-            });
             document.getElementById("cfg-cpu-throttle-pct")?.addEventListener("input", function () {
                 var lbl = document.getElementById("cfg-cpu-throttle-pct-label");
                 if (lbl) lbl.textContent = this.value + "%";
@@ -1506,7 +1495,7 @@
                     transcoding_enabled: document.getElementById("cfg-transcode-enabled").checked,
                     transcode_max_width: sanitizeInt(document.getElementById("cfg-transcode-max-width").value, 0),
                     transcode_max_height: sanitizeInt(document.getElementById("cfg-transcode-max-height").value, 0),
-                    transcode_quality: sanitizeInt(document.getElementById("cfg-transcode-quality").value, 23),
+                    transcode_crf: sanitizeInt(document.getElementById("cfg-transcode-crf").value, 23),
                     transcode_use_software_encoder: document.getElementById("cfg-transcode-software-encoder").checked,
                     transcode_timeout_seconds: sanitizeInt(document.getElementById("cfg-transcode-timeout").value, 7200),
                     cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
@@ -1526,7 +1515,7 @@
                     transcoding_enabled: document.getElementById("cfg-transcode-enabled").checked,
                     transcoding_profile: profile,
                     keep_audio: document.getElementById("cfg-keep-audio").checked,
-                    transcode_quality: sanitizeInt(document.getElementById("cfg-transcode-quality").value, 23),
+                    transcode_crf: sanitizeInt(document.getElementById("cfg-transcode-crf").value, 23),
                     transcode_use_software_encoder: document.getElementById("cfg-transcode-software-encoder").checked,
                     transcode_timeout_seconds: sanitizeInt(document.getElementById("cfg-transcode-timeout").value, 7200),
                     cpu_throttle_enabled: document.getElementById("cfg-cpu-throttle-enabled").checked,
@@ -1537,6 +1526,7 @@
                     payload.transcode_max_height = sanitizeInt(document.getElementById("cfg-transcode-max-height").value, 0);
                     payload.transcode_max_fps = sanitizeInt(document.getElementById("cfg-transcode-max-fps").value, 30);
                     payload.transcode_max_bitrate = sanitizeInt(document.getElementById("cfg-transcode-max-bitrate").value, 20);
+                    payload.transcode_crf = sanitizeInt(document.getElementById("cfg-transcode-crf").value, 23);
                     payload.transcode_codec = document.getElementById("cfg-transcode-codec").value;
                     payload.transcode_h264_profile = document.getElementById("cfg-transcode-h264-profile").value;
                     payload.transcode_h264_level = document.getElementById("cfg-transcode-h264-level").value;

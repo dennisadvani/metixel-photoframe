@@ -206,6 +206,32 @@ class DisplayBackend(ABC):
         self.unload_texture(texture)
         return self.load_texture(data)
 
+    def gpu_memory_info(self) -> dict[str, Any] | None:
+        """Return GPU memory usage statistics, or ``None`` if unavailable.
+
+        Subclasses on Raspberry Pi hardware should override to read from
+        ``vcgencmd`` and ``/sys/kernel/debug/dri/0/bo_stats``.
+
+        Returns:
+            Dict with keys like ``gpu_total_mb``, ``reloc_used_mb``,
+            ``v3d_bo_count``, ``v3d_bo_kb``, or ``None`` on non-Pi
+            platforms.
+        """
+        return None
+
+    def flush_gpu(self) -> None:
+        """Block until all pending GPU operations complete.
+
+        Subclasses should call ``glFinish()`` or equivalent to ensure
+        texture uploads, shader dispatches, and buffer writes are
+        fully committed before the CPU proceeds.  Critical on
+        memory-constrained hardware where ``free_after_load`` may
+        release source buffers before DMA transfers finish.
+
+        Default is a no-op — safe for dev backends without a GPU.
+        """
+        pass
+
     # -- Text Rendering ------------------------------------------------------
 
     @abstractmethod

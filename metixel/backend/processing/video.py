@@ -116,8 +116,8 @@ class VideoProcessor:
             "max_width": 1920,
             "max_height": 1080,
             "max_fps": 30,
-            "max_bitrate": 8,   # Mbps
-            "bitrate_target": True,  # Use -b:v (target bitrate) instead of CRF
+            "max_bitrate": 7,   # Mbps
+            "crf": 28,          # Higher CRF = lower bitrate for software decode
             "h264_profile": "high",
             "h264_level": "4.0",
             "color_depth": 8,
@@ -130,8 +130,8 @@ class VideoProcessor:
             "max_width": 1920,
             "max_height": 1080,
             "max_fps": 30,        # Hard limit — see project requirements
-            "max_bitrate": 8,      # Software decode limit: ARM cores tap out ~8-10 Mbps
-            "bitrate_target": True,  # Use -b:v (target bitrate) instead of CRF
+            "max_bitrate": 7,      # Software decode limit: ARM cores tap out ~8-10 Mbps
+            "crf": 28,            # Higher CRF = lower bitrate for software decode
             "h264_profile": "high",
             "h264_level": "4.0",   # Pi 3 VideoCore IV HW decode limit: Level 4.1
             "color_depth": 8,
@@ -145,6 +145,7 @@ class VideoProcessor:
             "max_height": 2160,
             "max_fps": 60,
             "max_bitrate": 40,
+            "crf": 23,            # Standard quality for hardware decode
             "h264_profile": "high",    # Not used for H.265, informational
             "h264_level": "5.1",
             "color_depth": 10,
@@ -158,6 +159,7 @@ class VideoProcessor:
             "max_height": 2160,
             "max_fps": 60,
             "max_bitrate": 80,
+            "crf": 23,            # Standard quality for hardware decode
             "h264_profile": "high",
             "h264_level": "5.2",
             "color_depth": 10,
@@ -171,6 +173,7 @@ class VideoProcessor:
         screen_width: int = 1920,
         screen_height: int = 1080,
         video_config: dict[str, Any] | None = None,
+        timeouts: dict[str, Any] | None = None,
     ) -> None:
         self._cache_dir = cache_dir
         self._video_cache = cache_dir / "videos"
@@ -190,6 +193,13 @@ class VideoProcessor:
         self._transcode_timeout = self._cfg.get("transcode_timeout_seconds", 7200)
         self._cpu_throttle_enabled = self._cfg.get("cpu_throttle_enabled", True)
         self._cpu_throttle_pct = self._cfg.get("cpu_throttle_percent", 100)
+
+        # Centralised timeouts (from config.timeouts, with defaults)
+        self._t = timeouts or {}
+        def _to(key: str, fallback: int) -> int:
+            v = int(self._t.get(key, fallback))
+            return v if v > 0 else fallback
+        self._timeout = _to  # helper: self._timeout("key", default)
 
         # Track currently transcoding files (by hash) so we can check guardrails
         self._transcoding: set[str] = set()
@@ -235,6 +245,7 @@ class VideoProcessor:
                 "max_height": self._cfg.get("transcode_max_height", 0) or self._screen_h,
                 "max_fps": self._cfg.get("transcode_max_fps", 30),
                 "max_bitrate": self._cfg.get("transcode_max_bitrate", 20),
+                "crf": self._cfg.get("transcode_crf", self._transcode_quality),
                 "h264_profile": self._cfg.get("transcode_h264_profile", "high"),
                 "h264_level": str(self._cfg.get("transcode_h264_level", "4.2")),
                 "color_depth": self._cfg.get("transcode_color_depth", 8),
@@ -301,54 +312,70 @@ class VideoProcessor:
 
         # Codec check
         if target_codec == "h264" and source_codec not in VideoProcessor.H264_CODECS:
+            logger.info("Needs transcode: codec %s not in H.264 set", source_codec)
             return True
         if target_codec == "h265" and source_codec not in VideoProcessor.HEVC_CODECS:
+            logger.info("Needs transcode: codec %s not in HEVC set", source_codec)
             return True
 
         # Resolution
-        if profile.get("max_width", 0) and w > profile["max_width"]:
+        max_w = profile.get("max_width", 0)
+        if max_w and w > max_w:
+            logger.info("Needs transcode: width %d > max %d", w, max_w)
             return True
-        if profile.get("max_height", 0) and h > profile["max_height"]:
+        max_h = profile.get("max_height", 0)
+        if max_h and h > max_h:
+            logger.info("Needs transcode: height %d > max %d", h, max_h)
             return True
 
         # Framerate
         max_fps = profile.get("max_fps", 0)
         src_fps = probe_info.get("fps", 0) or 0
         if max_fps and src_fps > max_fps:
+            logger.info("Needs transcode: fps %.2f > max %.2f", src_fps, max_fps)
             return True
 
-        # Bitrate (Mbps) — allow 10 % tolerance because CRF encoding
-        # cannot precisely target an average bitrate.
+        # Bitrate (both in Mbps — probe normalises bps→Mbps)
         max_br = profile.get("max_bitrate", 0)
         src_br = probe_info.get("bitrate", 0) or 0
         if max_br and src_br > int(max_br * 1.1):
+            logger.info(
+                "Needs transcode: bitrate %d Mbps > max %d Mbps (+10%%=%d)",
+                src_br, max_br, int(max_br * 1.1),
+            )
             return True
 
         # Color depth
         target_depth = profile.get("color_depth", 8)
         src_depth = probe_info.get("color_depth", 8) or 8
         if src_depth > target_depth:
+            logger.info("Needs transcode: color depth %d > target %d", src_depth, target_depth)
             return True
 
         # HDR → SDR downgrade
         if not profile.get("hdr_support", False) and probe_info.get("color_trc", ""):
             trc = probe_info["color_trc"]
             if trc in ("smpte2084", "arib-std-b67", "smpte428", "bt2020-10"):
-                return True  # HDR source on non-HDR-capable Pi
+                logger.info("Needs transcode: HDR source on non-HDR Pi (trc=%s)", trc)
+                return True
 
         # H.264 Profile/Level check (for H.264 sources on H.264 profiles)
         if target_codec == "h264" and source_codec in VideoProcessor.H264_CODECS:
             target_level = profile.get("h264_level", "")
             src_level = probe_info.get("h264_level", "") or ""
-            if target_level and src_level:
-                # Compare numeric level (e.g. "4.2" > "4.0" → needs transcode)
+            if target_level != "" and src_level != "":
                 try:
                     if float(src_level) > float(target_level):
+                        logger.info(
+                            "Needs transcode: H.264 level %s > target %s",
+                            src_level, target_level,
+                        )
                         return True
                 except (ValueError, TypeError):
                     pass
 
         # Within all limits — no optimisation needed
+        logger.debug("Video within all profile limits — skipping transcode")
         return False
 
     def process(self, source_path: Path, source: str = "local") -> MediaItem | None:
@@ -437,13 +464,13 @@ class VideoProcessor:
                             "Cached video exceeds new profile limits — re-transcoding: %s",
                             cached_path.name,
                         )
-                        self._cleanup_cached_video(cached_path, thumb_path)
+                        self._cleanup_cached_video(cached_path, thumb_path, file_hash)
                 else:
                     logger.warning(
                         "Cached video is corrupt — will re-transcode: %s",
                         cached_path.name,
                     )
-                    self._cleanup_cached_video(cached_path, thumb_path)
+                    self._cleanup_cached_video(cached_path, thumb_path, file_hash)
 
             # Mark as transcoding, then transcode
             self._transcoding.add(file_hash)
@@ -559,15 +586,10 @@ class VideoProcessor:
                     else:
                         preset = "superfast"
 
-                # Profiles with ``bitrate_target`` (Pi 2/3, software decode)
-                # use targeted bitrate encoding instead of CRF.  CRF cannot
-                # reliably cap average bitrate — the output can exceed the
-                # profile limit by 30-50 %, choking software decode.
-                if profile.get("bitrate_target"):
-                    target_br = profile.get("max_bitrate", 10)
-                    cmd += ["-preset", preset, "-b:v", f"{target_br}M"]
-                else:
-                    cmd += ["-preset", preset, "-crf", str(crf)]
+                # Use profile CRF if set, otherwise fall back to the
+                # global transcode_quality config value.
+                effective_crf = profile.get("crf", crf)
+                cmd += ["-preset", preset, "-crf", str(effective_crf)]
 
                 if thread_limit is not None and thread_limit > 0:
                     param_key = "-x264-params" if encoder == "libx264" else "-x265-params"
@@ -583,14 +605,15 @@ class VideoProcessor:
             if encoder == "libx264" and h264_profile:
                 cmd += ["-profile:v", h264_profile]
             if encoder in ("libx264", "libx265"):
-                cmd += ["-refs", "2", "-bf", "0", "-g", "30"]
+                cmd += ["-refs", "2", "-g", "30"]
 
-            # Framerate cap — only reduce, never increase
-            # A 30fps source should not be upscaled to 60fps by -r.
-            # Only apply the cap when the source exceeds max_fps.
+            # Framerate: always set explicitly to prevent ffmpeg from
+            # silently changing the output FPS (observed: 23.98→29.97).
+            # Cap to profile max, but never upscale.
             src_fps = info.get("fps", 0) or 0
-            if max_fps and max_fps > 0 and src_fps > max_fps:
-                cmd += ["-r", str(max_fps)]
+            if src_fps > 0:
+                target_fps = min(src_fps, max_fps) if max_fps else src_fps
+                cmd += ["-r", str(target_fps)]
 
             # Audio: keep or strip
             keep_audio = self._cfg.get("keep_audio", False)
@@ -605,10 +628,14 @@ class VideoProcessor:
                     "-color_trc", "bt709",
                 ]
 
-            # Max bitrate constraint
+            # Max bitrate constraint — never exceed source quality.
+            # Cap to min(source_bitrate, profile_max) so a 5.5 Mbps
+            # source doesn't get upscaled to the 7 Mbps profile cap.
             max_br = profile.get("max_bitrate", 0)
+            src_br = (info or {}).get("bitrate", 0) or 0
             if max_br and max_br > 0:
-                cmd += ["-maxrate", f"{max_br}M", "-bufsize", f"{max_br * 2}M"]
+                effective_max = min(src_br, max_br) if src_br else max_br
+                cmd += ["-maxrate", f"{effective_max}M", "-bufsize", f"{effective_max * 2}M"]
 
             cmd += [
                 "-movflags", "+faststart",
@@ -721,28 +748,33 @@ class VideoProcessor:
         """Extract a thumbnail frame at 2 seconds into the video.
 
         Uses fast (keyframe) seeking with ``-ss`` before ``-i`` plus
-        ``-noaccurate_seek`` to avoid decoding from the start.  A
-        generous timeout accommodates heavy 4K sources on a Pi 2/3
-        where software decode of a single frame can take >30 seconds.
+        ``-noaccurate_seek`` to avoid decoding from the start.  Frame
+        is downscaled to the display resolution to match image
+        optimisation limits and avoid wasting GPU memory.
         """
-        cmd = self._wrap_with_throttle([
+        vf = (
+            f"scale='min({self._screen_w},iw)':'min({self._screen_h},ih)'"
+            f":force_original_aspect_ratio=decrease,"
+            f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
+        )
+        cmd = nice_cmd([
             "ffmpeg",
             "-y",
             "-noaccurate_seek",
             "-ss", "2",
             "-i", str(source),
+            "-vf", vf,
             "-vframes", "1",
             "-q:v", "2",
             str(dest),
         ])
-        # Use the same timeout as probing (both are one-shot ffmpeg
-        # invocations that shouldn't take minutes, but 4K on a Pi 3
-        # can legitimately need over 30 seconds to initialise the
-        # decoder and seek to the first keyframe).
+        # Single-frame extraction — use nice only (no cpulimit).
+        # Thumbnails are quick one-shot operations; cpulimit is for
+        # long-running transcodes.
         subprocess.run(
             cmd, check=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=120,
+            timeout=self._timeout("thumbnail_extract", 300),
         )
 
     def _probe(self, path: Path) -> dict:
@@ -760,7 +792,7 @@ class VideoProcessor:
             "-show_streams",
             str(path),
         ])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=self._timeout("ffprobe_probe", 120))
         import json
 
         data = json.loads(result.stdout)
@@ -779,6 +811,14 @@ class VideoProcessor:
                 info["pix_fmt"] = stream.get("pix_fmt", "")
                 info["h264_profile"] = stream.get("profile", "")
                 info["h264_level"] = stream.get("level", "")
+                # Normalise ffprobe level: integer 40 → float 4.0
+                if isinstance(info["h264_level"], int) and info["h264_level"] > 9:
+                    info["h264_level"] = float(info["h264_level"]) / 10.0
+                elif info["h264_level"]:
+                    try:
+                        info["h264_level"] = float(info["h264_level"])
+                    except (ValueError, TypeError):
+                        info["h264_level"] = ""
                 info["color_primaries"] = stream.get("color_primaries", "")
                 info["color_trc"] = stream.get("color_transfer", "")
                 info["colorspace"] = stream.get("color_space", "")
@@ -831,7 +871,7 @@ class VideoProcessor:
         try:
             result = subprocess.run(
                 ["ffmpeg", "-encoders"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=self._timeout("hw_codec_detect", 30),
             )
             if "h264_v4l2m2m" in result.stdout:
                 encoders.append("h264_v4l2m2m")
@@ -846,12 +886,15 @@ class VideoProcessor:
         logger.debug("Available video encoders: %s", encoders)
         return encoders
 
-    @staticmethod
-    def _validate_cached_video(path: Path) -> bool:
+    def _validate_cached_video(self, path: Path) -> bool:
         """Check that a cached video file is valid (not corrupt/partial).
 
         Runs a quick ``ffprobe`` to verify the file has a readable video
         stream.  Returns ``True`` if the file is valid.
+
+        The timeout is generous (60 s) because on CPU-starved Pi 2/3
+        hardware, ffprobe can take 20–30 s just to open a file when
+        another transcode is saturating the I/O and CPU.
         """
         try:
             result = subprocess.run(
@@ -859,10 +902,16 @@ class VideoProcessor:
                  "-show_entries", "stream=codec_type",
                  "-of", "csv=p=0",
                  str(path)]),
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=self._timeout("ffprobe_validate", 60),
             )
             return result.returncode == 0 and "video" in result.stdout.lower()
-        except (subprocess.TimeoutExpired, OSError):
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "ffprobe timed out validating cached video — "
+                "system may be overloaded: %s", path.name,
+            )
+            return False
+        except OSError:
             return False
 
     def _extract_video_frames(
@@ -877,15 +926,25 @@ class VideoProcessor:
         needs to run ffmpeg — it just loads the pre-generated cache files.
         """
         frame_dir = self._video_cache
-        first_path = frame_dir / f"{file_hash}.1.frame"
-        last_path = frame_dir / f"{file_hash}.2.frame"
+        first_path = frame_dir / f"{file_hash}.1.frame.jpg"
+        last_path = frame_dir / f"{file_hash}.2.frame.jpg"
+
+        # Resolve the scale cap for frame extraction — use the display
+        # resolution (same as image optimisation) so frames don't exceed
+        # what the GPU can handle.
+        vf = (
+            f"scale='min({self._screen_w},iw)':'min({self._screen_h},ih)'"
+            f":force_original_aspect_ratio=decrease,"
+            f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
+        )
 
         # ── First frame (t=0, keyframe seek) ──────────────────────────
         if not first_path.exists() or first_path.stat().st_size == 0:
-            cmd = self._wrap_with_throttle([
+            cmd = nice_cmd([
                 "ffmpeg", "-y",
                 "-noaccurate_seek", "-ss", "0",
                 "-i", str(source),
+                "-vf", vf,
                 "-vframes", "1", "-q:v", "2",
                 "-f", "image2",
                 str(first_path),
@@ -894,7 +953,7 @@ class VideoProcessor:
                 subprocess.run(
                     cmd, check=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=60,
+                    timeout=self._timeout("frame_extract_first", 180),
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 logger.warning("Failed to extract first frame: %s", source.name)
@@ -913,10 +972,11 @@ class VideoProcessor:
         # before the real end — causing a visible jitter when VLC
         # exits and the last frame appears underneath.
         if not last_path.exists() or last_path.stat().st_size == 0:
-            cmd = self._wrap_with_throttle([
+            cmd = nice_cmd([
                 "ffmpeg", "-y",
                 "-sseof", "-1",
                 "-i", str(source),
+                "-vf", vf,
                 "-q:v", "2",
                 "-f", "image2",
                 "-update", "1",
@@ -926,7 +986,7 @@ class VideoProcessor:
                 subprocess.run(
                     cmd, check=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    timeout=120,
+                    timeout=self._timeout("frame_extract_last", 120),
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 logger.warning("Failed to extract last frame: %s", source.name)
@@ -937,25 +997,20 @@ class VideoProcessor:
         return first_path, last_path
 
     @staticmethod
-    def _cleanup_cached_video(cached_path: Path, thumb_path: Path) -> None:
-        """Delete a corrupt cached video and all associated artifacts.
+    def _cleanup_cached_video(cached_path: Path, thumb_path: Path, file_hash: str) -> None:
+        """Delete a corrupt cached video and its frame cache files.
 
-        Removes the video file, its thumbnail, and any frame cache files
-        (``.1.frame`` / ``.2.frame``) so stale frames don't appear after
-        re-transcode.
+        The thumbnail is NOT deleted — it's generated from the source
+        file and is independent of the transcode output.
         """
         # Delete the corrupt video
         with contextlib.suppress(OSError):
             cached_path.unlink()
-        # Delete the thumbnail
-        with contextlib.suppress(OSError):
-            thumb_path.unlink()
-        # Delete frame files (stored in the same directory with a
-        # path-based hash that differs from the content hash).
+        # Delete frame files (named with the content hash, same as
+        # _extract_video_frames uses).
         frame_dir = cached_path.parent
-        path_hash = hashlib.sha256(str(cached_path).encode()).hexdigest()[:16]
         for frame_num in (1, 2):
-            frame_file = frame_dir / f"{path_hash}.{frame_num}.frame"
+            frame_file = frame_dir / f"{file_hash}.{frame_num}.frame.jpg"
             if frame_file.exists():
                 with contextlib.suppress(OSError):
                     frame_file.unlink()
