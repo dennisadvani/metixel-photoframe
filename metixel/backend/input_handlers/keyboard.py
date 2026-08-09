@@ -24,13 +24,9 @@ logger = logging.getLogger(__name__)
 # -- Default key map (Linux key codes) ---------------------------------------
 
 DEFAULT_KEY_MAP: dict[int, str] = {
-    103: "next",     # KEY_UP
-    108: "next",     # KEY_DOWN
     105: "prev",     # KEY_LEFT
-    106: "prev",     # KEY_RIGHT
+    106: "next",     # KEY_RIGHT
     28:  "toggle_pause",  # KEY_ENTER / OK — toggles pause/resume
-    57:  "pause",    # KEY_SPACE
-    116: "screen_off",  # KEY_POWER (screen off, NOT Pi shutdown)
 }
 
 # -- Valid commands that can be mapped ---------------------------------------
