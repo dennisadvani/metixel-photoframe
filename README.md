@@ -8,8 +8,12 @@
   <em>A custom, open-source digital photo frame OS for Raspberry Pi.<br>Beautiful slideshows. Immich integration. Web UI. Zero-cloud. Just pictures and videos.</em>
 </p>
 
-<p align="center">
+<!-- <p align="center">
   <img src="docs/images/digital_frame_wall.PNG" alt="Metixel digital photo frame on a wall" width="70%">
+</p> -->
+
+<p align="center">
+  <img src="docs\images\metixel_youtube_400px_5fps.gif" alt="Metixel Photoframe in action"  width="70%">
 </p>
 
 <p align="center">
@@ -27,6 +31,13 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 - 📷 **Native Immich v3 sync** — auto-pull albums and assets
 - 🎬 **Video playback** via VLC
 - 🔒 **Runs locally** — no cloud dependency, your photos stay on your network
+
+---
+
+## Building Your Own Digital Photoframe
+
+I recommend repurposing a TV or old monitor to build your digital picture frame. In my case, I used an old monitor, had a professional framer create a frame and matte and mounted the monitor behind along with the Raspberry Pi. Instructions for building your own digital picture frame are available [here](https://www.thedigitalpictureframe.com/how-i-built-a-stunning-32-inch-4k-digital-picture-frame-with-a-raspberry-pi-4-featuring-smooth-image-crossfading-transitions/), [here](https://medium.com/women-make/diy-digital-photo-frame-in-less-than-20-minutes-69bc35ed6364), and [here](https://www.noahrousell.com/blog/making-a-digital-pho/).
+
 
 ---
 
