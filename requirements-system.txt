@@ -2,4 +2,38 @@
 # The OTA updater installs any missing packages from this list before
 # the pip install step.  Already-installed packages are skipped.
 # New releases may add to this list — the updater handles it idempotently.
+# Mirrors the apt install line in scripts/setup_trixie_metixel.sh.
+
+# Python runtime
+python3-pip
+python3-pil
+python3-numpy
+python3-libcamera
+libopenblas0
+
+# Display / graphics stack
+cage
+xwayland
+wlr-randr
+seatd
+
+# Media processing
+ffmpeg
+vlc-bin
+vlc-plugin-base
+vlc-plugin-video-output
+vlc-data
+cpulimit
+
+# Input / CEC
+cec-utils
+libcec-dev
 python3-evdev
+
+# Networking
+git
+samba
+iptables-persistent
+hostapd
+dnsmasq
+iw

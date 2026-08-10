@@ -5,7 +5,7 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.0.13-beta.6]
+## [1.1.0]
 
 ### Added
 
@@ -76,6 +76,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   memory to Pi 3 (which uses a static partition), leaving only 8 MB for
   textures after the framebuffer.  Videos rendered as black because the
   GPU couldn't allocate texture memory.
+- **Keyboard defaults** — KEY_UP / KEY_DOWN removed (redundant), KEY_RIGHT
+  corrected from ``prev`` → ``next``, KEY_SPACE and KEY_POWER removed.
+  Defaults now: KEY_LEFT → prev, KEY_RIGHT → next, KEY_ENTER → toggle.
+
+### Changed (2026-08-10)
+
+- **``gpu_mem=128`` for all Pi models** — setup script simplified: Pi 4/5
+  ignore ``gpu_mem`` via CMA dynamic allocation, so a single value avoids
+  model‑detection complexity and keeps the base image portable across all
+  Pi generations.
+- **``requirements-system.txt`` now complete** — lists all 24 apt packages
+  from the setup script (grouped by purpose) so the OTA updater can
+  install any missing system dependencies after an update.
 
 ### Added
 

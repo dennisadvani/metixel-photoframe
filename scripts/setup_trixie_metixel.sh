@@ -417,18 +417,14 @@ echo "[9/9] Configuring boot..."
 
 BOOT_CONFIG="/boot/firmware/config.txt"
 if [ -f "${BOOT_CONFIG}" ]; then
-    # ── GPU memory: Pi 2/3/Zero2W need a static partition (no CMA).
-    # 128 MB provides room for the KMS framebuffer (~8 MB) plus ~30
-    # pi3d textures at 1080p RGB565 (~4 MB each) with fragmentation
-    # headroom.  Pi 4/5 use CMA dynamic allocation — 16 MB is enough.
-    PI_MODEL=$(grep -oP 'Raspberry Pi \K[0-9]+' /proc/device-tree/model 2>/dev/null || echo "0")
-    if [ "${PI_MODEL}" -le 3 ] 2>/dev/null; then
-        GPU_MEM=128
-        GPU_RATIONALE="Pi ${PI_MODEL} uses static GPU memory — need room for framebuffer + textures"
-    else
-        GPU_MEM=16
-        GPU_RATIONALE="Pi ${PI_MODEL} uses CMA dynamic allocation — 16 MB is enough"
-    fi
+    # ── GPU memory: 128 MB for all Pi models.
+    # Pi 2/3/Zero2W need a static GPU partition — 128 MB provides room
+    # for the KMS framebuffer (~8 MB) plus ~30 pi3d textures at 1080p
+    # RGB565 (~4 MB each) with fragmentation headroom.
+    # Pi 4/5 use CMA dynamic allocation and ignore gpu_mem entirely, so
+    # setting it to 128 is harmless on those models.  A single value
+    # avoids model-detection complexity and keeps the base image portable.
+    GPU_MEM=128
 
     # Ensure KMS overlay is enabled
     if ! grep -q "dtoverlay=vc4-kms-v3d" "${BOOT_CONFIG}"; then
@@ -442,11 +438,11 @@ if [ -f "${BOOT_CONFIG}" ]; then
     if grep -q "^gpu_mem=" "${BOOT_CONFIG}"; then
         CURRENT_GPU_MEM=$(grep "^gpu_mem=" "${BOOT_CONFIG}" | head -1 | cut -d= -f2)
         if [ "${CURRENT_GPU_MEM}" -ne "${GPU_MEM}" ] 2>/dev/null; then
-            echo "  Setting gpu_mem to ${GPU_MEM} (was ${CURRENT_GPU_MEM}) — ${GPU_RATIONALE}"
+            echo "  Setting gpu_mem to ${GPU_MEM} (was ${CURRENT_GPU_MEM})"
             sed -i "s/^gpu_mem=.*/gpu_mem=${GPU_MEM}/" "${BOOT_CONFIG}"
         fi
     else
-        echo "  Adding gpu_mem=${GPU_MEM} — ${GPU_RATIONALE}"
+        echo "  Adding gpu_mem=${GPU_MEM}"
         echo "gpu_mem=${GPU_MEM}" | tee -a "${BOOT_CONFIG}"
     fi
 fi

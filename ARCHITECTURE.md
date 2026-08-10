@@ -560,9 +560,10 @@ Key invariants
 
 GPU memory on Pi 2/3
     Pi 2/3 use a STATIC GPU memory partition (``gpu_mem`` in config.txt).
-    Set ``gpu_mem=128`` for these models — the framebuffer alone needs
-    ~8 MB at 1080p, and pi3d textures consume ~4 MB each (RGB565).
-    Pi 4/5 use CMA dynamic allocation — ``gpu_mem=16`` is sufficient.
+    Set ``gpu_mem=128`` for all Pi models — Pi 2/3 need the static
+    partition for the framebuffer (~8 MB at 1080p) plus pi3d textures
+    (~4 MB each RGB565).  Pi 4/5 use CMA dynamic allocation and ignore
+    ``gpu_mem`` entirely, so a single value keeps the base image portable.
 ```
 
 **RAM budget for Phase 1 (512MB Pi Zero 2 W — untested):**
