@@ -166,6 +166,10 @@ class TestEngineVideoIntegration:
         """next_item should handle video items gracefully (no crash)."""
         from metixel.frontend.presentation.engine import PresentationEngine
 
+        # Disable shuffle so the queue order is deterministic — the video
+        # must be at index 0 so that _advance() lands on the image, not
+        # the video (which would trigger _video_launch and its side effects).
+        config.update("slideshow", {"shuffle": False})
         engine = PresentationEngine(config, mock_backend)
 
         item1 = MediaItem(

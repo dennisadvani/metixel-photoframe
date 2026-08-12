@@ -1157,6 +1157,14 @@ footer {
         margin-right: 0;
     }
 
+    /* Small inline buttons (browse, fetch, set, etc.) keep their natural size */
+    .btn--sm,
+    .btn-browse,
+    .watch-path-row button {
+        width: auto;
+        flex-shrink: 0;
+    }
+
     .card-row {
         flex-direction: column;
     }
