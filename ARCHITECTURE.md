@@ -79,15 +79,15 @@ The application code and `Pi3dBackend` are identical across all platforms. Only 
 
 | Package | Purpose | Phase 1 | Phase 2 |
 |---|---|---|---|
-| `pi3d` | OpenGL ES rendering (via Mesa EGL on Trixie) | ✅ | ❌ |
-| `Pillow` | Image loading, EXIF parsing, resizing | ✅ | ✅ |
-| `numpy` | Array operations for image processing | ✅ | ✅ |
-| `Flask` | Lightweight HTTP server for web dashboard | ✅ | ✅ |
-| `watchdog` | File system monitoring for media folders | ✅ | ✅ |
-| `paho-mqtt` | MQTT client for Home Assistant | ✅ | ✅ |
-| `requests` | HTTP client for Immich API sync | ✅ | ✅ |
-| `python-cec` | HDMI-CEC control | ✅ | ✅ |
-| `lirc` | IR remote control | ✅ | ✅ |
+| `pi3d` | OpenGL ES rendering (via Mesa EGL on Trixie) | Yes | No |
+| `Pillow` | Image loading, EXIF parsing, resizing | Yes | Yes |
+| `numpy` | Array operations for image processing | Yes | Yes |
+| `Flask` | Lightweight HTTP server for web dashboard | Yes | Yes |
+| `watchdog` | File system monitoring for media folders | Yes | Yes |
+| `paho-mqtt` | MQTT client for Home Assistant | Yes | Yes |
+| `requests` | HTTP client for Immich API sync | Yes | Yes |
+| `python-cec` | HDMI-CEC control | Yes | Yes |
+| `lirc` | IR remote control | Yes | Yes |
 
 ---
 
@@ -357,8 +357,8 @@ Next frame reflects change
 **Duration:** 1–2 weeks  
 **Goal:** Bootable dev environment, CI pipeline, placeholder files.
 
-1. ✅ Initialize monorepo with directory structure
-2. ✅ Create `pyproject.toml` with dependencies
+1. [x] Initialize monorepo with directory structure
+2. [x] Create `pyproject.toml` with dependencies
 3. Create `dev_backend.py` (pygame-based) for local testing without Pi hardware
 4. Write the `DisplayBackend` ABC with all methods documented
 5. Set up GitHub Actions for linting (ruff), type checking (mypy), and unit tests
@@ -683,11 +683,11 @@ Update flow:
 
 | Feature | Metixel Photoframe | pi3d PictureFrame | dakboard | MagicMirror² |
 |---|---|---|---|---|
-| No X11/Wayland (Phase 1) | ✅ | ✅ | ❌ | ❌ |
-| Immich integration | ✅ native | ❌ | ❌ | ❌ (3rd party) |
-| Home Assistant MQTT | ✅ native | ❌ | ❌ | ✅ |
-| Pi Zero 2 W support | ⚠️ Untested | ✅ | ❌ | ❌ |
-| Video playback | ✅ HW accel | ❌ | ❌ | ✅ |
-| Hot reload config | ✅ | ❌ | ❌ | ❌ |
-| OLED protection | ✅ | ❌ | ❌ | ❌ |
-| OTA updates | ✅ | ❌ | ❌ | ❌ |
+| No X11/Wayland (Phase 1) | Yes | Yes | No | No |
+| Immich integration | Yes — native | No | No | No (3rd party) |
+| Home Assistant MQTT | Yes — native | No | No | Yes |
+| Pi Zero 2 W support | Untested | Yes | No | No |
+| Video playback | Yes — HW accel | No | No | Yes |
+| Hot reload config | Yes | No | No | No |
+| OLED protection | Yes | No | No | No |
+| OTA updates | Yes | No | No | No |

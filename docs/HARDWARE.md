@@ -7,10 +7,10 @@
 | Model | RAM | GPU | Image | Notes |
 |---|---|---|---|---|
 | Raspberry Pi 5 | 2GB / 4GB / 8GB | VideoCore VII | 64-bit `.img` | **Recommended (2GB+)** |
-| Raspberry Pi 4 Model B | 1–8GB | VideoCore VI | 64-bit `.img` | ⚠️ Untested |
+| Raspberry Pi 4 Model B | 1–8GB | VideoCore VI | 64-bit `.img` | Untested |
 | Raspberry Pi 3 Model B/B+ | 1GB | VideoCore IV | 64-bit `.img` | 1080p max playback |
 | Raspberry Pi 2 Model B | 1GB | VideoCore IV | 32-bit manual install | 1080p max playback |
-| Raspberry Pi Zero 2 W | 512MB | VideoCore IV | 32-bit manual install | ⚠️ Untested — images only, no video, optimisation, or transcoding |
+| Raspberry Pi Zero 2 W | 512MB | VideoCore IV | 32-bit manual install | Untested — images only, no video, optimisation, or transcoding |
 
 ### Phase 2 (Planned)
 
@@ -22,8 +22,8 @@
 
 | RAM | Video Playback | Optimisation | Transcoding | SWAP |
 |---|---|---|---|---|
-| 512MB | ❌ | ❌ | ❌ | Required |
-| 1GB+ | ✅ Up to 1080p | ✅ | ✅ | Required |
+| 512MB | No | No | No | Required |
+| 1GB+ | Yes — up to 1080p | Yes | Yes | Required |
 
 ## Required Accessories
 - MicroSD card (8GB minimum, Class 10 recommended)

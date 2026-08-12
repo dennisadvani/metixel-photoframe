@@ -54,7 +54,7 @@ three channels in the Web UI's **Advanced → Updates** card:
 | Channel | GitHub Release Type | Git Ref | Typical Audience |
 |---|---|---|---|
 | **stable** | Full release (not prerelease, not draft) | Latest non-prerelease tag | Everyone |
-| **beta** | **Pre-release** (✔ "Set as a pre-release") | Latest prerelease tag | Testers, early adopters |
+| **beta** | **Pre-release** (tick "Set as a pre-release") | Latest prerelease tag | Testers, early adopters |
 | **dev** | N/A — uses branch HEAD | `origin/dev` | Contributors only |
 
 Users switch channels from the dashboard.  The backend polls
@@ -190,8 +190,8 @@ git push origin v0.2.0-beta.1
 #    • Tag:        v0.2.0-beta.1
 #    • Title:      v0.2.0-beta.1 — Descriptive Summary
 #    • Description: Paste the CHANGELOG.md entries for this version
-#    • ☑ Set as a pre-release        ← THIS IS THE KEY CHECKBOX
-#    • ☐ Set as the latest release   ← leave unchecked (GitHub default)
+#    • [x] Set as a pre-release        <- THIS IS THE KEY CHECKBOX
+#    • [ ] Set as the latest release   <- leave unchecked (GitHub default)
 #    • Click "Publish release"
 ```
 
@@ -226,8 +226,8 @@ git push origin v0.2.0
 #    • Tag:        v0.2.0
 #    • Title:      v0.2.0
 #    • Description: Paste CHANGELOG.md entries
-#    • ☐ Set as a pre-release          ← UNCHECKED
-#    • ☑ Set as the latest release     ← CHECKED
+#    • [ ] Set as a pre-release          <- UNCHECKED
+#    • [x] Set as the latest release     <- CHECKED
 #    • Click "Publish release"
 ```
 
@@ -254,13 +254,13 @@ be empty.  Add a new empty `[Unreleased]` section for future work:
 
 | Tag | Valid? | Channel |
 |---|---|---|
-| `v0.2.0` | ✅ | stable |
-| `v0.2.0-beta.1` | ✅ | beta |
-| `v0.2.0-beta1` | ✅ | beta |
-| `v0.2.0-rc.2` | ✅ | beta |
-| `v0.2.0-alpha.1` | ✅ | beta |
-| `beta-1` | ❌ | (won't parse) |
-| `v0.2.0beta1` | ❌ | (won't parse — needs `.` or `-` separator) |
+| `v0.2.0` | Yes | stable |
+| `v0.2.0-beta.1` | Yes | beta |
+| `v0.2.0-beta1` | Yes | beta |
+| `v0.2.0-rc.2` | Yes | beta |
+| `v0.2.0-alpha.1` | Yes | beta |
+| `beta-1` | No | (won't parse) |
+| `v0.2.0beta1` | No | (won't parse — needs `.` or `-` separator) |
 
 The tag name after stripping the leading `v` must match the
 `__version__` string in `metixel/__init__.py` **exactly**.

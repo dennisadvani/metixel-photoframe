@@ -26,11 +26,11 @@
 
 Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated digital photo frame. It's a complete operating system overlay — not just an app — designed to run headless on a wall or shelf, pulling photos from local folders, USB drives, network shares, or an [Immich](https://immich.app/) server.
 
-- 🖥️ **Web dashboard** on port 80/http — configure everything from any browser
-- 🎞️ **Smooth crossfade transitions** with hardware OpenGL ES rendering
-- 📷 **Native Immich v3 sync** — auto-pull albums and assets
-- 🎬 **Video playback** via VLC
-- 🔒 **Runs locally** — no cloud dependency, your photos stay on your network
+- **Web dashboard** on port 80/http — configure everything from any browser
+- **Smooth crossfade transitions** with hardware OpenGL ES rendering
+- **Native Immich v3 sync** — auto-pull albums and assets
+- **Video playback** via VLC
+- **Runs locally** — no cloud dependency, your photos stay on your network
 
 ---
 
@@ -45,15 +45,15 @@ I recommend repurposing a TV or old monitor to build your digital picture frame.
 
 | Category | Feature | Status |
 |---|---|---|
-| **Display** | Hardware-accelerated OpenGL ES 2.0 rendering (pi3d + Mesa) | ✅ |
-| | Smooth crossfade, slide, and fade transitions | ✅ |
-| | Automatic resolution detection | ✅ |
-| **Media** | Local folder watching (auto-detect new files) | ✅ |
-| | Immich server sync (albums, favorites, people) | ✅ |
-| | Video playback | ✅ |
-| **Control** | Web dashboard (vanilla JS SPA) | ✅ |
-| **System** | systemd services (auto-start on boot) | ✅ |
-| | Atomic config writes (no corruption on power loss) | ✅ |
+| **Display** | Hardware-accelerated OpenGL ES 2.0 rendering (pi3d + Mesa) | Yes |
+| | Smooth crossfade, slide, and fade transitions | Yes |
+| | Automatic resolution detection | Yes |
+| **Media** | Local folder watching (auto-detect new files) | Yes |
+| | Immich server sync (albums, favorites, people) | Yes |
+| | Video playback | Yes |
+| **Control** | Web dashboard (vanilla JS SPA) | Yes |
+| **System** | systemd services (auto-start on boot) | Yes |
+| | Atomic config writes (no corruption on power loss) | Yes |
 
 ---
 
@@ -63,20 +63,20 @@ I recommend repurposing a TV or old monitor to build your digital picture frame.
 
 | Model | GPU | Max Playback | Transcoding | Status | OS | IMG Available |
 |---|---|---|---|---|---|---|
-| Pi 5 | VideoCore VII | 4K | ✅ Hardware H.265 | ✅ | Trixie 13 Lite (64-bit) | ✅ |
-| Pi 4 | VideoCore VI | 4K (untested) | ✅ | ⚠️ Untested | Trixie 13 Lite (64-bit) | ✅ |
-| Pi 3 B/B+ | VideoCore IV | 1080p | ✅ Software only | ✅ Active | Trixie 13 Lite (64-bit) | ✅ |
-| Pi 2 B | VideoCore IV | 1080p | ✅ Software only | ✅ Active | Trixie 13 Lite (32-bit) | ❌ Manual Install |
-| Pi Zero 2 W | VideoCore IV | ❌ (RAM Limit) | ❌ (RAM Limit) | ⚠️ Untested | Trixie 13 Lite (32-bit) | ❌ Manual Install |
+| Pi 5 | VideoCore VII | 4K | Yes — HW H.265 | Yes | Trixie 13 Lite (64-bit) | Yes |
+| Pi 4 | VideoCore VI | 4K (untested) | Yes | Untested | Trixie 13 Lite (64-bit) | Yes |
+| Pi 3 B/B+ | VideoCore IV | 1080p | Yes  | Yes | Trixie 13 Lite (64-bit) | Yes |
+| Pi 2 B | VideoCore IV | 1080p | Yes  | Yes | Trixie 13 Lite (32-bit) | No — Manual Install |
+| Pi Zero 2 W | VideoCore IV | No (RAM Limit) | No (RAM Limit) | Untested | Trixie 13 Lite (32-bit) | No — Manual Install |
 
 ### RAM Requirements
 
 | RAM | Photo Playback | Video Playback | Image Optimisation | Video Transcoding |
 |---|---|---|---|---|
-| 512MB | ✅ | ❌ | ❌ | ❌ |
-| 1GB | ✅ | ✅ | ✅ | ✅ Up to 1080p H.264 |
-| 2GB | ✅ | ✅ | ✅ | ✅ Up to 4k H.265 (Ultrafast) |
-| 4GB+ | ✅ | ✅ | ✅ | ✅ 4k H.265 at Higher Qualities  |
+| 512MB | Yes | No | No | No |
+| 1GB | Yes | Yes | Yes | Yes — up to 1080p H.264 |
+| 2GB | Yes | Yes | Yes | Yes — up to 4k H.265 (Ultrafast) |
+| 4GB+ | Yes | Yes | Yes | Yes — 4k H.265 at Higher Qualities |
 
 > **Notes:**
 > - A SWAP file is **required** on all models.
@@ -97,9 +97,9 @@ See [`docs/HARDWARE.md`](docs/HARDWARE.md) for detailed setup and accessory reco
 3. Boot your Pi → done.
 ```
 
-📥 **[Download latest release →](https://github.com/dennisadvani/metixel-photoframe/releases/latest)**
+**[Download latest release](https://github.com/dennisadvani/metixel-photoframe/releases/latest)**
 
-Full step-by-step guide: **[Getting Started →](docs/GETTING_STARTED.md)**
+Full step-by-step guide: **[Getting Started](docs/GETTING_STARTED.md)**
 
 ---
 
@@ -107,7 +107,7 @@ Full step-by-step guide: **[Getting Started →](docs/GETTING_STARTED.md)**
 
 Two ways to install — both work on Raspberry Pi 3, 4, and 5.
 
-| | 🚀 Pre-built image | 🔧 Manual install |
+| | Pre-built image | Manual install |
 |---|---|---|
 | **Time** | ~10 minutes | ~1 hour |
 | **Method** | Download .img.zip → flash with Pi Imager → boot | Flash Trixie Lite → run setup script → reboot |
