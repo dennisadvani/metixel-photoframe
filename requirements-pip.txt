@@ -1,0 +1,13 @@
+# Metixel Photoframe — Python Dependencies (Raspberry Pi 2/3/Zero 2 W — Trixie)
+# Install with: pip install -r requirements-pip.txt
+
+pi3d>=2.47
+Pillow>=10.0
+numpy>=1.24,<2.0
+Flask>=3.0
+watchdog>=3.0
+paho-mqtt>=1.6
+requests>=2.31
+pysdl2>=0.9
+python-vlc>=3.0
+cec>=0.2

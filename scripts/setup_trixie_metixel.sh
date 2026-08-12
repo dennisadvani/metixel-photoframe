@@ -249,8 +249,8 @@ PIP_IGNORE="--break-system-packages --ignore-installed"
 pip3 install ${PIP_IGNORE} pi3d 2>/dev/null || \
     pip3 install ${PIP_IGNORE} pi3d
 
-pip3 install ${PIP_IGNORE} -r requirements-phase1.txt 2>/dev/null || \
-    pip3 install ${PIP_IGNORE} -r requirements-phase1.txt
+pip3 install ${PIP_IGNORE} -r requirements-pip.txt 2>/dev/null || \
+    pip3 install ${PIP_IGNORE} -r requirements-pip.txt
 
 # -- Git safe.directory (OTA updates run as root via systemd-run) ------------
 echo "[3b/9] Marking repository as safe for git..."

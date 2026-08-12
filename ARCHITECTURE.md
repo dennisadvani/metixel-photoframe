@@ -264,7 +264,6 @@ metixel-photoframe/                           # Repository root
 │
 ├── scripts/                           # Build & deployment scripts
 │   ├── build_phase1.sh               # Build Trixie Lite image for Pi 2/3/Zero 2 W
-│   ├── build_phase2.sh               # Build Trixie/Buildroot image for Pi 4/5 + non-Pi SBCs
 │   ├── quiet_boot.sh                 # Splash screen + silent boot config
 │   ├── setup_ap.sh                   # Wi-Fi captive portal setup
 │   ├── setup_trixie.sh              # Install deps for Trixie Lite (cage + pi3d)
@@ -274,10 +273,6 @@ metixel-photoframe/                           # Repository root
 │   ├── metixel-backend.service       # Backend daemon (all platforms)
 │   ├── metixel-cage.service          # Frontend under cage (Trixie/KMS)
 │   └── metixel-frontend.service      # Frontend direct (legacy Bullseye)
-│
-├── docker/                            # Balena / container support
-│   ├── Dockerfile.phase1
-│   └── Dockerfile.phase2
 │
 ├── tests/                             # Automated tests
 │   ├── test_backend/
@@ -293,8 +288,8 @@ metixel-photoframe/                           # Repository root
 ├── CLAUDE.md                          # AI assistant instructions
 ├── README.md                          # Project overview
 ├── LICENSE                            # AGPL v3
-├── requirements-phase1.txt            # Python deps for Phase 1
-├── requirements-phase2.txt            # Python deps for Phase 2
+├── requirements-pip.txt               # Python deps
+├── requirements-apt-system.txt        # System packages for apt insssssssstall
 └── pyproject.toml                     # Modern Python project metadata
 ```
 

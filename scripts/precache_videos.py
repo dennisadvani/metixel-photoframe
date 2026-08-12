@@ -510,7 +510,8 @@ def main() -> None:
 
     # -- Process each video -------------------------------------------------
     for i, src in enumerate(videos, 1):
-        print(f"[{i}/{len(videos)}] {src.name}")
+        pct = (i - 1) / len(videos) * 100
+        print(f"{pct:5.0f}%  [{i}/{len(videos)}]  {src.name}")
         file_hash = hash_file(src)
 
         cached_mp4 = video_dir / f"{file_hash}.mp4"
