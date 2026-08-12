@@ -5,6 +5,63 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.1-beta.1]
+
+### Added
+
+- **Parametrized config default tests** — all 79 keys in ``DEFAULT_CONFIG`` now
+  verified via a single parametrized test (``test_all_config_defaults``).
+- **``Config.timeout()`` tests** — known-key lookup, missing-key fallback,
+  zero/negative/string-value guards, float truncation, section-fill behaviour,
+  and resilience when the ``timeouts`` section is absent.
+- **``resolve_watch_paths()`` tests** — object format (enabled/disabled),
+  relative path resolution, legacy flat-list format, mixed formats, and
+  default watch-paths sanity check.
+- **``MediaItem`` model tests** — ``aspect_ratio`` (including ÷0 safety),
+  ``is_ready_to_play`` for all 5 transcode states × frame presence
+  combinations, and all dataclass field defaults.  ``Album`` defaults
+  also covered.
+- **IPC tests** — ``ControlMessage`` JSON roundtrip for all 8 command types;
+  ``IPCServer`` lifecycle (start/stop/poll/no-op on Windows, Unix domain
+  socket create-and-cleanup).
+- **``StateManager`` tests** — initialisation, atomic config persistence,
+  ``config.updated`` flag file, playlist add/dedup/remove/get, deep-copy
+  safety, and nested-directory creation.
+- **Web API config route tests** — full ``GET /api/config``, all 13 section
+  endpoints verify 200 status and correct defaults, unknown section returns
+  404, and ``/api/config/video/profiles`` structure.
+- **Test suite:** 73 → 256 tests (+183, +251 %).
+
+### Changed
+
+- **``requirements-phase1.txt`` → ``requirements-pip.txt``** — renamed to be
+  generic (not Phase‑1‑specific).  References updated in ``CLAUDE.md``,
+  ``scripts/build_phase1.sh``, and ``scripts/setup_trixie_metixel.sh``.
+- **Web UI mobile layout** — small inline buttons (browse, Fetch Albums, Set
+  timezone, watch‑path add/remove) no longer stretch to 100 % width on narrow
+  screens.  Fixed via ``.btn--sm`` / ``.btn-browse`` / ``.watch-path-row button``
+  exceptions in the mobile media query.
+- **Sync status display** — success state changed from green ``✅ Success`` to
+  plain white ``Success``.  Cancelled and error states also stripped of emoji
+  icons for a cleaner look.
+- **Footer** — ``--`` placeholder removed; uptime dash only appears after JS
+  populates the value.
+
+### Fixed
+
+- **Media Library folder filter always empty** — dropdown values stored the
+  full config path (``media/sample_media/``) but the API returns
+  ``item.folder`` as just the directory name (``sample_media``).  Filter
+  used ``indexOf`` which never matched.  Fixed by populating the dropdown
+  with folder names as values and filtering by direct ``===`` equality.
+- **Flaky ``test_next_item_does_not_crash_with_video_in_queue``** —
+  ``random.shuffle`` in ``set_queue()`` could reorder the queue so the
+  video landed at index 1, triggering ``_video_launch()`` which called
+  ``_advance()`` again when frame files didn't exist.  Test now disables
+  shuffle for deterministic order.
+- **Immich Sync page** — first card heading changed from ``Updates`` to
+  ``Time`` (duplicate heading with the OTA Updates card).
+
 ## [1.1.0]
 
 ### Added

@@ -26,11 +26,17 @@
 
 Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated digital photo frame. It's a complete operating system overlay — not just an app — designed to run headless on a wall or shelf, pulling photos from local folders, USB drives, network shares, or an [Immich](https://immich.app/) server.
 
-- **Web dashboard** on port 80/http — configure everything from any browser
+- **Web UI** on port 80/http — configure everything from a browser or phone, no text file editing required
 - **Smooth crossfade transitions** with hardware OpenGL ES rendering
 - **Native Immich v3 sync** — auto-pull albums and assets
 - **Video playback** via VLC
 - **Runs locally** — no cloud dependency, your photos stay on your network
+- **Screen Off Hours** — turn off the screen at night to save power
+- **Over the Air Updates** — update via the web UI
+- **EXIF Auto Rotation** — automatically rotate photos based on EXIF metadata
+- **Video Transcoding** — convert videos to a format that a Pi 2 can play
+- **Keyboard and Remote Support** — assign keys to controls via the web UI
+- **Network Management** — Wi-Fi scanning + connection, AP fallback with captive portal + PIN gate, auto-deactivation, connectivity check
 
 ---
 
@@ -38,22 +44,6 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 
 I recommend repurposing a TV or old monitor to build your digital picture frame. In my case, I used an old monitor, had a professional framer create a frame and matte and mounted the monitor behind along with the Raspberry Pi. Instructions for building your own digital picture frame are available [here](https://www.thedigitalpictureframe.com/how-i-built-a-stunning-32-inch-4k-digital-picture-frame-with-a-raspberry-pi-4-featuring-smooth-image-crossfading-transitions/), [here](https://medium.com/women-make/diy-digital-photo-frame-in-less-than-20-minutes-69bc35ed6364), and [here](https://www.noahrousell.com/blog/making-a-digital-pho/).
 
-
----
-
-## Features
-
-| Category | Feature | Status |
-|---|---|---|
-| **Display** | Hardware-accelerated OpenGL ES 2.0 rendering (pi3d + Mesa) | Yes |
-| | Smooth crossfade, slide, and fade transitions | Yes |
-| | Automatic resolution detection | Yes |
-| **Media** | Local folder watching (auto-detect new files) | Yes |
-| | Immich server sync (albums, favorites, people) | Yes |
-| | Video playback | Yes |
-| **Control** | Web dashboard (vanilla JS SPA) | Yes |
-| **System** | systemd services (auto-start on boot) | Yes |
-| | Atomic config writes (no corruption on power loss) | Yes |
 
 ---
 
