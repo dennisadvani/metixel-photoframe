@@ -59,7 +59,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **Non-blocking state machine** | VLC plays on top of the slideshow; frame swaps underneath are invisible |
 | **Last-frame swap** | VLC's window is covered by a cached last-frame JPEG at 80% of video duration for a seamless transition |
 | **Guardrails** | Max duration filter, transcoding enabled/disabled toggle, playback enabled/disabled master switch |
-| **Pi Zero 2 W** | ⚠️ Untested — image-only; no video, optimisation, or transcoding |
+| **Pi Zero 2 W** | Untested — image-only; no video, optimisation, or transcoding |
 
 ---
 
@@ -128,7 +128,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 | Constraint | Strategy |
 |---|---|
-| **Pi Zero 2 W (512MB)** | ⚠️ Untested — image-only; no video, optimisation, or transcoding |
+| **Pi Zero 2 W (512MB)** | Untested — image-only; no video, optimisation, or transcoding |
 | **GPU textures** | `GL_RGB565` (2 bytes/pixel) preferred over `GL_RGBA`; max 3 GPU-resident textures at any time |
 | **CPU memory** | `Texture(free_after_load=True)` releases CPU-side array after GPU upload |
 | **Batch processing** | Process media one file at a time in a subprocess that exits to release memory |
