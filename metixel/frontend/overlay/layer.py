@@ -32,10 +32,10 @@ class OverlayLayer(ABC):
     """
 
     # -- Reserved z-base values for each layer type -------------------------
-    Z_BOOT = 0.0       # Boot screen (closest to camera)
+    Z_BOOT = 0.0  # Boot screen (closest to camera)
     Z_MESSAGES = 0.01  # System pop-up messages
-    Z_WIDGETS = 0.02   # Persistent widgets (clock, weather, etc.)
-    Z_VIDEO = 0.03     # Video overlay (future)
+    Z_WIDGETS = 0.02  # Persistent widgets (clock, weather, etc.)
+    Z_VIDEO = 0.03  # Video overlay (future)
 
     def __init__(self, name: str, z_base: float) -> None:
         self._name = name

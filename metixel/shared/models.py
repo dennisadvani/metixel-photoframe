@@ -17,10 +17,11 @@ class MediaType(enum.Enum):
 
 class TranscodeStatus(enum.Enum):
     """Transcoding state for a video media item."""
+
     NOT_TRANSCODED = "not_transcoded"  # Original file, transcoding not attempted
-    TRANSCODING = "transcoding"       # Transcode in progress
-    TRANSCODED = "transcoded"         # Cached transcoded file ready
-    FAILED = "failed"                 # Transcode failed, use original
+    TRANSCODING = "transcoding"  # Transcode in progress
+    TRANSCODED = "transcoded"  # Cached transcoded file ready
+    FAILED = "failed"  # Transcode failed, use original
 
 
 @dataclass
@@ -35,8 +36,8 @@ class MediaItem:
     height: int = 0
     duration_seconds: float = 0.0  # For videos
     thumbnail_path: Path | None = None
-    first_frame_path: Path | None = None   # First frame JPEG (for video preload)
-    last_frame_path: Path | None = None    # Last frame JPEG (for video swap)
+    first_frame_path: Path | None = None  # First frame JPEG (for video preload)
+    last_frame_path: Path | None = None  # Last frame JPEG (for video swap)
     exif_data: dict[str, Any] = field(default_factory=dict)
     source: str = "local"  # "local" or "immich"
     transcode_status: TranscodeStatus | None = None  # Only relevant for videos
@@ -73,9 +74,7 @@ class MediaItem:
             return False
         # Video: require first + last frame caches (backend-generated).
         # The frontend loads these directly — it must never run ffmpeg.
-        if self.first_frame_path is None or self.last_frame_path is None:
-            return False
-        return True
+        return not (self.first_frame_path is None or self.last_frame_path is None)
 
 
 @dataclass

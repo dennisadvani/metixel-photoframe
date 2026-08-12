@@ -8,6 +8,7 @@ services and runs the Flask web server as the foreground thread.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
@@ -51,10 +52,9 @@ class BackendDaemon:
         """Start all backend services. Blocks on the web server."""
         self._running = True
         logger.info(
-            "\n" + "=" * 70 + "\n"
-            "  METIXEL BACKEND STARTING  |  pid=%d  |  %s\n"
-            + "=" * 70,
-            os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),
+            "\n" + "=" * 70 + "\n  METIXEL BACKEND STARTING  |  pid=%d  |  %s\n" + "=" * 70,
+            os.getpid(),
+            time.strftime("%Y-%m-%d %H:%M:%S"),
         )
 
         self._start_optimisation_queue()
@@ -67,10 +67,9 @@ class BackendDaemon:
         self._start_web_server()
 
         logger.info(
-            "\n" + "=" * 70 + "\n"
-            "  METIXEL BACKEND STOPPING  |  pid=%d  |  %s\n"
-            + "=" * 70,
-            os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),
+            "\n" + "=" * 70 + "\n  METIXEL BACKEND STOPPING  |  pid=%d  |  %s\n" + "=" * 70,
+            os.getpid(),
+            time.strftime("%Y-%m-%d %H:%M:%S"),
         )
         self._running = False
         self._ipc.close()
@@ -80,10 +79,8 @@ class BackendDaemon:
         """Gracefully stop all services."""
         self._running = False
         if self._update_mgr is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._update_mgr.shutdown()
-            except Exception:
-                pass
 
     def reset_pipeline(self) -> None:
         """Clear all queues and restart the media pipeline from scratch.
@@ -124,7 +121,9 @@ class BackendDaemon:
 
         self._opt_queue = OptimisationQueue(self._state)
         t = threading.Thread(
-            target=self._opt_queue.run, name="optimisation-queue", daemon=True,
+            target=self._opt_queue.run,
+            name="optimisation-queue",
+            daemon=True,
         )
         t.start()
         self._threads.append(t)
@@ -198,11 +197,13 @@ class BackendDaemon:
             from metixel.backend.input_handlers.keyboard import KeyboardHandler
 
             self._keyboard_handler = KeyboardHandler(
-                config=config.input, ipc=self._ipc,
+                config=config.input,
+                ipc=self._ipc,
             )
             t = threading.Thread(
                 target=self._keyboard_handler.run,
-                name="kbd-handler", daemon=True,
+                name="kbd-handler",
+                daemon=True,
             )
             t.start()
             self._threads.append(t)
@@ -232,8 +233,9 @@ class BackendDaemon:
         )
         t.start()
         self._threads.append(t)
-        logger.info("Network monitor started (timeout=%ds)",
-                     network_cfg.get("ap_timeout_seconds", 60))
+        logger.info(
+            "Network monitor started (timeout=%ds)", network_cfg.get("ap_timeout_seconds", 60)
+        )
 
     def _network_monitor_loop(self) -> None:
         """Background loop: monitor connectivity and manage AP fallback.
@@ -302,7 +304,8 @@ class BackendDaemon:
         elif state == NetworkState.AP_ACTIVE and pin:
             logger.warning(
                 "No network after %ds — activating PIN-gated AP fallback (PIN: %s)",
-                timeout, pin,
+                timeout,
+                pin,
             )
             self._show_pin_on_screen(pin)
             controller.mark_pin_displayed()
@@ -329,8 +332,8 @@ class BackendDaemon:
 
     def _drain_actions(
         self,
-        controller: "NetworkController",
-        actions: list["NetworkState"],
+        controller: NetworkController,  # noqa: F821
+        actions: list[NetworkState],  # noqa: F821
     ) -> None:
         """Execute side effects for each pending state transition."""
         from metixel.backend.network_controller import NetworkState
@@ -356,19 +359,22 @@ class BackendDaemon:
                 controller.mark_pin_dismissed()
                 try:
                     from metixel.shared.ipc import ControlMessage
-                    self._ipc.send(ControlMessage(
-                        cmd="show_message",
-                        args={
-                            "title": "WiFi Offline",
-                            "body": (
-                                "Could not reconnect. The WiFi setup portal "
-                                "will not appear again until the frame is "
-                                "rebooted."
-                            ),
-                            "severity": "warning",
-                            "duration": 120,
-                        },
-                    ))
+
+                    self._ipc.send(
+                        ControlMessage(
+                            cmd="show_message",
+                            args={
+                                "title": "WiFi Offline",
+                                "body": (
+                                    "Could not reconnect. The WiFi setup portal "
+                                    "will not appear again until the frame is "
+                                    "rebooted."
+                                ),
+                                "severity": "warning",
+                                "duration": 120,
+                            },
+                        )
+                    )
                 except Exception:
                     pass
 
@@ -387,23 +393,26 @@ class BackendDaemon:
         """
         try:
             from metixel.shared.ipc import ControlMessage
+
             # Clear existing messages before showing PIN
             self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
             time.sleep(0.3)  # Brief pause so frontend processes dismiss
-            self._ipc.send(ControlMessage(
-                cmd="show_message",
-                args={
-                    "title": "Welcome to Metixel!",
-                    "body": (
-                        f"No network connection detected. "
-                        f"To configure one, connect to 'Metixel-Setup' WiFi, "
-                        f"open http://192.168.42.1 or http://metixel.local "
-                        f"and use PIN {pin} to login."
-                    ),
-                    "severity": "info",
-                    "duration": 0,  # persistent
-                },
-            ))
+            self._ipc.send(
+                ControlMessage(
+                    cmd="show_message",
+                    args={
+                        "title": "Welcome to Metixel!",
+                        "body": (
+                            f"No network connection detected. "
+                            f"To configure one, connect to 'Metixel-Setup' WiFi, "
+                            f"open http://192.168.42.1 or http://metixel.local "
+                            f"and use PIN {pin} to login."
+                        ),
+                        "severity": "info",
+                        "duration": 0,  # persistent
+                    },
+                )
+            )
             logger.info("PIN message sent to frontend")
         except Exception:
             logger.warning("Failed to send PIN message to frontend", exc_info=True)
@@ -412,6 +421,7 @@ class BackendDaemon:
         """Dismiss the PIN message from the frame display."""
         try:
             from metixel.shared.ipc import ControlMessage
+
             self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
         except Exception:
             logger.debug("Could not dismiss PIN message", exc_info=True)
@@ -425,6 +435,7 @@ class BackendDaemon:
                 return
 
             from metixel.backend.network_manager import get_connection_status
+
             status = get_connection_status()
             ip = status.get("ip", "")
             if not ip or ip.startswith("192.168.42."):
@@ -434,18 +445,21 @@ class BackendDaemon:
             label = "WiFi" if iface_type == "wifi" else "Ethernet"
 
             from metixel.shared.ipc import ControlMessage
-            self._ipc.send(ControlMessage(
-                cmd="show_message",
-                args={
-                    "title": f"Connected via {label}",
-                    "body": (
-                        f"{label} connected. Access Metixel at "
-                        f"http://metixel.local or http://{ip}"
-                    ),
-                    "severity": "success",
-                    "duration": 60,  # auto-dismiss after 60s
-                },
-            ))
+
+            self._ipc.send(
+                ControlMessage(
+                    cmd="show_message",
+                    args={
+                        "title": f"Connected via {label}",
+                        "body": (
+                            f"{label} connected. Access Metixel at "
+                            f"http://metixel.local or http://{ip}"
+                        ),
+                        "severity": "success",
+                        "duration": 60,  # auto-dismiss after 60s
+                    },
+                )
+            )
             logger.info("Connected message sent to frontend")
         except Exception:
             logger.warning("Failed to show connected message", exc_info=True)
@@ -467,6 +481,7 @@ class BackendDaemon:
                 return
 
             from metixel.backend.network_manager import get_connection_status
+
             status = get_connection_status()
             ip = status.get("ip", "")
 
@@ -489,10 +504,10 @@ class BackendDaemon:
                 {
                     "title": "Upload photos via File Sharing",
                     "body": (
-                        f"Upload photos and videos to your media folder via SMB — "
-                        f"Windows: \\\\metixel\\metixel-media, "
-                        f"Mac: smb://metixel/metixel-media. "
-                        f"Or sync your Immich media to this photo frame via the Web UI."
+                        "Upload photos and videos to your media folder via SMB — "
+                        "Windows: \\\\metixel\\metixel-media, "
+                        "Mac: smb://metixel/metixel-media. "
+                        "Or sync your Immich media to this photo frame via the Web UI."
                     ),
                 },
                 {
@@ -507,10 +522,12 @@ class BackendDaemon:
             ]
 
             for msg in messages:
-                self._ipc.send(ControlMessage(
-                    cmd="show_message",
-                    args={**msg, "severity": "info", "duration": 120},
-                ))
+                self._ipc.send(
+                    ControlMessage(
+                        cmd="show_message",
+                        args={**msg, "severity": "info", "duration": 120},
+                    )
+                )
                 time.sleep(0.5)  # brief pause so messages queue in order
 
             logger.info("First-run welcome messages sent to frontend")
@@ -528,7 +545,9 @@ class BackendDaemon:
 
         self._update_mgr = UpdateManager(self._state)
         t = threading.Thread(
-            target=self._update_mgr.run, name="update-manager", daemon=True,
+            target=self._update_mgr.run,
+            name="update-manager",
+            daemon=True,
         )
         t.start()
         self._threads.append(t)
@@ -576,13 +595,15 @@ class BackendDaemon:
                         if should_be_on:
                             logger.info(
                                 "Display scheduler: turning ON (scheduled %s–%s)",
-                                on_str, off_str,
+                                on_str,
+                                off_str,
                             )
                             self._ipc.send(ControlMessage(cmd="screen_on"))
                         else:
                             logger.info(
                                 "Display scheduler: turning OFF (scheduled %s–%s)",
-                                on_str, off_str,
+                                on_str,
+                                off_str,
                             )
                             self._ipc.send(ControlMessage(cmd="screen_off"))
                 except Exception:
@@ -591,7 +612,9 @@ class BackendDaemon:
                 time.sleep(30)
 
         t = threading.Thread(
-            target=_scheduler_loop, name="display-scheduler", daemon=True,
+            target=_scheduler_loop,
+            name="display-scheduler",
+            daemon=True,
         )
         t.start()
         self._threads.append(t)
@@ -603,7 +626,9 @@ class BackendDaemon:
 
         opt_queue = getattr(self, "_opt_queue", None)
         update_mgr = getattr(self, "_update_mgr", None)
-        app = create_app(self._state, self._ipc, opt_queue=opt_queue, update_mgr=update_mgr, daemon=self)
+        app = create_app(
+            self._state, self._ipc, opt_queue=opt_queue, update_mgr=update_mgr, daemon=self
+        )
         web_config = self._state.config.web
 
         logger.info("Web server starting on %s:%d", web_config["host"], web_config["port"])

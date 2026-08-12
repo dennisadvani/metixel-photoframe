@@ -14,10 +14,10 @@ from metixel.frontend.widgets.base import Widget
 logger = logging.getLogger(__name__)
 
 # -- Defaults ---------------------------------------------------------------
-DEFAULT_BG_ALPHA = 0.45          # How translucent the background box is
-DEFAULT_TEXT_ALPHA = 0.95        # How opaque the text is
-DEFAULT_PADDING = 12             # Padding inside the background box (pixels)
-DEFAULT_CORNER_RADIUS = 10       # Rounded corner radius (pixels)
+DEFAULT_BG_ALPHA = 0.45  # How translucent the background box is
+DEFAULT_TEXT_ALPHA = 0.95  # How opaque the text is
+DEFAULT_PADDING = 12  # Padding inside the background box (pixels)
+DEFAULT_CORNER_RADIUS = 10  # Rounded corner radius (pixels)
 
 
 class ClockWidget(Widget):
@@ -57,9 +57,7 @@ class ClockWidget(Widget):
         self._background_alpha: float = float(
             self.settings.get("background_alpha", DEFAULT_BG_ALPHA)
         )
-        self._text_alpha: float = float(
-            self.settings.get("text_alpha", DEFAULT_TEXT_ALPHA)
-        )
+        self._text_alpha: float = float(self.settings.get("text_alpha", DEFAULT_TEXT_ALPHA))
         self._font_size_override: int = self.settings.get("font_size", 0)
         self._padding: int = int(self.settings.get("padding", DEFAULT_PADDING))
         self._current_time: str = ""

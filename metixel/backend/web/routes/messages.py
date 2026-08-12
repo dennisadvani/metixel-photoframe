@@ -71,9 +71,7 @@ def dismiss_persistent():
             else:
                 new_persistent.append(entry)
         if count == 0:
-            return jsonify(
-                {"error": f"No persistent message found with id={target_id!r}"}
-            ), 404
+            return jsonify({"error": f"No persistent message found with id={target_id!r}"}), 404
 
     # Atomically update config
     state.update_config("messages", {"persistent": new_persistent})

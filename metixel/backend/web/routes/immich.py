@@ -34,10 +34,12 @@ def list_albums():
         albums = syncer._list_albums()  # noqa: SLF001 (internal access)
     except Exception as e:
         logger.exception("Failed to list Immich albums")
-        return jsonify({
-            "error": str(e),
-            "hint": "Check server URL, API key, and network connectivity",
-        }), 502
+        return jsonify(
+            {
+                "error": str(e),
+                "hint": "Check server URL, API key, and network connectivity",
+            }
+        ), 502
 
     # Simplify for the frontend — only return what the picker needs
     result = [
@@ -85,10 +87,12 @@ def trigger_sync():
     thread = threading.Thread(target=_run, name="immich-manual-sync", daemon=True)
     thread.start()
 
-    return jsonify({
-        "status": "started",
-        "message": "Sync started in background — check GET /api/immich/status for results",
-    })
+    return jsonify(
+        {
+            "status": "started",
+            "message": "Sync started in background — check GET /api/immich/status for results",
+        }
+    )
 
 
 @immich_bp.route("/status", methods=["GET"])
@@ -106,17 +110,21 @@ def sync_status():
     progress = _read_progress()
 
     if result is None:
-        return jsonify({
-            "status": "never_run",
-            "last_sync": None,
-            "progress": progress,
-        })
+        return jsonify(
+            {
+                "status": "never_run",
+                "last_sync": None,
+                "progress": progress,
+            }
+        )
 
-    return jsonify({
-        "status": "ok",
-        "last_sync": result.to_dict(),
-        "progress": progress,
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "last_sync": result.to_dict(),
+            "progress": progress,
+        }
+    )
 
 
 @immich_bp.route("/cancel", methods=["POST"])
@@ -160,32 +168,44 @@ def test_connection():
             timeout=(10, 15),
         )
         if resp.status_code == 401 or resp.status_code == 403:
-            return jsonify({
-                "ok": False,
-                "error": f"Authentication failed (HTTP {resp.status_code}). Check your API key.",
-            }), 401
+            return jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        f"Authentication failed (HTTP {resp.status_code}). Check your API key."
+                    ),
+                }
+            ), 401
         resp.raise_for_status()
         album_count = len(resp.json())
-        return jsonify({
-            "ok": True,
-            "message": f"Connected successfully — found {album_count} album(s)",
-            "album_count": album_count,
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "message": f"Connected successfully — found {album_count} album(s)",
+                "album_count": album_count,
+            }
+        )
     except req_lib.exceptions.ConnectionError:
-        return jsonify({
-            "ok": False,
-            "error": "Could not connect to the server. Check the URL and network.",
-        }), 502
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Could not connect to the server. Check the URL and network.",
+            }
+        ), 502
     except req_lib.exceptions.Timeout:
-        return jsonify({
-            "ok": False,
-            "error": "Connection timed out. Check the server URL and network.",
-        }), 504
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Connection timed out. Check the server URL and network.",
+            }
+        ), 504
     except Exception as e:
-        return jsonify({
-            "ok": False,
-            "error": str(e),
-        }), 502
+        return jsonify(
+            {
+                "ok": False,
+                "error": str(e),
+            }
+        ), 502
 
 
 # ── Module-level syncer cache ───────────────────────────────────────────────
@@ -193,7 +213,7 @@ def test_connection():
 _syncer_cache: Any = None
 
 
-def _get_or_create_syncer(state) -> ImmichSyncer:
+def _get_or_create_syncer(state) -> ImmichSyncer:  # noqa: F821
     """Return a cached ``ImmichSyncer`` for the current state manager.
 
     The syncer is lightweight — it just wraps API calls. We reuse it

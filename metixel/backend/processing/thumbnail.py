@@ -128,7 +128,8 @@ def generate_image_thumbnail(
     except Exception:
         logger.warning(
             "Failed to generate image thumbnail: %s",
-            source_path.name, exc_info=True,
+            source_path.name,
+            exc_info=True,
         )
         return None
 
@@ -166,19 +167,27 @@ def generate_video_thumbnail(
             with contextlib.suppress(OSError):
                 thumb_path.unlink()
 
-        cmd = nice_cmd([
-            "ffmpeg",
-            "-y",
-            "-noaccurate_seek",
-            "-ss", "2",
-            "-i", str(source_path),
-            "-vframes", "1",
-            "-q:v", "2",
-            str(thumb_path),
-        ])
+        cmd = nice_cmd(
+            [
+                "ffmpeg",
+                "-y",
+                "-noaccurate_seek",
+                "-ss",
+                "2",
+                "-i",
+                str(source_path),
+                "-vframes",
+                "1",
+                "-q:v",
+                "2",
+                str(thumb_path),
+            ]
+        )
         subprocess.run(
-            cmd, check=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=300,
         )
 
@@ -195,17 +204,20 @@ def generate_video_thumbnail(
 
     except subprocess.TimeoutExpired:
         logger.warning(
-            "Thumbnail generation timed out (300 s) for: %s", source_path.name,
+            "Thumbnail generation timed out (300 s) for: %s",
+            source_path.name,
         )
         return None
     except subprocess.CalledProcessError:
         logger.warning(
-            "ffmpeg failed to generate thumbnail for: %s", source_path.name,
+            "ffmpeg failed to generate thumbnail for: %s",
+            source_path.name,
         )
         return None
     except Exception:
         logger.warning(
             "Failed to generate video thumbnail: %s",
-            source_path.name, exc_info=True,
+            source_path.name,
+            exc_info=True,
         )
         return None

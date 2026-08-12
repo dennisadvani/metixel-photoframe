@@ -132,21 +132,27 @@ def set_log_level():
         return jsonify({"error": "Missing 'level' in JSON body"}), 400
 
     level_name = data["level"].upper()
-    valid_levels = {"DEBUG": logging.DEBUG, "INFO": logging.INFO,
-                    "WARNING": logging.WARNING, "ERROR": logging.ERROR,
-                    "NONE": _NONE_LEVEL}
+    valid_levels = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "NONE": _NONE_LEVEL,
+    }
     if level_name not in valid_levels:
-        return jsonify({
-            "error": f"Invalid level: {data['level']}",
-            "valid": sorted(valid_levels.keys()),
-        }), 400
+        return jsonify(
+            {
+                "error": f"Invalid level: {data['level']}",
+                "valid": sorted(valid_levels.keys()),
+            }
+        ), 400
 
     new_level = valid_levels[level_name]
 
     # ── 1. Update every FileHandler across all loggers ──────────────────
     #     Ring buffers and console handlers are deliberately skipped.
     updated = 0
-    for logger_name, logger_obj in logging.Logger.manager.loggerDict.items():
+    for _logger_name, logger_obj in logging.Logger.manager.loggerDict.items():
         if not isinstance(logger_obj, logging.Logger):
             continue
         for handler in logger_obj.handlers:
@@ -168,15 +174,17 @@ def set_log_level():
         logger.exception("Failed to persist log level to config")
 
     logger.warning(
-        "File log level changed to %s — %d file handlers updated "
-        "(ring buffer + console unchanged)",
-        level_name, updated,
+        "File log level changed to %s — %d file handlers updated (ring buffer + console unchanged)",
+        level_name,
+        updated,
     )
-    return jsonify({
-        "status": "ok",
-        "level": level_name,
-        "file_handlers_updated": updated,
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "level": level_name,
+            "file_handlers_updated": updated,
+        }
+    )
 
 
 @logs_bp.route("/recent", methods=["GET"])

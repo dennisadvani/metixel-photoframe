@@ -70,8 +70,11 @@ def serve_thumbnail(filename: str):
     safe_name = Path(filename).name
 
     # Security: only allow known safe extensions
-    if not (safe_name.endswith(".jpg") or safe_name.endswith(".jpeg")
-            or safe_name.endswith(".frame.jpg")):
+    if not (
+        safe_name.endswith(".jpg")
+        or safe_name.endswith(".jpeg")
+        or safe_name.endswith(".frame.jpg")
+    ):
         return jsonify({"error": "Invalid file type"}), 403
 
     # 1. Try the thumbnail cache directory (already 320 px)
@@ -96,7 +99,9 @@ def serve_thumbnail(filename: str):
                 if safe_name.endswith(".frame"):
                     return _serve_resized_frame(candidate)
                 return send_from_directory(
-                    str(candidate.parent), safe_name, mimetype="image/jpeg",
+                    str(candidate.parent),
+                    safe_name,
+                    mimetype="image/jpeg",
                 )
 
     return jsonify({"error": "Thumbnail not found"}), 404
@@ -104,7 +109,7 @@ def serve_thumbnail(filename: str):
 
 def _serve_resized_frame(path: Path) -> Response:
     """Resize a full-resolution video frame to thumbnail size and serve it."""
-    THUMB = 320
+    THUMB = 320  # noqa: N806
     try:
         from PIL import Image
 
@@ -120,7 +125,9 @@ def _serve_resized_frame(path: Path) -> Response:
         logger.warning("Failed to resize frame: %s", path, exc_info=True)
         # Fall back to serving the original
         return send_from_directory(
-            str(path.parent), path.name, mimetype="image/jpeg",
+            str(path.parent),
+            path.name,
+            mimetype="image/jpeg",
         )
 
 
@@ -202,7 +209,7 @@ def list_media():
             logger.debug("Could not query video queue status", exc_info=True)
 
     # ── Slice the requested page ─────────────────────────────────────
-    page_paths = all_paths[offset: offset + limit]
+    page_paths = all_paths[offset : offset + limit]
 
     items = []
     for entry in page_paths:
@@ -245,32 +252,37 @@ def list_media():
         except Exception:
             folder = _watch_folder_name(entry, watch_paths)
             rel_path = _relative_to_any(entry, watch_paths)
-            items.append({
-                "name": entry.name,
-                "path": rel_path,
-                "folder": folder,
-                "width": 0,
-                "height": 0,
-                "size_kb": round(entry.stat().st_size / 1024, 1),
-                "media_type": "video" if is_video else "image",
-                "thumbnail_url": None,
-            })
+            items.append(
+                {
+                    "name": entry.name,
+                    "path": rel_path,
+                    "folder": folder,
+                    "width": 0,
+                    "height": 0,
+                    "size_kb": round(entry.stat().st_size / 1024, 1),
+                    "media_type": "video" if is_video else "image",
+                    "thumbnail_url": None,
+                }
+            )
 
-    return jsonify({
-        "items": items,
-        "total": total,
-        "offset": offset,
-        "limit": limit,
-        "has_more": (offset + limit) < total,
-        "images": img_count,
-        "videos": vid_count,
-    })
+    return jsonify(
+        {
+            "items": items,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": (offset + limit) < total,
+            "images": img_count,
+            "videos": vid_count,
+        }
+    )
 
 
 def _probe_image(path: Path) -> tuple[int, int]:
     """Get image dimensions without a full decode."""
     try:
         from PIL import Image
+
         with Image.open(path) as img:
             return img.size
     except Exception:
@@ -282,11 +294,23 @@ def _probe_video(path: Path) -> tuple[int, int]:
     try:
         import json
         import subprocess
+
         result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "json", str(path)],
-            capture_output=True, text=True, timeout=10,
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=width,height",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode == 0 and result.stdout.strip():
             probe = json.loads(result.stdout)
@@ -376,9 +400,10 @@ def clear_image_cache():
                 logger.warning("Failed to iterate cache dir: %s", cache_path)
 
     logger.info(
-        "All caches cleared: %d files deleted, %d bytes freed "
-        "(%s, %s, %s)",
-        deleted_files, freed_bytes, *cache_subdirs,
+        "All caches cleared: %d files deleted, %d bytes freed (%s, %s, %s)",
+        deleted_files,
+        freed_bytes,
+        *cache_subdirs,
     )
 
     # ── Reset backend playlist ──────────────────────────────────────
@@ -393,8 +418,11 @@ def clear_image_cache():
     ipc = current_app.config.get("METIXEL_IPC")
     if ipc is not None:
         from metixel.shared.ipc import ControlMessage
+
         ipc.send(ControlMessage(cmd="pause"))
-        logger.debug("Sent pause via IPC before cache clear — frontend will reset on empty playlist")
+        logger.debug(
+            "Sent pause via IPC before cache clear — frontend will reset on empty playlist"
+        )
 
     # Also invalidate the file-list cache so the next list_media()
     # call re-scans the filesystem.
@@ -412,9 +440,11 @@ def clear_image_cache():
     )
     logger.info("Services restart scheduled (metixel-backend + metixel-cage)")
 
-    return jsonify({
-        "status": "ok",
-        "deleted_files": deleted_files,
-        "freed_bytes": freed_bytes,
-        "freed_mb": round(freed_bytes / (1024 * 1024), 2),
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "deleted_files": deleted_files,
+            "freed_bytes": freed_bytes,
+            "freed_mb": round(freed_bytes / (1024 * 1024), 2),
+        }
+    )

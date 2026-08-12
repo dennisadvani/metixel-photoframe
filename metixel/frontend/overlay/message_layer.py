@@ -19,7 +19,7 @@ from metixel.frontend.overlay.layer import OverlayLayer
 logger = logging.getLogger(__name__)
 
 # -- Layout constants --------------------------------------------------------
-MSG_WIDTH = 500            # 60% of original
+MSG_WIDTH = 500  # 60% of original
 MSG_MARGIN = 24
 MSG_PADDING = 20
 MSG_ACCENT = 5
@@ -68,10 +68,27 @@ def _wrap_text(text: str, chars_per_line: int) -> list[str]:
 
 class _Message:
     """Internal message state."""
-    __slots__ = ("id", "icon", "title", "body", "severity", "duration",
-                 "created_at", "state", "_anim_start", "_from_x", "_to_x",
-                 "_x", "_alpha", "_y", "_visible_start", "_paused_since",
-                 "_paused_total")
+
+    __slots__ = (
+        "id",
+        "icon",
+        "title",
+        "body",
+        "severity",
+        "duration",
+        "created_at",
+        "state",
+        "_anim_start",
+        "_from_x",
+        "_to_x",
+        "_x",
+        "_alpha",
+        "_y",
+        "_visible_start",
+        "_paused_since",
+        "_paused_total",
+    )
+
     def __init__(self, msg_id, icon, title, body, severity, duration):
         self.id = msg_id
         self.icon = icon
@@ -87,9 +104,9 @@ class _Message:
         self._x = 0.0
         self._alpha = 0.0
         self._y = 0.0
-        self._visible_start = 0.0   # when the message became visible
-        self._paused_since = 0.0    # monotonic; 0 = not paused by video
-        self._paused_total = 0.0    # accumulated seconds paused by video
+        self._visible_start = 0.0  # when the message became visible
+        self._paused_since = 0.0  # monotonic; 0 = not paused by video
+        self._paused_total = 0.0  # accumulated seconds paused by video
 
     @property
     def active(self) -> bool:
@@ -109,9 +126,14 @@ class MessageLayer(OverlayLayer):
 
     # -- Public API (thread-safe) -------------------------------------------
 
-    def show(self, title: str = "", body: str = "",
-             severity: str = "info", duration: float = 5.0,
-             icon: str = "") -> str:
+    def show(
+        self,
+        title: str = "",
+        body: str = "",
+        severity: str = "info",
+        duration: float = 5.0,
+        icon: str = "",
+    ) -> str:
         """Queue a message. Returns the message ID."""
         if icon == "":
             icon = SEVERITY_ICONS.get(severity, SEVERITY_ICONS["info"])
@@ -181,7 +203,7 @@ class MessageLayer(OverlayLayer):
                 m._paused_total = 0.0
             else:
                 # ease_out_cubic
-                et = 1.0 - (1.0 - t) ** 3
+                1.0 - (1.0 - t) ** 3
                 m._alpha = min(1.0, t / 0.5)
         elif m.state == "visible":
             if self._video_playing:
@@ -196,7 +218,7 @@ class MessageLayer(OverlayLayer):
                 if m._paused_since > 0.0:
                     m._paused_total += now - m._paused_since
                     m._paused_since = 0.0
-                effective = (now - m._visible_start - m._paused_total)
+                effective = now - m._visible_start - m._paused_total
                 if m.duration > 0 and effective >= m.duration:
                     self._start_dismiss(m)
         elif m.state == "sliding_out":
@@ -208,8 +230,9 @@ class MessageLayer(OverlayLayer):
     def draw(self, backend: DisplayBackend) -> None:
         self.reset_z()
         # Lazy-init textures (created once, reused every frame)
-        if not hasattr(self, '_tex_bg'):
+        if not hasattr(self, "_tex_bg"):
             import numpy as np
+
             bg_arr = np.ones((1, 1, 3), dtype=np.uint8)
             bg_arr[0, 0] = tuple(int(c * 255) for c in MSG_BG)
             self._tex_bg = backend.load_texture(bg_arr)
@@ -274,31 +297,38 @@ class MessageLayer(OverlayLayer):
             return
 
         # 1. Background — use draw_image (same as slideshow, correct colours)
-        backend.draw_image(self._tex_bg, x, y, MSG_WIDTH, mh,
-                           alpha=MSG_BG_ALPHA * alpha,
-                           z=self.next_z())
+        backend.draw_image(
+            self._tex_bg, x, y, MSG_WIDTH, mh, alpha=MSG_BG_ALPHA * alpha, z=self.next_z()
+        )
 
         # 2. Accent bar — use draw_image (bypasses draw_rect colour bug)
-        backend.draw_image(self._tex_accent, x, y, MSG_ACCENT, mh,
-                           alpha=1.0 * alpha,
-                           z=self.next_z())
+        backend.draw_image(
+            self._tex_accent, x, y, MSG_ACCENT, mh, alpha=1.0 * alpha, z=self.next_z()
+        )
 
         # 3. Icon — vertically centered in the box
         icon_x = int(x + MSG_ACCENT + MSG_PADDING)
         icon_y = int(y + 8)
-        backend.draw_text(m.icon, icon_x, icon_y,
-                          font_size=MSG_ICON_SIZE,
-                          color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
-                          z=self.next_z())
+        backend.draw_text(
+            m.icon,
+            icon_x,
+            icon_y,
+            font_size=MSG_ICON_SIZE,
+            color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
+            z=self.next_z(),
+        )
 
         # 4. Title — positioned higher, next to icon
         text_x = int(icon_x + MSG_ICON_SIZE + MSG_PADDING)
         if m.title:
-            backend.draw_text(m.title, text_x,
-                              int(y + 6),
-                              font_size=MSG_TITLE_SIZE,
-                              color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
-                              z=self.next_z())
+            backend.draw_text(
+                m.title,
+                text_x,
+                int(y + 6),
+                font_size=MSG_TITLE_SIZE,
+                color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
+                z=self.next_z(),
+            )
 
         # 5. Body — wrapping support
         if m.body:
@@ -309,8 +339,11 @@ class MessageLayer(OverlayLayer):
             chars_per = max(20, int(avail_w / char_w))
             lines = _wrap_text(m.body, chars_per)
             for li, line in enumerate(lines[:5]):  # max 5 lines
-                backend.draw_text(line, text_x,
-                                  body_start_y + li * (MSG_BODY_SIZE + 4),
-                                  font_size=MSG_BODY_SIZE,
-                                  color=(0.78, 0.78, 0.82, MSG_TEXT_ALPHA * 0.9 * alpha),
-                                  z=self.next_z())
+                backend.draw_text(
+                    line,
+                    text_x,
+                    body_start_y + li * (MSG_BODY_SIZE + 4),
+                    font_size=MSG_BODY_SIZE,
+                    color=(0.78, 0.78, 0.82, MSG_TEXT_ALPHA * 0.9 * alpha),
+                    z=self.next_z(),
+                )

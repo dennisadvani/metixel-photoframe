@@ -12,8 +12,10 @@ pi3d uses Mesa EGL, which talks to the vc4 KMS/DRM kernel driver.
 This approach adds ~40MB RAM overhead (cage + XWayland) vs direct
 framebuffer access, but is forward-compatible and works on all Pi models.
 """
+
 from __future__ import annotations
 
+import contextlib
 import gc
 import logging
 import os
@@ -149,6 +151,7 @@ class Pi3dBackend(DisplayBackend):
         global GPU_TEXTURE_FORMAT_GL_RGB
         try:
             from pi3d.constants import GL_RGB  # pi3d >= 2.50
+
             GPU_TEXTURE_FORMAT_GL_RGB = GL_RGB
         except ImportError:
             try:
@@ -186,20 +189,20 @@ class Pi3dBackend(DisplayBackend):
         # When no monitor is connected, pi3d/DRM may report 1×1 (or 0×0).
         # This causes pi3d Textures to fail with "height and width must be > 0"
         # during resize.  Fall back to a safe 1080p default and warn loudly.
-        DISPLAY_FALLBACK_W = 1920
-        DISPLAY_FALLBACK_H = 1080
+        DISPLAY_FALLBACK_W = 1920  # noqa: N806
+        DISPLAY_FALLBACK_H = 1080  # noqa: N806
         if self._display.width <= 1 or self._display.height <= 1:
             logger.warning(
                 "Detected display resolution %dx%d — likely no monitor connected. "
                 "Falling back to %dx%d.",
-                self._display.width, self._display.height,
-                DISPLAY_FALLBACK_W, DISPLAY_FALLBACK_H,
+                self._display.width,
+                self._display.height,
+                DISPLAY_FALLBACK_W,
+                DISPLAY_FALLBACK_H,
             )
             # Destroy the bogus 1×1 display and recreate at 1080p.
-            try:
+            with contextlib.suppress(Exception):
                 self._display.destroy()
-            except Exception:
-                pass
             self._display = pi3d.Display.create(
                 x=0,
                 y=0,
@@ -231,7 +234,9 @@ class Pi3dBackend(DisplayBackend):
         # Pre-create white 1×1 texture for colored rects (reused every frame)
         white_arr = np.ones((1, 1, 3), dtype=np.uint8) * 255
         self._white_tex = pi3d.Texture(
-            white_arr, free_after_load=True, i_format=GPU_TEXTURE_FORMAT_GL_RGB,
+            white_arr,
+            free_after_load=True,
+            i_format=GPU_TEXTURE_FORMAT_GL_RGB,
         )
 
         self._running = True
@@ -239,9 +244,11 @@ class Pi3dBackend(DisplayBackend):
             "Pi3dBackend created: %dx%d @ %d FPS | "
             "config requested %dx%d | "
             "GPU mem: %s | DRM driver: %s | pi3d version: %s",
-            self._display.width, self._display.height,
+            self._display.width,
+            self._display.height,
             fps_limit,
-            width, height,
+            width,
+            height,
             self._get_gpu_mem(),
             self._get_drm_driver(),
             getattr(self._pi3d, "__version__", "unknown"),
@@ -254,10 +261,8 @@ class Pi3dBackend(DisplayBackend):
         self._text_cache.clear()
         self._white_tex = None
         if self._display:
-            try:
+            with contextlib.suppress(Exception):
                 self._display.destroy()
-            except Exception:
-                pass
             self._display = None
         self._camera = None
         self._overlay_camera = None
@@ -305,10 +310,8 @@ class Pi3dBackend(DisplayBackend):
         slideshow renders and before drawing overlay elements.
         """
         if self._pi3d is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._pi3d.opengles.glClear(0x00000100)  # GL_DEPTH_BUFFER_BIT
-            except Exception:
-                pass
 
     def set_depth_test(self, enabled: bool) -> None:
         """Enable or disable OpenGL depth testing.
@@ -361,7 +364,12 @@ class Pi3dBackend(DisplayBackend):
                 del self._rect_sprites[oldest]
 
             sprite = self._pi3d.Sprite(
-                w=w, h=h, x=0, y=0, z=z, camera=self._camera,
+                w=w,
+                h=h,
+                x=0,
+                y=0,
+                z=z,
+                camera=self._camera,
             )
             sprite.set_draw_details(self._shader, [self._white_tex])
             # Tint the white texture via material color
@@ -410,7 +418,12 @@ class Pi3dBackend(DisplayBackend):
         py = self._display.height / 2 - (y + h / 2)
 
         sprite = self._pi3d.Sprite(
-            w=w, h=h, x=px, y=py, z=z, camera=self._camera,
+            w=w,
+            h=h,
+            x=px,
+            y=py,
+            z=z,
+            camera=self._camera,
         )
         sprite.set_shader(self._shader)
         sprite.set_textures([texture])
@@ -473,7 +486,12 @@ class Pi3dBackend(DisplayBackend):
         # Create or reuse the crossfade sprite (full-screen quad).
         if self._crossfade_sprite is None:
             self._crossfade_sprite = self._pi3d.Sprite(
-                w=sw, h=sh, x=0, y=0, z=0.0, camera=self._camera,
+                w=sw,
+                h=sh,
+                x=0,
+                y=0,
+                z=0.0,
+                camera=self._camera,
             )
             self._crossfade_sprite.set_draw_details(
                 self._crossfade_shader,
@@ -489,20 +507,21 @@ class Pi3dBackend(DisplayBackend):
         # UVs outside [0,1] are clamped to transparent in the fragment shader.
         u = self._crossfade_sprite.unif
 
-        def _set_uv(base_idx: int, rect: tuple[float, float, float, float] | None,
-                     slide_off: float = 0.0) -> None:
+        def _set_uv(
+            base_idx: int, rect: tuple[float, float, float, float] | None, slide_off: float = 0.0
+        ) -> None:
             if rect is None:
-                u[base_idx] = 1.0       # scale X
-                u[base_idx + 1] = 1.0   # scale Y
-                u[base_idx + 6] = 0.0   # offset X
-                u[base_idx + 7] = 0.0   # offset Y
+                u[base_idx] = 1.0  # scale X
+                u[base_idx + 1] = 1.0  # scale Y
+                u[base_idx + 6] = 0.0  # offset X
+                u[base_idx + 7] = 0.0  # offset Y
             else:
                 rx, ry, rw, rh = rect
-                u[base_idx] = sw / rw if rw > 0 else 1.0       # scale X
-                u[base_idx + 1] = sh / rh if rh > 0 else 1.0   # scale Y
+                u[base_idx] = sw / rw if rw > 0 else 1.0  # scale X
+                u[base_idx + 1] = sh / rh if rh > 0 else 1.0  # scale Y
                 # Slide offset in pixels → UV offset: dx / rw
-                u[base_idx + 6] = (rx - slide_off) / rw if rw > 0 else 0.0   # offset X
-                u[base_idx + 7] = ry / rh if rh > 0 else 0.0   # offset Y
+                u[base_idx + 6] = (rx - slide_off) / rw if rw > 0 else 0.0  # offset X
+                u[base_idx + 7] = ry / rh if rh > 0 else 0.0  # offset Y
 
         # Front texture UV: unif[42,43] = scale, unif[48,49] = offset
         _set_uv(42, current_rect, slide_offset_current)
@@ -536,14 +555,20 @@ class Pi3dBackend(DisplayBackend):
 
         if isinstance(path, np.ndarray):
             texture = self._pi3d.Texture(
-                path, blend=True, m_repeat=True,
-                i_format=i_format, **kwargs,
+                path,
+                blend=True,
+                m_repeat=True,
+                i_format=i_format,
+                **kwargs,
             )
         else:
             texture = self._pi3d.Texture(
-                str(path), blend=True, m_repeat=True,
+                str(path),
+                blend=True,
+                m_repeat=True,
                 free_after_load=free_after_load,
-                i_format=i_format, **kwargs,
+                i_format=i_format,
+                **kwargs,
             )
 
         logger.debug(
@@ -612,7 +637,9 @@ class Pi3dBackend(DisplayBackend):
             # ── vcgencmd get_mem gpu ──────────────────────────────────
             result = subprocess.run(
                 ["vcgencmd", "get_mem", "gpu"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             )
             if result.returncode == 0 and "=" in result.stdout:
                 val = result.stdout.strip().split("=")[-1].rstrip("M")
@@ -624,7 +651,9 @@ class Pi3dBackend(DisplayBackend):
             # ── vcgencmd get_mem reloc ────────────────────────────────
             result = subprocess.run(
                 ["vcgencmd", "get_mem", "reloc"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             )
             if result.returncode == 0 and "=" in result.stdout:
                 val = result.stdout.strip().split("=")[-1].rstrip("M")
@@ -636,7 +665,9 @@ class Pi3dBackend(DisplayBackend):
             # ── vcgencmd get_mem malloc ───────────────────────────────
             result = subprocess.run(
                 ["vcgencmd", "get_mem", "malloc"],
-                capture_output=True, text=True, timeout=3,
+                capture_output=True,
+                text=True,
+                timeout=3,
             )
             if result.returncode == 0 and "=" in result.stdout:
                 val = result.stdout.strip().split("=")[-1].rstrip("M")
@@ -678,6 +709,7 @@ class Pi3dBackend(DisplayBackend):
         """
         try:
             from ctypes import cdll, util
+
             lib_name = util.find_library("GLESv2")
             if lib_name is None:
                 logger.debug("flush_gpu: GLESv2 library not found — skipping")
@@ -872,11 +904,15 @@ class Pi3dBackend(DisplayBackend):
 
             cmd = [
                 wlr_bin,
-                "--output", Pi3dBackend._WLR_OUTPUT,
+                "--output",
+                Pi3dBackend._WLR_OUTPUT,
                 "--on" if on else "--off",
             ]
             result = subprocess.run(
-                cmd, capture_output=True, timeout=5, env=env,
+                cmd,
+                capture_output=True,
+                timeout=5,
+                env=env,
             )
             if result.returncode != 0:
                 logger.warning(
@@ -921,7 +957,10 @@ class Pi3dBackend(DisplayBackend):
                     on_off = "on" if state == "on" else "off"
                     result = subprocess.run(
                         ["sudo", "tee", status_path],
-                        input=on_off, capture_output=True, text=True, timeout=5,
+                        input=on_off,
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
                     )
                     if result.returncode == 0:
                         return True

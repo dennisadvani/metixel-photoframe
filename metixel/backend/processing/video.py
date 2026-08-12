@@ -73,7 +73,7 @@ def _detect_pi_model() -> str | None:
     if "raspberry pi 2" in model_lower:
         return "pi2"
     if "raspberry pi zero 2" in model_lower:
-        return "pi3"   # Zero 2 W has similar VideoCore IV to Pi 3
+        return "pi3"  # Zero 2 W has similar VideoCore IV to Pi 3
     return None
 
 
@@ -116,8 +116,8 @@ class VideoProcessor:
             "max_width": 1920,
             "max_height": 1080,
             "max_fps": 30,
-            "max_bitrate": 7,   # Mbps
-            "crf": 28,          # Higher CRF = lower bitrate for software decode
+            "max_bitrate": 7,  # Mbps
+            "crf": 28,  # Higher CRF = lower bitrate for software decode
             "h264_profile": "high",
             "h264_level": "4.0",
             "color_depth": 8,
@@ -129,11 +129,11 @@ class VideoProcessor:
             "encoder": "libx264",
             "max_width": 1920,
             "max_height": 1080,
-            "max_fps": 30,        # Hard limit — see project requirements
-            "max_bitrate": 7,      # Software decode limit: ARM cores tap out ~8-10 Mbps
-            "crf": 28,            # Higher CRF = lower bitrate for software decode
+            "max_fps": 30,  # Hard limit — see project requirements
+            "max_bitrate": 7,  # Software decode limit: ARM cores tap out ~8-10 Mbps
+            "crf": 28,  # Higher CRF = lower bitrate for software decode
             "h264_profile": "high",
-            "h264_level": "4.0",   # Pi 3 VideoCore IV HW decode limit: Level 4.1
+            "h264_level": "4.0",  # Pi 3 VideoCore IV HW decode limit: Level 4.1
             "color_depth": 8,
             "hdr_support": False,
         },
@@ -145,8 +145,8 @@ class VideoProcessor:
             "max_height": 2160,
             "max_fps": 60,
             "max_bitrate": 40,
-            "crf": 23,            # Standard quality for hardware decode
-            "h264_profile": "high",    # Not used for H.265, informational
+            "crf": 23,  # Standard quality for hardware decode
+            "h264_profile": "high",  # Not used for H.265, informational
             "h264_level": "5.1",
             "color_depth": 10,
             "hdr_support": True,
@@ -159,7 +159,7 @@ class VideoProcessor:
             "max_height": 2160,
             "max_fps": 60,
             "max_bitrate": 80,
-            "crf": 23,            # Standard quality for hardware decode
+            "crf": 23,  # Standard quality for hardware decode
             "h264_profile": "high",
             "h264_level": "5.2",
             "color_depth": 10,
@@ -196,9 +196,11 @@ class VideoProcessor:
 
         # Centralised timeouts (from config.timeouts, with defaults)
         self._t = timeouts or {}
+
         def _to(key: str, fallback: int) -> int:
             v = int(self._t.get(key, fallback))
             return v if v > 0 else fallback
+
         self._timeout = _to  # helper: self._timeout("key", default)
 
         # Track currently transcoding files (by hash) so we can check guardrails
@@ -240,7 +242,9 @@ class VideoProcessor:
                 "profile": "custom",
                 "label": "Custom",
                 "codec": self._cfg.get("transcode_codec", "h264"),
-                "encoder": "libx264" if self._cfg.get("transcode_codec", "h264") == "h264" else "libx265",
+                "encoder": "libx264"
+                if self._cfg.get("transcode_codec", "h264") == "h264"
+                else "libx265",
                 "max_width": self._cfg.get("transcode_max_width", 0) or self._screen_w,
                 "max_height": self._cfg.get("transcode_max_height", 0) or self._screen_h,
                 "max_fps": self._cfg.get("transcode_max_fps", 30),
@@ -274,9 +278,13 @@ class VideoProcessor:
         logger.debug(
             "VideoProcessor config updated: transcode=%s, max=%dx%d, quality=%d, "
             "sw_encoder=%s, cpu_throttle=%s (%d%%)",
-            self._transcoding_enabled, self._transcode_max_w, self._transcode_max_h,
-            self._transcode_quality, self._force_software_encoder,
-            self._cpu_throttle_enabled, self._cpu_throttle_pct,
+            self._transcoding_enabled,
+            self._transcode_max_w,
+            self._transcode_max_h,
+            self._transcode_quality,
+            self._force_software_encoder,
+            self._cpu_throttle_enabled,
+            self._cpu_throttle_pct,
         )
 
     @staticmethod
@@ -341,7 +349,9 @@ class VideoProcessor:
         if max_br and src_br > int(max_br * 1.1):
             logger.info(
                 "Needs transcode: bitrate %d Mbps > max %d Mbps (+10%%=%d)",
-                src_br, max_br, int(max_br * 1.1),
+                src_br,
+                max_br,
+                int(max_br * 1.1),
             )
             return True
 
@@ -368,7 +378,8 @@ class VideoProcessor:
                     if float(src_level) > float(target_level):
                         logger.info(
                             "Needs transcode: H.264 level %s > target %s",
-                            src_level, target_level,
+                            src_level,
+                            target_level,
                         )
                         return True
                 except (ValueError, TypeError):
@@ -412,7 +423,8 @@ class VideoProcessor:
             # These are required by the frontend — videos without cached
             # frames are excluded from the playlist via is_ready_to_play.
             first_frame, last_frame = self._extract_video_frames(
-                source_path, file_hash,
+                source_path,
+                file_hash,
             )
 
             # If the source is within all profile limits, skip transcode.
@@ -427,23 +439,37 @@ class VideoProcessor:
             needs_opt = VideoProcessor.needs_optimisation(info, profile)
             if not needs_opt:
                 logger.debug(
-                    "Video already optimal (%s %dx%d) — "
-                    "skipping transcode for %s",
-                    codec_name, vw, vh, source_path.name,
+                    "Video already optimal (%s %dx%d) — skipping transcode for %s",
+                    codec_name,
+                    vw,
+                    vh,
+                    source_path.name,
                 )
                 return self._build_item(
-                    source_path, source_path, thumb_path, info, source, file_hash,
+                    source_path,
+                    source_path,
+                    thumb_path,
+                    info,
+                    source,
+                    file_hash,
                     status=TranscodeStatus.NOT_TRANSCODED,
-                    first_frame=first_frame, last_frame=last_frame,
+                    first_frame=first_frame,
+                    last_frame=last_frame,
                 )
 
             # If transcoding is disabled, use original file
             if not self._transcoding_enabled:
                 logger.debug("Transcoding disabled — using original file for %s", source_path.name)
                 return self._build_item(
-                    source_path, source_path, thumb_path, info, source, file_hash,
+                    source_path,
+                    source_path,
+                    thumb_path,
+                    info,
+                    source,
+                    file_hash,
                     status=TranscodeStatus.NOT_TRANSCODED,
-                    first_frame=first_frame, last_frame=last_frame,
+                    first_frame=first_frame,
+                    last_frame=last_frame,
                 )
 
             # If cached file already exists, validate it against the current
@@ -455,9 +481,15 @@ class VideoProcessor:
                     if not VideoProcessor.needs_optimisation(cached_info, profile):
                         logger.debug("Cached video still valid for current profile: %s", file_hash)
                         return self._build_item(
-                            source_path, cached_path, thumb_path, info, source, file_hash,
+                            source_path,
+                            cached_path,
+                            thumb_path,
+                            info,
+                            source,
+                            file_hash,
                             status=TranscodeStatus.TRANSCODED,
-                            first_frame=first_frame, last_frame=last_frame,
+                            first_frame=first_frame,
+                            last_frame=last_frame,
                         )
                     else:
                         logger.info(
@@ -480,12 +512,14 @@ class VideoProcessor:
                 playback_path = cached_path
                 logger.info(
                     "Video transcoded: %s → %s",
-                    source_path.name, file_hash,
+                    source_path.name,
+                    file_hash,
                 )
             except RuntimeError as e:
                 logger.warning(
                     "Transcode failed for %s: %s — will play original file",
-                    source_path.name, e,
+                    source_path.name,
+                    e,
                 )
                 status = TranscodeStatus.FAILED
                 playback_path = source_path
@@ -493,9 +527,15 @@ class VideoProcessor:
                 self._transcoding.discard(file_hash)
 
             return self._build_item(
-                source_path, playback_path, thumb_path, info, source, file_hash,
+                source_path,
+                playback_path,
+                thumb_path,
+                info,
+                source,
+                file_hash,
                 status=status,
-                first_frame=first_frame, last_frame=last_frame,
+                first_frame=first_frame,
+                last_frame=last_frame,
             )
 
         except Exception:
@@ -520,8 +560,8 @@ class VideoProcessor:
         if avail is not None and avail < self._MIN_FREE_RAM_FOR_TRANSCODE:
             raise RuntimeError(
                 f"Insufficient free RAM for transcode "
-                f"(available: {avail // (1024*1024)} MB, "
-                f"need: {self._MIN_FREE_RAM_FOR_TRANSCODE // (1024*1024)} MB)"
+                f"(available: {avail // (1024 * 1024)} MB, "
+                f"need: {self._MIN_FREE_RAM_FOR_TRANSCODE // (1024 * 1024)} MB)"
             )
 
         max_w = profile.get("max_width", self._transcode_max_w)
@@ -559,9 +599,12 @@ class VideoProcessor:
             cmd = [
                 "ffmpeg",
                 "-y",
-                "-i", str(source),
-                "-c:v", encoder,
-                "-vf", scale_filter,
+                "-i",
+                str(source),
+                "-c:v",
+                encoder,
+                "-vf",
+                scale_filter,
             ]
 
             if encoder in ("libx264", "libx265"):
@@ -623,9 +666,12 @@ class VideoProcessor:
             # HDR → SDR downgrade
             if not hdr_support:
                 cmd += [
-                    "-colorspace", "bt709",
-                    "-color_primaries", "bt709",
-                    "-color_trc", "bt709",
+                    "-colorspace",
+                    "bt709",
+                    "-color_primaries",
+                    "bt709",
+                    "-color_trc",
+                    "bt709",
                 ]
 
             # Max bitrate constraint — never exceed source quality.
@@ -638,7 +684,8 @@ class VideoProcessor:
                 cmd += ["-maxrate", f"{effective_max}M", "-bufsize", f"{effective_max * 2}M"]
 
             cmd += [
-                "-movflags", "+faststart",
+                "-movflags",
+                "+faststart",
                 str(dest),
             ]
 
@@ -647,36 +694,39 @@ class VideoProcessor:
 
             try:
                 subprocess.run(
-                    final_cmd, check=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    final_cmd,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=timeout,
                 )
                 logger.debug(
                     "Transcoded with %s (threads=%s, timeout=%ds): %s",
-                    encoder, thread_limit, timeout, source.name,
+                    encoder,
+                    thread_limit,
+                    timeout,
+                    source.name,
                 )
                 return
             except subprocess.CalledProcessError as e:
-                logger.warning("Encoder %s failed for %s (rc=%d)", encoder, source.name, e.returncode)
+                logger.warning(
+                    "Encoder %s failed for %s (rc=%d)", encoder, source.name, e.returncode
+                )
                 if dest.exists():
-                    try:
+                    with contextlib.suppress(OSError):
                         dest.unlink()
-                    except OSError:
-                        pass
             except subprocess.TimeoutExpired:
-                logger.warning("Encoder %s timed out for %s (%ds limit)", encoder, source.name, timeout)
+                logger.warning(
+                    "Encoder %s timed out for %s (%ds limit)", encoder, source.name, timeout
+                )
                 if dest.exists():
-                    try:
+                    with contextlib.suppress(OSError):
                         dest.unlink()
-                    except OSError:
-                        pass
             except Exception:
                 logger.exception("Unexpected error during transcode with %s", encoder)
                 if dest.exists():
-                    try:
+                    with contextlib.suppress(OSError):
                         dest.unlink()
-                    except OSError:
-                        pass
 
         raise RuntimeError(f"All encoders failed for: {source.name}")
 
@@ -710,9 +760,11 @@ class VideoProcessor:
             logger.debug("Throttling transcode to %d%% CPU via cpulimit", limit)
             return [
                 "cpulimit",
-                "-l", str(limit),
+                "-l",
+                str(limit),
                 "-f",  # foreground: wait for child to exit (CRITICAL!)
-                "--"] + cmd
+                "--",
+            ] + cmd
 
         logger.debug("cpulimit not installed — using nice + -threads only")
         return cmd
@@ -757,23 +809,32 @@ class VideoProcessor:
             f":force_original_aspect_ratio=decrease,"
             f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
         )
-        cmd = nice_cmd([
-            "ffmpeg",
-            "-y",
-            "-noaccurate_seek",
-            "-ss", "2",
-            "-i", str(source),
-            "-vf", vf,
-            "-vframes", "1",
-            "-q:v", "2",
-            str(dest),
-        ])
+        cmd = nice_cmd(
+            [
+                "ffmpeg",
+                "-y",
+                "-noaccurate_seek",
+                "-ss",
+                "2",
+                "-i",
+                str(source),
+                "-vf",
+                vf,
+                "-vframes",
+                "1",
+                "-q:v",
+                "2",
+                str(dest),
+            ]
+        )
         # Single-frame extraction — use nice only (no cpulimit).
         # Thumbnails are quick one-shot operations; cpulimit is for
         # long-running transcodes.
         subprocess.run(
-            cmd, check=True,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             timeout=self._timeout("thumbnail_extract", 300),
         )
 
@@ -784,23 +845,37 @@ class VideoProcessor:
         fps, bitrate, color_depth, h264_profile, h264_level,
         color_primaries, color_trc, colorspace, pix_fmt.
         """
-        cmd = nice_cmd([
-            "ffprobe",
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            "-show_streams",
-            str(path),
-        ])
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=self._timeout("ffprobe_probe", 120))
+        cmd = nice_cmd(
+            [
+                "ffprobe",
+                "-v",
+                "quiet",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(path),
+            ]
+        )
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=self._timeout("ffprobe_probe", 120)
+        )
         import json
 
         data = json.loads(result.stdout)
         info: dict = {
-            "width": 0, "height": 0, "duration": 0.0,
-            "codec_name": "", "fps": 0.0, "bitrate": 0,
-            "color_depth": 8, "h264_profile": "", "h264_level": "",
-            "color_primaries": "", "color_trc": "", "colorspace": "",
+            "width": 0,
+            "height": 0,
+            "duration": 0.0,
+            "codec_name": "",
+            "fps": 0.0,
+            "bitrate": 0,
+            "color_depth": 8,
+            "h264_profile": "",
+            "h264_level": "",
+            "color_primaries": "",
+            "color_trc": "",
+            "colorspace": "",
             "pix_fmt": "",
         }
         for stream in data.get("streams", []):
@@ -871,7 +946,9 @@ class VideoProcessor:
         try:
             result = subprocess.run(
                 ["ffmpeg", "-encoders"],
-                capture_output=True, text=True, timeout=self._timeout("hw_codec_detect", 30),
+                capture_output=True,
+                text=True,
+                timeout=self._timeout("hw_codec_detect", 30),
             )
             if "h264_v4l2m2m" in result.stdout:
                 encoders.append("h264_v4l2m2m")
@@ -898,24 +975,36 @@ class VideoProcessor:
         """
         try:
             result = subprocess.run(
-                nice_cmd(["ffprobe", "-v", "error",
-                 "-show_entries", "stream=codec_type",
-                 "-of", "csv=p=0",
-                 str(path)]),
-                capture_output=True, text=True, timeout=self._timeout("ffprobe_validate", 60),
+                nice_cmd(
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-show_entries",
+                        "stream=codec_type",
+                        "-of",
+                        "csv=p=0",
+                        str(path),
+                    ]
+                ),
+                capture_output=True,
+                text=True,
+                timeout=self._timeout("ffprobe_validate", 60),
             )
             return result.returncode == 0 and "video" in result.stdout.lower()
         except subprocess.TimeoutExpired:
             logger.warning(
-                "ffprobe timed out validating cached video — "
-                "system may be overloaded: %s", path.name,
+                "ffprobe timed out validating cached video — system may be overloaded: %s",
+                path.name,
             )
             return False
         except OSError:
             return False
 
     def _extract_video_frames(
-        self, source: Path, file_hash: str,
+        self,
+        source: Path,
+        file_hash: str,
     ) -> tuple[Path | None, Path | None]:
         """Extract first (t=0) and last (``-sseof``) frame JPEGs.
 
@@ -940,19 +1029,32 @@ class VideoProcessor:
 
         # ── First frame (t=0, keyframe seek) ──────────────────────────
         if not first_path.exists() or first_path.stat().st_size == 0:
-            cmd = nice_cmd([
-                "ffmpeg", "-y",
-                "-noaccurate_seek", "-ss", "0",
-                "-i", str(source),
-                "-vf", vf,
-                "-vframes", "1", "-q:v", "2",
-                "-f", "image2",
-                str(first_path),
-            ])
+            cmd = nice_cmd(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-noaccurate_seek",
+                    "-ss",
+                    "0",
+                    "-i",
+                    str(source),
+                    "-vf",
+                    vf,
+                    "-vframes",
+                    "1",
+                    "-q:v",
+                    "2",
+                    "-f",
+                    "image2",
+                    str(first_path),
+                ]
+            )
             try:
                 subprocess.run(
-                    cmd, check=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    cmd,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=self._timeout("frame_extract_first", 180),
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -972,20 +1074,31 @@ class VideoProcessor:
         # before the real end — causing a visible jitter when VLC
         # exits and the last frame appears underneath.
         if not last_path.exists() or last_path.stat().st_size == 0:
-            cmd = nice_cmd([
-                "ffmpeg", "-y",
-                "-sseof", "-1",
-                "-i", str(source),
-                "-vf", vf,
-                "-q:v", "2",
-                "-f", "image2",
-                "-update", "1",
-                str(last_path),
-            ])
+            cmd = nice_cmd(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-sseof",
+                    "-1",
+                    "-i",
+                    str(source),
+                    "-vf",
+                    vf,
+                    "-q:v",
+                    "2",
+                    "-f",
+                    "image2",
+                    "-update",
+                    "1",
+                    str(last_path),
+                ]
+            )
             try:
                 subprocess.run(
-                    cmd, check=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    cmd,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                     timeout=self._timeout("frame_extract_last", 120),
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):

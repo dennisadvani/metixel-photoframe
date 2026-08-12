@@ -30,11 +30,17 @@ class LayoutEngine:
         self._screen_ratio = screen_w / screen_h if screen_h > 0 else 1.0
         logger.info(
             "LayoutEngine: screen=%dx%d (ratio %.3f)",
-            self._screen_w, self._screen_h, self._screen_ratio,
+            self._screen_w,
+            self._screen_h,
+            self._screen_ratio,
         )
 
-    def compute(self, item: MediaItem, fit_mode: str = "contain",
-                matte_color: tuple[int, int, int] = (20, 20, 20)) -> dict:
+    def compute(
+        self,
+        item: MediaItem,
+        fit_mode: str = "contain",
+        matte_color: tuple[int, int, int] = (20, 20, 20),
+    ) -> dict:
         """Compute the layout for a media item.
 
         Returns:

@@ -9,7 +9,6 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -40,7 +39,8 @@ def get_config_section(section: str):
         try:
             subprocess.run(
                 ["sudo", "iw", "reg", "set", country],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
             logger.info("WiFi regulatory domain set to: %s", country)
         except Exception:
@@ -53,43 +53,52 @@ def get_config_section(section: str):
 def video_profiles():
     """Return available transcoding profiles with current selection."""
     from metixel.backend.processing.video import VideoProcessor, _detect_pi_model
+
     state = current_app.config["METIXEL_STATE"]
     video_cfg = state.config.video
     profiles = []
     for key, prof in VideoProcessor.PROFILES.items():
-        profiles.append({
-            "key": key,
-            "label": prof["label"],
-            "codec": prof["codec"],
-            "max_width": prof["max_width"],
-            "max_height": prof["max_height"],
-            "max_fps": prof["max_fps"],
-            "max_bitrate": prof["max_bitrate"],
-            "crf": prof["crf"],
-            "h264_profile": prof["h264_profile"],
-            "h264_level": prof["h264_level"],
-            "color_depth": prof["color_depth"],
-            "hdr_support": prof["hdr_support"],
-        })
+        profiles.append(
+            {
+                "key": key,
+                "label": prof["label"],
+                "codec": prof["codec"],
+                "max_width": prof["max_width"],
+                "max_height": prof["max_height"],
+                "max_fps": prof["max_fps"],
+                "max_bitrate": prof["max_bitrate"],
+                "crf": prof["crf"],
+                "h264_profile": prof["h264_profile"],
+                "h264_level": prof["h264_level"],
+                "color_depth": prof["color_depth"],
+                "hdr_support": prof["hdr_support"],
+            }
+        )
     # Add custom
     profiles.append({"key": "custom", "label": "Custom"})
-    return jsonify({
-        "profiles": profiles,
-        "current": video_cfg.get("transcoding_profile", ""),
-        "detected_model": _detect_pi_model(),
-        "keep_audio": video_cfg.get("keep_audio", False),
-        "custom_settings": {
-            "transcode_max_width": video_cfg.get("transcode_max_width", 0),
-            "transcode_max_height": video_cfg.get("transcode_max_height", 0),
-            "transcode_quality": video_cfg.get("transcode_quality", 23),
-            "transcode_crf": video_cfg.get("transcode_crf", video_cfg.get("transcode_quality", 23)),
-            "transcode_use_software_encoder": video_cfg.get("transcode_use_software_encoder", True),
-            "transcode_timeout_seconds": video_cfg.get("transcode_timeout_seconds", 7200),
-            "cpu_throttle_enabled": video_cfg.get("cpu_throttle_enabled", True),
-            "cpu_throttle_percent": video_cfg.get("cpu_throttle_percent", 200),
-            "transcoding_enabled": video_cfg.get("transcoding_enabled", True),
-        },
-    })
+    return jsonify(
+        {
+            "profiles": profiles,
+            "current": video_cfg.get("transcoding_profile", ""),
+            "detected_model": _detect_pi_model(),
+            "keep_audio": video_cfg.get("keep_audio", False),
+            "custom_settings": {
+                "transcode_max_width": video_cfg.get("transcode_max_width", 0),
+                "transcode_max_height": video_cfg.get("transcode_max_height", 0),
+                "transcode_quality": video_cfg.get("transcode_quality", 23),
+                "transcode_crf": video_cfg.get(
+                    "transcode_crf", video_cfg.get("transcode_quality", 23)
+                ),
+                "transcode_use_software_encoder": video_cfg.get(
+                    "transcode_use_software_encoder", True
+                ),
+                "transcode_timeout_seconds": video_cfg.get("transcode_timeout_seconds", 7200),
+                "cpu_throttle_enabled": video_cfg.get("cpu_throttle_enabled", True),
+                "cpu_throttle_percent": video_cfg.get("cpu_throttle_percent", 200),
+                "transcoding_enabled": video_cfg.get("transcoding_enabled", True),
+            },
+        }
+    )
 
 
 @config_bp.route("/<section>", methods=["PUT"])
@@ -98,9 +107,14 @@ def update_config_section(section: str):
     state = current_app.config["METIXEL_STATE"]
     data = request.get_json(silent=True)
     if data is None:
-        logger.warning("PUT /%s: invalid or missing JSON body (Content-Type: %s)",
-                       section, request.content_type)
-        return jsonify({"error": "Invalid JSON body", "hint": "Send JSON with Content-Type: application/json"}), 400
+        logger.warning(
+            "PUT /%s: invalid or missing JSON body (Content-Type: %s)",
+            section,
+            request.content_type,
+        )
+        return jsonify(
+            {"error": "Invalid JSON body", "hint": "Send JSON with Content-Type: application/json"}
+        ), 400
 
     try:
         logger.info("PUT /%s: updating with keys=%s", section, list(data.keys()))
@@ -137,27 +151,34 @@ def update_config_section(section: str):
         if ipc is not None and section == "system" and data.get("first_run") is False:
             try:
                 from metixel.shared.ipc import ControlMessage
+
                 ipc.send(ControlMessage(cmd="dismiss_all_messages"))
                 logger.info("Welcome banner dismissed — clearing on-screen messages")
             except Exception:
                 pass
 
-        return jsonify({
-            "status": "ok",
-            "section": section,
-            "config_path": str(state.config_path),
-        })
+        return jsonify(
+            {
+                "status": "ok",
+                "section": section,
+                "config_path": str(state.config_path),
+            }
+        )
     except KeyError:
-        return jsonify({
-            "error": f"Unknown config section: {section}",
-            "valid_sections": list(state.config.to_dict().keys()),
-        }), 404
+        return jsonify(
+            {
+                "error": f"Unknown config section: {section}",
+                "valid_sections": list(state.config.to_dict().keys()),
+            }
+        ), 404
     except Exception as e:
         logger.exception("Failed to update config section '%s'", section)
-        return jsonify({
-            "error": str(e),
-            "hint": "Check server logs for details",
-        }), 500
+        return jsonify(
+            {
+                "error": str(e),
+                "hint": "Check server logs for details",
+            }
+        ), 500
 
 
 @config_bp.route("/reload", methods=["POST"])
@@ -193,7 +214,9 @@ def restart_services():
         try:
             result = subprocess.run(
                 ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 tail = (result.stderr or result.stdout or "").strip()[-300:]
@@ -231,7 +254,9 @@ def reboot_system():
         try:
             result = subprocess.run(
                 ["sudo", "-n", "reboot", "now"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 tail = (result.stderr or result.stdout or "").strip()[-300:]
@@ -269,7 +294,9 @@ def shutdown_system():
         try:
             result = subprocess.run(
                 ["sudo", "-n", "shutdown", "now"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             if result.returncode != 0:
                 tail = (result.stderr or result.stdout or "").strip()[-300:]
@@ -299,14 +326,16 @@ def get_server_time():
     import datetime
 
     now = datetime.datetime.now().astimezone()
-    return jsonify({
-        "iso": now.isoformat(),
-        "unix": now.timestamp(),
-        "time": now.strftime("%H:%M:%S"),
-        "date": now.strftime("%Y-%m-%d"),
-        "timezone": now.tzname() or "",
-        "utc_offset": now.strftime("%z"),
-    })
+    return jsonify(
+        {
+            "iso": now.isoformat(),
+            "unix": now.timestamp(),
+            "time": now.strftime("%H:%M:%S"),
+            "date": now.strftime("%Y-%m-%d"),
+            "timezone": now.tzname() or "",
+            "utc_offset": now.strftime("%z"),
+        }
+    )
 
 
 @config_bp.route("/timezone", methods=["POST"])
@@ -328,7 +357,9 @@ def set_timezone():
     try:
         result = subprocess.run(
             ["sudo", "-n", "timedatectl", "set-timezone", tz],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         if result.returncode != 0:
             tail = (result.stderr or result.stdout or "").strip()[-300:]
@@ -355,19 +386,45 @@ def list_timezones():
     """
     shortlist = [
         "UTC",
-        "US/Eastern", "US/Central", "US/Mountain", "US/Pacific",
-        "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
-        "America/Toronto", "America/Vancouver",
-        "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Madrid",
-        "Europe/Rome", "Europe/Amsterdam", "Europe/Stockholm", "Europe/Warsaw",
-        "Europe/Athens", "Europe/Moscow",
-        "Asia/Tokyo", "Asia/Shanghai", "Asia/Singapore", "Asia/Kolkata",
-        "Asia/Dubai", "Asia/Jerusalem", "Asia/Seoul",
-        "Australia/Sydney", "Australia/Melbourne", "Australia/Brisbane",
-        "Australia/Perth", "Australia/Adelaide",
-        "Pacific/Auckland", "Pacific/Fiji",
-        "Africa/Johannesburg", "Africa/Cairo", "Africa/Lagos",
-        "America/Sao_Paulo", "America/Argentina/Buenos_Aires",
+        "US/Eastern",
+        "US/Central",
+        "US/Mountain",
+        "US/Pacific",
+        "America/New_York",
+        "America/Chicago",
+        "America/Denver",
+        "America/Los_Angeles",
+        "America/Toronto",
+        "America/Vancouver",
+        "Europe/London",
+        "Europe/Paris",
+        "Europe/Berlin",
+        "Europe/Madrid",
+        "Europe/Rome",
+        "Europe/Amsterdam",
+        "Europe/Stockholm",
+        "Europe/Warsaw",
+        "Europe/Athens",
+        "Europe/Moscow",
+        "Asia/Tokyo",
+        "Asia/Shanghai",
+        "Asia/Singapore",
+        "Asia/Kolkata",
+        "Asia/Dubai",
+        "Asia/Jerusalem",
+        "Asia/Seoul",
+        "Australia/Sydney",
+        "Australia/Melbourne",
+        "Australia/Brisbane",
+        "Australia/Perth",
+        "Australia/Adelaide",
+        "Pacific/Auckland",
+        "Pacific/Fiji",
+        "Africa/Johannesburg",
+        "Africa/Cairo",
+        "Africa/Lagos",
+        "America/Sao_Paulo",
+        "America/Argentina/Buenos_Aires",
         "America/Mexico_City",
     ]
     try:
@@ -414,28 +471,38 @@ def configure_ntp():
             conf = f"[Time]\n{ntp_lines}\n" if ntp_lines else "[Time]\n"
             # Write to temp file, then sudo cp to /etc
             import tempfile
+
             with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False) as tf:
                 tf.write(conf)
                 tmp_path = tf.name
             subprocess.run(
                 ["sudo", "-n", "cp", tmp_path, "/etc/systemd/timesyncd.conf"],
-                capture_output=True, text=True, timeout=10, check=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
             )
             os.unlink(tmp_path)
             subprocess.run(
                 ["sudo", "-n", "systemctl", "restart", "systemd-timesyncd"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             logger.info("NTP enabled with %d server(s)", len([s for s in servers if s.strip()]))
             return jsonify({"status": "ok", "ntp": "enabled", "servers": servers})
         else:
             subprocess.run(
                 ["sudo", "-n", "systemctl", "stop", "systemd-timesyncd"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             subprocess.run(
                 ["sudo", "-n", "systemctl", "disable", "systemd-timesyncd"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
             logger.info("NTP disabled")
             return jsonify({"status": "ok", "ntp": "disabled"})
@@ -479,24 +546,24 @@ def toggle_quiet_boot():
         if result.returncode != 0:
             tail = (result.stderr or result.stdout or "").strip()[-500:]
             logger.error("quiet_boot.sh failed (rc=%d): %s", result.returncode, tail)
-            return jsonify({
-                "status": "error",
-                "message": "Script failed. Check server logs.",
-                "detail": tail[:300],
-            }), 500
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "Script failed. Check server logs.",
+                    "detail": tail[:300],
+                }
+            ), 500
         logger.info(
             "Quiet boot %s via quiet_boot.sh",
             "enabled" if enabled else "disabled",
         )
-        return jsonify({
-            "status": "ok",
-            "quiet_boot": enabled,
-            "message": (
-                "Quiet boot enabled."
-                if enabled
-                else "Quiet boot disabled."
-            ),
-        })
+        return jsonify(
+            {
+                "status": "ok",
+                "quiet_boot": enabled,
+                "message": ("Quiet boot enabled." if enabled else "Quiet boot disabled."),
+            }
+        )
     except subprocess.TimeoutExpired:
         logger.error("quiet_boot.sh timed out after 30s")
         return jsonify({"status": "error", "message": "Script timed out."}), 500
@@ -560,10 +627,7 @@ def keyboard_learn():
             state = current_app.config["METIXEL_STATE"]
             stored = dict(state.config.input.get("keyboard_map", {}) or {})
             target = handler._learn_target  # The command being mapped
-            if target and target in stored:
-                codes = list(stored[target])
-            else:
-                codes = []
+            codes = list(stored[target]) if target and target in stored else []
             if code not in codes:
                 codes.append(code)
             if target:
@@ -598,6 +662,7 @@ def _key_name(code: int) -> str:
     """Get a human-readable name for a Linux key code."""
     try:
         import evdev
+
         return str(evdev.ecodes.KEY.get(code, f"Key {code}"))
     except ImportError:
         return f"Key {code}"
@@ -615,12 +680,25 @@ def send_control():
         return jsonify({"error": "Missing 'cmd' in JSON body"}), 400
 
     cmd = data["cmd"]
-    valid_cmds = {"next", "prev", "pause", "resume", "toggle_pause", "switch_album", "screen_off", "screen_on", "show_message", "dismiss_message", "dismiss_all_messages"}
+    valid_cmds = {
+        "next",
+        "prev",
+        "pause",
+        "resume",
+        "toggle_pause",
+        "switch_album",
+        "screen_off",
+        "screen_on",
+        "show_message",
+        "dismiss_message",
+        "dismiss_all_messages",
+    }
     if cmd not in valid_cmds:
         return jsonify({"error": f"Unknown command: {cmd}. Valid: {sorted(valid_cmds)}"}), 400
 
     if ipc is not None:
         from metixel.shared.ipc import ControlMessage
+
         ipc.send(ControlMessage(cmd=cmd, args=data.get("args", {})))
         logger.info("Control command '%s' sent via IPC", cmd)
     else:
@@ -630,7 +708,7 @@ def send_control():
     if cmd in ("screen_on", "screen_off"):
         daemon = current_app.config.get("METIXEL_DAEMON")
         if daemon is not None:
-            daemon._display_on = (cmd == "screen_on")
+            daemon._display_on = cmd == "screen_on"
 
     return jsonify({"status": "ok", "cmd": cmd})
 
@@ -654,10 +732,12 @@ def health_check():
 def get_config_path():
     """Return the config file path (for debugging)."""
     state = current_app.config["METIXEL_STATE"]
-    return jsonify({
-        "config_path": str(state.config_path),
-        "exists": state.config_path.exists(),
-    })
+    return jsonify(
+        {
+            "config_path": str(state.config_path),
+            "exists": state.config_path.exists(),
+        }
+    )
 
 
 @config_bp.route("/info", methods=["GET"])
@@ -677,6 +757,7 @@ def get_system_info():
     # -- App version ---------------------------------------------------------
     try:
         from metixel import __version__
+
         info["app_version"] = __version__
     except Exception:
         info["app_version"] = "unknown"
@@ -709,6 +790,7 @@ def get_system_info():
     # -- pi3d version --------------------------------------------------------
     try:
         import pi3d
+
         info["pi3d_version"] = getattr(pi3d, "__version__", "installed")
     except ImportError:
         info["pi3d_version"] = "not installed"
@@ -717,7 +799,9 @@ def get_system_info():
     try:
         result = subprocess.run(
             ["vcgencmd", "get_mem", "gpu"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             info["gpu_memory"] = result.stdout.strip()
@@ -774,12 +858,14 @@ def get_processing_status():
     try:
         if os.path.isfile(path):
             import json as _json
+
             with open(path) as f:
                 data = _json.load(f)
             return jsonify(data)
     except (OSError, ValueError):
         pass
     return jsonify({"phase": "unknown", "total": 0, "processed": 0, "current_file": ""})
+
 
 @config_bp.route("/browse", methods=["GET"])
 def browse_folder():
@@ -794,7 +880,6 @@ def browse_folder():
         JSON with ``current_path``, ``parent_path``, and ``entries`` —
         a list of subdirectory names (no files, no hidden dirs).
     """
-    import os as _os
 
     requested = request.args.get("path", "/opt/metixel/")
     requested_path = Path(requested)
@@ -824,21 +909,25 @@ def browse_folder():
                 continue
             if entry.name.startswith("."):
                 continue
-            entries.append({
-                "name": entry.name + "/",
-                "path": str(entry),
-            })
+            entries.append(
+                {
+                    "name": entry.name + "/",
+                    "path": str(entry),
+                }
+            )
     except PermissionError:
         return jsonify({"error": "Permission denied", "path": str(resolved)}), 403
     except OSError as e:
         return jsonify({"error": str(e), "path": str(resolved)}), 500
 
     parent = str(resolved.parent) if resolved != resolved.anchor else None
-    return jsonify({
-        "current_path": str(resolved),
-        "parent_path": parent,
-        "entries": entries,
-    })
+    return jsonify(
+        {
+            "current_path": str(resolved),
+            "parent_path": parent,
+            "entries": entries,
+        }
+    )
 
 
 def _read_current_media() -> dict | None:
@@ -885,6 +974,7 @@ def _read_display_info() -> dict | None:
 
 
 # ── Background processing status (per-phase progress bars) ─────────────────
+
 
 @config_bp.route("/processing-status", methods=["GET"])
 def processing_status():

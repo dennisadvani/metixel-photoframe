@@ -10,7 +10,7 @@ import pytest
 from PIL import Image
 
 from metixel.shared.config import Config
-from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 
 def _make_valid_jpeg(path: Path) -> None:
@@ -37,27 +37,25 @@ class TestEngineVideoIntegration:
         cfg.update("slideshow", {"video_playback_enabled": True})
         return cfg
 
-    def test_scan_folder_includes_videos(self, mock_backend, config):
-        """scan_folder() should pick up video files alongside images."""
+    def test_scan_folder_excludes_videos(self, mock_backend, config):
+        """scan_folder should NOT pick up video files (backend-pipeline-only)."""
         from metixel.frontend.presentation.engine import PresentationEngine
 
         engine = PresentationEngine(config, mock_backend)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-            # Create a valid JPEG
             _make_valid_jpeg(tmp / "photo.jpg")
-            # Create a dummy video file
             (tmp / "clip.mp4").touch()
 
             items = engine.scan_folder(tmp)
 
             types = {item.media_type for item in items}
             assert MediaType.IMAGE in types
-            assert MediaType.VIDEO in types
+            assert MediaType.VIDEO not in types, "scan_folder should exclude videos"
 
-    def test_scan_folder_video_has_correct_type(self, mock_backend, config):
-        """Video files should get MediaType.VIDEO."""
+    def test_scan_folder_videos_excluded(self, mock_backend, config):
+        """Video files should not appear in scan_folder results."""
         from metixel.frontend.presentation.engine import PresentationEngine
 
         engine = PresentationEngine(config, mock_backend)
@@ -70,8 +68,7 @@ class TestEngineVideoIntegration:
             items = engine.scan_folder(tmp)
 
             video_items = [i for i in items if i.media_type == MediaType.VIDEO]
-            assert len(video_items) == 1
-            assert video_items[0].source == "local"
+            assert len(video_items) == 0
 
     def test_scan_folder_skips_unknown_extensions(self, mock_backend, config):
         """Files with unknown extensions should be skipped."""
@@ -175,6 +172,9 @@ class TestEngineVideoIntegration:
             id="v1", original_path=Path("/t/v.mp4"),
             cached_path=Path("/t/v.mp4"), media_type=MediaType.VIDEO,
             width=1920, height=1080, duration_seconds=5.0,
+            transcode_status=TranscodeStatus.NOT_TRANSCODED,
+            first_frame_path=Path("/t/v.1.frame.jpg"),
+            last_frame_path=Path("/t/v.2.frame.jpg"),
         )
         item2 = MediaItem(
             id="img1", original_path=Path("/t/1.jpg"),
@@ -197,6 +197,9 @@ class TestEngineVideoIntegration:
                 id="v1", original_path=Path("/t/v.mp4"),
                 cached_path=Path("/t/v.mp4"), media_type=MediaType.VIDEO,
                 width=1920, height=1080, duration_seconds=5.0,
+                transcode_status=TranscodeStatus.NOT_TRANSCODED,
+                first_frame_path=Path("/t/v.1.frame.jpg"),
+                last_frame_path=Path("/t/v.2.frame.jpg"),
             ),
             MediaItem(
                 id="img1", original_path=Path("/t/1.jpg"),

@@ -26,15 +26,15 @@ class CECHandler:
 
     # CEC user control code → Metixel command
     CMD_MAP: dict[int, str] = {
-        0x01: "next",       # Play (next slide)
-        0x02: "pause",      # Pause
-        0x44: "prev",       # Previous
-        0x45: "next",       # Forward
-        0x46: "prev",       # Backward
-        0x41: "screen_on",   # Screen On
+        0x01: "next",  # Play (next slide)
+        0x02: "pause",  # Pause
+        0x44: "prev",  # Previous
+        0x45: "next",  # Forward
+        0x46: "prev",  # Backward
+        0x41: "screen_on",  # Screen On
         0x42: "screen_off",  # Screen Off
-        0x60: "next",       # Play (alternative)
-        0x00: "resume",     # Select / OK → resume
+        0x60: "next",  # Play (alternative)
+        0x00: "resume",  # Select / OK → resume
     }
 
     def __init__(self, state: StateManager, ipc: IPCClient) -> None:
@@ -81,8 +81,10 @@ class CECHandler:
             self._cec_client.Open(adapters[0].strComName)
             logger.info("CEC handler started on %s", adapters[0].strComName)
         except Exception:
-            logger.warning("Failed to open CEC adapter — CEC disabled. "
-                           "Is the HDMI cable connected to a CEC-capable TV?")
+            logger.warning(
+                "Failed to open CEC adapter — CEC disabled. "
+                "Is the HDMI cable connected to a CEC-capable TV?"
+            )
             return
 
         self._running = True

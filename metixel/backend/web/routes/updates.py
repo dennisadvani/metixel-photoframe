@@ -70,10 +70,12 @@ def trigger_update_check():
     )
     thread.start()
 
-    return jsonify({
-        "status": "ok",
-        "message": "Update check started — poll /api/updates/status for results",
-    })
+    return jsonify(
+        {
+            "status": "ok",
+            "message": "Update check started — poll /api/updates/status for results",
+        }
+    )
 
 
 @updates_bp.route("/apply", methods=["POST"])
@@ -121,10 +123,12 @@ def set_channel():
         mgr = _get_update_manager()
         data = request.get_json(silent=True)
         if not data or "channel" not in data:
-            return jsonify({
-                "status": "error",
-                "message": "Missing 'channel' in request body. Valid: stable, beta, dev",
-            }), 400
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": "Missing 'channel' in request body. Valid: stable, beta, dev",
+                }
+            ), 400
 
         result = mgr.set_channel(data["channel"])
         status_code = 200 if result.get("status") == "ok" else 400

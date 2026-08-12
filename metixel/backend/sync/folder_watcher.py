@@ -13,6 +13,7 @@ and Phase 3 (queue to slideshow playlist).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -28,7 +29,7 @@ from metixel.backend.processing.thumbnail import (
 )
 from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.state import StateManager
-from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
+from metixel.shared.models import MediaItem, MediaType
 
 if TYPE_CHECKING:
     from metixel.backend.processing.optimisation_queue import OptimisationQueue
@@ -163,13 +164,9 @@ class FolderWatcher:
                 # videos, add extra delay between folder scans so the
                 # two threads don't compete for CPU.  The optimiser
                 # always has priority — scanning can wait.
-                if (
-                    self._opt_queue is not None
-                    and self._opt_queue.is_busy
-                ):
+                if self._opt_queue is not None and self._opt_queue.is_busy:
                     logger.debug(
-                        "FolderWatcher: optimiser busy — delaying scan "
-                        "by %ds",
+                        "FolderWatcher: optimiser busy — delaying scan by %ds",
                         self._poll_interval,
                     )
                     time.sleep(self._poll_interval)
@@ -195,7 +192,8 @@ class FolderWatcher:
         if [str(p) for p in new_paths] != old_paths:
             logger.info(
                 "Watch paths changed — was %s, now %s",
-                old_paths, [str(p) for p in new_paths],
+                old_paths,
+                [str(p) for p in new_paths],
             )
             self._watch_paths = new_paths
             self._config = config
@@ -251,7 +249,8 @@ class FolderWatcher:
                 _write_progress("scanning", total, 0, "")
                 logger.info(
                     "Initial scan: discovered %d media files across %d watch paths",
-                    total, len(self._watch_paths),
+                    total,
+                    len(self._watch_paths),
                 )
                 self._gather_and_enqueue(list(current_files.keys()), is_initial=True)
             else:
@@ -275,26 +274,33 @@ class FolderWatcher:
 
         # 4. Act on changes
         if new_paths:
-            logger.info("Detected %d new file(s): %s", len(new_paths),
-                        ", ".join(str(p.name) for p in list(new_paths)[:5]))
+            logger.info(
+                "Detected %d new file(s): %s",
+                len(new_paths),
+                ", ".join(str(p.name) for p in list(new_paths)[:5]),
+            )
             self._gather_and_enqueue(list(new_paths))
 
         if changed_paths:
-            logger.info("Detected %d changed file(s): %s", len(changed_paths),
-                        ", ".join(str(p.name) for p in list(changed_paths)[:5]))
+            logger.info(
+                "Detected %d changed file(s): %s",
+                len(changed_paths),
+                ", ".join(str(p.name) for p in list(changed_paths)[:5]),
+            )
             self._process_changed(list(changed_paths))
 
         if deleted_paths:
-            logger.info("Detected %d deleted file(s): %s", len(deleted_paths),
-                        ", ".join(str(p.name) for p in list(deleted_paths)[:5]))
+            logger.info(
+                "Detected %d deleted file(s): %s",
+                len(deleted_paths),
+                ", ".join(str(p.name) for p in list(deleted_paths)[:5]),
+            )
             self._handle_deleted(deleted_paths)
 
         # 5. Update snapshot
         self._known_files = current_files
 
-    def _walk_path(
-        self, root: Path, out: dict[Path, tuple[int, int]]
-    ) -> None:
+    def _walk_path(self, root: Path, out: dict[Path, tuple[int, int]]) -> None:
         """Recursively walk a directory, collecting media files with stat metadata.
 
         Args:
@@ -319,7 +325,9 @@ class FolderWatcher:
     # -- Metadata gathering --------------------------------------------------
 
     def _gather_and_enqueue(
-        self, paths: list[Path], is_initial: bool = False,
+        self,
+        paths: list[Path],
+        is_initial: bool = False,
     ) -> None:
         """Gather minimal metadata for each file and push to the OptimisationQueue.
 
@@ -490,7 +498,9 @@ class FolderWatcher:
 
             logger.debug(
                 "[WATCHFOLDER] image  | %4dx%-4d | %s",
-                w, h, path.name,
+                w,
+                h,
+                path.name,
             )
             return MediaItem(
                 id=file_hash,
@@ -517,14 +527,23 @@ class FolderWatcher:
         """
         try:
             result = subprocess.run(
-                nice_cmd([
-                    "ffprobe", "-v", "error",
-                    "-select_streams", "v:0",
-                    "-show_entries", "stream=width,height,duration,codec_name",
-                    "-of", "json",
-                    str(path),
-                ]),
-                capture_output=True, text=True, timeout=120,
+                nice_cmd(
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=width,height,duration,codec_name",
+                        "-of",
+                        "json",
+                        str(path),
+                    ]
+                ),
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
             if result.returncode != 0:
                 logger.debug("ffprobe failed for %s", path.name)
@@ -552,7 +571,11 @@ class FolderWatcher:
 
             logger.debug(
                 "[WATCHFOLDER] video  | %4dx%-4d | %-6s | %5.1fs | %s",
-                w, h, codec or "?", duration, path.name,
+                w,
+                h,
+                codec or "?",
+                duration,
+                path.name,
             )
             return MediaItem(
                 id=file_hash,
@@ -619,7 +642,16 @@ class FolderWatcher:
             # Check whether the video needs transcoding
             codec = (item.exif_data.get("codec_name") or "").lower()
             needs_transcode = False
-            if item.width <= 0 or item.height <= 0 or max_w > 0 and item.width > max_w or max_h > 0 and item.height > max_h or codec and codec not in {"h264", "avc", "avc1", "h.264"}:
+            if (
+                item.width <= 0
+                or item.height <= 0
+                or max_w > 0
+                and item.width > max_w
+                or max_h > 0
+                and item.height > max_h
+                or codec
+                and codec not in {"h264", "avc", "avc1", "h.264"}
+            ):
                 needs_transcode = True
             if needs_transcode:
                 # PLAY_CACHED — will be transcoded
@@ -759,7 +791,5 @@ class FolderWatcher:
             for frame in (1, 2):
                 frame_cache = cache_dir / "videos" / f"{file_hash}.{frame}.frame.jpg"
                 if frame_cache.is_file():
-                    try:
+                    with contextlib.suppress(OSError):
                         frame_cache.unlink()
-                    except OSError:
-                        pass

@@ -15,6 +15,7 @@ at all times.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -34,7 +35,6 @@ from PIL import Image, ImageOps
 from metixel.display.backend import DisplayBackend
 from metixel.frontend.presentation.layout import LayoutEngine
 from metixel.frontend.presentation.transitions import TransitionEngine
-from metixel.frontend.presentation.video_player import VIDEO_EXTENSIONS
 from metixel.shared.config import Config
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
@@ -76,6 +76,7 @@ def _hash_image_file(path: Path) -> str:
 # PresentationEngine
 # ---------------------------------------------------------------------------
 
+
 class PresentationEngine:
     """Two-texture ping-pong slideshow.
 
@@ -100,9 +101,10 @@ class PresentationEngine:
         fit_mode = config.slideshow.get("fit_mode", "contain")
 
         logger.info(
-            "PresentationEngine: resolution=%dx%d fit_mode=%s transition=%s "
-            "slide_duration=%ds",
-            sw, sh, fit_mode,
+            "PresentationEngine: resolution=%dx%d fit_mode=%s transition=%s slide_duration=%ds",
+            sw,
+            sh,
+            fit_mode,
             config.slideshow.get("transition_style", "crossfade"),
             config.slideshow.get("image_duration_seconds", 30),
         )
@@ -139,15 +141,15 @@ class PresentationEngine:
         # --- Non-blocking video state machine ---
         self._video_state: int = _VIDEO_IDLE
         self._video_proc: subprocess.Popen[bytes] | None = None
-        self._video_player: Any = None          # VlcVideoPlayer instance
-        self._video_launch_at: float = 0.0      # monotonic when VLC launched
-        self._video_swap_at: float = 0.0      # monotonic timestamp for last-frame swap
+        self._video_player: Any = None  # VlcVideoPlayer instance
+        self._video_launch_at: float = 0.0  # monotonic when VLC launched
+        self._video_swap_at: float = 0.0  # monotonic timestamp for last-frame swap
         self._video_item: MediaItem | None = None
         self._video_path: str = ""
         self._video_vw: int = 0
         self._video_vh: int = 0
         self._video_duration: float = 0.0
-        self._video_paused: bool = False       # True when SIGSTOP sent to VLC
+        self._video_paused: bool = False  # True when SIGSTOP sent to VLC
         self._video_last_frame_loaded: bool = False
         self._video_last_frame_tex: Any | None = None  # preloaded before VLC starts
 
@@ -255,12 +257,14 @@ class PresentationEngine:
 
         if skipped_playback:
             logger.info(
-                "Video playback disabled — filtered %d videos", skipped_playback,
+                "Video playback disabled — filtered %d videos",
+                skipped_playback,
             )
         if skipped_duration:
             logger.info(
                 "Max video duration (%ds) — filtered %d videos",
-                max_duration, skipped_duration,
+                max_duration,
+                skipped_duration,
             )
         if skipped_transcode:
             logger.info(
@@ -270,7 +274,8 @@ class PresentationEngine:
             )
         if skipped_ready:
             logger.info(
-                "Videos not ready to play — filtered %d videos", skipped_ready,
+                "Videos not ready to play — filtered %d videos",
+                skipped_ready,
             )
 
         self._queue = filtered
@@ -325,9 +330,10 @@ class PresentationEngine:
             if existing.thumbnail_path is None and backend_item.thumbnail_path is not None:
                 existing.thumbnail_path = backend_item.thumbnail_path
             # Optimised cache path from backend (avoids loading 4K originals)
-            if str(existing.cached_path) == str(existing.original_path):
-                if str(backend_item.cached_path) != str(backend_item.original_path):
-                    existing.cached_path = backend_item.cached_path
+            if str(existing.cached_path) == str(existing.original_path) and str(
+                backend_item.cached_path
+            ) != str(backend_item.original_path):
+                existing.cached_path = backend_item.cached_path
 
         new_items = [item for item in items if item.id not in existing_ids]
         if not new_items:
@@ -383,14 +389,18 @@ class PresentationEngine:
         skipped = len(new_items) - added
         if skipped:
             logger.info(
-                "Added %d new items (filtered %d by video guardrails) — "
-                "total: %d, current idx: %d",
-                added, skipped, len(self._queue), self._current_idx,
+                "Added %d new items (filtered %d by video guardrails) — total: %d, current idx: %d",
+                added,
+                skipped,
+                len(self._queue),
+                self._current_idx,
             )
         else:
             logger.info(
                 "Added %d new items to queue (total: %d, current idx: %d)",
-                added, len(self._queue), self._current_idx,
+                added,
+                len(self._queue),
+                self._current_idx,
             )
 
         # Restart preload for the correct next item after queue change.
@@ -411,10 +421,11 @@ class PresentationEngine:
             return 0
 
         before = len(self._queue)
-        removed_current = any(
-            self._queue[self._current_idx].id in item_ids
-            for _ in [0]
-        ) if 0 <= self._current_idx < len(self._queue) else False
+        removed_current = (
+            any(self._queue[self._current_idx].id in item_ids for _ in [0])
+            if 0 <= self._current_idx < len(self._queue)
+            else False
+        )
 
         self._queue = [item for item in self._queue if item.id not in item_ids]
         removed = before - len(self._queue)
@@ -455,7 +466,9 @@ class PresentationEngine:
 
         logger.info(
             "Removed %d items from queue (total: %d, current idx: %d)",
-            removed, len(self._queue), self._current_idx,
+            removed,
+            len(self._queue),
+            self._current_idx,
         )
         return removed
 
@@ -482,7 +495,8 @@ class PresentationEngine:
             "advance: %d → %d  active_slot=%d→%d",
             self._current_idx,
             (self._current_idx + 1) % len(self._queue),
-            self._active, self._inactive,
+            self._active,
+            self._inactive,
         )
         self._unload_texture(self._tex[self._active])
         self._tex[self._active] = None
@@ -501,7 +515,7 @@ class PresentationEngine:
                 "(item=%s, idx=%d) — preload may have failed or not completed. "
                 "Screen will be blank until next texture loads.",
                 self._active,
-                getattr(self._queue[self._current_idx], 'original_path', '?'),
+                getattr(self._queue[self._current_idx], "original_path", "?"),
                 self._current_idx,
             )
         with self._preload_lock:
@@ -648,10 +662,7 @@ class PresentationEngine:
         transition_ms = self._config.slideshow.get("transition_duration_ms", 1500)
         # When transition style is "none", the slide cuts immediately
         # with no animation — treat the transition duration as zero.
-        if transition_style == "none":
-            transition_s = 0.0
-        else:
-            transition_s = transition_ms / 1000.0
+        transition_s = 0.0 if transition_style == "none" else transition_ms / 1000.0
 
         if self._paused:
             self._render_item(current_item, 1.0)
@@ -668,8 +679,13 @@ class PresentationEngine:
             self._transition_stall_logged = False
             logger.debug(
                 "Transition unstalled — crossfading to %s",
-                getattr(self._queue[(self._current_idx + 1) % len(self._queue)]
-                        if self._queue else None, 'original_path', '?'),
+                getattr(
+                    self._queue[(self._current_idx + 1) % len(self._queue)]
+                    if self._queue
+                    else None,
+                    "original_path",
+                    "?",
+                ),
             )
 
         if elapsed >= (duration + transition_s):
@@ -677,7 +693,11 @@ class PresentationEngine:
             # is still running (e.g. video first-frame extraction), don't
             # jump-cut — wait for the preload to finish.  Cap at 30s to
             # prevent infinite stall on genuinely broken files.
-            if next_tex is None and self._preload_thread is not None and self._preload_thread.is_alive():
+            if (
+                next_tex is None
+                and self._preload_thread is not None
+                and self._preload_thread.is_alive()
+            ):
                 stall_elapsed = elapsed - (duration + transition_s)
                 if stall_elapsed < 30.0:
                     if not self._transition_stall_logged:
@@ -711,21 +731,23 @@ class PresentationEngine:
         if elapsed >= duration and next_tex is not None:
             progress = (elapsed - duration) / transition_s
             self._render_transition(current_item, progress, next_tex)
+        elif elapsed >= duration and next_tex is None and self._current_idx >= 0:
+            # Preload hasn't finished — log once per slide, not every frame.
+            if not self._transition_stall_logged:
+                self._transition_stall_logged = True
+                next_idx = (self._current_idx + 1) % len(self._queue)
+                next_item = self._queue[next_idx]
+                logger.warning(
+                    "Transition stalled: inactive slot %d has no texture "
+                    "(next item=%s, elapsed=%.1fs, slide_duration=%.1fs). "
+                    "Preload likely still in progress — holding current slide.",
+                    self._inactive,
+                    getattr(next_item, "original_path", next_item),
+                    elapsed,
+                    duration,
+                )
+            self._render_item(current_item, 1.0)
         else:
-            if elapsed >= duration and next_tex is None and self._current_idx >= 0:
-                # Preload hasn't finished — log once per slide, not every frame.
-                if not self._transition_stall_logged:
-                    self._transition_stall_logged = True
-                    next_idx = (self._current_idx + 1) % len(self._queue)
-                    next_item = self._queue[next_idx]
-                    logger.warning(
-                        "Transition stalled: inactive slot %d has no texture "
-                        "(next item=%s, elapsed=%.1fs, slide_duration=%.1fs). "
-                        "Preload likely still in progress — holding current slide.",
-                        self._inactive,
-                        getattr(next_item, 'original_path', next_item),
-                        elapsed, duration,
-                    )
             self._render_item(current_item, 1.0)
 
     # ------------------------------------------------------------------
@@ -733,7 +755,9 @@ class PresentationEngine:
     # ------------------------------------------------------------------
 
     def _render_item(
-        self, item: MediaItem, alpha: float,
+        self,
+        item: MediaItem,
+        alpha: float,
         with_matte: bool = True,
         texture: Any = None,
         layout: dict | None = None,
@@ -745,12 +769,12 @@ class PresentationEngine:
                 gpu_info = self._backend.gpu_memory_info()
                 logger.warning(
                     "Active slot %d has no texture — attempting sync load for %s",
-                    self._active, getattr(item, 'original_path', item),
+                    self._active,
+                    getattr(item, "original_path", item),
                 )
                 if gpu_info:
                     logger.debug(
-                        "GPU mem at sync load: total=%sM reloc=%sM V3D=%skb/%sBOs "
-                        "textures=%s/%s",
+                        "GPU mem at sync load: total=%sM reloc=%sM V3D=%skb/%sBOs textures=%s/%s",
                         gpu_info.get("gpu_total_mb", "?"),
                         gpu_info.get("reloc_used_mb", "?"),
                         gpu_info.get("v3d_bo_kb", "?"),
@@ -766,7 +790,7 @@ class PresentationEngine:
                     "No texture for active slot %d (item=%s, idx=%d) — "
                     "rendering blank frame (black screen)",
                     self._active,
-                    getattr(item, 'original_path', item),
+                    getattr(item, "original_path", item),
                     self._current_idx,
                 )
                 if gpu_info:
@@ -802,12 +826,21 @@ class PresentationEngine:
             matte_color = self._config.slideshow.get("matte_color", [0, 0, 0])
             for mx, my, mw, mh in layout.get("matte_rects", []):
                 self._backend.draw_rect(
-                    mx, my, mw, mh, (*matte_color, alpha), z=-1,
+                    mx,
+                    my,
+                    mw,
+                    mh,
+                    (*matte_color, alpha),
+                    z=-1,
                 )
 
         ix, iy, iw, ih = layout["image_rect"]
         self._backend.draw_image(
-            texture, ix, iy, iw, ih,
+            texture,
+            ix,
+            iy,
+            iw,
+            ih,
             alpha=alpha,
             uv_offset=(0.0, 0.0),
             uv_scale=(1.0, 1.0),
@@ -815,12 +848,13 @@ class PresentationEngine:
         )
 
     def _render_transition(
-        self, current_item: MediaItem, progress: float, next_tex: Any,
+        self,
+        current_item: MediaItem,
+        progress: float,
+        next_tex: Any,
     ) -> None:
         """Crossfade between active and inactive texture slots."""
-        next_item = self._queue[
-            (self._current_idx + 1) % len(self._queue)
-        ]
+        next_item = self._queue[(self._current_idx + 1) % len(self._queue)]
         style = self._config.slideshow.get("transition_style", "crossfade")
 
         # Use the texture's source item for layout when it differs from
@@ -831,10 +865,12 @@ class PresentationEngine:
 
         if style == "crossfade":
             current_layout = self._layout.compute(
-                cur_src, fit_mode=self._resolve_fit_mode(cur_src),
+                cur_src,
+                fit_mode=self._resolve_fit_mode(cur_src),
             )
             next_layout = self._layout.compute(
-                next_src, fit_mode=self._resolve_fit_mode(next_src),
+                next_src,
+                fit_mode=self._resolve_fit_mode(next_src),
             )
             matte_color = self._config.slideshow.get("matte_color", [0, 0, 0])
 
@@ -843,12 +879,21 @@ class PresentationEngine:
             # against solid black rather than showing framebuffer
             # artefacts or PNG transparency edges.
             self._backend.draw_rect(
-                0, 0, self._backend.width, self._backend.height,
-                (*matte_color, 1.0), z=-2,
+                0,
+                0,
+                self._backend.width,
+                self._backend.height,
+                (*matte_color, 1.0),
+                z=-2,
             )
             for mx, my, mw, mh in current_layout.get("matte_rects", []):
                 self._backend.draw_rect(
-                    mx, my, mw, mh, (*matte_color, 1.0), z=-1,
+                    mx,
+                    my,
+                    mw,
+                    mh,
+                    (*matte_color, 1.0),
+                    z=-1,
                 )
             self._backend.draw_crossfade(
                 tex_current=self._tex[self._active],
@@ -864,20 +909,25 @@ class PresentationEngine:
             # explicit layouts, the second half would draw the next
             # texture with the current item's aspect ratio.
             cur_layout = self._layout.compute(
-                cur_src, fit_mode=self._resolve_fit_mode(cur_src),
+                cur_src,
+                fit_mode=self._resolve_fit_mode(cur_src),
             )
             next_layout = self._layout.compute(
-                next_src, fit_mode=self._resolve_fit_mode(next_src),
+                next_src,
+                fit_mode=self._resolve_fit_mode(next_src),
             )
             if progress < 0.5:
                 self._render_item(
-                    current_item, 1.0 - progress * 2,
+                    current_item,
+                    1.0 - progress * 2,
                     texture=self._tex[self._active],
                     layout=cur_layout,
                 )
             else:
                 self._render_item(
-                    next_item, (progress - 0.5) * 2, texture=next_tex,
+                    next_item,
+                    (progress - 0.5) * 2,
+                    texture=next_tex,
                     layout=next_layout,
                 )
         elif style == "none":
@@ -885,28 +935,31 @@ class PresentationEngine:
             # Layouts are still computed explicitly so the next
             # texture isn't drawn with the current item's aspect ratio.
             next_layout = self._layout.compute(
-                next_src, fit_mode=self._resolve_fit_mode(next_src),
+                next_src,
+                fit_mode=self._resolve_fit_mode(next_src),
             )
-            self._render_item(next_item, 1.0, texture=next_tex,
-                              layout=next_layout)
+            self._render_item(next_item, 1.0, texture=next_tex, layout=next_layout)
         else:
             # Hard cut: show current until midpoint, then next.
             # Explicit layouts prevent the next texture from being drawn
             # with the current item's aspect ratio during the second half.
             cur_layout = self._layout.compute(
-                cur_src, fit_mode=self._resolve_fit_mode(cur_src),
+                cur_src,
+                fit_mode=self._resolve_fit_mode(cur_src),
             )
             next_layout = self._layout.compute(
-                next_src, fit_mode=self._resolve_fit_mode(next_src),
+                next_src,
+                fit_mode=self._resolve_fit_mode(next_src),
             )
             if progress < 0.5:
                 self._render_item(
-                    current_item, 1.0, texture=self._tex[self._active],
+                    current_item,
+                    1.0,
+                    texture=self._tex[self._active],
                     layout=cur_layout,
                 )
             else:
-                self._render_item(next_item, 1.0, texture=next_tex,
-                                  layout=next_layout)
+                self._render_item(next_item, 1.0, texture=next_tex, layout=next_layout)
 
     # ------------------------------------------------------------------
     # Texture loading
@@ -958,12 +1011,14 @@ class PresentationEngine:
                 logger.debug(
                     "Skipping large uncached original (%.1f MB): %s — "
                     "waiting for backend cached version",
-                    file_size_mb, path_to_load,
+                    file_size_mb,
+                    path_to_load,
                 )
                 return None
 
         try:
             from PIL import ImageFile
+
             ImageFile.LOAD_TRUNCATED_IMAGES = True
 
             img = Image.open(path_to_load)
@@ -981,22 +1036,24 @@ class PresentationEngine:
                 img.thumbnail((max_w, max_h), Image.LANCZOS)
                 logger.debug(
                     "Downscaled [%s]: %dx%d → %dx%d",
-                    path_to_load, orig_w, orig_h, img.width, img.height,
+                    path_to_load,
+                    orig_w,
+                    orig_h,
+                    img.width,
+                    img.height,
                 )
 
             arr = np.asarray(img, dtype=np.uint8)
             img.close()
 
-            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)  # noqa: SIM115
             try:
                 Image.fromarray(arr).save(tmp.name, "JPEG", quality=92)
                 texture = self._backend.load_texture(Path(tmp.name))
             finally:
                 tmp.close()
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(tmp.name)
-                except OSError:
-                    pass
             logger.debug("Texture loaded [%s]: tex=%s", path_to_load, id(texture))
             return texture
         except Exception:
@@ -1041,6 +1098,7 @@ class PresentationEngine:
         """
         try:
             from PIL import ImageFile
+
             ImageFile.LOAD_TRUNCATED_IMAGES = True
 
             if item.media_type == MediaType.VIDEO:
@@ -1063,7 +1121,8 @@ class PresentationEngine:
                     logger.debug(
                         "Preload skipping large uncached original "
                         "(%.1f MB): %s — waiting for backend cache",
-                        file_size_mb, path_to_load,
+                        file_size_mb,
+                        path_to_load,
                     )
                     with self._preload_lock:
                         self._preload_array = None
@@ -1086,7 +1145,11 @@ class PresentationEngine:
                 img.thumbnail((max_w, max_h), Image.LANCZOS)
                 logger.debug(
                     "Preload downscaled [%s]: %dx%d → %dx%d",
-                    path_to_load, orig_w, orig_h, img.width, img.height,
+                    path_to_load,
+                    orig_w,
+                    orig_h,
+                    img.width,
+                    img.height,
                 )
 
             arr = np.asarray(img, dtype=np.uint8)
@@ -1097,7 +1160,7 @@ class PresentationEngine:
                 self._preload_cache_key = str(path_to_load)
             logger.debug("Preload ready [%s]", path_to_load)
         except Exception:
-            logger.exception("Preload failed: %s", getattr(item, 'cached_path', item.original_path))
+            logger.exception("Preload failed: %s", getattr(item, "cached_path", item.original_path))
             with self._preload_lock:
                 self._preload_array = None
 
@@ -1113,20 +1176,22 @@ class PresentationEngine:
         # Guard: if cached path != original and the file doesn't exist
         # (e.g. transcoding not yet complete), don't attempt to play it.
         from pathlib import Path as _Path
+
         _cached = _Path(video_path)
-        if str(item.cached_path) != str(item.original_path):
-            if not _cached.is_file() or _cached.stat().st_size < 1024:
-                logger.warning(
-                    "Video cached file not ready — skipping: %s", video_path,
-                )
-                return None
+        if str(item.cached_path) != str(item.original_path) and (
+            not _cached.is_file() or _cached.stat().st_size < 1024
+        ):
+            logger.warning(
+                "Video cached file not ready — skipping: %s",
+                video_path,
+            )
+            return None
 
         if item.first_frame_path is not None and item.first_frame_path.exists():
             return item.first_frame_path
 
         logger.warning(
-            "No first frame cached for %s — "
-            "backend should have pre-generated this during OPTIMISE",
+            "No first frame cached for %s — backend should have pre-generated this during OPTIMISE",
             video_path,
         )
         return None
@@ -1146,16 +1211,14 @@ class PresentationEngine:
             return
 
         try:
-            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)  # noqa: SIM115
             try:
                 Image.fromarray(arr).save(tmp.name, "JPEG", quality=92)
                 texture = self._backend.load_texture(Path(tmp.name))
             finally:
                 tmp.close()
-                try:
+                with contextlib.suppress(OSError):
                     os.unlink(tmp.name)
-                except OSError:
-                    pass
 
             self._unload_texture(self._tex[self._inactive])
             self._tex[self._inactive] = texture
@@ -1214,7 +1277,9 @@ class PresentationEngine:
         if vw <= 0 or vh <= 0:
             logger.warning(
                 "Video has invalid dimensions (%dx%d): %s — skipping",
-                vw, vh, video_path,
+                vw,
+                vh,
+                video_path,
             )
             self._advance()
             return
@@ -1246,20 +1311,33 @@ class PresentationEngine:
             # ffmpeg GPU-texture pipeline (experimental — Phase 2)
             logger.warning(
                 "ffmpeg player backend selected but not yet integrated — "
-                "falling back to VLC for %s", video_path,
+                "falling back to VLC for %s",
+                video_path,
             )
             player_backend = "vlc"  # Fall through to VLC path below
 
         if player_backend in ("auto", "vlc"):
             self._video_launch_vlc(
-                item, video_path, vw, vh, duration,
-                screen_w, screen_h, resolved_fit,
+                item,
+                video_path,
+                vw,
+                vh,
+                duration,
+                screen_w,
+                screen_h,
+                resolved_fit,
             )
 
     def _video_launch_vlc(
-        self, item: MediaItem, video_path: str,
-        vw: int, vh: int, duration: float,
-        screen_w: int, screen_h: int, resolved_fit: str,
+        self,
+        item: MediaItem,
+        video_path: str,
+        vw: int,
+        vh: int,
+        duration: float,
+        screen_w: int,
+        screen_h: int,
+        resolved_fit: str,
     ) -> None:
         """Launch VLC as a subprocess for video playback.
 
@@ -1281,15 +1359,15 @@ class PresentationEngine:
         if item.last_frame_path is not None and item.last_frame_path.exists():
             try:
                 tex = self._backend.load_texture(item.last_frame_path)
-                if hasattr(tex, 'load_opengl'):
+                if hasattr(tex, "load_opengl"):
                     tex.load_opengl()
                 self._backend.flush_gpu()
-                gl_id = getattr(tex, '_tex', None)
-                if gl_id is None or (hasattr(gl_id, 'value') and gl_id.value == 0):
+                gl_id = getattr(tex, "_tex", None)
+                if gl_id is None or (hasattr(gl_id, "value") and gl_id.value == 0):
                     logger.error(
-                        "Last frame GL texture is invalid (gl_id=%s) — "
-                        "skipping video: %s",
-                        gl_id, video_path,
+                        "Last frame GL texture is invalid (gl_id=%s) — skipping video: %s",
+                        gl_id,
+                        video_path,
                     )
                     self._unload_texture(tex)
                     self._advance()
@@ -1297,13 +1375,16 @@ class PresentationEngine:
                 self._video_last_frame_tex = tex
                 logger.debug(
                     "Last frame ready for %s: %s (gl_id=%s)",
-                    video_path, item.last_frame_path, gl_id,
+                    video_path,
+                    item.last_frame_path,
+                    gl_id,
                 )
             except Exception:
                 logger.exception(
                     "Failed to load last frame for %s: %s — "
                     "skipping video to avoid black screen on VLC exit",
-                    video_path, item.last_frame_path,
+                    video_path,
+                    item.last_frame_path,
                 )
                 self._advance()
                 return
@@ -1338,12 +1419,17 @@ class PresentationEngine:
         vlc_player = VlcVideoPlayer()
         logger.debug(
             "Starting VLC: %s (duration=%.1fs, fit_mode=%s)",
-            video_path, item.duration_seconds, resolved_fit,
+            video_path,
+            item.duration_seconds,
+            resolved_fit,
         )
         vlc_proc = vlc_player.play(
             video_path,
-            screen_w=screen_w, screen_h=screen_h,
-            block=False, loop=False, fit_mode=resolved_fit,
+            screen_w=screen_w,
+            screen_h=screen_h,
+            block=False,
+            loop=False,
+            fit_mode=resolved_fit,
         )
         if vlc_proc is None:
             logger.warning("VLC failed to start: %s", video_path)
@@ -1369,9 +1455,9 @@ class PresentationEngine:
         # _video_tick WAITING→PLAYING transition), not at launch.
         self._video_swap_at = 0.0
         logger.debug(
-            "Video state machine: WAITING (duration=%.1f, "
-            "last_frame_preloaded=%s)",
-            duration, self._video_last_frame_tex is not None,
+            "Video state machine: WAITING (duration=%.1f, last_frame_preloaded=%s)",
+            duration,
+            self._video_last_frame_tex is not None,
         )
 
     def _video_tick(self) -> None:
@@ -1406,15 +1492,17 @@ class PresentationEngine:
                 self._video_swap_at = now + swap_delay
                 self._video_state = _VIDEO_PLAYING
                 logger.debug(
-                    "Video state machine: PLAYING "
-                    "(swap_at=%.1f, duration=%.1f, vlc_startup=%.1fs)",
-                    self._video_swap_at, duration, waited,
+                    "Video state machine: PLAYING (swap_at=%.1f, duration=%.1f, vlc_startup=%.1fs)",
+                    self._video_swap_at,
+                    duration,
+                    waited,
                 )
             elif waited >= self._config.timeout("vlc_start", int(_VLC_START_TIMEOUT_DEFAULT)):
                 # VLC never confirmed playback — skip the video.
                 logger.warning(
                     "VLC start timeout (%.1fs/%ds) — skipping video: %s",
-                    waited, self._config.timeout("vlc_start", int(_VLC_START_TIMEOUT_DEFAULT)),
+                    waited,
+                    self._config.timeout("vlc_start", int(_VLC_START_TIMEOUT_DEFAULT)),
                     self._video_path,
                 )
                 self._video_stop()
@@ -1437,8 +1525,12 @@ class PresentationEngine:
     # ------------------------------------------------------------------
 
     def _load_last_frame_into_active(
-        self, item: MediaItem, video_path: str,
-        video_vw: int, video_vh: int, video_duration: float,
+        self,
+        item: MediaItem,
+        video_path: str,
+        video_vw: int,
+        video_vh: int,
+        video_duration: float,
     ) -> bool:
         """Swap the preloaded last-frame texture into the active slot.
 
@@ -1466,11 +1558,14 @@ class PresentationEngine:
         self._video_last_frame_tex = None  # ownership transferred
 
         # Log the texture internals for black-screen diagnostics.
-        tex_id = getattr(new_tex, '_tex', None) if new_tex is not None else None
-        tex_size = getattr(new_tex, 'size', None) if new_tex is not None else None
+        tex_id = getattr(new_tex, "_tex", None) if new_tex is not None else None
+        tex_size = getattr(new_tex, "size", None) if new_tex is not None else None
         logger.debug(
             "Last-frame texture: pi3d_id=%s gl_id=%s size=%s → slot %d",
-            id(new_tex), tex_id, tex_size, self._active,
+            id(new_tex),
+            tex_id,
+            tex_size,
+            self._active,
         )
 
         # Draw to front buffer, swap, then draw to back buffer
@@ -1483,7 +1578,8 @@ class PresentationEngine:
         self._draw_frame_to_buffer(self._tex[self._active], layout)
         logger.debug(
             "Last frame loaded into active slot %d: %s",
-            self._active, video_path,
+            self._active,
+            video_path,
         )
         return True
 
@@ -1503,8 +1599,11 @@ class PresentationEngine:
             return
 
         self._load_last_frame_into_active(
-            item, self._video_path,
-            self._video_vw, self._video_vh, self._video_duration,
+            item,
+            self._video_path,
+            self._video_vw,
+            self._video_vh,
+            self._video_duration,
         )
 
         self._video_state = _VIDEO_SWAPPED
@@ -1541,12 +1640,16 @@ class PresentationEngine:
             )
             try:
                 self._load_last_frame_into_active(
-                    item, video_path,
-                    self._video_vw, self._video_vh, self._video_duration,
+                    item,
+                    video_path,
+                    self._video_vw,
+                    self._video_vh,
+                    self._video_duration,
                 )
             except Exception:
                 logger.exception(
-                    "Emergency last-frame swap failed for %s", video_path,
+                    "Emergency last-frame swap failed for %s",
+                    video_path,
                 )
 
         # --- Clear video state -----------------------------------------
@@ -1571,24 +1674,25 @@ class PresentationEngine:
             # trick would cause _advance() to fire immediately,
             # never showing the last frame.  Reserve a brief linger.
             transition_style = self._config.slideshow.get(
-                "transition_style", "crossfade",
+                "transition_style",
+                "crossfade",
             )
             if transition_style == "none":
                 linger = 0.5
-                self._item_start_time = (
-                    time.monotonic() - item_duration + linger
-                )
+                self._item_start_time = time.monotonic() - item_duration + linger
                 logger.debug(
                     "Post-VLC (no transition): lingering %.1fs "
                     "on last frame (active=%d, inactive=%d)",
-                    linger, self._active, self._inactive,
+                    linger,
+                    self._active,
+                    self._inactive,
                 )
             else:
                 self._item_start_time = time.monotonic() - item_duration
                 logger.debug(
-                    "Post-VLC: item_start_time set for transition "
-                    "(active=%d, inactive=%d)",
-                    self._active, self._inactive,
+                    "Post-VLC: item_start_time set for transition (active=%d, inactive=%d)",
+                    self._active,
+                    self._inactive,
                 )
 
     def _video_stop(self) -> None:
@@ -1602,10 +1706,8 @@ class PresentationEngine:
             try:
                 # Resume if paused, then terminate
                 if self._video_paused:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.kill(pid, signal.SIGCONT)
-                    except OSError:
-                        pass
                 self._video_proc.terminate()
                 try:
                     self._video_proc.wait(timeout=2.0)
@@ -1656,20 +1758,33 @@ class PresentationEngine:
         matte_color = self._config.slideshow.get("matte_color", [0, 0, 0])
         for mx, my, mw, mh in layout.get("matte_rects", []):
             self._backend.draw_rect(
-                mx, my, mw, mh, (*matte_color, 1.0), z=-1,
+                mx,
+                my,
+                mw,
+                mh,
+                (*matte_color, 1.0),
+                z=-1,
             )
         ix, iy, iw, ih = layout["image_rect"]
         self._backend.draw_image(
-            texture, ix, iy, iw, ih,
+            texture,
+            ix,
+            iy,
+            iw,
+            ih,
             alpha=1.0,
-            uv_offset=(0.0, 0.0), uv_scale=(1.0, 1.0), z=0.0,
+            uv_offset=(0.0, 0.0),
+            uv_scale=(1.0, 1.0),
+            z=0.0,
         )
 
     def _write_current_media(self) -> None:
         try:
             if self._current_idx < 0 or not self._queue:
                 data = {
-                    "file": None, "index": -1, "total": 0,
+                    "file": None,
+                    "index": -1,
+                    "total": 0,
                     "paused": self._paused,
                     "media_type": None,
                     "thumbnail_path": None,
@@ -1699,9 +1814,13 @@ class PresentationEngine:
                     except OSError:
                         pass
                 # Video-only: fall back to first-frame cache (backend-generated)
-                if thumb is None and item.media_type == MediaType.VIDEO:
-                    if item.first_frame_path is not None and item.first_frame_path.exists():
-                        thumb = str(item.first_frame_path)
+                if (
+                    thumb is None
+                    and item.media_type == MediaType.VIDEO
+                    and item.first_frame_path is not None
+                    and item.first_frame_path.exists()
+                ):
+                    thumb = str(item.first_frame_path)
                 data = {
                     "file": str(item.original_path.name) if item.original_path else "unknown",
                     "index": self._current_idx,
@@ -1756,26 +1875,28 @@ class PresentationEngine:
                 # the backend optimiser for I/O — skipped intentionally.
                 # Backend-processed items will replace these stubs via
                 # playlist hot-reload with correct content-hash IDs.
-                file_id = hashlib.sha256(
-                    str(entry).encode()
-                ).hexdigest()[:16]
+                file_id = hashlib.sha256(str(entry).encode()).hexdigest()[:16]
 
-                items.append(MediaItem(
-                    id=file_id,
-                    original_path=entry,
-                    cached_path=entry,  # No cache check — backend will replace
-                    media_type=MediaType.IMAGE,
-                    width=0, height=0,  # No PIL — backend provides dimensions
-                    duration_seconds=0.0,
-                    thumbnail_path=None,
-                    source="local",
-                ))
+                items.append(
+                    MediaItem(
+                        id=file_id,
+                        original_path=entry,
+                        cached_path=entry,  # No cache check — backend will replace
+                        media_type=MediaType.IMAGE,
+                        width=0,
+                        height=0,  # No PIL — backend provides dimensions
+                        duration_seconds=0.0,
+                        thumbnail_path=None,
+                        source="local",
+                    )
+                )
             except OSError:
                 logger.debug("Skipping unreadable file: %s", entry)
 
         logger.info(
             "Folder scan (dev fallback): %d images in %s",
-            len(items), folder_path,
+            len(items),
+            folder_path,
         )
         return items
 
@@ -1801,7 +1922,8 @@ class PresentationEngine:
         if old_video != new_video:
             logger.info(
                 "Video playback toggled (%s → %s) — regenerating queue",
-                old_video, new_video,
+                old_video,
+                new_video,
             )
             from metixel.shared.config import resolve_watch_paths
 

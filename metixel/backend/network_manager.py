@@ -12,6 +12,7 @@ dnsmasq, which are configured by ``scripts/setup_ap.sh``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import subprocess
 import time
@@ -54,7 +55,9 @@ def is_wifi_radio_enabled() -> bool:
     try:
         result = subprocess.run(
             ["nmcli", "-t", "radio", "wifi"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() == "enabled"
     except Exception:
@@ -72,7 +75,9 @@ def has_saved_wifi_networks() -> bool:
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in result.stdout.strip().splitlines():
             parts = line.split(":")
@@ -95,7 +100,9 @@ def is_wifi_hardware_present() -> bool:
     try:
         result = subprocess.run(
             ["ip", "link", "show", "wlan0"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return "wlan0:" in result.stdout
     except Exception:
@@ -117,17 +124,18 @@ def is_connected() -> bool:
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "DEVICE,STATE", "device", "status"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in result.stdout.strip().splitlines():
             parts = line.split(":")
             if len(parts) >= 2:
                 dev, state = parts[0], parts[1]
-                if dev != "lo" and state == "connected":
-                    # Exclude the AP's own IP — 192.168.42.x is the
-                    # captive portal subnet, not a real upstream link.
-                    if _interface_has_real_ip(dev):
-                        return True
+                # Exclude the AP's own IP — 192.168.42.x is the
+                # captive portal subnet, not a real upstream link.
+                if dev != "lo" and state == "connected" and _interface_has_real_ip(dev):
+                    return True
         return False
     except Exception:
         logger.debug("is_connected() check failed — assuming connected", exc_info=True)
@@ -139,7 +147,9 @@ def _interface_has_real_ip(device: str) -> bool:
     try:
         ip_result = subprocess.run(
             ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", device],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in ip_result.stdout.strip().splitlines():
             if line.startswith("IP4.ADDRESS["):
@@ -162,7 +172,8 @@ def pre_scan_for_ap() -> None:
     try:
         subprocess.run(
             ["nmcli", "device", "wifi", "rescan"],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         time.sleep(10.0)
         networks = _parse_scan_results()
@@ -199,7 +210,8 @@ def scan_networks() -> list[dict[str, Any]]:
     try:
         subprocess.run(
             ["nmcli", "device", "wifi", "rescan"],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         time.sleep(10.0)
         networks = _parse_scan_results()
@@ -217,7 +229,9 @@ def _parse_scan_results() -> list[dict[str, Any]]:
     """Parse nmcli wifi list output into a list of network dicts."""
     result = subprocess.run(
         ["nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY,FREQ", "device", "wifi", "list"],
-        capture_output=True, text=True, timeout=10,
+        capture_output=True,
+        text=True,
+        timeout=10,
     )
     networks: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -240,12 +254,14 @@ def _parse_scan_results() -> list[dict[str, Any]]:
             freq = int(parts[3]) if len(parts) > 3 else 0
         except (ValueError, IndexError):
             freq = 0
-        networks.append({
-            "ssid": ssid,
-            "signal": signal,
-            "security": security,
-            "freq": freq,
-        })
+        networks.append(
+            {
+                "ssid": ssid,
+                "signal": signal,
+                "security": security,
+                "freq": freq,
+            }
+        )
     networks.sort(key=lambda n: n["signal"], reverse=True)
     return networks
 
@@ -275,7 +291,8 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
         time.sleep(2.0)
         subprocess.run(
             ["nmcli", "device", "wifi", "rescan"],
-            capture_output=True, timeout=15,
+            capture_output=True,
+            timeout=15,
         )
         time.sleep(3.0)  # Wait for scan results to populate
 
@@ -324,7 +341,9 @@ def forget_network(ssid: str) -> bool:
     try:
         result = subprocess.run(
             ["nmcli", "-t", "-f", "NAME,UUID", "connection", "show"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         uuid = None
         for line in result.stdout.strip().splitlines():
@@ -335,12 +354,14 @@ def forget_network(ssid: str) -> bool:
         if uuid:
             subprocess.run(
                 ["sudo", "nmcli", "connection", "delete", uuid],
-                capture_output=True, timeout=10,
+                capture_output=True,
+                timeout=10,
             )
             # Also disconnect wlan0 to trigger AP fallback
             subprocess.run(
                 ["sudo", "nmcli", "device", "disconnect", "wlan0"],
-                capture_output=True, timeout=10,
+                capture_output=True,
+                timeout=10,
             )
             logger.info("Forgot Wi-Fi network: %s", ssid)
             return True
@@ -379,7 +400,9 @@ def get_connection_status() -> dict[str, Any]:
         # ── Discover which interfaces are connected ──────────────────
         result = subprocess.run(
             ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         connected_ifaces: list[dict[str, str]] = []
         for line in result.stdout.strip().splitlines():
@@ -387,10 +410,12 @@ def get_connection_status() -> dict[str, Any]:
             if len(parts) >= 3:
                 dev, dev_type, state = parts[0], parts[1], parts[2]
                 if dev != "lo" and state == "connected":
-                    connected_ifaces.append({
-                        "device": dev,
-                        "type": dev_type,
-                    })
+                    connected_ifaces.append(
+                        {
+                            "device": dev,
+                            "type": dev_type,
+                        }
+                    )
 
         if not connected_ifaces:
             return status
@@ -422,16 +447,16 @@ def _fill_wifi_details(status: dict[str, Any], device: str) -> None:
     try:
         conn_result = subprocess.run(
             ["nmcli", "-t", "-f", "active,ssid,signal,security", "device", "wifi", "list"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in conn_result.stdout.strip().splitlines():
             parts = line.split(":")
             if len(parts) >= 3 and parts[0] == "yes":
                 status["ssid"] = parts[1].strip()
-                try:
+                with contextlib.suppress(ValueError, IndexError):
                     status["signal"] = int(parts[2])
-                except (ValueError, IndexError):
-                    pass
                 if len(parts) >= 4:
                     status["security"] = parts[3].strip()
                 break
@@ -447,7 +472,9 @@ def _fill_ethernet_details(status: dict[str, Any], device: str) -> None:
         # Get the connection name for the Ethernet interface
         conn_result = subprocess.run(
             ["nmcli", "-t", "-f", "GENERAL.CONNECTION", "device", "show", device],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in conn_result.stdout.strip().splitlines():
             if line.startswith("GENERAL.CONNECTION:"):
@@ -466,7 +493,9 @@ def _fill_ip_address(status: dict[str, Any], device: str) -> None:
     try:
         ip_result = subprocess.run(
             ["nmcli", "-t", "-f", "IP4.ADDRESS", "device", "show", device],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         for line in ip_result.stdout.strip().splitlines():
             if line.startswith("IP4.ADDRESS["):
@@ -497,7 +526,9 @@ def start_ap_mode() -> bool:
             try:
                 result = subprocess.run(
                     ["ip", "link", "show", "wlan0"],
-                    capture_output=True, text=True, timeout=5,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
                 )
                 if "wlan0:" in result.stdout:
                     wlan_ready = True
@@ -513,7 +544,9 @@ def start_ap_mode() -> bool:
         for unit in (HOSTAPD_UNIT, DNSMASQ_UNIT):
             check = subprocess.run(
                 ["systemctl", "list-unit-files", unit],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             # systemctl list-unit-files outputs "unit.service enabled" or
             # "unit.service masked" etc.  If the unit isn't found it prints
@@ -531,11 +564,13 @@ def start_ap_mode() -> bool:
         # hostapd's AP-ENABLED has no effect (beacons aren't sent).
         subprocess.run(
             ["sudo", "nmcli", "device", "set", "wlan0", "managed", "no"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         subprocess.run(
             ["sudo", "ip", "link", "set", "wlan0", "down"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
 
         # Disable kernel-level WiFi power management BEFORE starting
@@ -545,55 +580,66 @@ def start_ap_mode() -> bool:
         # before hostapd starts so it initialises with beacons on.
         subprocess.run(
             ["sudo", "iw", "dev", "wlan0", "set", "power_save", "off"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
 
         # Start hostapd first — it creates the AP (sets interface to AP mode)
         subprocess.run(
             ["sudo", "systemctl", "start", HOSTAPD_UNIT],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         time.sleep(0.5)
 
         # Verify hostapd started
         result = subprocess.run(
             ["systemctl", "is-active", HOSTAPD_UNIT],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.stdout.strip() != "active":
             logger.error("hostapd failed to start — AP mode unavailable")
             subprocess.run(
                 ["sudo", "systemctl", "stop", HOSTAPD_UNIT],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
             return False
 
         # Bring up wlan0 with the AP static IP
         subprocess.run(
             ["sudo", "ip", "addr", "add", "192.168.42.1/24", "dev", "wlan0"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         subprocess.run(
             ["sudo", "ip", "link", "set", "wlan0", "up"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
 
         # Start dnsmasq after wlan0 is up (avoids "interface does not exist")
         subprocess.run(
             ["sudo", "systemctl", "start", DNSMASQ_UNIT],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         time.sleep(0.5)
 
         result = subprocess.run(
             ["systemctl", "is-active", DNSMASQ_UNIT],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.stdout.strip() != "active":
             logger.error("dnsmasq failed to start — AP mode unavailable")
             subprocess.run(
                 ["sudo", "systemctl", "stop", HOSTAPD_UNIT, DNSMASQ_UNIT],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
             )
             return False
 
@@ -609,17 +655,20 @@ def stop_ap_mode() -> bool:
     try:
         subprocess.run(
             ["sudo", "systemctl", "stop", HOSTAPD_UNIT, DNSMASQ_UNIT],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
         # Remove static IP
         subprocess.run(
             ["sudo", "ip", "addr", "del", "192.168.42.1/24", "dev", "wlan0"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         # Return wlan0 to NetworkManager control
         subprocess.run(
             ["sudo", "nmcli", "device", "set", "wlan0", "managed", "yes"],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         logger.info("AP mode deactivated")
         return True
@@ -633,7 +682,9 @@ def is_ap_mode_active() -> bool:
     try:
         result = subprocess.run(
             ["systemctl", "is-active", HOSTAPD_UNIT],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         return result.stdout.strip() == "active"
     except Exception:
@@ -655,31 +706,43 @@ def _connect_with_profile(ssid: str, password: str) -> tuple[bool, str]:
     avoids this.
     """
     con_name = f"Metixel-{ssid}"
-    try:
+    with contextlib.suppress(Exception):
         # Remove any stale profile from a previous attempt
         subprocess.run(
             ["sudo", "nmcli", "connection", "delete", con_name],
-            capture_output=True, timeout=10,
+            capture_output=True,
+            timeout=10,
         )
-    except Exception:
-        pass
 
     try:
         subprocess.run(
             [
-                "sudo", "nmcli", "connection", "add",
-                "type", "wifi",
-                "con-name", con_name,
-                "ifname", "wlan0",
-                "ssid", ssid,
-                "wifi-sec.key-mgmt", "wpa-psk",
-                "wifi-sec.psk", password,
+                "sudo",
+                "nmcli",
+                "connection",
+                "add",
+                "type",
+                "wifi",
+                "con-name",
+                con_name,
+                "ifname",
+                "wlan0",
+                "ssid",
+                ssid,
+                "wifi-sec.key-mgmt",
+                "wpa-psk",
+                "wifi-sec.psk",
+                password,
             ],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
         result = subprocess.run(
             ["sudo", "nmcli", "connection", "up", con_name],
-            capture_output=True, text=True, timeout=CONNECT_TIMEOUT + 10,
+            capture_output=True,
+            text=True,
+            timeout=CONNECT_TIMEOUT + 10,
         )
         if result.returncode == 0:
             logger.info("Connected to %s via explicit profile", ssid)
@@ -690,7 +753,8 @@ def _connect_with_profile(ssid: str, password: str) -> tuple[bool, str]:
             # Clean up the failed profile
             subprocess.run(
                 ["sudo", "nmcli", "connection", "delete", con_name],
-                capture_output=True, timeout=10,
+                capture_output=True,
+                timeout=10,
             )
             return False, _friendly_error(err)
     except Exception:

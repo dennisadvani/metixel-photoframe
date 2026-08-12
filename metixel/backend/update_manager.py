@@ -42,9 +42,7 @@ COMMITS_ENDPOINT = "/repos/{repo}/commits"
 API_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 # Semver regex: matches v1.2.3, v1.2.3-beta.4, v1.2.3-rc1
-_SEMVER_RE = re.compile(
-    r"^v?(\d+)\.(\d+)\.(\d+)(?:[-.](beta|rc|alpha|pre)\.?(\d+))?$"
-)
+_SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-.](beta|rc|alpha|pre)\.?(\d+))?$")
 
 # Time between update check cycles (when auto_check is enabled)
 MIN_CHECK_INTERVAL = 600  # 10 minutes minimum
@@ -133,8 +131,12 @@ class UpdateManager:
         :class:`BackendDaemon`.
         """
         self._running = True
-        logger.info("UpdateManager started (channel=%s, repo=%s, version=%s)",
-                     self.channel, self.repo, __version__)
+        logger.info(
+            "UpdateManager started (channel=%s, repo=%s, version=%s)",
+            self.channel,
+            self.repo,
+            __version__,
+        )
 
         while self._running:
             try:
@@ -170,9 +172,7 @@ class UpdateManager:
     @property
     def repo(self) -> str:
         """GitHub repository in owner/repo format."""
-        return self._state.config.updates.get(
-            "github_repo", "dennisadvani/metixel-photoframe"
-        )
+        return self._state.config.updates.get("github_repo", "dennisadvani/metixel-photoframe")
 
     @property
     def installed_version(self) -> str:
@@ -241,8 +241,9 @@ class UpdateManager:
                         self._check_in_progress = False
                     return
 
-            logger.info("Checking GitHub for updates (repo=%s, channel=%s)",
-                         self.repo, self.channel)
+            logger.info(
+                "Checking GitHub for updates (repo=%s, channel=%s)", self.repo, self.channel
+            )
             available: dict[str, dict[str, Any]] = {}
 
             # ── Stable channel: latest non-prerelease tag ──────────
@@ -308,12 +309,14 @@ class UpdateManager:
         except Exception:
             with self._lock:
                 self._check_in_progress = False
-                self._last_error = f"Check failed: check logs for details"
+                self._last_error = "Check failed: check logs for details"
             logger.exception("Update check failed")
 
     # -- Apply Update --------------------------------------------------------
 
-    def apply_update(self, channel: str | None = None, version: str | None = None) -> dict[str, Any]:
+    def apply_update(
+        self, channel: str | None = None, version: str | None = None
+    ) -> dict[str, Any]:
         """Apply an update via a detached shell script.
 
         The update cannot run inside the Python process because stopping
@@ -350,10 +353,13 @@ class UpdateManager:
             # Record the update attempt
             now_iso = datetime.now(timezone.utc).isoformat()
             try:
-                self._state.update_config("update", {
-                    "last_update": now_iso,
-                    "channel": target_channel,
-                })
+                self._state.update_config(
+                    "update",
+                    {
+                        "last_update": now_iso,
+                        "channel": target_channel,
+                    },
+                )
             except Exception:
                 logger.debug("Could not persist last_update timestamp", exc_info=True)
 
@@ -376,9 +382,7 @@ class UpdateManager:
     # -- Internal: Update Script ---------------------------------------------
 
     @staticmethod
-    def _write_and_launch_update_script(
-        repo_root: str, target_ref: str, channel: str
-    ) -> None:
+    def _write_and_launch_update_script(repo_root: str, target_ref: str, channel: str) -> None:
         """Write and detach a shell script that performs the actual update.
 
         The script:
@@ -444,17 +448,20 @@ if [ -f "$REPO/requirements-system.txt" ]; then
         [[ "$pkg" =~ ^# ]] && continue
         if ! dpkg -s "$pkg" >/dev/null 2>&1; then
             echo "  Installing: $pkg"
-            sudo -n apt-get install -y -qq "$pkg" 2>/dev/null || echo "  WARNING: failed to install $pkg"
+            sudo -n apt-get install -y -qq "$pkg" 2>/dev/null \
+                || echo "  WARNING: failed to install $pkg"
         fi
     done < "$REPO/requirements-system.txt"
 fi
 
 # ── Reinstall Python package ──
 echo "Reinstalling Python package…"
-pip install --break-system-packages -e "$REPO" || echo "WARNING: pip install failed (continuing)"
+pip install --break-system-packages -e "$REPO" \
+    || echo "WARNING: pip install failed (continuing)"
 
 echo "Update finished: $(date)"
-echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' 2>/dev/null || echo unknown)"
+echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' \
+    2>/dev/null || echo unknown)"
 
 # ── Clean up script (trap handles restart next) ──
 rm -f "$0"
@@ -469,11 +476,14 @@ rm -f "$0"
         # script survives even when the backend is stopped.
         subprocess.run(
             [
-                "sudo", "-n", "systemd-run",
+                "sudo",
+                "-n",
+                "systemd-run",
                 "--unit=metixel-update",
                 "--description=Metixel OTA Update",
-                "--collect",          # drop unit after it exits (don't leave garbage)
-                "/bin/bash", script_path,
+                "--collect",  # drop unit after it exits (don't leave garbage)
+                "/bin/bash",
+                script_path,
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -489,7 +499,10 @@ rm -f "$0"
         """
         valid = {"stable", "beta", "dev"}
         if channel not in valid:
-            return {"status": "error", "message": f"Invalid channel: {channel}. Valid: {sorted(valid)}"}
+            return {
+                "status": "error",
+                "message": f"Invalid channel: {channel}. Valid: {sorted(valid)}",
+            }
 
         self._state.update_config("update", {"channel": channel})
         logger.info("Update channel switched to '%s'", channel)
@@ -519,7 +532,9 @@ rm -f "$0"
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0:
                 return Path(result.stdout.strip())
@@ -577,8 +592,9 @@ rm -f "$0"
             timeout=15,
         )
         if not resp.ok:
-            logger.warning("GitHub commits API returned %d for branch '%s'",
-                           resp.status_code, branch)
+            logger.warning(
+                "GitHub commits API returned %d for branch '%s'", resp.status_code, branch
+            )
             return None
 
         commits: list[dict[str, Any]] = resp.json()

@@ -32,7 +32,9 @@ def detect_backend() -> DisplayBackend:
     3. On other Linux: use Wayland/DRM backend
     4. On desktop / unknown: use TkBackend (tkinter)
     """
-    logger.info("Detecting display backend: platform=%s, python=%s", sys.platform, sys.version.split()[0])
+    logger.info(
+        "Detecting display backend: platform=%s, python=%s", sys.platform, sys.version.split()[0]
+    )
 
     # -- Environment variable override ---------------------------------------
     env_backend = os.environ.get("METIXEL_DISPLAY_BACKEND", "").lower()
@@ -40,15 +42,15 @@ def detect_backend() -> DisplayBackend:
         logger.info("Display backend forced via env: %s", env_backend)
         if env_backend in ("dispmanx", "pi3d"):
             from metixel.display.dispmanx_backend import Pi3dBackend
+
             return Pi3dBackend()
         elif env_backend == "wayland":
             from metixel.display.wayland_backend import WaylandBackend
+
             return WaylandBackend()
-        elif env_backend == "dev":
+        elif env_backend == "dev" or env_backend == "tk":
             from metixel.display.tk_backend import TkBackend
-            return TkBackend()
-        elif env_backend == "tk":
-            from metixel.display.tk_backend import TkBackend
+
             return TkBackend()
 
     # -- Check if running on a Raspberry Pi ----------------------------------
@@ -59,18 +61,21 @@ def detect_backend() -> DisplayBackend:
     if is_pi and has_pi3d:
         logger.info("Detected Raspberry Pi → Pi3dBackend (Mesa EGL via cage/XWayland)")
         from metixel.display.dispmanx_backend import Pi3dBackend
+
         return Pi3dBackend()
 
     # -- Linux (non-Pi, or Pi without pi3d) ----------------------------------
     if sys.platform == "linux":
         logger.info("Detected Linux → WaylandBackend")
         from metixel.display.wayland_backend import WaylandBackend
+
         return WaylandBackend()
 
     # -- Fallback: dev backend -----------------------------------------------
     # Use tkinter (bundled with Python, zero extra dependencies).
     logger.info("Using TkBackend (tkinter) for desktop development")
     from metixel.display.tk_backend import TkBackend
+
     return TkBackend()
 
 
@@ -103,6 +108,7 @@ def _pi3d_available() -> bool:
     """
     try:
         import pi3d  # noqa: F401
+
         return True
     except ImportError:
         logger.debug("pi3d not installed — Pi3dBackend unavailable")

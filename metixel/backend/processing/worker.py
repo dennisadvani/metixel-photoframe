@@ -59,6 +59,7 @@ def _validate_cached(path: Path) -> bool:
     """Check that a cached JPEG is readable (not corrupt/truncated)."""
     try:
         from PIL import Image as PILImage
+
         with PILImage.open(path) as img:
             img.verify()
         return True
@@ -76,9 +77,7 @@ def _read_exif(source_path: Path) -> dict[str, str]:
             exif = img.getexif()
             if exif:
                 return {
-                    TAGS.get(k, str(k)): str(v)
-                    for k, v in exif.items()
-                    if not isinstance(v, bytes)
+                    TAGS.get(k, str(k)): str(v) for k, v in exif.items() if not isinstance(v, bytes)
                 }
     except Exception:
         pass
@@ -129,6 +128,7 @@ def _process(args: argparse.Namespace) -> dict:
                 raw = img.getexif()
                 if raw:
                     from PIL.ExifTags import TAGS
+
                     exif = {
                         TAGS.get(k, str(k)): str(v)
                         for k, v in raw.items()
@@ -181,6 +181,7 @@ def _regenerate_thumbnail(cached: Path, thumb: Path) -> None:
     """Generate a 320 px thumbnail from an already-cached image."""
     try:
         from PIL import Image as PILImage
+
         with PILImage.open(cached) as img:
             t = img.copy()
             t.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), PILImage.LANCZOS)
@@ -194,6 +195,7 @@ def _get_dimensions(path: Path) -> tuple[int, int]:
     """Read image dimensions without decoding pixel data."""
     try:
         from PIL import Image as PILImage
+
         with PILImage.open(path) as img:
             return img.size
     except Exception:
@@ -201,6 +203,7 @@ def _get_dimensions(path: Path) -> tuple[int, int]:
 
 
 # ── CLI entry point ────────────────────────────────────────────────────────
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Metixel image optimisation worker")

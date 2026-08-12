@@ -52,8 +52,13 @@ class WaylandBackend(DisplayBackend):
         return self._running
 
     def create(
-        self, width=1920, height=1080, fullscreen=True,
-        hide_cursor=True, fps_limit=30, **kwargs,
+        self,
+        width=1920,
+        height=1080,
+        fullscreen=True,
+        hide_cursor=True,
+        fps_limit=30,
+        **kwargs,
     ):
         raise NotImplementedError(
             "WaylandBackend is not yet implemented. "
@@ -72,8 +77,19 @@ class WaylandBackend(DisplayBackend):
     def draw_rect(self, x, y, w, h, color=(0, 0, 0, 1), z=0.0):
         raise NotImplementedError("WaylandBackend stub")
 
-    def draw_image(self, texture, x, y, w, h, alpha=1.0, rotation=0.0, z=0.0,
-                   uv_offset=(0.0, 0.0), uv_scale=(1.0, 1.0)):
+    def draw_image(
+        self,
+        texture,
+        x,
+        y,
+        w,
+        h,
+        alpha=1.0,
+        rotation=0.0,
+        z=0.0,
+        uv_offset=(0.0, 0.0),
+        uv_scale=(1.0, 1.0),
+    ):
         raise NotImplementedError("WaylandBackend stub")
 
     def load_texture(self, path, **kwargs):

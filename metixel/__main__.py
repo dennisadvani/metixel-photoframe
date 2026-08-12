@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import contextlib
 import logging
 import logging.config
 import logging.handlers
@@ -49,19 +50,18 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
     log_file = log_dir / "metixel.log"
 
     if log_conf.exists():
-        try:
+        with contextlib.suppress(Exception):
+            # Fall through to manual setup on failure
             logging.config.fileConfig(str(log_conf), disable_existing_loggers=False)
-        except Exception:
-            pass  # Fall through to manual setup
 
     # Ensure file handler exists (may have been added by fileConfig, or add manually)
-    has_file_handler = any(
-        isinstance(h, logging.FileHandler) for h in root.handlers
-    )
+    has_file_handler = any(isinstance(h, logging.FileHandler) for h in root.handlers)
     if not has_file_handler:
         log_dir.mkdir(parents=True, exist_ok=True)
         file_handler = logging.handlers.RotatingFileHandler(
-            str(log_file), maxBytes=10_485_760, backupCount=5,
+            str(log_file),
+            maxBytes=10_485_760,
+            backupCount=5,
         )
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(fmt)
@@ -166,7 +166,6 @@ def main() -> None:
 
         renderer = FrontendRenderer(config_path=args.config)
         renderer.run()
-
 
 if __name__ == "__main__":
     main()

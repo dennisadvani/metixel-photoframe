@@ -24,15 +24,23 @@ logger = logging.getLogger(__name__)
 # -- Default key map (Linux key codes) ---------------------------------------
 
 DEFAULT_KEY_MAP: dict[int, str] = {
-    105: "prev",     # KEY_LEFT
-    106: "next",     # KEY_RIGHT
-    28:  "toggle_pause",  # KEY_ENTER / OK — toggles pause/resume
+    105: "prev",  # KEY_LEFT
+    106: "next",  # KEY_RIGHT
+    28: "toggle_pause",  # KEY_ENTER / OK — toggles pause/resume
 }
 
 # -- Valid commands that can be mapped ---------------------------------------
 
-VALID_COMMANDS = {"next", "prev", "pause", "resume", "toggle_pause",
-                  "screen_on", "screen_off", "switch_album"}
+VALID_COMMANDS = {
+    "next",
+    "prev",
+    "pause",
+    "resume",
+    "toggle_pause",
+    "screen_on",
+    "screen_off",
+    "switch_album",
+}
 
 
 class KeyboardHandler:
@@ -122,15 +130,15 @@ class KeyboardHandler:
     def run(self) -> None:
         """Find keyboard devices and process key events.  Blocks."""
         try:
-            import evdev  # type: ignore[import-untyped]
             import selectors
+
+            import evdev  # type: ignore[import-untyped]
         except ImportError:
             logger.warning("python3-evdev not installed — keyboard input disabled")
             return
 
         devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-        keyboards = [d for d in devices if
-                     evdev.ecodes.EV_KEY in d.capabilities()]
+        keyboards = [d for d in devices if evdev.ecodes.EV_KEY in d.capabilities()]
 
         if not keyboards:
             logger.debug("No keyboard input devices found")
@@ -176,7 +184,9 @@ class KeyboardHandler:
                                 self._learn_mode = False
                                 logger.info(
                                     "Learned: key %s (%s) → %s",
-                                    event.code, key_name, self._learn_target,
+                                    event.code,
+                                    key_name,
+                                    self._learn_target,
                                 )
                                 continue
 
