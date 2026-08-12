@@ -309,7 +309,7 @@
 
         var uptimeEl = document.getElementById("uptime");
         if (uptimeEl) {
-            uptimeEl.textContent = "Uptime " + uptimeH + "h " + uptimeM + "m";
+            uptimeEl.textContent = " — Uptime " + uptimeH + "h " + uptimeM + "m";
         }
     }
 
@@ -1340,11 +1340,11 @@
         }
 
         if (s.success) {
-            textEl.textContent = ago + " — ✅ Success";
-            textEl.style.color = "var(--success)";
+            textEl.textContent = ago + " — Success";
+            textEl.style.color = "var(--text)";
         } else {
             var hasCancel = s.errors && s.errors.some(function (e) { return e.indexOf("Cancelled") >= 0; });
-            textEl.textContent = ago + (hasCancel ? " — ⏹ Cancelled" : " — ⚠ Errors");
+            textEl.textContent = ago + (hasCancel ? " — Cancelled" : " — Errors");
             textEl.style.color = hasCancel ? "var(--text-muted)" : "#f0a030";
         }
 
@@ -2158,13 +2158,13 @@
         var hasCancel = s.errors && s.errors.some(function (e) { return e.indexOf("Cancelled") >= 0; });
 
         if (s.success) {
-            textEl.textContent = ago + " — ✅ Success";
-            textEl.style.color = "var(--success)";
+            textEl.textContent = ago + " — Success";
+            textEl.style.color = "var(--text)";
         } else if (hasCancel) {
-            textEl.textContent = ago + " — ⏹ Cancelled";
+            textEl.textContent = ago + " — Cancelled";
             textEl.style.color = "var(--text-muted)";
         } else {
-            textEl.textContent = ago + " — ⚠ Completed with errors";
+            textEl.textContent = ago + " — Completed with errors";
             textEl.style.color = "#f0a030";
         }
 
@@ -2222,8 +2222,10 @@
                 paths.forEach(function (p) {
                     var pathVal = typeof p === "object" ? p.path : String(p);
                     if (pathVal) {
+                        // Value = folder name (matches API's item.folder = root.name)
+                        var folderName = pathVal.replace(/\/+$/, "").split("/").pop() || pathVal;
                         var opt = document.createElement("option");
-                        opt.value = pathVal;
+                        opt.value = folderName;
                         opt.textContent = pathVal;
                         sel.appendChild(opt);
                     }
@@ -2243,11 +2245,10 @@
         var filtered = _allMediaItems.filter(function (item) {
             // Filename filter
             if (nameFilter && item.name.toLowerCase().indexOf(nameFilter) === -1) return false;
-            // Folder filter — match watch path prefix
+            // Folder filter — match by folder name (e.g. "sample_media")
             if (folderFilter) {
-                var itemPath = item.path || "";
                 var itemFolder = item.folder || "";
-                if (itemFolder.indexOf(folderFilter) !== 0 && itemPath.indexOf(folderFilter) !== 0) return false;
+                if (itemFolder !== folderFilter) return false;
             }
             // Type filter
             if (typeFilter && item.media_type !== typeFilter) return false;

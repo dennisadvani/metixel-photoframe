@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=8">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=9">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -464,7 +464,7 @@
                                 <select id="cfg-immich-album" style="flex:1;max-width:440px">
                                     <option value="">— Select an album —</option>
                                 </select>
-                                <button id="btn-fetch-albums" class="btn--secondary" style="white-space:nowrap;margin-top:0">Fetch Albums</button>
+                                <button id="btn-fetch-albums" class="btn--sm btn--secondary" style="white-space:nowrap;margin-top:0">Fetch Albums</button>
                             </div>
                         </div>
                     </div>
@@ -606,7 +606,7 @@
                 </div>
 
                 <div class="card">
-                    <h2>Updates</h2>
+                    <h2>Time</h2>
                     <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
                         <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
                         <span style="font-weight:600;font-size:0.9rem">Server Time</span>
@@ -799,7 +799,7 @@
         </main>
 
         <footer>
-            <p>Metixel Photoframe v{{ version }} — <span id="uptime">--</span></p>
+            <p>Metixel Photoframe v{{ version }}<span id="uptime"></span></p>
         </footer>
     </div>
 
@@ -822,6 +822,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script src="/static/js/dashboard.js?v=8"></script>
+    <script src="/static/js/dashboard.js?v=11"></script>
 </body>
 </html>

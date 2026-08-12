@@ -97,7 +97,7 @@ echo "  Installing Metixel Photoframe application..."
 sudo mkdir -p "${MOUNT_DIR}/opt/metixel"
 sudo cp -r "${PROJECT_ROOT}/metixel" "${MOUNT_DIR}/opt/metixel/"
 sudo cp -r "${PROJECT_ROOT}/etc" "${MOUNT_DIR}/opt/metixel/"
-sudo cp "${PROJECT_ROOT}/requirements-phase1.txt" "${MOUNT_DIR}/opt/metixel/"
+sudo cp "${PROJECT_ROOT}/requirements-pip.txt" "${MOUNT_DIR}/opt/metixel/"
 
 # Copy systemd units
 sudo cp "${PROJECT_ROOT}/systemd/metixel-backend.service" "${MOUNT_DIR}/etc/systemd/system/"

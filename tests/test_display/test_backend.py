@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Tests for the Metixel Photoframe display backend abstraction."""
 
+import pytest
+
 
 def test_backend_abc_imports():
     """Verify the DisplayBackend ABC can be imported."""
@@ -11,6 +13,7 @@ def test_backend_abc_imports():
 
 def test_tk_backend_imports():
     """Verify the TkBackend can be imported."""
+    pytest.importorskip("tkinter", reason="tkinter not installed (headless Pi)")
     from metixel.display.tk_backend import TkBackend
     assert TkBackend is not None
 
@@ -20,6 +23,7 @@ def test_detect_backend_returns_tk():
 
     When pi3d is importable (running on a Pi), it returns Pi3dBackend instead.
     """
+    pytest.importorskip("tkinter", reason="tkinter not installed (headless Pi)")
     from metixel.display import detect_backend
     from metixel.display.tk_backend import TkBackend
 
@@ -44,6 +48,7 @@ def test_detect_backend_returns_tk():
 
 def test_detect_backend_env_override():
     """Setting METIXEL_DISPLAY_BACKEND=tk should force TkBackend."""
+    pytest.importorskip("tkinter", reason="tkinter not installed (headless Pi)")
     import os
 
     os.environ["METIXEL_DISPLAY_BACKEND"] = "tk"

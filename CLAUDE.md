@@ -77,7 +77,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 ```bash
 # Install dependencies (Phase 1 — Trixie)
-pip install -r requirements-phase1.txt
+pip install -r requirements-pip.txt
 
 # Run the backend daemon (development)
 python -m metixel --mode backend --config etc/config.json
