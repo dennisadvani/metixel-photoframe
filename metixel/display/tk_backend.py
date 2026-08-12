@@ -11,6 +11,7 @@ Renders to a tkinter Canvas with software blitting.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import tkinter as tk
 from pathlib import Path
@@ -113,10 +114,8 @@ class TkBackend(DisplayBackend):
         self._textures.clear()
         self._photo_cache.clear()
         if self._root:
-            try:
+            with contextlib.suppress(Exception):
                 self._root.destroy()
-            except Exception:
-                pass
             self._root = None
         self._canvas = None
         logger.info("TkBackend destroyed")
@@ -161,7 +160,10 @@ class TkBackend(DisplayBackend):
         if a < 20:
             return
         self._canvas.create_rectangle(
-            x, y, x + w, y + h,
+            x,
+            y,
+            x + w,
+            y + h,
             fill=fill_color,
             outline="",
             tags="rect",
@@ -239,7 +241,9 @@ class TkBackend(DisplayBackend):
         if isinstance(texture, int):
             self._textures.pop(texture, None)
             # Also clean up cached PhotoImages for this texture
-            keys_to_remove = [k for k in self._photo_cache if isinstance(k, tuple) and k[0] == texture]
+            keys_to_remove = [
+                k for k in self._photo_cache if isinstance(k, tuple) and k[0] == texture
+            ]
             for k in keys_to_remove:
                 del self._photo_cache[k]
 
@@ -283,7 +287,8 @@ class TkBackend(DisplayBackend):
         r, g, b = int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)
         fill_color = f"#{r:02x}{g:02x}{b:02x}"
         self._canvas.create_text(
-            x, y,
+            x,
+            y,
             text=text,
             fill=fill_color,
             font=("TkDefaultFont", font_size),

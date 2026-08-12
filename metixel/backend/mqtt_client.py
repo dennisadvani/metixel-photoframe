@@ -62,8 +62,9 @@ class MQTTClient:
         try:
             self._client.connect(config["broker"], config["port"], keepalive=60)
         except Exception:
-            logger.error("Failed to connect to MQTT broker at %s:%d",
-                        config["broker"], config["port"])
+            logger.error(
+                "Failed to connect to MQTT broker at %s:%d", config["broker"], config["port"]
+            )
             return
 
         self._running = True

@@ -33,6 +33,7 @@ Memory-conscious design (Pi Zero 2 W: 512MB):
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import logging
 import os
@@ -105,14 +106,14 @@ class VlcVideoPlayer:
 
     def __init__(self) -> None:
         self._window: ctypes.c_void_p | None = None
-        self._player: vlc.MediaPlayer | None = None  # type: ignore[name-defined]
-        self._instance: vlc.Instance | None = None   # type: ignore[name-defined]
+        self._player: vlc.MediaPlayer | None = None  # type: ignore[name-defined]  # noqa: F821
+        self._instance: vlc.Instance | None = None  # type: ignore[name-defined]  # noqa: F821
         self._playing: bool = False
         self._finished: bool = False
         self._video_path: str = ""
         self._duration: float = 0.0
         self._start_time: float = 0.0
-        self._event: sdl2.SDL_Event | None = None    # type: ignore[name-defined]
+        self._event: sdl2.SDL_Event | None = None  # type: ignore[name-defined]  # noqa: F821
         self._screen_w: int = 1920
         self._screen_h: int = 1080
         self._hw_codecs: list[str] = []
@@ -179,7 +180,9 @@ class VlcVideoPlayer:
 
         try:
             return self._play_subprocess(
-                video_path, block=block, fit_mode=fit_mode,
+                video_path,
+                block=block,
+                fit_mode=fit_mode,
             )
         except Exception:
             logger.exception("VLC playback failed: %s", video_path)
@@ -194,10 +197,8 @@ class VlcVideoPlayer:
         self._vlc_playing_event.clear()
         self._vlc_ended_event.set()
         if self._player:
-            try:
+            with contextlib.suppress(Exception):
                 self._player.stop()
-            except Exception:
-                pass
         self._teardown()
 
     # ------------------------------------------------------------------
@@ -239,7 +240,8 @@ class VlcVideoPlayer:
         self._detect_best_codec()
 
         display_ratio = self._compute_crop_ratio(
-            self._screen_w, self._screen_h,
+            self._screen_w,
+            self._screen_h,
         )
 
         # Pick a free TCP port for VLC's RC interface.
@@ -255,10 +257,13 @@ class VlcVideoPlayer:
             "--no-audio",
             "--play-and-exit",
             "--no-video-title-show",
-            "--intf", "dummy",       # No interactive interface
-            "--extraintf", "rc",      # LUA CLI for status queries
-            "--rc-host", f"localhost:{self._rc_port}",
-            "--rc-fake-tty",          # No TTY needed
+            "--intf",
+            "dummy",  # No interactive interface
+            "--extraintf",
+            "rc",  # LUA CLI for status queries
+            "--rc-host",
+            f"localhost:{self._rc_port}",
+            "--rc-fake-tty",  # No TTY needed
             video_path,
         ]
 
@@ -306,7 +311,9 @@ class VlcVideoPlayer:
                 self._duration = time.monotonic() - self._start_time
                 logger.info(
                     "VlcVideoPlayer finished: rc=%d elapsed=%.1fs path=%s",
-                    rc, self._duration, video_path,
+                    rc,
+                    self._duration,
+                    video_path,
                 )
                 return rc
             else:
@@ -350,7 +357,8 @@ class VlcVideoPlayer:
             self._duration = time.monotonic() - self._start_time
             logger.info(
                 "VLC playback ended (event): %.1fs elapsed (%s)",
-                self._duration, self._video_path,
+                self._duration,
+                self._video_path,
             )
             self._teardown()
             return 0
@@ -359,13 +367,15 @@ class VlcVideoPlayer:
         try:
             state = self._player.get_state()
             import vlc  # type: ignore
+
             if state == vlc.State.Ended:
                 self._playing = False
                 self._finished = True
                 self._duration = time.monotonic() - self._start_time
                 logger.info(
                     "VLC playback ended (poll): %.1fs elapsed (%s)",
-                    self._duration, self._video_path,
+                    self._duration,
+                    self._video_path,
                 )
                 self._teardown()
                 return 0
@@ -517,14 +527,17 @@ class VlcVideoPlayer:
         # -- SDL2 setup ---------------------------------------------------
         if sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO) != 0:
             logger.error(
-                "SDL2 init failed: %s", sdl2.SDL_GetError().decode(),
+                "SDL2 init failed: %s",
+                sdl2.SDL_GetError().decode(),
             )
             return None
 
         self._window = sdl2.SDL_CreateWindow(
             b"Metixel Video",
-            0, 0,
-            self._screen_w, self._screen_h,
+            0,
+            0,
+            self._screen_w,
+            self._screen_h,
             sdl2.SDL_WINDOW_HIDDEN | sdl2.SDL_WINDOW_BORDERLESS,
         )
         if not self._window:
@@ -552,7 +565,8 @@ class VlcVideoPlayer:
             "--no-audio",
             "--quiet",
             "--verbose=0",
-            "--vout", "xcb_x11",
+            "--vout",
+            "xcb_x11",
         ]
 
         try:
@@ -583,7 +597,8 @@ class VlcVideoPlayer:
         #   - contain: nothing — VLC's default letterbox/pillarbox.
         #
         display_ratio = self._compute_crop_ratio(
-            self._screen_w, self._screen_h,
+            self._screen_w,
+            self._screen_h,
         )
 
         # Load media (use media_new_path for local files — media_new
@@ -597,12 +612,16 @@ class VlcVideoPlayer:
             self._player.video_set_aspect_ratio(display_ratio)
             logger.debug(
                 "VLC %s mode: aspect-ratio=%s (display %dx%d)",
-                fit_mode, display_ratio, self._screen_w, self._screen_h,
+                fit_mode,
+                display_ratio,
+                self._screen_w,
+                self._screen_h,
             )
         else:
             logger.debug(
                 "VLC contain mode: no aspect override (display %dx%d)",
-                self._screen_w, self._screen_h,
+                self._screen_w,
+                self._screen_h,
             )
 
         self._player.set_media(media)
@@ -624,7 +643,9 @@ class VlcVideoPlayer:
         sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
         if self._screen_w > 1 and self._screen_h > 1:
             sdl2.SDL_WarpMouseInWindow(
-                self._window, self._screen_w - 1, self._screen_h - 1,
+                self._window,
+                self._screen_w - 1,
+                self._screen_h - 1,
             )
 
         self._playing = True
@@ -638,7 +659,8 @@ class VlcVideoPlayer:
 
         logger.info(
             "VlcVideoPlayer starting: %s (hw_codecs=%s)",
-            video_path, ", ".join(self._hw_codecs) if self._hw_codecs else "auto",
+            video_path,
+            ", ".join(self._hw_codecs) if self._hw_codecs else "auto",
         )
 
         if self._player.play() == -1:
@@ -698,10 +720,10 @@ class VlcVideoPlayer:
                 try:
                     state = self._player.get_state()
                     import vlc  # type: ignore
-                    if state == vlc.State.Playing:
-                        if not self._check_video_progress():
-                            # _check_video_progress already logs + tears down
-                            break
+
+                    if state == vlc.State.Playing and not self._check_video_progress():
+                        # _check_video_progress already logs + tears down
+                        break
                 except Exception:
                     logger.warning(
                         "VLC state check failed — player may have crashed",
@@ -734,7 +756,9 @@ class VlcVideoPlayer:
         rc = 0 if self._finished else 1
         logger.info(
             "VlcVideoPlayer finished: rc=%d elapsed=%.1fs path=%s",
-            rc, self._duration, self._video_path,
+            rc,
+            self._duration,
+            self._video_path,
         )
 
         self._teardown()
@@ -756,25 +780,30 @@ class VlcVideoPlayer:
 
         try:
             import vlc  # type: ignore
+
             event_manager = self._player.event_manager()
             event_manager.event_attach(
-                vlc.EventType.MediaPlayerPlaying, self._on_vlc_playing,
+                vlc.EventType.MediaPlayerPlaying,
+                self._on_vlc_playing,
             )
             event_manager.event_attach(
-                vlc.EventType.MediaPlayerStopped, self._on_vlc_stopped,
+                vlc.EventType.MediaPlayerStopped,
+                self._on_vlc_stopped,
             )
             event_manager.event_attach(
-                vlc.EventType.MediaPlayerEndReached, self._on_vlc_ended,
+                vlc.EventType.MediaPlayerEndReached,
+                self._on_vlc_ended,
             )
             event_manager.event_attach(
-                vlc.EventType.MediaPlayerEncounteredError, self._on_vlc_error,
+                vlc.EventType.MediaPlayerEncounteredError,
+                self._on_vlc_error,
             )
             self._vlc_callbacks_registered = True
             logger.debug("VLC event callbacks registered")
         except Exception:
             logger.warning("Failed to register VLC event callbacks")
 
-    def _on_vlc_playing(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
+    def _on_vlc_playing(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
         """VLC callback: MediaPlayerPlaying.
 
         Fired when VLC has started rendering frames.  This is the right
@@ -790,21 +819,21 @@ class VlcVideoPlayer:
         self._last_progress_time = time.time()
         self._startup = True
 
-    def _on_vlc_stopped(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
+    def _on_vlc_stopped(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
         """VLC callback: MediaPlayerStopped."""
         logger.debug("VLC event: MediaPlayerStopped")
         self._hide_window_request = True
         self._vlc_playing_event.clear()
         self._vlc_ended_event.set()
 
-    def _on_vlc_ended(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
+    def _on_vlc_ended(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
         """VLC callback: MediaPlayerEndReached."""
         logger.debug("VLC event: MediaPlayerEndReached")
         self._hide_window_request = True
         self._vlc_playing_event.clear()
         self._vlc_ended_event.set()
 
-    def _on_vlc_error(self, event: vlc.Event) -> None:  # type: ignore[name-defined]
+    def _on_vlc_error(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
         """VLC callback: MediaPlayerEncounteredError."""
         logger.error("VLC event: MediaPlayerEncounteredError")
         self._hide_window_request = True
@@ -812,10 +841,8 @@ class VlcVideoPlayer:
         self._vlc_error_event.set()
         # Force-stop VLC so we don't sit in an error state forever
         if self._player:
-            try:
+            with contextlib.suppress(Exception):
                 self._player.stop()
-            except Exception:
-                pass
 
     # ------------------------------------------------------------------
     # Internal: progress watchdog
@@ -847,30 +874,28 @@ class VlcVideoPlayer:
             # No time advancement — check if stuck for too long
             if now - self._last_progress_time > self.STUCK_TIMEOUT:
                 logger.error(
-                    "VLC stuck for >%.1fs (time=%d, last_time=%d) — "
-                    "aborting playback of %s",
-                    self.STUCK_TIMEOUT, current_time, self._last_vlc_time,
+                    "VLC stuck for >%.1fs (time=%d, last_time=%d) — aborting playback of %s",
+                    self.STUCK_TIMEOUT,
+                    current_time,
+                    self._last_vlc_time,
                     self._video_path,
                 )
                 self._vlc_error_event.set()
                 self._playing = False
                 self._finished = True
                 if self._player:
-                    try:
+                    with contextlib.suppress(Exception):
                         self._player.stop()
-                    except Exception:
-                        pass
                 return False
         elif current_time == -1:
             # VLC returns -1 if no media is loaded
             logger.warning(
-                "No media loaded or media invalid: %s", self._video_path,
+                "No media loaded or media invalid: %s",
+                self._video_path,
             )
             if self._player:
-                try:
+                with contextlib.suppress(Exception):
                     self._player.stop()
-                except Exception:
-                    pass
             self._playing = False
             self._finished = True
             return False
@@ -880,7 +905,8 @@ class VlcVideoPlayer:
             if self._startup and current_time > 0:
                 logger.debug(
                     "Video started playing (time=%d): %s",
-                    current_time, self._video_path,
+                    current_time,
+                    self._video_path,
                 )
                 self._startup = False
 
@@ -913,7 +939,9 @@ class VlcVideoPlayer:
             # Warp mouse to bottom-right corner (off-screen on most frames)
             if self._screen_w > 1 and self._screen_h > 1:
                 sdl2.SDL_WarpMouseInWindow(
-                    self._window, self._screen_w - 1, self._screen_h - 1,
+                    self._window,
+                    self._screen_w - 1,
+                    self._screen_h - 1,
                 )
             logger.debug("Window shown: %dx%d", self._screen_w, self._screen_h)
 
@@ -962,7 +990,8 @@ class VlcVideoPlayer:
                     return True
             time.sleep(0.01)
         logger.warning(
-            "Player window not shown within %.0f seconds", timeout,
+            "Player window not shown within %.0f seconds",
+            timeout,
         )
         return False
 
@@ -997,19 +1026,19 @@ class VlcVideoPlayer:
             return self._embed_windows()
         else:
             logger.error(
-                "VLC embedding not supported on platform: %s", sys.platform,
+                "VLC embedding not supported on platform: %s",
+                sys.platform,
             )
             return False
 
-    def _embed_linux(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]
+    def _embed_linux(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]  # noqa: F821
         """Embed VLC in X11/KMSDRM window (Linux)."""
         import sdl2  # type: ignore
 
         if wm_info.subsystem in (sdl2.SDL_SYSWM_X11, sdl2.SDL_SYSWM_KMSDRM):
             xid = wm_info.info.x11.window
             self._player.set_xwindow(xid)
-            logger.debug("VLC embedded in X11 window: %s (subsystem=%s)",
-                         xid, wm_info.subsystem)
+            logger.debug("VLC embedded in X11 window: %s (subsystem=%s)", xid, wm_info.subsystem)
             return True
         else:
             logger.error(
@@ -1018,10 +1047,11 @@ class VlcVideoPlayer:
             )
             return False
 
-    def _embed_macos(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]
+    def _embed_macos(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]  # noqa: F821
         """Embed VLC in NSView (macOS)."""
         try:
             from rubicon.objc import ObjCInstance  # type: ignore
+
             nswindow_ptr = wm_info.info.cocoa.window
             nswindow = ObjCInstance(ctypes.c_void_p(nswindow_ptr))
             nsview = nswindow.contentView
@@ -1039,6 +1069,7 @@ class VlcVideoPlayer:
         """Embed VLC in HWND (Windows)."""
         try:
             import sdl2  # type: ignore
+
             hwnd = sdl2.SDL_GetWindowID(self._window)
             self._player.set_hwnd(hwnd)
             logger.debug("VLC embedded in Windows HWND: %s", hwnd)
@@ -1060,20 +1091,14 @@ class VlcVideoPlayer:
         self._rc_port = 0
 
         if self._player:
-            try:
+            with contextlib.suppress(Exception):
                 self._player.stop()
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 self._player.release()
-            except Exception:
-                pass
             self._player = None
         if self._instance:
-            try:
+            with contextlib.suppress(Exception):
                 self._instance.release()
-            except Exception:
-                pass
             self._instance = None
         self._teardown_sdl2()
 
@@ -1085,15 +1110,11 @@ class VlcVideoPlayer:
             self._window = None
             return
         if self._window:
-            try:
+            with contextlib.suppress(Exception):
                 sdl2.SDL_DestroyWindow(self._window)
-            except Exception:
-                pass
             self._window = None
-        try:
+        with contextlib.suppress(Exception):
             sdl2.SDL_Quit()
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # Internal: codec detection
@@ -1107,7 +1128,9 @@ class VlcVideoPlayer:
         try:
             result = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-decoders"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             out = result.stdout
             self._hw_codecs = []
@@ -1125,7 +1148,8 @@ class VlcVideoPlayer:
 
             if "h264_v4l2m2m" in self._hw_codecs:
                 logger.debug(
-                    "HW codecs available: %s", ", ".join(self._hw_codecs),
+                    "HW codecs available: %s",
+                    ", ".join(self._hw_codecs),
                 )
                 return "h264_v4l2m2m"
         except Exception:
@@ -1145,6 +1169,7 @@ class VlcVideoPlayer:
         (e.g. ``"16:9"`` for 1920×1080, ``"16:10"`` for 1920×1200).
         """
         from math import gcd
+
         g = gcd(display_w, display_h)
         return f"{display_w // g}:{display_h // g}"
 
@@ -1153,6 +1178,7 @@ class VlcVideoPlayer:
         """Check if python-vlc bindings are importable."""
         try:
             import vlc  # type: ignore # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -1162,6 +1188,7 @@ class VlcVideoPlayer:
         """Check if pysdl2 is importable."""
         try:
             import sdl2  # type: ignore # noqa: F401
+
             return True
         except ImportError:
             return False
@@ -1256,28 +1283,43 @@ class VideoPlayer:
             # Compute scale: fit within target, maintain aspect ratio,
             # ensure even dimensions (required by many codecs).
             scale_w, scale_h = self._compute_scale(
-                src_w, src_h, target_w, target_h,
+                src_w,
+                src_h,
+                target_w,
+                target_h,
             )
 
             cmd = [
                 "ffmpeg",
-                "-loglevel", "error",
-                "-hwaccel", "drm",
-                "-i", str(video_path),
-                "-f", "rawvideo",
-                "-pix_fmt", "rgb24",
-                "-vf", (
+                "-loglevel",
+                "error",
+                "-hwaccel",
+                "drm",
+                "-i",
+                str(video_path),
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb24",
+                "-vf",
+                (
                     f"scale={scale_w}:{scale_h}:force_original_aspect_ratio=decrease,"
                     f"pad={scale_w}:{scale_h}:(ow-iw)/2:(oh-ih)/2:black"
                 ),
                 "-an",  # No audio
-                "-vsync", "passthrough",
+                "-vsync",
+                "passthrough",
                 "-",
             ]
 
             logger.info(
                 "VideoPlayer starting: %s -> %dx%d @ %.1f fps (src: %dx%d)",
-                video_path, scale_w, scale_h, self._fps, src_w, src_h,
+                video_path,
+                scale_w,
+                scale_h,
+                self._fps,
+                src_w,
+                src_h,
             )
 
             self._process = subprocess.Popen(
@@ -1306,7 +1348,10 @@ class VideoPlayer:
 
             logger.debug(
                 "ffmpeg cmd: %s | frame_bytes=%d | fps=%.1f | period=%.3fs",
-                " ".join(cmd), self._frame_bytes, self._fps, self._frame_period,
+                " ".join(cmd),
+                self._frame_bytes,
+                self._fps,
+                self._frame_period,
             )
 
             return (scale_w, scale_h)
@@ -1330,18 +1375,14 @@ class VideoPlayer:
             except queue.Empty:
                 break
         if self._process:
-            try:
+            with contextlib.suppress(Exception):
                 self._process.stdout.close()
-            except Exception:
-                pass
             try:
                 self._process.terminate()
                 self._process.wait(timeout=2)
             except Exception:
-                try:
+                with contextlib.suppress(Exception):
                     self._process.kill()
-                except Exception:
-                    pass
             self._process = None
         self._reader_thread = None
 
@@ -1403,11 +1444,12 @@ class VideoPlayer:
 
         if catch_up_frames > 0:
             logger.debug(
-                "Skipped %d frames (behind by %d, elapsed=%.2fs, "
-                "delivered=%d, expected=%d) [%s]",
+                "Skipped %d frames (behind by %d, elapsed=%.2fs, delivered=%d, expected=%d) [%s]",
                 catch_up_frames,
                 expected_frame - self._frames_delivered,
-                elapsed, self._frames_delivered, expected_frame,
+                elapsed,
+                self._frames_delivered,
+                expected_frame,
                 self._video_path,
             )
 
@@ -1416,8 +1458,11 @@ class VideoPlayer:
         if self._frames_delivered <= 3:
             logger.debug(
                 "Frame #%d [%s]: %dx%d, first 12 bytes=%s",
-                self._frames_delivered, self._video_path,
-                self._width, self._height, frame.flat[:12].tolist(),
+                self._frames_delivered,
+                self._video_path,
+                self._width,
+                self._height,
+                frame.flat[:12].tolist(),
             )
 
         return frame
@@ -1436,10 +1481,8 @@ class VideoPlayer:
         except Exception:
             pass
         finally:
-            try:
+            with contextlib.suppress(queue.Full):
                 self._frame_queue.put_nowait(None)
-            except queue.Full:
-                pass
 
     # -- Properties ----------------------------------------------------------
 
@@ -1485,14 +1528,18 @@ class VideoPlayer:
         """Probe video metadata using ffprobe (JSON format — field-order safe)."""
         try:
             import json
+
             result = subprocess.run(
                 [
                     "ffprobe",
-                    "-v", "error",
-                    "-select_streams", "v:0",
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
                     "-show_entries",
                     "stream=width,height,r_frame_rate,duration",
-                    "-of", "json",
+                    "-of",
+                    "json",
                     str(video_path),
                 ],
                 capture_output=True,
@@ -1527,7 +1574,10 @@ class VideoPlayer:
 
     @staticmethod
     def _compute_scale(
-        src_w: int, src_h: int, target_w: int, target_h: int,
+        src_w: int,
+        src_h: int,
+        target_w: int,
+        target_h: int,
     ) -> tuple[int, int]:
         """Compute the output frame size that fits within the target."""
         if src_w <= 0 or src_h <= 0:
@@ -1548,7 +1598,9 @@ class VideoPlayer:
         try:
             result = subprocess.run(
                 ["ffmpeg", "-hide_banner", "-decoders"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if "h264_v4l2m2m" in result.stdout:
                 return "h264_v4l2m2m"

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from metixel.display import detect_backend
 from metixel.display.backend import DisplayBackend
-from metixel.frontend.overlay import OverlayManager, MessageLayer
+from metixel.frontend.overlay import MessageLayer, OverlayManager
 from metixel.frontend.presentation.engine import PresentationEngine
 from metixel.shared.config import Config
 from metixel.shared.ipc import ControlMessage, IPCServer
@@ -105,54 +105,61 @@ class FrontendRenderer:
                 original = Path(entry["original_path"])
                 cached = Path(entry["cached_path"])
                 thumb = Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None
-                first_frame = Path(entry["first_frame_path"]) if entry.get("first_frame_path") else None
-                last_frame = Path(entry["last_frame_path"]) if entry.get("last_frame_path") else None
+                first_frame = (
+                    Path(entry["first_frame_path"]) if entry.get("first_frame_path") else None
+                )
+                last_frame = (
+                    Path(entry["last_frame_path"]) if entry.get("last_frame_path") else None
+                )
 
                 # Guard: skip items whose cached file doesn't exist yet
                 # (e.g. transcoding still in progress from a previous run).
                 # PLAY_ORIGINAL items (cached == original) always pass.
-                if cached != original:
-                    if not cached.is_file() or cached.stat().st_size < 1024:
-                        logger.debug(
-                            "Skipping playlist entry — cached file not ready: %s",
-                            cached.name,
-                        )
-                        continue
+                if cached != original and (not cached.is_file() or cached.stat().st_size < 1024):
+                    logger.debug(
+                        "Skipping playlist entry — cached file not ready: %s",
+                        cached.name,
+                    )
+                    continue
 
-                items.append(MediaItem(
-                    id=entry["id"],
-                    original_path=original,
-                    cached_path=cached,
-                    media_type=media_type,
-                    width=entry.get("width", 0),
-                    height=entry.get("height", 0),
-                    duration_seconds=entry.get("duration_seconds", 0.0),
-                    thumbnail_path=thumb,
-                    first_frame_path=first_frame,
-                    last_frame_path=last_frame,
-                    source=entry.get("source", "local"),
-                    transcode_status=(
-                        TranscodeStatus(entry["transcode_status"])
-                        if entry.get("transcode_status")
-                        else None
-                    ),
-                ))
+                items.append(
+                    MediaItem(
+                        id=entry["id"],
+                        original_path=original,
+                        cached_path=cached,
+                        media_type=media_type,
+                        width=entry.get("width", 0),
+                        height=entry.get("height", 0),
+                        duration_seconds=entry.get("duration_seconds", 0.0),
+                        thumbnail_path=thumb,
+                        first_frame_path=first_frame,
+                        last_frame_path=last_frame,
+                        source=entry.get("source", "local"),
+                        transcode_status=(
+                            TranscodeStatus(entry["transcode_status"])
+                            if entry.get("transcode_status")
+                            else None
+                        ),
+                    )
+                )
             except (KeyError, TypeError) as e:
                 logger.debug("Skipping malformed playlist entry: %s", e)
                 continue
 
         if items:
-            logger.info("Loaded %d items from backend playlist (%d bytes)",
-                         len(items), playlist_path.stat().st_size)
+            logger.info(
+                "Loaded %d items from backend playlist (%d bytes)",
+                len(items),
+                playlist_path.stat().st_size,
+            )
         return items
 
     def run(self) -> None:
         """Initialize and start the main render loop. Blocks until shutdown."""
         logger.info(
-            "\n" + "=" * 70 + "\n"
-            "  METIXEL FRONTEND STARTING  |  pid=%d  |  %s\n"
-            + "=" * 70,
-            os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),
+            "\n" + "=" * 70 + "\n  METIXEL FRONTEND STARTING  |  pid=%d  |  %s\n" + "=" * 70,
+            os.getpid(),
+            time.strftime("%Y-%m-%d %H:%M:%S"),
         )
         display_cfg = self._config.display
 
@@ -169,8 +176,10 @@ class FrontendRenderer:
 
         logger.info(
             "Display: config=%dx%d, backend=%dx%d, fullscreen=%s, fps_limit=%d",
-            display_cfg["width"], display_cfg["height"],
-            self._backend.width, self._backend.height,
+            display_cfg["width"],
+            display_cfg["height"],
+            self._backend.width,
+            self._backend.height,
             display_cfg.get("fullscreen", True),
             display_cfg.get("fps_limit", 30),
         )
@@ -201,13 +210,13 @@ class FrontendRenderer:
         # BootLayer (z=0.0, closest) covers the screen until the first
         # slideshow items are ready, then fades out to reveal them.
         from metixel.frontend.overlay.boot_layer import BootLayer
+
         self._overlay = OverlayManager()
         self._boot_layer = BootLayer()
         self._overlay.add_layer(self._boot_layer)
         self._overlay.add_layer(MessageLayer())
         self._boot_was_active = True  # Track for first-slide timer reset
-        logger.info("Overlay system initialized: %d layers",
-                     len(self._overlay._layers))
+        logger.info("Overlay system initialized: %d layers", len(self._overlay._layers))
 
         # ── Show persistent messages from config ─────────────────────
         # These are duration=0 messages that stay on screen until
@@ -292,7 +301,9 @@ class FrontendRenderer:
             _queue_ready.set()
 
         loader_thread = threading.Thread(
-            target=_load_initial_queue, daemon=True, name="queue-loader",
+            target=_load_initial_queue,
+            daemon=True,
+            name="queue-loader",
         )
         loader_thread.start()
 
@@ -398,8 +409,10 @@ class FrontendRenderer:
             parts = cpu_line.split()
             if parts[0] == "cpu" and len(parts) >= 8:
                 user, nice, system, idle = (
-                    int(parts[1]), int(parts[2]),
-                    int(parts[3]), int(parts[4]),
+                    int(parts[1]),
+                    int(parts[2]),
+                    int(parts[3]),
+                    int(parts[4]),
                 )
                 total = user + nice + system + idle
                 active = user + nice + system
@@ -430,12 +443,16 @@ class FrontendRenderer:
                 load = f.readline().split()[:3]
 
             logger.debug(
-                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  "
-                "SWAP=%d/%dMB  LOAD=%s %s %s",
+                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  SWAP=%d/%dMB  LOAD=%s %s %s",
                 cpu_pct,
-                used_mb, total_mb, mem_pct,
-                swap_used, swap_total,
-                load[0], load[1], load[2],
+                used_mb,
+                total_mb,
+                mem_pct,
+                swap_used,
+                swap_total,
+                load[0],
+                load[1],
+                load[2],
             )
 
             # ── GPU memory (Pi only) ─────────────────────────────────
@@ -446,9 +463,10 @@ class FrontendRenderer:
                     total = gpu["gpu_total_mb"]
                     pct = (reloc / total * 100) if total > 0 else 0.0
                     logger.debug(
-                        "GPU: %d/%dMB (%.0f%%) | V3D: %skb/%sBOs | "
-                        "textures: %s/%s",
-                        reloc, total, pct,
+                        "GPU: %d/%dMB (%.0f%%) | V3D: %skb/%sBOs | textures: %s/%s",
+                        reloc,
+                        total,
+                        pct,
                         gpu.get("v3d_bo_kb", "?"),
                         gpu.get("v3d_bo_count", "?"),
                         gpu.get("texture_count", "?"),
@@ -472,7 +490,8 @@ class FrontendRenderer:
             # Pass video state so message timers pause during VLC playback
             video_playing = (
                 self._presentation._video_state != 0  # _VIDEO_IDLE
-                if hasattr(self._presentation, '_video_state') else False
+                if hasattr(self._presentation, "_video_state")
+                else False
             )
             # Tell the boot layer whether the frontend has actually
             # loaded its queue — not just whether the backend wrote
@@ -494,22 +513,27 @@ class FrontendRenderer:
                 and self._presentation._tex[self._presentation._active] is not None
             )
             queue_size = len(self._presentation._queue) if self._presentation else 0
-            self._overlay.update({
-                "video_playing": video_playing,
-                "slideshow_ready": slideshow_ready,
-                "queue_size": queue_size,
-            })
+            self._overlay.update(
+                {
+                    "video_playing": video_playing,
+                    "slideshow_ready": slideshow_ready,
+                    "queue_size": queue_size,
+                }
+            )
             self._overlay.draw(self._backend)
 
         # ── Boot → slideshow transition ───────────────────────────────
         # When the boot layer finishes fading, reset the first slide's
         # display timer so it gets its full configured duration.
-        if getattr(self, '_boot_layer', None) is not None:
-            if self._boot_layer.is_done and getattr(self, '_boot_was_active', False):
-                self._boot_was_active = False
-                if self._presentation:
-                    self._presentation.reset_slide_timer()
-                    logger.info("First slide timer reset — boot screen finished")
+        if (
+            getattr(self, "_boot_layer", None) is not None
+            and self._boot_layer.is_done
+            and getattr(self, "_boot_was_active", False)
+        ):
+            self._boot_was_active = False
+            if self._presentation:
+                self._presentation.reset_slide_timer()
+                logger.info("First slide timer reset — boot screen finished")
 
     # -- Hot reload ----------------------------------------------------------
 
@@ -544,10 +568,7 @@ class FrontendRenderer:
         # Poll every 0.5s when the queue is empty (boot phase) so the
         # first items are loaded quickly; throttle to 3s during normal
         # operation to reduce disk I/O.
-        queue_empty = (
-            self._presentation is not None
-            and not self._presentation._queue
-        )
+        queue_empty = self._presentation is not None and not self._presentation._queue
         poll_interval = 0.5 if queue_empty else 3.0
         if now - self._last_playlist_check >= poll_interval:
             self._last_playlist_check = now
@@ -599,9 +620,15 @@ class FrontendRenderer:
                     width=entry.get("width", 0),
                     height=entry.get("height", 0),
                     duration_seconds=entry.get("duration_seconds", 0.0),
-                    thumbnail_path=Path(entry["thumbnail_path"]) if entry.get("thumbnail_path") else None,
-                    first_frame_path=Path(entry["first_frame_path"]) if entry.get("first_frame_path") else None,
-                    last_frame_path=Path(entry["last_frame_path"]) if entry.get("last_frame_path") else None,
+                    thumbnail_path=Path(entry["thumbnail_path"])
+                    if entry.get("thumbnail_path")
+                    else None,
+                    first_frame_path=Path(entry["first_frame_path"])
+                    if entry.get("first_frame_path")
+                    else None,
+                    last_frame_path=Path(entry["last_frame_path"])
+                    if entry.get("last_frame_path")
+                    else None,
                     source=entry.get("source", "local"),
                     transcode_status=(
                         TranscodeStatus(entry["transcode_status"])
@@ -623,7 +650,7 @@ class FrontendRenderer:
             # black screen while the pipeline rebuilds.
             logger.info("Backend playlist is empty — resetting slideshow queue")
             self._presentation.set_queue([])
-            if getattr(self, '_boot_layer', None) is not None:
+            if getattr(self, "_boot_layer", None) is not None:
                 self._boot_layer.reactivate()
                 self._boot_was_active = True
             return
@@ -661,7 +688,10 @@ class FrontendRenderer:
                 if src.height > 0 and src.height != item.height:
                     item.height = src.height
                     updated += 1
-                if src.first_frame_path is not None and src.first_frame_path != item.first_frame_path:
+                if (
+                    src.first_frame_path is not None
+                    and src.first_frame_path != item.first_frame_path
+                ):
                     item.first_frame_path = src.first_frame_path
                     updated += 1
                 if src.last_frame_path is not None and src.last_frame_path != item.last_frame_path:
@@ -678,9 +708,10 @@ class FrontendRenderer:
             added = self._presentation.add_items(new_items)
             if added:
                 logger.info(
-                    "Added %d new items to slideshow "
-                    "(backend playlist: %d, frontend queue: %d)",
-                    added, len(items), len(self._presentation._queue),
+                    "Added %d new items to slideshow (backend playlist: %d, frontend queue: %d)",
+                    added,
+                    len(items),
+                    len(self._presentation._queue),
                 )
 
         if removed_ids:
@@ -696,22 +727,25 @@ class FrontendRenderer:
                     logger.info(
                         "Removed %d items from slideshow "
                         "(backend playlist: %d, frontend queue: %d)",
-                        removed, len(items), len(self._presentation._queue),
+                        removed,
+                        len(items),
+                        len(self._presentation._queue),
                     )
             else:
                 logger.debug(
                     "Not pruning %d item(s) — backend playlist is still "
                     "building (%d items vs frontend %d).  Items will be "
                     "reconciled when the backend finishes processing.",
-                    len(removed_ids), len(items),
+                    len(removed_ids),
+                    len(items),
                     len(self._presentation._queue),
                 )
 
         if not new_ids and not removed_ids:
             logger.debug(
-                "Playlist mtime changed but no items added or removed "
-                "(backend: %d, frontend: %d)",
-                len(items), len(self._presentation._queue),
+                "Playlist mtime changed but no items added or removed (backend: %d, frontend: %d)",
+                len(items),
+                len(self._presentation._queue),
             )
 
     def _get_config_mtime(self) -> float:
@@ -755,7 +789,8 @@ class FrontendRenderer:
         if updated:
             logger.debug(
                 "Frontend file log level set to %s (%d handler(s) updated)",
-                level_name, updated,
+                level_name,
+                updated,
             )
 
     # -- IPC -----------------------------------------------------------------
@@ -853,10 +888,9 @@ class FrontendRenderer:
         """Clean up all resources."""
         self._running = False
         logger.info(
-            "=" * 70 + "\n"
-            "  METIXEL FRONTEND STOPPING  |  pid=%d  |  %s\n"
-            + "=" * 70,
-            os.getpid(), time.strftime("%Y-%m-%d %H:%M:%S"),
+            "=" * 70 + "\n  METIXEL FRONTEND STOPPING  |  pid=%d  |  %s\n" + "=" * 70,
+            os.getpid(),
+            time.strftime("%Y-%m-%d %H:%M:%S"),
         )
 
         if self._ipc_server:

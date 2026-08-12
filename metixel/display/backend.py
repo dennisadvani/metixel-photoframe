@@ -138,7 +138,7 @@ class DisplayBackend(ABC):
         """
         ...
 
-    def draw_crossfade(
+    def draw_crossfade(  # noqa: B027
         self,
         tex_current: Any,
         tex_next: Any,
@@ -219,7 +219,7 @@ class DisplayBackend(ABC):
         """
         return None
 
-    def flush_gpu(self) -> None:
+    def flush_gpu(self) -> None:  # noqa: B027
         """Block until all pending GPU operations complete.
 
         Subclasses should call ``glFinish()`` or equivalent to ensure

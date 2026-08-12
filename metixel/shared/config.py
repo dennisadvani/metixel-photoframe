@@ -55,7 +55,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "transcode_max_width": 0,  # 0 = use profile limit; overridden by profile/custom
         "transcode_max_height": 0,
         "transcode_quality": 23,  # CRF value (lower = better, 18-28 typical)
-        "transcode_use_software_encoder": True,  # libx264 (best quality); False = try hardware first
+        "transcode_use_software_encoder": True,  # libx264; False = try hardware first
         "transcode_timeout_seconds": 7200,  # max time per transcode (2 hours)
         "cpu_throttle_enabled": True,
         "cpu_throttle_percent": 100,  # 0-100 or >100 for multi-core (100 = 1 core)
@@ -134,18 +134,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "timeouts": {
         # ── ffprobe / metadata ──────────────────────────────────────
-        "ffprobe_probe": 120,           # ffprobe metadata probe (video.py _probe)
-        "ffprobe_validate": 60,         # ffprobe cached-video validation
-        "folder_watcher_probe": 120,    # folder watcher ffprobe metadata scan
-        "hw_codec_detect": 30,          # ffmpeg HW codec detection
+        "ffprobe_probe": 120,  # ffprobe metadata probe (video.py _probe)
+        "ffprobe_validate": 60,  # ffprobe cached-video validation
+        "folder_watcher_probe": 120,  # folder watcher ffprobe metadata scan
+        "hw_codec_detect": 30,  # ffmpeg HW codec detection
         # ── Extraction / processing ──────────────────────────────────
-        "thumbnail_extract": 300,       # thumbnail frame extraction (ffmpeg)
-        "frame_extract_first": 180,     # first-frame JPEG extraction
-        "frame_extract_last": 120,      # last-frame JPEG extraction (decodes final 1s)
-        "image_process": 120,           # image optimisation subprocess
-        "transcode": 7200,              # video transcode (2 hours)
+        "thumbnail_extract": 300,  # thumbnail frame extraction (ffmpeg)
+        "frame_extract_first": 180,  # first-frame JPEG extraction
+        "frame_extract_last": 120,  # last-frame JPEG extraction (decodes final 1s)
+        "image_process": 120,  # image optimisation subprocess
+        "transcode": 7200,  # video transcode (2 hours)
         # ── Playback ─────────────────────────────────────────────────
-        "vlc_start": 30,                # VLC playback confirmation
+        "vlc_start": 30,  # VLC playback confirmation
     },
 }
 
@@ -282,6 +282,7 @@ class Config:
 
         # Use predefined profile from VideoProcessor
         from metixel.backend.processing.video import VideoProcessor
+
         prof = dict(VideoProcessor.PROFILES.get(profile_key, VideoProcessor.PROFILES["pi3"]))
         prof["profile"] = profile_key
         return prof
@@ -399,7 +400,8 @@ class Config:
             return cls(merged)
         else:
             logger.info(
-                "Config not found at %s — creating with defaults", path,
+                "Config not found at %s — creating with defaults",
+                path,
             )
             config = cls()
             config.save(path)
@@ -409,6 +411,7 @@ class Config:
 # ---------------------------------------------------------------------------
 # Shared utility: resolve watch_paths to a list of Path objects
 # ---------------------------------------------------------------------------
+
 
 def resolve_watch_paths(
     config: Config,

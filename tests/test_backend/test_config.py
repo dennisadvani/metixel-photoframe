@@ -9,7 +9,7 @@ def test_default_config():
 
     config = Config()
     assert config.display["width"] == 0
-    assert config.slideshow["image_duration_seconds"] == 30
+    assert config.slideshow["image_duration_seconds"] == 15
 
 
 def test_config_update():
@@ -57,7 +57,7 @@ def test_video_playback_enabled_persists(tmp_path):
 
     # Default is True
     assert config.slideshow["video_playback_enabled"] is True
-    assert config.slideshow["video_max_duration_seconds"] == 120
+    assert config.slideshow["video_max_duration_seconds"] == 0
 
     # Simulate user unchecking the box and saving
     config.update("slideshow", {"video_playback_enabled": False})
@@ -161,7 +161,7 @@ def test_video_section_defaults():
     assert v["transcode_max_height"] == 0  # use display height
     assert v["transcode_quality"] == 23
     assert v["cpu_throttle_enabled"] is True
-    assert v["cpu_throttle_percent"] == 50
+    assert v["cpu_throttle_percent"] == 100
 
 
 def test_video_section_save_load(tmp_path):

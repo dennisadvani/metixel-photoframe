@@ -11,7 +11,8 @@ Usage:
     python scripts/precache_videos.py --profile pi2 --media ./local_media --out ./cache
 
     # Pull from Pi via SSH, process, push results back
-    python scripts/precache_videos.py --profile pi2 --host 192.168.222.143 --remote-media /opt/metixel/media/sample_media --out ./cache --push
+    python scripts/precache_videos.py --profile pi2 --host 192.168.222.143 \
+        --remote-media /opt/metixel/media/sample_media --out ./cache --push
 
 This produces:
     cache/videos/<hash>.mp4       — transcoded video
@@ -23,12 +24,12 @@ This produces:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -40,35 +41,59 @@ from typing import Any
 PROFILES: dict[str, dict[str, Any]] = {
     "pi2": {
         "label": "Raspberry Pi 2",
-        "codec": "h264", "encoder": "libx264",
-        "max_width": 1920, "max_height": 1080, "max_fps": 30,
-        "max_bitrate": 7, "crf": 28,
-        "h264_profile": "high", "h264_level": "4.0",
-        "color_depth": 8, "hdr_support": False,
+        "codec": "h264",
+        "encoder": "libx264",
+        "max_width": 1920,
+        "max_height": 1080,
+        "max_fps": 30,
+        "max_bitrate": 7,
+        "crf": 28,
+        "h264_profile": "high",
+        "h264_level": "4.0",
+        "color_depth": 8,
+        "hdr_support": False,
     },
     "pi3": {
         "label": "Raspberry Pi 3 / 3B+",
-        "codec": "h264", "encoder": "libx264",
-        "max_width": 1920, "max_height": 1080, "max_fps": 30,
-        "max_bitrate": 7, "crf": 28,
-        "h264_profile": "high", "h264_level": "4.0",
-        "color_depth": 8, "hdr_support": False,
+        "codec": "h264",
+        "encoder": "libx264",
+        "max_width": 1920,
+        "max_height": 1080,
+        "max_fps": 30,
+        "max_bitrate": 7,
+        "crf": 28,
+        "h264_profile": "high",
+        "h264_level": "4.0",
+        "color_depth": 8,
+        "hdr_support": False,
     },
     "pi4": {
         "label": "Raspberry Pi 4 / 400",
-        "codec": "h265", "encoder": "libx265",
-        "max_width": 3840, "max_height": 2160, "max_fps": 60,
-        "max_bitrate": 40, "crf": 23,
-        "h264_profile": "high", "h264_level": "5.1",
-        "color_depth": 10, "hdr_support": True,
+        "codec": "h265",
+        "encoder": "libx265",
+        "max_width": 3840,
+        "max_height": 2160,
+        "max_fps": 60,
+        "max_bitrate": 40,
+        "crf": 23,
+        "h264_profile": "high",
+        "h264_level": "5.1",
+        "color_depth": 10,
+        "hdr_support": True,
     },
     "pi5": {
         "label": "Raspberry Pi 5",
-        "codec": "h265", "encoder": "libx265",
-        "max_width": 3840, "max_height": 2160, "max_fps": 60,
-        "max_bitrate": 80, "crf": 23,
-        "h264_profile": "high", "h264_level": "5.2",
-        "color_depth": 10, "hdr_support": True,
+        "codec": "h265",
+        "encoder": "libx265",
+        "max_width": 3840,
+        "max_height": 2160,
+        "max_fps": 60,
+        "max_bitrate": 80,
+        "crf": 23,
+        "h264_profile": "high",
+        "h264_level": "5.2",
+        "color_depth": 10,
+        "hdr_support": True,
     },
 }
 
@@ -94,17 +119,31 @@ def hash_file(path: Path) -> str:
 def probe(path: Path) -> dict[str, Any]:
     """Probe video metadata via ffprobe (mirrors VideoProcessor._probe)."""
     cmd = [
-        "ffprobe", "-v", "quiet", "-print_format", "json",
-        "-show_format", "-show_streams", str(path),
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        str(path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     data = json.loads(result.stdout)
 
     info: dict[str, Any] = {
-        "width": 0, "height": 0, "duration": 0.0,
-        "codec_name": "", "fps": 0.0, "bitrate": 0,
-        "color_depth": 8, "h264_profile": "", "h264_level": "",
-        "color_primaries": "", "color_trc": "", "colorspace": "",
+        "width": 0,
+        "height": 0,
+        "duration": 0.0,
+        "codec_name": "",
+        "fps": 0.0,
+        "bitrate": 0,
+        "color_depth": 8,
+        "h264_profile": "",
+        "h264_level": "",
+        "color_primaries": "",
+        "color_trc": "",
+        "colorspace": "",
         "pix_fmt": "",
     }
 
@@ -188,7 +227,9 @@ def needs_optimisation(probe_info: dict, profile: dict) -> bool:
     max_br = profile.get("max_bitrate", 0)
     src_br = probe_info.get("bitrate", 0) or 0
     if max_br and src_br > int(max_br * 1.1):
-        print(f"  → needs transcode: bitrate {src_br} Mbps > max {max_br} (+10%={int(max_br * 1.1)})")
+        print(
+            f"  → needs transcode: bitrate {src_br} Mbps > max {max_br} (+10%={int(max_br * 1.1)})"
+        )
         return True
 
     target_depth = profile.get("color_depth", 8)
@@ -244,8 +285,14 @@ def transcode(source: Path, dest: Path, profile: dict, info: dict) -> None:
 
     for encoder in encoders:
         cmd: list[str] = [
-            "ffmpeg", "-y", "-i", str(source),
-            "-c:v", encoder, "-vf", scale_filter,
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-c:v",
+            encoder,
+            "-vf",
+            scale_filter,
         ]
 
         if encoder in ("libx264", "libx265"):
@@ -294,13 +341,17 @@ def transcode(source: Path, dest: Path, profile: dict, info: dict) -> None:
     raise RuntimeError(f"All encoders failed for: {source.name}")
 
 
-def extract_frame(src: Path, dest: Path, seek: str, max_w: int = 0, max_h: int = 0, timeout: int = 120) -> bool:
+def extract_frame(
+    src: Path, dest: Path, seek: str, max_w: int = 0, max_h: int = 0, timeout: int = 120
+) -> bool:
     """Extract a single frame, downscaling if larger than max_w x max_h."""
     cmd: list[str] = ["ffmpeg", "-y"]
     vf_parts: list[str] = []
     if max_w and max_h:
-        vf_parts.append(f"scale='min({max_w},iw)':'min({max_h},ih)':force_original_aspect_ratio=decrease")
-        vf_parts.append(f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'")
+        vf_parts.append(
+            f"scale='min({max_w},iw)':'min({max_h},ih)':force_original_aspect_ratio=decrease"
+        )
+        vf_parts.append("pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'")
     if seek == "0":
         cmd += ["-noaccurate_seek", "-ss", "0"]
     else:
@@ -314,7 +365,9 @@ def extract_frame(src: Path, dest: Path, seek: str, max_w: int = 0, max_h: int =
         cmd += ["-update", "1"]
     cmd.append(str(dest))
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout)
+        subprocess.run(
+            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=timeout
+        )
         return True
     except Exception:
         return False
@@ -325,12 +378,16 @@ def extract_thumbnail(src: Path, dest: Path, max_w: int = 0, max_h: int = 0) -> 
     cmd = ["ffmpeg", "-y", "-noaccurate_seek", "-ss", "2"]
     cmd += ["-i", str(src)]
     if max_w and max_h:
-        vf = (f"scale='min({max_w},iw)':'min({max_h},ih)':force_original_aspect_ratio=decrease,"
-              f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'")
+        vf = (
+            f"scale='min({max_w},iw)':'min({max_h},ih)':force_original_aspect_ratio=decrease,"
+            f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
+        )
         cmd += ["-vf", vf]
     cmd += ["-vframes", "1", "-q:v", "2", str(dest)]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        subprocess.run(
+            cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120
+        )
         return True
     except Exception:
         return False
@@ -345,7 +402,9 @@ def ssh_run(host: str, cmd: str) -> str:
     """Run a command on a Pi via SSH and return stdout."""
     result = subprocess.run(
         ["ssh", f"pi@{host}", cmd],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
     return result.stdout.strip()
 
@@ -354,7 +413,8 @@ def scp_pull(host: str, remote_path: str, local_dir: Path) -> None:
     """Pull files from a Pi to a local directory via scp."""
     subprocess.run(
         ["scp", "-r", f"pi@{host}:{remote_path}", str(local_dir)],
-        check=True, timeout=300,
+        check=True,
+        timeout=300,
     )
 
 
@@ -362,7 +422,8 @@ def scp_push(local_dir: Path, host: str, remote_dir: str) -> None:
     """Push files from a local directory to a Pi via scp."""
     subprocess.run(
         ["scp", "-r", f"{local_dir}/*", f"pi@{host}:{remote_dir}/"],
-        check=True, timeout=300,
+        check=True,
+        timeout=300,
     )
 
 
@@ -373,12 +434,22 @@ def scp_push(local_dir: Path, host: str, remote_dir: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pre-transcode videos for Metixel")
-    parser.add_argument("--profile", required=True, choices=list(PROFILES), help="Target Pi model profile")
+    parser.add_argument(
+        "--profile", required=True, choices=list(PROFILES), help="Target Pi model profile"
+    )
     parser.add_argument("--media", help="Path to local media directory")
     parser.add_argument("--host", help="Pi hostname/IP to pull media from via SSH")
-    parser.add_argument("--remote-media", default="/opt/metixel/media/sample_media", help="Remote media path on Pi (default: /opt/metixel/media/sample_media)")
-    parser.add_argument("--out", default="./cache", help="Output cache directory (default: ./cache)")
-    parser.add_argument("--push", action="store_true", help="Push results back to Pi via SCP after processing")
+    parser.add_argument(
+        "--remote-media",
+        default="/opt/metixel/media/sample_media",
+        help="Remote media path on Pi (default: /opt/metixel/media/sample_media)",
+    )
+    parser.add_argument(
+        "--out", default="./cache", help="Output cache directory (default: ./cache)"
+    )
+    parser.add_argument(
+        "--push", action="store_true", help="Push results back to Pi via SCP after processing"
+    )
     parser.add_argument("--force", action="store_true", help="Re-transcode even if output exists")
     args = parser.parse_args()
 
@@ -395,8 +466,10 @@ def main() -> None:
     thumb_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Profile: {profile['label']} ({args.profile})")
-    print(f"Limits:  {profile['max_width']}x{profile['max_height']} @ {profile['max_fps']}fps, "
-          f"{profile['max_bitrate']} Mbps, {profile['codec'].upper()}, CRF {profile['crf']}")
+    print(
+        f"Limits:  {profile['max_width']}x{profile['max_height']} @ {profile['max_fps']}fps, "
+        f"{profile['max_bitrate']} Mbps, {profile['codec'].upper()}, CRF {profile['crf']}"
+    )
     print()
 
     # -- Resolve media directory --------------------------------------------
@@ -410,10 +483,9 @@ def main() -> None:
         scp_pull(args.host, f"{args.remote_media}/*.mp4", media_dir)
         # Also pull any other video extensions
         for ext in [".mov", ".mkv", ".avi", ".webm", ".m4v"]:
-            try:
+            with contextlib.suppress(subprocess.CalledProcessError):
+                # No files with that extension
                 scp_pull(args.host, f"{args.remote_media}/*{ext}", media_dir)
-            except subprocess.CalledProcessError:
-                pass  # No files with that extension
         print(f"  → pulled to {media_dir}")
     else:
         media_dir = Path(args.media)
@@ -424,7 +496,8 @@ def main() -> None:
 
     # -- Find videos --------------------------------------------------------
     videos = sorted(
-        media_dir / Path(p) for p in os.listdir(str(media_dir))
+        media_dir / Path(p)
+        for p in os.listdir(str(media_dir))
         if Path(p).suffix.lower() in VIDEO_EXTENSIONS
     )
     if not videos:
@@ -447,42 +520,44 @@ def main() -> None:
 
         # Probe source
         info = probe(src)
-        print(f"  source: {info['width']}x{info['height']}, {info['fps']:.2f}fps, "
-              f"{info['bitrate']} Mbps, {info['codec_name']}, level={info['h264_level']}")
+        print(
+            f"  source: {info['width']}x{info['height']}, {info['fps']:.2f}fps, "
+            f"{info['bitrate']} Mbps, {info['codec_name']}, level={info['h264_level']}"
+        )
 
         # Check if transcode needed
         if not needs_optimisation(info, profile):
-            print(f"  → already optimal — skipping transcode")
+            print("  → already optimal — skipping transcode")
         elif cached_mp4.exists() and not args.force:
             print(f"  → cached: {cached_mp4.name} (use --force to re-transcode)")
         else:
-            print(f"  transcoding…")
+            print("  transcoding…")
             transcode(src, cached_mp4, profile, info)
 
         # Extract thumbnail
         if not thumb.exists() or args.force:
-            print(f"  extracting thumbnail…")
+            print("  extracting thumbnail…")
             if extract_thumbnail(src, thumb, max_w, max_h):
                 print(f"  → thumbnail: {thumb.name}")
             else:
-                print(f"  ✗ thumbnail failed")
+                print("  ✗ thumbnail failed")
 
         # Extract frames
         if not first_frame.exists() or args.force:
-            print(f"  extracting first frame…")
+            print("  extracting first frame…")
             if extract_frame(src, first_frame, "0", max_w, max_h):
                 print(f"  → first frame: {first_frame.name}")
             else:
-                print(f"  ✗ first frame failed")
+                print("  ✗ first frame failed")
         else:
             print(f"  → first frame cached: {first_frame.name}")
 
         if not last_frame.exists() or args.force:
-            print(f"  extracting last frame…")
+            print("  extracting last frame…")
             if extract_frame(src, last_frame, "-1", max_w, max_h, timeout=120):
                 print(f"  → last frame: {last_frame.name}")
             else:
-                print(f"  ✗ last frame failed")
+                print("  ✗ last frame failed")
         else:
             print(f"  → last frame cached: {last_frame.name}")
 

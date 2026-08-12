@@ -28,10 +28,11 @@ logger = logging.getLogger(__name__)
 
 class NetworkState(Enum):
     """Exclusive states — the WiFi radio can only be in one mode at a time."""
-    CLIENT_CONNECTED = "client_connected"          # WiFi client or Ethernet up
-    CLIENT_DISCONNECTED = "client_disconnected"    # No connection, grace period
-    AP_ACTIVE = "ap_active"                        # WiFi in master mode, PIN on screen
-    AP_EXHAUSTED = "ap_exhausted"                  # AP timed out, client mode, terminal
+
+    CLIENT_CONNECTED = "client_connected"  # WiFi client or Ethernet up
+    CLIENT_DISCONNECTED = "client_disconnected"  # No connection, grace period
+    AP_ACTIVE = "ap_active"  # WiFi in master mode, PIN on screen
+    AP_EXHAUSTED = "ap_exhausted"  # AP timed out, client mode, terminal
 
 
 # ---------------------------------------------------------------------------
@@ -39,14 +40,16 @@ class NetworkState(Enum):
 # ---------------------------------------------------------------------------
 
 from metixel.backend.network_manager import (  # noqa: E402
-    connect_to_network,
     has_saved_wifi_networks,
     is_ap_mode_active,
     is_connected,
     is_wifi_hardware_present,
     pre_scan_for_ap,
-    scan_networks,
+)
+from metixel.backend.network_manager import (  # noqa: E402
     start_ap_mode as _start_ap,
+)
+from metixel.backend.network_manager import (  # noqa: E402
     stop_ap_mode as _stop_ap,
 )
 
@@ -158,7 +161,8 @@ class NetworkController:
                     # Nothing to retry — AP immediately
                     self._transition_to(NetworkState.AP_ACTIVE)
                 elif self._elapsed() >= self._config.get(
-                    "ap_grace_period_seconds", 300,
+                    "ap_grace_period_seconds",
+                    300,
                 ):
                     self._transition_to(NetworkState.AP_ACTIVE)
 
@@ -176,10 +180,12 @@ class NetworkController:
                     logger.warning("AP died unexpectedly — marking exhausted")
                     self._transition_to(NetworkState.AP_EXHAUSTED)
                 elif self._elapsed() >= self._config.get(
-                    "ap_max_duration_seconds", 600,
+                    "ap_max_duration_seconds",
+                    600,
                 ):
                     logger.warning(
-                        "AP auto-stop after %ds", int(self._elapsed()),
+                        "AP auto-stop after %ds",
+                        int(self._elapsed()),
                     )
                     self._transition_to(NetworkState.AP_EXHAUSTED)
 
@@ -272,7 +278,9 @@ class NetworkController:
         try:
             result = subprocess.run(
                 ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             for line in result.stdout.strip().splitlines():
                 parts = line.split(":")
@@ -323,7 +331,8 @@ class NetworkController:
 
             logger.warning(
                 "AP PIN validation failed (%d/%d attempts)",
-                self._pin_attempts, MAX_PIN_ATTEMPTS,
+                self._pin_attempts,
+                MAX_PIN_ATTEMPTS,
             )
             return False, f"Incorrect PIN. {remaining} attempt(s) remaining."
 

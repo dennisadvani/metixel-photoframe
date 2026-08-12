@@ -13,6 +13,7 @@ Key Immich v3 API changes:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -116,7 +117,9 @@ class ImmichSyncer:
         self._running = True
         logger.info(
             "Immich syncer started (server: %s, interval: %ds, strict: %s)",
-            self._base_url, self._poll_interval, self._strict_sync,
+            self._base_url,
+            self._poll_interval,
+            self._strict_sync,
         )
 
         while self._running:
@@ -157,10 +160,8 @@ class ImmichSyncer:
         """
         self._cancel_requested = True
         # Also touch the cancel file for external processes
-        try:
+        with contextlib.suppress(OSError):
             Path(_SYNC_CANCEL_FILE).write_text("1")
-        except OSError:
-            pass
         logger.info("Sync cancellation requested")
 
     def sync_once(self) -> SyncResult:
@@ -184,10 +185,17 @@ class ImmichSyncer:
             if os.path.isfile(_SYNC_STATUS_FILE):
                 with open(_SYNC_STATUS_FILE) as f:
                     data = json.load(f)
-                if self._last_result is None or data.get("finished_at", 0) > self._last_result.finished_at:
-                    self._last_result = SyncResult(**{
-                        k: v for k, v in data.items() if k in SyncResult.__dataclass_fields__  # type: ignore[arg-type]
-                    })  # type: ignore[arg-type]
+                if (
+                    self._last_result is None
+                    or data.get("finished_at", 0) > self._last_result.finished_at
+                ):
+                    self._last_result = SyncResult(
+                        **{
+                            k: v
+                            for k, v in data.items()
+                            if k in SyncResult.__dataclass_fields__  # type: ignore[arg-type]
+                        }
+                    )  # type: ignore[arg-type]
         except (OSError, json.JSONDecodeError, TypeError):
             pass
         return self._last_result
@@ -241,10 +249,8 @@ class ImmichSyncer:
             self._syncing = True
             self._cancel_requested = False
             # Remove stale cancel file
-            try:
+            with contextlib.suppress(OSError):
                 Path(_SYNC_CANCEL_FILE).unlink(missing_ok=True)
-            except OSError:
-                pass
 
         try:
             return self._do_sync()
@@ -353,7 +359,9 @@ class ImmichSyncer:
         download_total = len(to_download)
         logger.info(
             "Local: %d files | Remote: %d assets | To download: %d",
-            len(local_files), result.total_remote, download_total,
+            len(local_files),
+            result.total_remote,
+            download_total,
         )
 
         # 7. Download new assets
@@ -373,10 +381,14 @@ class ImmichSyncer:
             except Exception as e:
                 logger.error("Failed to download %s: %s", filename, e)
                 result.errors.append(f"Download failed for {filename}: {e}")
-                self._write_progress("downloading", download_total, downloaded, f"{filename} — FAILED")
+                self._write_progress(
+                    "downloading", download_total, downloaded, f"{filename} — FAILED"
+                )
 
-        result.skipped = result.total_remote - result.downloaded - len(
-            [e for e in result.errors if e.startswith("Download failed")]
+        result.skipped = (
+            result.total_remote
+            - result.downloaded
+            - len([e for e in result.errors if e.startswith("Download failed")])
         )
 
         if self._cancel_requested and "Cancelled" not in " ".join(result.errors):
@@ -412,9 +424,13 @@ class ImmichSyncer:
         result.finished_at = time.time()
 
         logger.info(
-            "=== Immich sync complete: %d downloaded, %d skipped, %d deleted, %d errors (%.1fs) ===",
-            result.downloaded, result.skipped, result.deleted,
-            len(result.errors), result.duration_seconds,
+            "=== Immich sync complete: %d downloaded, %d skipped, "
+            "%d deleted, %d errors (%.1fs) ===",
+            result.downloaded,
+            result.skipped,
+            result.deleted,
+            len(result.errors),
+            result.duration_seconds,
         )
 
         self._last_result = result
@@ -444,7 +460,8 @@ class ImmichSyncer:
         logger.debug("Listing albums: GET %s", url)
 
         resp = requests.get(
-            url, headers=self._get_headers(),
+            url,
+            headers=self._get_headers(),
             timeout=_REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
@@ -457,7 +474,9 @@ class ImmichSyncer:
                 return album["id"]
 
         logger.warning(
-            "Album '%s' not found among %d albums on server", album_name, len(albums),
+            "Album '%s' not found among %d albums on server",
+            album_name,
+            len(albums),
         )
         return None
 
@@ -465,7 +484,8 @@ class ImmichSyncer:
         """Return all albums from the Immich server (for the UI picker)."""
         url = f"{self._base_url}{_API_ALBUMS}"
         resp = requests.get(
-            url, headers=self._get_headers(),
+            url,
+            headers=self._get_headers(),
             timeout=_REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
@@ -489,7 +509,9 @@ class ImmichSyncer:
                 payload["page"] = page
 
             resp = requests.post(
-                url, headers=headers, json=payload,
+                url,
+                headers=headers,
+                json=payload,
                 timeout=_REQUEST_TIMEOUT,
             )
             resp.raise_for_status()
@@ -503,7 +525,9 @@ class ImmichSyncer:
                 break
             page = int(next_page)
 
-        logger.debug("Fetched %d assets for album %s (%d pages)", len(all_assets), album_id, page or 1)
+        logger.debug(
+            "Fetched %d assets for album %s (%d pages)", len(all_assets), album_id, page or 1
+        )
         return all_assets
 
     def _download_asset(self, asset: dict[str, Any], filename: str) -> None:
@@ -529,7 +553,9 @@ class ImmichSyncer:
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 with requests.get(
-                    url, headers=headers, stream=True,
+                    url,
+                    headers=headers,
+                    stream=True,
                     timeout=_REQUEST_TIMEOUT,
                 ) as r:
                     r.raise_for_status()
@@ -554,7 +580,11 @@ class ImmichSyncer:
                 if attempt < _MAX_RETRIES:
                     logger.warning(
                         "HTTP %s downloading %s, retry %d/%d in %ds",
-                        status, filename, attempt, _MAX_RETRIES, _RETRY_DELAY,
+                        status,
+                        filename,
+                        attempt,
+                        _MAX_RETRIES,
+                        _RETRY_DELAY,
                     )
                     time.sleep(_RETRY_DELAY)
                 else:
@@ -564,21 +594,31 @@ class ImmichSyncer:
                 if attempt < _MAX_RETRIES:
                     logger.warning(
                         "Timeout downloading %s, retry %d/%d in %ds",
-                        filename, attempt, _MAX_RETRIES, _RETRY_DELAY,
+                        filename,
+                        attempt,
+                        _MAX_RETRIES,
+                        _RETRY_DELAY,
                     )
                     time.sleep(_RETRY_DELAY)
                 else:
-                    raise RuntimeError(f"Timeout downloading {filename} after {_MAX_RETRIES} attempts") from e
+                    raise RuntimeError(
+                        f"Timeout downloading {filename} after {_MAX_RETRIES} attempts"
+                    ) from e
 
             except requests.exceptions.ConnectionError as e:
                 if attempt < _MAX_RETRIES:
                     logger.warning(
                         "Connection error downloading %s, retry %d/%d in %ds",
-                        filename, attempt, _MAX_RETRIES, _RETRY_DELAY,
+                        filename,
+                        attempt,
+                        _MAX_RETRIES,
+                        _RETRY_DELAY,
                     )
                     time.sleep(_RETRY_DELAY * 2)
                 else:
-                    raise RuntimeError(f"Connection failed for {filename} after {_MAX_RETRIES} attempts") from e
+                    raise RuntimeError(
+                        f"Connection failed for {filename} after {_MAX_RETRIES} attempts"
+                    ) from e
 
         # Clean up temp file on failure
         if tmp_path.exists():
@@ -646,7 +686,11 @@ class ImmichSyncer:
             logger.debug("Could not write sync status file — /run/metixel unavailable?")
 
     def _write_progress(
-        self, phase: str, total: int, processed: int, current_file: str,
+        self,
+        phase: str,
+        total: int,
+        processed: int,
+        current_file: str,
     ) -> None:
         """Write a live progress snapshot for the web dashboard to poll."""
         try:
@@ -668,7 +712,5 @@ class ImmichSyncer:
 
     def _clear_progress(self) -> None:
         """Remove the live progress file."""
-        try:
+        with contextlib.suppress(OSError):
             Path(_SYNC_PROGRESS_FILE).unlink(missing_ok=True)
-        except OSError:
-            pass

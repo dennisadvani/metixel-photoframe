@@ -39,19 +39,19 @@ _SPINNER_PATH = _ASSETS_DIR / "spinner.png"
 # ---------------------------------------------------------------------------
 # Timing
 # ---------------------------------------------------------------------------
-_MIN_DISPLAY = 3.0       # Minimum time logo is visible (seconds)
-_FADE_DURATION = 0.8     # Fade-out animation duration (seconds)
-_SPINNER_RPM = 60        # Spinner rotation speed
+_MIN_DISPLAY = 3.0  # Minimum time logo is visible (seconds)
+_FADE_DURATION = 0.8  # Fade-out animation duration (seconds)
+_SPINNER_RPM = 60  # Spinner rotation speed
 
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
-_LOGO_WIDTH_RATIO = 0.60       # Logo takes 60% of screen width
-_SPINNER_SIZE_RATIO = 0.05     # Spinner size relative to screen height
-_SPINNER_GAP_RATIO = 0.04      # Gap between logo bottom and spinner top
-_PROGRESS_GAP_RATIO = 0.02     # Gap between spinner bottom and progress bar
-_PROGRESS_HEIGHT_RATIO = 0.008 # Progress bar height relative to screen height
-_PROGRESS_WIDTH_RATIO = 0.30   # Progress bar is 30% screen width (half of logo)
+_LOGO_WIDTH_RATIO = 0.60  # Logo takes 60% of screen width
+_SPINNER_SIZE_RATIO = 0.05  # Spinner size relative to screen height
+_SPINNER_GAP_RATIO = 0.04  # Gap between logo bottom and spinner top
+_PROGRESS_GAP_RATIO = 0.02  # Gap between spinner bottom and progress bar
+_PROGRESS_HEIGHT_RATIO = 0.008  # Progress bar height relative to screen height
+_PROGRESS_WIDTH_RATIO = 0.30  # Progress bar is 30% screen width (half of logo)
 
 # Processing status file written by the optimisation queue
 _PROCESSING_STATUS_PATH = Path("/run/metixel/processing_status.json")
@@ -96,7 +96,7 @@ class BootLayer(OverlayLayer):
         self._progress_x: int = 0
         self._progress_y: int = 0
         # 1×1 pixel textures for the progress bar (avoids draw_rect colour bugs)
-        self._progress_bg_tex: Any = None   # dark gray track
+        self._progress_bg_tex: Any = None  # dark gray track
         self._progress_fill_tex: Any = None  # red fill
         # Suppress the progress bar once the slideshow queue has enough
         # items to begin — avoids the bar cycling to 100% multiple times
@@ -238,8 +238,11 @@ class BootLayer(OverlayLayer):
         # ── Full-screen black background ───────────────────────────────
         if self._bg_tex is not None:
             backend.draw_image(
-                self._bg_tex, 0, 0,
-                backend.width, backend.height,
+                self._bg_tex,
+                0,
+                0,
+                backend.width,
+                backend.height,
                 alpha=self._alpha,
                 z=self.next_z(),
             )
@@ -248,8 +251,10 @@ class BootLayer(OverlayLayer):
         if self._logo_tex is not None:
             backend.draw_image(
                 self._logo_tex,
-                self._logo_x, self._logo_y,
-                self._logo_w, self._logo_h,
+                self._logo_x,
+                self._logo_y,
+                self._logo_w,
+                self._logo_h,
                 alpha=self._alpha,
                 z=self.next_z(),
             )
@@ -258,8 +263,10 @@ class BootLayer(OverlayLayer):
         if self._spinner_tex is not None:
             backend.draw_image(
                 self._spinner_tex,
-                self._spinner_x, self._spinner_y,
-                self._spinner_size, self._spinner_size,
+                self._spinner_x,
+                self._spinner_y,
+                self._spinner_size,
+                self._spinner_size,
                 alpha=self._alpha,
                 rotation=self._spinner_angle,
                 z=self.next_z(),
@@ -274,19 +281,19 @@ class BootLayer(OverlayLayer):
         if self._progress_pct > 0.0 and self._progress_pct <= 100.0 and not self._progress_hidden:
             # Lazy-init progress bar textures
             if self._progress_bg_tex is None:
-                self._progress_bg_tex = self._make_pixel_tex(
-                    backend, (0.2, 0.2, 0.2))
+                self._progress_bg_tex = self._make_pixel_tex(backend, (0.2, 0.2, 0.2))
             if self._progress_fill_tex is None:
-                self._progress_fill_tex = self._make_pixel_tex(
-                    backend, (0.85, 0.15, 0.15))
+                self._progress_fill_tex = self._make_pixel_tex(backend, (0.85, 0.15, 0.15))
 
             pct = self._progress_pct / 100.0
             # Track (dark gray, full width)
             if self._progress_bg_tex is not None:
                 backend.draw_image(
                     self._progress_bg_tex,
-                    self._progress_x, self._progress_y,
-                    self._progress_w, self._progress_h,
+                    self._progress_x,
+                    self._progress_y,
+                    self._progress_w,
+                    self._progress_h,
                     alpha=self._alpha,
                     z=self.next_z(),
                 )
@@ -295,8 +302,10 @@ class BootLayer(OverlayLayer):
                 fill_w = max(1, int(self._progress_w * pct))
                 backend.draw_image(
                     self._progress_fill_tex,
-                    self._progress_x, self._progress_y,
-                    fill_w, self._progress_h,
+                    self._progress_x,
+                    self._progress_y,
+                    fill_w,
+                    self._progress_h,
                     alpha=self._alpha,
                     z=self.next_z(),
                 )
@@ -352,6 +361,7 @@ class BootLayer(OverlayLayer):
         self._logo_w = int(dw * _LOGO_WIDTH_RATIO)
         try:
             from PIL import Image
+
             with Image.open(_LOGO_PATH) as img:
                 orig_w, orig_h = img.size
             if orig_w > 0:
@@ -377,16 +387,24 @@ class BootLayer(OverlayLayer):
         self._progress_x = (dw - self._progress_w) // 2
         # Place in the middle of the remaining space below the spinner
         _space_below = dh - (self._spinner_y + self._spinner_size)
-        self._progress_y = self._spinner_y + self._spinner_size + (_space_below - self._progress_h) // 2
+        self._progress_y = (
+            self._spinner_y + self._spinner_size + (_space_below - self._progress_h) // 2
+        )
 
         self._layout_done = True
         logger.debug(
-            "Boot layout: logo=%dx%d@(%d,%d) spinner=%d@(%d,%d) "
-            "progress=%dx%d@(%d,%d)",
-            self._logo_w, self._logo_h, self._logo_x, self._logo_y,
-            self._spinner_size, self._spinner_x, self._spinner_y,
-            self._progress_w, self._progress_h,
-            self._progress_x, self._progress_y,
+            "Boot layout: logo=%dx%d@(%d,%d) spinner=%d@(%d,%d) progress=%dx%d@(%d,%d)",
+            self._logo_w,
+            self._logo_h,
+            self._logo_x,
+            self._logo_y,
+            self._spinner_size,
+            self._spinner_x,
+            self._spinner_y,
+            self._progress_w,
+            self._progress_h,
+            self._progress_x,
+            self._progress_y,
         )
 
     def _read_progress_pct(self) -> float:
@@ -438,12 +456,17 @@ class BootLayer(OverlayLayer):
 
     def _unload_textures(self) -> None:
         """Release GPU textures.  Safe to call multiple times."""
-        for attr in ('_bg_tex', '_logo_tex', '_spinner_tex',
-                     '_progress_bg_tex', '_progress_fill_tex'):
+        for attr in (
+            "_bg_tex",
+            "_logo_tex",
+            "_spinner_tex",
+            "_progress_bg_tex",
+            "_progress_fill_tex",
+        ):
             tex = getattr(self, attr, None)
             if tex is not None:
                 try:
-                    if hasattr(self, '_backend_ref'):
+                    if hasattr(self, "_backend_ref"):
                         self._backend_ref.unload_texture(tex)
                 except Exception:
                     logger.debug("Failed to unload %s texture", attr, exc_info=True)
@@ -457,6 +480,7 @@ class BootLayer(OverlayLayer):
         incorrect colours on some pi3d / OpenGL configurations.
         """
         import numpy as np
+
         arr = np.zeros((1, 1, 3), dtype=np.uint8)
         arr[0, 0] = [int(c * 255) for c in color]
         return backend.load_texture(arr)

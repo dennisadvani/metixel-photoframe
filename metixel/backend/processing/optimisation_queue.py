@@ -253,23 +253,17 @@ class OptimisationQueue:
         # Drain incoming items
         with self._incoming_lock:
             before = len(self._incoming)
-            self._incoming = [
-                item for item in self._incoming if item.id not in item_ids
-            ]
+            self._incoming = [item for item in self._incoming if item.id not in item_ids]
             removed += before - len(self._incoming)
 
         # Drain image and video optimisation queues
         with self._queue_lock:
             before_img = len(self._image_queue)
             before_vid = len(self._video_queue)
-            self._image_queue = [
-                item for item in self._image_queue if item.id not in item_ids
-            ]
-            self._video_queue = [
-                item for item in self._video_queue if item.id not in item_ids
-            ]
-            removed += (before_img - len(self._image_queue))
-            removed += (before_vid - len(self._video_queue))
+            self._image_queue = [item for item in self._image_queue if item.id not in item_ids]
+            self._video_queue = [item for item in self._video_queue if item.id not in item_ids]
+            removed += before_img - len(self._image_queue)
+            removed += before_vid - len(self._video_queue)
 
         if removed:
             logger.info(
@@ -354,11 +348,15 @@ class OptimisationQueue:
         if old_img_enabled != self._image_opt_enabled:
             changes.append(f"image_opt_enabled: {old_img_enabled}→{self._image_opt_enabled}")
         if old_img_w != self._image_max_w or old_img_h != self._image_max_h:
-            changes.append(f"image_threshold: {old_img_w}x{old_img_h}→{self._image_max_w}x{self._image_max_h}")
+            changes.append(
+                f"image_threshold: {old_img_w}x{old_img_h}→{self._image_max_w}x{self._image_max_h}"
+            )
         if old_vid_enabled != self._video_transcode_enabled:
             changes.append(f"video_transcode: {old_vid_enabled}→{self._video_transcode_enabled}")
         if old_vid_w != self._video_max_w or old_vid_h != self._video_max_h:
-            changes.append(f"video_threshold: {old_vid_w}x{old_vid_h}→{self._video_max_w}x{self._video_max_h}")
+            changes.append(
+                f"video_threshold: {old_vid_w}x{old_vid_h}→{self._video_max_w}x{self._video_max_h}"
+            )
         if changes:
             logger.info("OptimisationQueue config reloaded: %s", "; ".join(changes))
 
@@ -389,18 +387,27 @@ class OptimisationQueue:
         self._video_max_h = video_cfg.get("transcode_max_height", 0) or sh
 
         self._image_processor = ImageProcessor(
-            cache_dir, screen_width=sw, screen_height=sh,
+            cache_dir,
+            screen_width=sw,
+            screen_height=sh,
         )
         self._video_processor = VideoProcessor(
-            cache_dir, screen_width=sw, screen_height=sh, video_config=video_cfg,
+            cache_dir,
+            screen_width=sw,
+            screen_height=sh,
+            video_config=video_cfg,
             timeouts=config.timeouts,
         )
         logger.info(
             "OptimisationQueue processors initialised: cache=%s, screen=%dx%d, "
             "image_threshold=%dx%d, video_threshold=%dx%d, transcode=%s",
-            cache_dir, sw, sh,
-            self._image_max_w, self._image_max_h,
-            self._video_max_w, self._video_max_h,
+            cache_dir,
+            sw,
+            sh,
+            self._image_max_w,
+            self._image_max_h,
+            self._video_max_w,
+            self._video_max_h,
             "enabled" if self._video_transcode_enabled else "disabled",
         )
 
@@ -443,7 +450,8 @@ class OptimisationQueue:
         if cleaned > 0:
             logger.info(
                 "Cleaned up %d partial transcode artifact(s) in %s",
-                cleaned, video_cache,
+                cleaned,
+                video_cache,
             )
 
     # -- Internal: classification --------------------------------------------
@@ -469,16 +477,20 @@ class OptimisationQueue:
                 if self._image_needs_optimisation(item):
                     logger.debug(
                         "[OPTQ] IMG→opt  | %4dx%-4d > %dx%d | %s",
-                        item.width, item.height,
-                        self._image_max_w, self._image_max_h,
+                        item.width,
+                        item.height,
+                        self._image_max_w,
+                        self._image_max_h,
                         item.original_path.name,
                     )
                     img_opt.append(item)
                 else:
                     logger.debug(
                         "[OPTQ] IMG→play | %4dx%-4d ≤ %dx%d | %s",
-                        item.width, item.height,
-                        self._image_max_w, self._image_max_h,
+                        item.width,
+                        item.height,
+                        self._image_max_w,
+                        self._image_max_h,
                         item.original_path.name,
                     )
                     ready.append(item)
@@ -488,17 +500,21 @@ class OptimisationQueue:
                 # codec/resolution are already optimal.  VideoProcessor.process()
                 # will skip the actual transcode step for H.264 videos within
                 # resolution limits but still extract frames.
-                codec = (item.exif_data.get("codec_name") or "?")
+                codec = item.exif_data.get("codec_name") or "?"
                 if self._video_needs_optimisation(item):
                     logger.debug(
                         "[OPTQ] VID→opt  | %4dx%-4d | %-6s | %s",
-                        item.width, item.height, codec,
+                        item.width,
+                        item.height,
+                        codec,
                         item.original_path.name,
                     )
                 else:
                     logger.debug(
                         "[OPTQ] VID→frame| %4dx%-4d | %-6s | %s",
-                        item.width, item.height, codec,
+                        item.width,
+                        item.height,
+                        codec,
                         item.original_path.name,
                     )
                 vid_opt.append(item)
@@ -522,17 +538,21 @@ class OptimisationQueue:
                 self._video_queue.extend(vid_opt)
             if img_opt:
                 logger.info(
-                    "[OPTQ] %d image(s) queued for optimisation "
-                    "(queue: %d→%d, threshold: %dx%d)",
-                    len(img_opt), old_img, len(self._image_queue),
-                    self._image_max_w, self._image_max_h,
+                    "[OPTQ] %d image(s) queued for optimisation (queue: %d→%d, threshold: %dx%d)",
+                    len(img_opt),
+                    old_img,
+                    len(self._image_queue),
+                    self._image_max_w,
+                    self._image_max_h,
                 )
             if vid_opt:
                 logger.info(
-                    "[OPTQ] %d video(s) queued for optimisation "
-                    "(queue: %d→%d, threshold: %dx%d)",
-                    len(vid_opt), old_vid, len(self._video_queue),
-                    self._video_max_w, self._video_max_h,
+                    "[OPTQ] %d video(s) queued for optimisation (queue: %d→%d, threshold: %dx%d)",
+                    len(vid_opt),
+                    old_vid,
+                    len(self._video_queue),
+                    self._video_max_w,
+                    self._video_max_h,
                 )
 
     # -- Internal: threshold checks ------------------------------------------
@@ -547,9 +567,7 @@ class OptimisationQueue:
         """
         if not self._image_opt_enabled:
             return False
-        if item.cached_path != item.original_path:
-            return True
-        return False
+        return item.cached_path != item.original_path
 
     def _video_needs_optimisation(self, item: MediaItem) -> bool:
         """Check whether a video needs transcoding.
@@ -561,9 +579,7 @@ class OptimisationQueue:
         """
         if not self._video_transcode_enabled:
             return False
-        if item.cached_path != item.original_path:
-            return True
-        return False
+        return item.cached_path != item.original_path
 
     def _drain_video_queue_to_playlist(self) -> None:
         """Move all queued videos directly to the slideshow playlist.
@@ -612,7 +628,9 @@ class OptimisationQueue:
         self._process_image_batch(batch, total_remaining)
 
     def _process_image_batch(
-        self, batch: list[MediaItem], total_remaining: int,
+        self,
+        batch: list[MediaItem],
+        total_remaining: int,
     ) -> None:
         """Process a batch of images through the ImageProcessor."""
         if self._image_processor is None:
@@ -630,8 +648,10 @@ class OptimisationQueue:
             _img_start = time.monotonic()
             logger.debug(
                 "[OPTQ] IMG opt  | %4dx%-4d | (%d/%d) | %s",
-                item.width, item.height,
-                idx + 1, len(batch),
+                item.width,
+                item.height,
+                idx + 1,
+                len(batch),
                 item.original_path.name,
             )
             try:
@@ -641,7 +661,8 @@ class OptimisationQueue:
                     optimised.append(result)
                     logger.debug(
                         "[OPTQ] IMG done | %4dx%-4d → cached | %5.1fs | %s",
-                        result.width, result.height,
+                        result.width,
+                        result.height,
                         _img_elapsed,
                         item.original_path.name,
                     )
@@ -653,7 +674,8 @@ class OptimisationQueue:
                     )
             except Exception:
                 logger.exception(
-                    "Failed to optimise image: %s", item.original_path,
+                    "Failed to optimise image: %s",
+                    item.original_path,
                 )
             # Yield between items so the frontend gets CPU time.
             # Sleep duration scales with system load to prevent the
@@ -671,7 +693,8 @@ class OptimisationQueue:
                 pass
             logger.debug(
                 "[OPTQ] yield  | load=%.2f  sleep=%.3fs",
-                _load1, _sleep,
+                _load1,
+                _sleep,
             )
             time.sleep(_sleep)
             # Cumulative progress — uses the full queue backlog
@@ -697,11 +720,13 @@ class OptimisationQueue:
         if optimised:
             self._state.add_playlist_items(optimised)
         logger.debug(
-            "[OPTQ] IMG batch done | %d/%d optimised | "
-            "%.1fs | mem: %+dMB (%d→%d)",
-            len(optimised), len(batch),
+            "[OPTQ] IMG batch done | %d/%d optimised | %.1fs | mem: %+dMB (%d→%d)",
+            len(optimised),
+            len(batch),
             _batch_elapsed,
-            _mem_delta, _mem_before, _mem_after,
+            _mem_delta,
+            _mem_before,
+            _mem_after,
         )
 
     @staticmethod
@@ -767,7 +792,8 @@ class OptimisationQueue:
 
         logger.info(
             "[OPTQ] VID opt  | %4dx%-4d | %-6s | %5.1fs | mem=%dMB | %s",
-            item.width, item.height,
+            item.width,
+            item.height,
             (item.exif_data.get("codec_name") or "?"),
             item.duration_seconds,
             self._read_mem_used_mb(),
@@ -775,7 +801,10 @@ class OptimisationQueue:
         )
         try:
             _write_progress(
-                "transcoding", _total, _current - 1, item.original_path.name,
+                "transcoding",
+                _total,
+                _current - 1,
+                item.original_path.name,
             )
             result = processor.process(item.original_path, source=item.source)
             if result is not None:
@@ -789,7 +818,8 @@ class OptimisationQueue:
                     self._state.add_playlist_items([result])
                     logger.info(
                         "[OPTQ] VID done | %4dx%-4d → cached | %s",
-                        result.width, result.height,
+                        result.width,
+                        result.height,
                         item.original_path.name,
                     )
                 else:
@@ -803,7 +833,8 @@ class OptimisationQueue:
             _write_progress("transcoding", _total, _current, "")
         except Exception:
             logger.exception(
-                "Failed to optimise video: %s", item.original_path,
+                "Failed to optimise video: %s",
+                item.original_path,
             )
 
     # -- Internal: helpers ---------------------------------------------------
@@ -834,15 +865,23 @@ class OptimisationQueue:
 
         try:
             result = subprocess.run(
-                nice_cmd([
-                    "ffprobe", "-v", "error",
-                    "-select_streams", "v:0",
-                    "-show_entries",
-                    "stream=width,height,duration,codec_name",
-                    "-of", "json",
-                    str(path),
-                ]),
-                capture_output=True, text=True, timeout=10,
+                nice_cmd(
+                    [
+                        "ffprobe",
+                        "-v",
+                        "error",
+                        "-select_streams",
+                        "v:0",
+                        "-show_entries",
+                        "stream=width,height,duration,codec_name",
+                        "-of",
+                        "json",
+                        str(path),
+                    ]
+                ),
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             if result.returncode == 0:
                 probe = json.loads(result.stdout)
@@ -873,8 +912,10 @@ class OptimisationQueue:
             parts = cpu_line.split()
             if parts[0] == "cpu" and len(parts) >= 8:
                 user, nice, system, idle = (
-                    int(parts[1]), int(parts[2]),
-                    int(parts[3]), int(parts[4]),
+                    int(parts[1]),
+                    int(parts[2]),
+                    int(parts[3]),
+                    int(parts[4]),
                 )
                 total = user + nice + system + idle
                 active = user + nice + system
@@ -905,12 +946,16 @@ class OptimisationQueue:
                 load = f.readline().split()[:3]
 
             logger.debug(
-                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  "
-                "SWAP=%d/%dMB  LOAD=%s %s %s",
+                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  SWAP=%d/%dMB  LOAD=%s %s %s",
                 cpu_pct,
-                used_mb, total_mb, mem_pct,
-                swap_used, swap_total,
-                load[0], load[1], load[2],
+                used_mb,
+                total_mb,
+                mem_pct,
+                swap_used,
+                swap_total,
+                load[0],
+                load[1],
+                load[2],
             )
         except (OSError, ValueError, IndexError):
             pass  # Non-Linux or /proc not available

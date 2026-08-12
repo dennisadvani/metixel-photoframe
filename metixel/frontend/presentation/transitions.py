@@ -85,7 +85,11 @@ class TransitionEngine:
             return 1.0 if layer == "current" else 0.0
         else:
             # Unknown style — hard cut at midpoint
-            return 1.0 if (layer == "current" and progress < 0.5) or (layer == "next" and progress >= 0.5) else 0.0
+            return (
+                1.0
+                if (layer == "current" and progress < 0.5) or (layer == "next" and progress >= 0.5)
+                else 0.0
+            )
 
     def reload_config(self, config: Config) -> None:
         """Update transition settings from config."""

@@ -16,7 +16,9 @@ class SyncScheduler:
     with jitter to avoid thundering-herd problems.
     """
 
-    def __init__(self, callback: Callable[[], None], interval_seconds: int, jitter: float = 0.1) -> None:
+    def __init__(
+        self, callback: Callable[[], None], interval_seconds: int, jitter: float = 0.1
+    ) -> None:
         self._callback = callback
         self._interval = interval_seconds
         self._jitter = jitter  # ±10% random jitter by default

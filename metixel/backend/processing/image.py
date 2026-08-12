@@ -30,6 +30,7 @@ def _detect_cpulimit() -> str | None:
     global _CPULIMIT_PATH
     if _CPULIMIT_PATH is None:
         import shutil
+
         _CPULIMIT_PATH = shutil.which("cpulimit")
         if _CPULIMIT_PATH:
             logger.debug("cpulimit found at %s — workers will be CPU-capped", _CPULIMIT_PATH)
@@ -54,8 +55,14 @@ def _wrap_worker_cmd(worker_cmd: list[str]) -> list[str]:
         # cpulimit -l 50 -f -- nice -n 19 python3 ...
         # -f = foreground (wait for child to exit) — required on v3.1
         return [
-            cpulimit, "-l", "50", "-f", "--",
-            "nice", "-n", "19",
+            cpulimit,
+            "-l",
+            "50",
+            "-f",
+            "--",
+            "nice",
+            "-n",
+            "19",
         ] + worker_cmd
     # cpulimit not available — nice only (scheduling hint, no hard cap)
     return ["nice", "-n", "19"] + worker_cmd
@@ -83,7 +90,9 @@ class ImageProcessor:
     JPEG_QUALITY = 85
     THUMBNAIL_SIZE = 320
 
-    def __init__(self, cache_dir: Path, screen_width: int = 1920, screen_height: int = 1080) -> None:
+    def __init__(
+        self, cache_dir: Path, screen_width: int = 1920, screen_height: int = 1080
+    ) -> None:
         self._cache_dir = cache_dir
         self._image_cache = cache_dir / "images"
         self._thumb_cache = cache_dir / "thumbnails"
@@ -94,8 +103,10 @@ class ImageProcessor:
 
     @staticmethod
     def needs_optimisation(
-        width: int, height: int,
-        max_width: int = 0, max_height: int = 0,
+        width: int,
+        height: int,
+        max_width: int = 0,
+        max_height: int = 0,
     ) -> bool:
         """Check whether an image exceeds the optimisation threshold.
 
@@ -113,9 +124,7 @@ class ImageProcessor:
             return True  # Unknown dimensions — optimise to be safe
         if max_width > 0 and width > max_width:
             return True
-        if max_height > 0 and height > max_height:
-            return True
-        return False
+        return bool(max_height > 0 and height > max_height)
 
     def process(self, source_path: Path, source: str = "local") -> MediaItem | None:
         """Process a single image file.
@@ -144,7 +153,9 @@ class ImageProcessor:
 
             # ── Cache hit ────────────────────────────────────────────
             if cached_path.exists():
-                if cached_path.stat().st_size < 1024 or not self._validate_cached_image(cached_path):
+                if cached_path.stat().st_size < 1024 or not self._validate_cached_image(
+                    cached_path
+                ):
                     logger.warning(
                         "Cached image is corrupt — will re-process: %s",
                         cached_path.name,
@@ -173,17 +184,26 @@ class ImageProcessor:
             logger.debug("Spawning worker for: %s", source_path.name)
             screen = f"{self._screen_w}x{self._screen_h}"
             worker_cmd = [
-                sys.executable, "-m", "metixel.backend.processing.worker",
-                "--source", str(source_path),
-                "--cache", str(cached_path),
-                "--thumb", str(thumb_path),
-                "--screen", screen,
+                sys.executable,
+                "-m",
+                "metixel.backend.processing.worker",
+                "--source",
+                str(source_path),
+                "--cache",
+                str(cached_path),
+                "--thumb",
+                str(thumb_path),
+                "--screen",
+                screen,
             ]
             # Wrap with cpulimit (hard CPU cap) if installed, otherwise
             # fall back to nice-only (priority hint, no hard cap).
             cmd = _wrap_worker_cmd(worker_cmd)
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
             )
 
             # Parse JSON output from the worker.
@@ -191,7 +211,7 @@ class ImageProcessor:
             # BEFORE the worker's output, so we take only the last
             # non-empty line (the worker's JSON).
             try:
-                stdout_lines = [l for l in result.stdout.strip().splitlines() if l.strip()]
+                stdout_lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
                 # The worker's JSON is the first line; cpulimit noise
                 # ("Process NNNN detected") comes after it.
                 json_line = stdout_lines[0] if stdout_lines else result.stdout
@@ -199,7 +219,8 @@ class ImageProcessor:
             except (json.JSONDecodeError, IndexError):
                 logger.error(
                     "Worker returned invalid JSON for %s (rc=%d, stderr=%r, stdout=%r)",
-                    source_path.name, result.returncode,
+                    source_path.name,
+                    result.returncode,
                     result.stderr[:200] if result.stderr else "",
                     result.stdout[:200] if result.stdout else "",
                 )
@@ -263,7 +284,9 @@ class ImageProcessor:
             logger.debug("Thumbnail regenerated: %s", thumb_path.name)
         except Exception:
             logger.warning(
-                "Failed to regenerate thumbnail for %s", cached_path.name, exc_info=True,
+                "Failed to regenerate thumbnail for %s",
+                cached_path.name,
+                exc_info=True,
             )
 
     @staticmethod
@@ -275,6 +298,7 @@ class ImageProcessor:
         """
         try:
             from PIL import Image as PILImage
+
             with PILImage.open(path) as img:
                 img.verify()
             return True
@@ -286,6 +310,7 @@ class ImageProcessor:
         """Read image dimensions without decoding pixel data."""
         try:
             from PIL import Image as PILImage
+
             with PILImage.open(path) as img:
                 return img.size
         except Exception:

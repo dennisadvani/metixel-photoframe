@@ -9,19 +9,19 @@ def test_backend_abc_imports():
     assert DisplayBackend is not None
 
 
-def test_dev_backend_imports():
-    """Verify the DevBackend can be imported."""
-    from metixel.display.dev_backend import DevBackend
-    assert DevBackend is not None
+def test_tk_backend_imports():
+    """Verify the TkBackend can be imported."""
+    from metixel.display.tk_backend import TkBackend
+    assert TkBackend is not None
 
 
-def test_detect_backend_returns_dev():
-    """On a non-Pi machine, detect_backend should return DevBackend.
+def test_detect_backend_returns_tk():
+    """On a non-Pi machine, detect_backend should return TkBackend.
 
     When pi3d is importable (running on a Pi), it returns Pi3dBackend instead.
     """
     from metixel.display import detect_backend
-    from metixel.display.dev_backend import DevBackend
+    from metixel.display.tk_backend import TkBackend
 
     # Check if we're on a Pi with pi3d available
     try:
@@ -37,19 +37,19 @@ def test_detect_backend_returns_dev():
             f"On Pi with pi3d, expected Pi3dBackend, got {type(backend).__name__}"
         )
     else:
-        assert isinstance(backend, DevBackend), (
-            f"On non-Pi, expected DevBackend, got {type(backend).__name__}"
+        assert isinstance(backend, TkBackend), (
+            f"On non-Pi, expected TkBackend, got {type(backend).__name__}"
         )
 
 
 def test_detect_backend_env_override():
-    """Setting METIXEL_DISPLAY_BACKEND=dev should force DevBackend."""
+    """Setting METIXEL_DISPLAY_BACKEND=tk should force TkBackend."""
     import os
 
-    os.environ["METIXEL_DISPLAY_BACKEND"] = "dev"
+    os.environ["METIXEL_DISPLAY_BACKEND"] = "tk"
     from metixel.display import detect_backend
-    from metixel.display.dev_backend import DevBackend
+    from metixel.display.tk_backend import TkBackend
 
     backend = detect_backend()
-    assert isinstance(backend, DevBackend)
+    assert isinstance(backend, TkBackend)
     del os.environ["METIXEL_DISPLAY_BACKEND"]

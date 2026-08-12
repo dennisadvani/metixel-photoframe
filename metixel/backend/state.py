@@ -8,6 +8,7 @@ renderer of changes via inotify or a flag file.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -72,7 +73,10 @@ class StateManager:
         with self._lock:
             logger.info(
                 "Updating config section '%s' with %d keys: %s → %s",
-                section, len(values), list(values.keys()), str(self._config_path),
+                section,
+                len(values),
+                list(values.keys()),
+                str(self._config_path),
             )
             self._config.update(section, values)
             self._config.save(self._config_path)
@@ -168,10 +172,8 @@ class StateManager:
             total = 0
             for entry in cache_dir.rglob("*"):
                 if entry.is_file():
-                    try:
+                    with contextlib.suppress(OSError):
                         total += entry.stat().st_size
-                    except OSError:
-                        pass
             return total
         except Exception:
             logger.debug("Could not compute cache size", exc_info=True)
@@ -212,8 +214,8 @@ class StateManager:
         Returns:
             A tuple of ``(image_count, video_count)``.
         """
-        IMG_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
-        VID_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
+        IMG_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}  # noqa: N806
+        VID_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}  # noqa: N806
         try:
             from metixel.shared.config import resolve_watch_paths
 
@@ -297,9 +299,12 @@ class StateManager:
         """
         try:
             import subprocess
+
             result = subprocess.run(
                 ["vcgencmd", "measure_temp"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             # Output format: "temp=45.0'C\n"
             out = result.stdout.strip()
@@ -399,7 +404,8 @@ class StateManager:
                 self._notify_playlist_change()
                 logger.info(
                     "[SLIDESHOWQ] +%d items (total: %d)",
-                    len(new_items), len(self._playlist),
+                    len(new_items),
+                    len(self._playlist),
                 )
                 for item in new_items:
                     logger.debug(
@@ -423,7 +429,9 @@ class StateManager:
                 self._write_playlist_file()
                 self._notify_playlist_change()
                 logger.info(
-                    "[SLIDESHOWQ] -%d items (total: %d)", removed, len(self._playlist),
+                    "[SLIDESHOWQ] -%d items (total: %d)",
+                    removed,
+                    len(self._playlist),
                 )
             return removed
 
@@ -457,10 +465,14 @@ class StateManager:
                     "height": item.height,
                     "duration_seconds": item.duration_seconds,
                     "thumbnail_path": str(item.thumbnail_path) if item.thumbnail_path else None,
-                    "first_frame_path": str(item.first_frame_path) if item.first_frame_path else None,
+                    "first_frame_path": str(item.first_frame_path)
+                    if item.first_frame_path
+                    else None,
                     "last_frame_path": str(item.last_frame_path) if item.last_frame_path else None,
                     "source": item.source,
-                    "transcode_status": item.transcode_status.value if item.transcode_status else None,
+                    "transcode_status": item.transcode_status.value
+                    if item.transcode_status
+                    else None,
                 }
                 for item in self._playlist
             ]

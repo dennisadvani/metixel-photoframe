@@ -95,10 +95,12 @@ def network_connect():
     # Return the response NOW — before stopping the AP.  Once hostapd
     # is killed the client's TCP connection dies, so we must flush the
     # response while the AP is still up.
-    response = jsonify({
-        "status": "ok",
-        "message": f"Connecting to {ssid} — your device will switch networks.",
-    })
+    response = jsonify(
+        {
+            "status": "ok",
+            "message": f"Connecting to {ssid} — your device will switch networks.",
+        }
+    )
 
     # Spawn a background thread to do the actual work
     import threading
@@ -112,44 +114,51 @@ def network_connect():
         if ipc is not None and success:
             try:
                 from metixel.shared.ipc import ControlMessage
+
                 # Dismiss any PIN/welcome messages
                 ipc.send(ControlMessage(cmd="dismiss_all_messages"))
                 # Show a WiFi-connected popup with the IP address
                 from metixel.backend.network_manager import get_connection_status
+
                 status = get_connection_status()
                 ip_addr = status.get("ip", "")
                 if ip_addr and not ip_addr.startswith("192.168.42."):
-                    ipc.send(ControlMessage(
-                        cmd="show_message",
-                        args={
-                            "title": f"Connected to {ssid}",
-                            "body": (
-                                f"WiFi connected. Access Metixel at "
-                                f"http://metixel.local or http://{ip_addr}"
-                            ),
-                            "severity": "success",
-                            "duration": 60,
-                        },
-                    ))
+                    ipc.send(
+                        ControlMessage(
+                            cmd="show_message",
+                            args={
+                                "title": f"Connected to {ssid}",
+                                "body": (
+                                    f"WiFi connected. Access Metixel at "
+                                    f"http://metixel.local or http://{ip_addr}"
+                                ),
+                                "severity": "success",
+                                "duration": 60,
+                            },
+                        )
+                    )
             except Exception:
                 pass
         elif ipc is not None and not success:
             try:
                 from metixel.shared.ipc import ControlMessage
-                ipc.send(ControlMessage(
-                    cmd="show_message",
-                    args={
-                        "title": "WiFi Connection Failed",
-                        "body": (
-                            f"Could not connect to \"{ssid}\". "
-                            "Check the password and try again or the WiFi "
-                            "may use an unsupported configuration such as "
-                            "WPA3-only."
-                        ),
-                        "severity": "error",
-                        "duration": 30,
-                    },
-                ))
+
+                ipc.send(
+                    ControlMessage(
+                        cmd="show_message",
+                        args={
+                            "title": "WiFi Connection Failed",
+                            "body": (
+                                f'Could not connect to "{ssid}". '
+                                "Check the password and try again or the WiFi "
+                                "may use an unsupported configuration such as "
+                                "WPA3-only."
+                            ),
+                            "severity": "error",
+                            "duration": 30,
+                        },
+                    )
+                )
             except Exception:
                 pass
 
@@ -192,6 +201,7 @@ def ap_start():
     AP lifecycle automatically.  This endpoint exists for debugging.
     """
     from metixel.backend.network_manager import start_ap_mode
+
     ok = start_ap_mode()
     if ok:
         return jsonify({"status": "ok", "message": "AP mode started"})
@@ -207,6 +217,7 @@ def ap_stop():
     AP lifecycle automatically.  This endpoint exists for debugging.
     """
     from metixel.backend.network_manager import stop_ap_mode
+
     ok = stop_ap_mode()
     if ok:
         return jsonify({"status": "ok", "message": "AP mode stopped"})

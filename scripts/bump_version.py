@@ -51,7 +51,7 @@ def read_version() -> dict[str, Any]:
         "major": int(m.group(1)),
         "minor": int(m.group(2)),
         "patch": int(m.group(3)),
-        "pre_label": m.group(4),          # "beta", "rc", "alpha", "pre", or None
+        "pre_label": m.group(4),  # "beta", "rc", "alpha", "pre", or None
         "pre_num": int(m.group(5)) if m.group(5) else 0,
     }
 
@@ -81,57 +81,81 @@ def main() -> None:
         description="Bump Metixel Photoframe version",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Examples:\n"
-               "  bump_version.py                  # 0.1.3 → 0.1.4\n"
-               "  bump_version.py --minor           # 0.1.3 → 0.2.0\n"
-               "  bump_version.py --major           # 0.1.3 → 1.0.0\n"
-               "  bump_version.py --beta            # 0.1.3 → 0.1.3-beta.1\n"
-               "  bump_version.py --beta 3          # 0.1.3 → 0.1.3-beta.3\n"
-               "  bump_version.py --rc              # 0.1.3 → 0.1.3-rc.1\n"
-               "  bump_version.py --release         # 0.1.3-beta.1 → 0.1.3\n"
-               "  bump_version.py --set 0.2.0-beta.1\n"
-               "  bump_version.py --minor --beta 1  # 0.1.3 → 0.2.0-beta.1",
+        "  bump_version.py                  # 0.1.3 → 0.1.4\n"
+        "  bump_version.py --minor           # 0.1.3 → 0.2.0\n"
+        "  bump_version.py --major           # 0.1.3 → 1.0.0\n"
+        "  bump_version.py --beta            # 0.1.3 → 0.1.3-beta.1\n"
+        "  bump_version.py --beta 3          # 0.1.3 → 0.1.3-beta.3\n"
+        "  bump_version.py --rc              # 0.1.3 → 0.1.3-rc.1\n"
+        "  bump_version.py --release         # 0.1.3-beta.1 → 0.1.3\n"
+        "  bump_version.py --set 0.2.0-beta.1\n"
+        "  bump_version.py --minor --beta 1  # 0.1.3 → 0.2.0-beta.1",
     )
 
     # -- Bump type (mutually exclusive) ------------------------------------
     bump_group = parser.add_mutually_exclusive_group()
-    bump_group.add_argument("--major", action="store_true", help="Bump major version, reset lower segments")
+    bump_group.add_argument(
+        "--major", action="store_true", help="Bump major version, reset lower segments"
+    )
     bump_group.add_argument("--minor", action="store_true", help="Bump minor version, reset patch")
 
     # -- Pre-release channel (mutually exclusive with each other) -----------
     pre_group = parser.add_mutually_exclusive_group()
     pre_group.add_argument(
-        "--beta", nargs="?", type=int, const=-1, default=None,
+        "--beta",
+        nargs="?",
+        type=int,
+        const=-1,
+        default=None,
         metavar="N",
-        help="Set pre-release to beta.N (auto-increments if already beta; defaults to 1 if omitted)",
+        help=(
+            "Set pre-release to beta.N (auto-increments if already beta; defaults to 1 if omitted)"
+        ),
     )
     pre_group.add_argument(
-        "--rc", nargs="?", type=int, const=-1, default=None,
+        "--rc",
+        nargs="?",
+        type=int,
+        const=-1,
+        default=None,
         metavar="N",
         help="Set pre-release to rc.N (auto-increments if already rc)",
     )
     pre_group.add_argument(
-        "--alpha", nargs="?", type=int, const=-1, default=None,
+        "--alpha",
+        nargs="?",
+        type=int,
+        const=-1,
+        default=None,
         metavar="N",
         help="Set pre-release to alpha.N (auto-increments if already alpha)",
     )
     pre_group.add_argument(
-        "--pre", nargs="?", type=int, const=-1, default=None,
+        "--pre",
+        nargs="?",
+        type=int,
+        const=-1,
+        default=None,
         metavar="N",
         help="Set pre-release to pre.N (auto-increments if already pre)",
     )
     pre_group.add_argument(
-        "--release", action="store_true",
+        "--release",
+        action="store_true",
         help="Strip any pre-release suffix (release version)",
     )
 
     # -- Explicit set ------------------------------------------------------
     parser.add_argument(
-        "--set", dest="set_version", metavar="VERSION",
+        "--set",
+        dest="set_version",
+        metavar="VERSION",
         help="Set an exact version string (e.g. 0.2.0-beta.1)",
     )
 
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Print new version without writing",
     )
 
@@ -142,9 +166,7 @@ def main() -> None:
     if args.set_version:
         raw = args.set_version.strip().lstrip("v")
         # Parse with the same semver pattern used by UpdateManager
-        semver_re = re.compile(
-            r"^(\d+)\.(\d+)\.(\d+)(?:[-.](beta|rc|alpha|pre)\.?(\d+))?$"
-        )
+        semver_re = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-.](beta|rc|alpha|pre)\.?(\d+))?$")
         sm = semver_re.match(raw)
         if not sm:
             raise SystemExit(
