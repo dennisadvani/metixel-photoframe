@@ -145,6 +145,7 @@ sudo journalctl -u metixel-backend -f    # Follow logs
 | **[docs/HARDWARE.md](docs/HARDWARE.md)** | Hardware setup, wiring, and accessories |
 | [`FEATURES.md`](FEATURES.md) | Complete feature list |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Full system design & implementation roadmap |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contribution guide — dev setup, testing, code style |
 | [`docs/API.md`](docs/API.md) | REST API and IPC protocol reference |
 | [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md) | Dependency license details |
 
@@ -152,7 +153,10 @@ sudo journalctl -u metixel-backend -f    # Follow logs
 
 ## Contributing
 
-Contributions are welcome! Before diving in:
+Contributions are welcome! See **[`CONTRIBUTING.md`](CONTRIBUTING.md)** for the full
+contribution guide — dev setup, the testing workflow (Python unit tests +
+Playwright web UI tests against a live frame), code style, and how to submit
+changes. At a glance:
 
 1. Read [`ARCHITECTURE.md`](ARCHITECTURE.md) — it's the single source of truth
 2. Check the [issues](https://github.com/dennisadvani/metixel-photoframe/issues) for open tasks

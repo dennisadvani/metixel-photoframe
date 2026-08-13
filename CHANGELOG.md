@@ -5,6 +5,18 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Playwright web UI test suite** — `web-tests/` runs headless Chromium from a
+  workstation against a live frame's dashboard (nginx port 80 → Flask) to
+  verify the routes, save buttons, controls, and fields; wired in as VS Code
+  tasks. Destructive actions are opt-in (`npm run test:destructive`).
+- **`CONTRIBUTING.md`** — contribution guide covering dev setup, the testing
+  workflow (Python unit tests + Playwright web UI tests), code style, and the
+  change-submission checklist; linked from the README.
+
 ## [1.1.5-beta.5]
 
 ### Changed

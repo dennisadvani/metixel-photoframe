@@ -255,6 +255,56 @@
                 "clear": true
             },
             "problemMatcher": []
+        },
+        {
+            "label": "🌐 Install Playwright (Web UI tests)",
+            "detail": "Installs the Playwright runner + Chromium for the dashboard E2E suite (run once).",
+            "type": "shell",
+            "command": "npm install; npx playwright install chromium",
+            "options": {
+                "cwd": "${workspaceFolder}/web-tests",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "🌐 Run Web UI Tests (Playwright)",
+            "detail": "Runs the dashboard Playwright suite from this workstation against the selected Pi.",
+            "type": "shell",
+            "command": "npx playwright test",
+            "options": {
+                "cwd": "${workspaceFolder}/web-tests",
+                "env": {
+                    "METIXEL_URL": "http://${input:piHost}"
+                },
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "test"
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
         }
     ],
     "inputs": [
