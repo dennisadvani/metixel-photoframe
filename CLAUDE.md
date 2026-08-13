@@ -81,6 +81,49 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
+## Web UI Style Guide
+
+The dashboard (`metixel/backend/web/`) is a vanilla-JS SPA with a burgundy-on-white design system. **Keep styling consistent** — follow these rules for any UI change.
+
+### Icons — monochrome only
+
+- Use **Google Material Symbols** (`material-symbols-outlined` font, already loaded in `index.html`) for ALL icons.
+- **NEVER use coloured emoji as UI icons** (`✅`, `❌`, `⚠`, `⚠️`, `🔒`, `⏹`, `🖼`, …). Replace them with a Material Symbol or plain text.
+- Standard pattern:
+  ```html
+  <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span>
+  ```
+- Colour icons with `style="color:var(--text-muted)"` (or another token) — Material Symbols inherit `currentColor`.
+- **Captive portal** (`captive.html`) does NOT load the Material Symbols font — use small inline SVG icons with `fill="currentColor"` there (see the lock / check-circle examples).
+
+### Status colours — green is background-only
+
+| State | Colour |
+|---|---|
+| Success **text** | `var(--text)` (white) — **never** `var(--success)` |
+| Error text | `var(--danger)` (red) |
+| Cancelled / neutral text | `var(--text-muted)` |
+| Warning text | `#f0a030` (amber — no token exists) |
+| Green `var(--success)` / `#059669` | backgrounds/accents ONLY: Connected button, toast background, progress-bar fill, connected-row border/tint |
+
+### Use design tokens
+
+Prefer CSS variables over raw hex: `var(--primary)` (brand burgundy `#8B1A2B`), `var(--text)`, `var(--text-secondary)`, `var(--text-muted)`, `var(--danger)`, `var(--success)`, `var(--border)`, `var(--bg)`, `var(--surface)`. The only raw colour allowed in text is the amber `#f0a030` (no token).
+
+### Mobile (max-width 480px) button behaviour
+
+The mobile block forces `button { width: 100% }`. Small inline buttons must keep their natural width — add `btn--sm` / `btn-browse` classes or scope the rule to `.watch-path-row button`. Never let an inline action (browse, fetch, set, add, remove) stretch full-width and crush a form row.
+
+### Cache-busting
+
+When editing `dashboard.css` or `dashboard.js`, **bump the `?v=` query** on both the stylesheet `<link>` and the `<script src>` in `index.html` (e.g. `dashboard.css?v=10` → `v=11`). Otherwise browsers serve stale assets.
+
+### General
+
+- Keep the bundle under 200KB, no frameworks.
+- Settings live in `.card` blocks with an `<h2>` title; fields use `.form-group` + `.form-label`; primary save buttons are `.btn--primary`.
+- The sync task mirrors only `src/metixel/` — UI files under `src/metixel/backend/web/` ARE included, but `tests/` are not (copy separately).
+
 ## Build & Run Commands
 
 ```bash

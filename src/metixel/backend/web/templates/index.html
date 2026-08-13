@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=10">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=11">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -457,18 +457,26 @@
 
                     <h3 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin:0 0 0.6rem 0;text-transform:uppercase;letter-spacing:0.04em">Sync Settings</h3>
                     <div class="form-group">
-                        <span class="form-label">Album</span>
+                        <span class="form-label" style="align-self:flex-start">Albums</span>
                         <div style="flex:1">
-                            <input type="text" id="album-search" placeholder="Filter album dropdown…" style="display:none;width:100%;padding:0.3rem 0.5rem;margin-bottom:0.35rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
-                            <div style="display:flex;gap:0.5rem;align-items:center">
-                                <select id="cfg-immich-album" style="flex:1;max-width:440px">
-                                    <option value="">— Select an album —</option>
-                                </select>
+                            <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.35rem">
+                                <input type="text" id="album-search" placeholder="Filter albums…" style="flex:1;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
                                 <button id="btn-fetch-albums" class="btn--sm btn--secondary" style="white-space:nowrap;margin-top:0">Fetch Albums</button>
+                            </div>
+                            <select id="album-picker" size="8" style="width:100%;max-width:440px;padding:0.3rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
+                                <option value="">— Fetch albums to populate —</option>
+                            </select>
+                            <div style="margin-top:0.35rem">
+                                <button id="btn-add-album" class="btn--sm btn--primary" style="margin-top:0" disabled>+ Add Selected</button>
+                                <span id="album-picker-count" style="font-size:0.75rem;color:var(--text-muted);margin-left:0.4rem"></span>
+                            </div>
+                            <p class="hint" style="margin-top:0.35rem">Fetch the album list, then select one and click <strong>Add Selected</strong>. Each album syncs into its own <code>album_&lt;id&gt;</code> folder.</p>
+                            <div style="margin-top:0.6rem">
+                                <span class="form-label" style="display:block;margin-bottom:0.3rem">Synced Albums</span>
+                                <ul id="synced-albums-list" style="list-style:none;padding:0;margin:0"></ul>
                             </div>
                         </div>
                     </div>
-                    <p class="hint">After saving settings, click <strong>Fetch Albums</strong> to populate the list.</p>
                     <div class="form-group">
                         <span class="form-label">Sync Directory</span>
                         <div style="display:flex;gap:0.4rem;align-items:center">
@@ -509,6 +517,7 @@
                     <div id="immich-sync-status" style="margin-top:0.8rem;padding:0.6rem;background:var(--bg);border-radius:4px;font-size:0.82rem;display:none">
                         <strong>Last Sync:</strong> <span id="sync-status-text">—</span>
                         <div id="sync-status-detail" style="margin-top:0.3rem;color:var(--text-muted)"></div>
+                        <div id="sync-albums" style="margin-top:0.4rem"></div>
                         <ul id="sync-errors" style="margin:0.3rem 0 0 1.2rem;padding:0;font-size:0.78rem;color:var(--danger);display:none"></ul>
                     </div>
                 </div>
@@ -822,6 +831,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script src="/static/js/dashboard.js?v=12"></script>
+    <script src="/static/js/dashboard.js?v=14"></script>
 </body>
 </html>

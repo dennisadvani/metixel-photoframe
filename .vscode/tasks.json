@@ -109,7 +109,7 @@
         {
             "label": "Run Tests",
             "type": "shell",
-            "command": "cd /opt/metixel && python -m pytest tests/ -v",
+            "command": "cd /opt/metixel && python -m pytest tests/ -q --no-cov",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",

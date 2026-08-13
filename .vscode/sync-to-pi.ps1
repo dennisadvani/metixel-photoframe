@@ -21,17 +21,23 @@ $RemoteTemp = "/tmp/metixel-sync"
 $ScpExe = "C:\Windows\System32\OpenSSH\scp.exe"
 $SshExe = "C:\Windows\System32\OpenSSH\ssh.exe"
 
+# SSH options shared by every remote call:
+#  - StrictHostKeyChecking=accept-new: no interactive host-key prompt
+#  - ConnectTimeout: bounds the TCP handshake (not the whole command)
+#  - ServerAliveInterval/CountMax: detect a dead connection ~60s and fail
+#    instead of hanging forever on a dropped link.
+$SshBase = @(
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=10",
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4"
+)
+
 Write-Host "=== Syncing metixel/ to ${PiUser}@${PiHost}:${RemotePath} ===" -ForegroundColor Cyan
 
 # Pre-flight: accept host key silently and verify SSH works
-Write-Host "[0/2] Checking SSH connectivity..." -ForegroundColor Gray
-$sshArgs = @(
-    "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ConnectTimeout=5",
-    "${PiUser}@${PiHost}",
-    "echo ok"
-)
-$sshResult = & $SshExe @sshArgs 2>&1
+Write-Host "[0/4] Checking SSH connectivity..." -ForegroundColor Gray
+$sshResult = & $SshExe @SshBase -o "ConnectTimeout=5" "${PiUser}@${PiHost}" "echo ok" 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Cannot SSH to ${PiUser}@${PiHost}. Is the Pi online?" -ForegroundColor Red
     Write-Host "  Details: $sshResult" -ForegroundColor Red
@@ -40,8 +46,9 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "  SSH connection OK." -ForegroundColor Gray
 
 # Verify passwordless sudo is available (needed for the final rsync into
-# the root-owned install tree).
-& $SshExe -o "StrictHostKeyChecking=accept-new" -o "ConnectTimeout=10" "${PiUser}@${PiHost}" "sudo -n true" 2>&1 | Out-Null
+# the root-owned install tree).  Redirect with >$null (NOT | Out-Null, which
+# can hang on native commands) so $LASTEXITCODE stays reliable.
+& $SshExe @SshBase "${PiUser}@${PiHost}" "sudo -n true" >$null 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Passwordless sudo is required on the Pi (sudo -n true failed)." -ForegroundColor Red
     Write-Host "  The pi user on Raspberry Pi OS has this by default. Fix with: sudo visudo" -ForegroundColor Red
@@ -49,7 +56,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Prepare the remote staging dir (pi-writable; cleaned before each sync).
-& $SshExe -o "StrictHostKeyChecking=accept-new" -o "ConnectTimeout=10" "${PiUser}@${PiHost}" "rm -rf ${RemoteTemp} && mkdir -p ${RemoteTemp}" 2>&1 | Out-Null
+& $SshExe @SshBase "${PiUser}@${PiHost}" "rm -rf ${RemoteTemp} && mkdir -p ${RemoteTemp}" >$null 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Could not prepare remote staging dir ${RemoteTemp}." -ForegroundColor Red
     exit 1
@@ -61,7 +68,7 @@ if (Test-Path $TempSync) {
 }
 
 # Step 2: Robocopy mirror to temp, excluding cache/git files
-Write-Host "[1/2] Mirroring to temp (excluding caches)..." -ForegroundColor Gray
+Write-Host "[1/4] Mirroring to temp (excluding caches)..." -ForegroundColor Gray
 $robocopyArgs = @(
     $LocalMetixel,
     $TempSync,
@@ -95,12 +102,14 @@ $filesCopied = ($robocopyResult | Select-String -Pattern "^\s*Files\s*:\s*(\d+)"
 Write-Host "  Done. Files synced to temp: $filesCopied" -ForegroundColor Gray
 
 # Step 3: scp to the Pi's staging dir (with host-key auto-accept)
-Write-Host "[2/3] Copying to Pi staging dir..." -ForegroundColor Gray
+Write-Host "[2/4] Copying to Pi staging dir..." -ForegroundColor Gray
 $scpArgs = @(
     "-r",
     "-q",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", "ConnectTimeout=10",
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4",
     "$TempSync",
     "${PiUser}@${PiHost}:${RemoteTemp}/"
 )
@@ -112,8 +121,10 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Step 4: sudo rsync staging -> install dir (handles root-owned files)
-Write-Host "[3/3] Installing to ${RemotePath}metixel/ (sudo rsync)..." -ForegroundColor Gray
-& $SshExe -o "StrictHostKeyChecking=accept-new" -o "ConnectTimeout=15" "${PiUser}@${PiHost}" "sudo rsync -a --delete ${RemoteTemp}/metixel/ ${RemotePath}metixel/" 2>&1 | Out-Null
+# Output is streamed (not silenced) so progress is visible.  ServerAlive
+# ensures a dropped connection fails rather than hanging.
+Write-Host "[3/4] Installing to ${RemotePath}metixel/ (sudo rsync)..." -ForegroundColor Gray
+& $SshExe @SshBase "${PiUser}@${PiHost}" "sudo rsync -a --delete ${RemoteTemp}/metixel/ ${RemotePath}metixel/"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: remote rsync failed with exit code $LASTEXITCODE" -ForegroundColor Red
     exit $LASTEXITCODE
@@ -121,6 +132,6 @@ if ($LASTEXITCODE -ne 0) {
 
 # Step 5: Cleanup local + remote temp
 Remove-Item -Recurse -Force $TempSync -ErrorAction SilentlyContinue
-& $SshExe -o "StrictHostKeyChecking=accept-new" "${PiUser}@${PiHost}" "rm -rf ${RemoteTemp}" 2>&1 | Out-Null
+& $SshExe @SshBase "${PiUser}@${PiHost}" "rm -rf ${RemoteTemp}" >$null 2>&1
 
-Write-Host "=== Sync complete! ===" -ForegroundColor Green
+Write-Host "[4/4] Sync complete!" -ForegroundColor Green

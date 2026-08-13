@@ -1626,7 +1626,7 @@
     var _syncBound = false;
     var _syncPollTimer = null;
     var _syncWasActive = false;
-    var _albumData = null;  // Tracks if we've seen an active sync for auto-stop
+    var _albumData = null;  // Cached album list from GET /api/immich/albums
 
     function startSyncPolling() {
         if (_syncPollTimer) return;
@@ -1878,24 +1878,79 @@
         }
     }
 
-    function _populateAlbumSelect(albums, filter) {
-        var select = document.getElementById("cfg-immich-album");
+    function _populateAlbumPicker(albums, filter) {
+        var select = document.getElementById("album-picker");
         if (!select) return;
-        var configuredAlbum = select.getAttribute("data-saved") || "";
         var q = (filter || "").toLowerCase().trim();
-        var html = '<option value="">— Select an album —</option>';
+        var html = "";
         var count = 0;
         albums.forEach(function (album) {
-            if (q && album.name.toLowerCase().indexOf(q) === -1) return;
-            var selected = (album.name === configuredAlbum) ? " selected" : "";
-            html += '<option value="' + escapeHtml(album.name) + '"' + selected + '>'
+            if (q && (album.name || "").toLowerCase().indexOf(q) === -1) return;
+            html += '<option value="' + escapeHtml(album.id) + '">'
                 + escapeHtml(album.name) + ' (' + album.assetCount + ' assets)</option>';
             count++;
         });
-        if (count === 0 && q) {
-            html += '<option value="" disabled>No matching albums</option>';
+        if (count === 0) {
+            html = '<option value="" disabled>' + (q ? "No matching albums" : "— No albums found —") + '</option>';
         }
         select.innerHTML = html;
+        select.disabled = count === 0;
+
+        var countEl = document.getElementById("album-picker-count");
+        if (countEl) countEl.textContent = count + " album(s)";
+
+        var addBtn = document.getElementById("btn-add-album");
+        if (addBtn) addBtn.disabled = count === 0;
+    }
+
+    /** Render the "Synced Albums" list with a Remove button per album. */
+    function _renderSyncedAlbums(albums) {
+        var list = document.getElementById("synced-albums-list");
+        if (!list) return;
+        albums = albums || [];
+        if (albums.length === 0) {
+            list.innerHTML = '<li style="font-size:0.78rem;color:var(--text-muted)">No albums synced yet — add one above.</li>';
+            return;
+        }
+        var html = "";
+        albums.forEach(function (album) {
+            var id = escapeHtml(album.id || "");
+            var name = escapeHtml(album.name || "Untitled");
+            html += '<li class="synced-album" data-id="' + id + '" style="display:flex;align-items:center;gap:0.5rem;padding:0.35rem 0.5rem;border:1px solid var(--border);border-radius:6px;margin-bottom:0.3rem">'
+                + '<span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted);flex-shrink:0">photo_library</span>'
+                + '<div style="flex:1;min-width:0">'
+                + '<div style="font-size:0.82rem">' + name + '</div>'
+                + '<div style="font-size:0.68rem;color:var(--text-muted);word-break:break-all">album_' + id + '</div>'
+                + '</div>'
+                + '<button type="button" class="btn-remove-album btn--sm btn--danger" data-id="' + id + '" data-name="' + name + '" title="Remove album and delete its local files" style="margin:0;flex-shrink:0">Remove</button>'
+                + '</li>';
+        });
+        list.innerHTML = html;
+
+        // Bind remove handlers
+        list.querySelectorAll(".btn-remove-album").forEach(function (btn) {
+            btn.addEventListener("click", async function () {
+                var albumId = btn.getAttribute("data-id");
+                var albumName = btn.getAttribute("data-name");
+                if (!confirm('Remove "' + albumName + '" from sync and delete its local folder (album_' + albumId + ')?')) return;
+                var result = await apiPost("/immich/albums/remove", { id: albumId });
+                if (result && result.status === "ok") {
+                    showToast("Removed " + albumName, "success");
+                    _loadSyncedAlbums();
+                    if (typeof loadMedia === "function") loadMedia();
+                } else {
+                    showToast("Failed to remove album", "error");
+                }
+            });
+        });
+    }
+
+    /** Load the configured albums from config and render the synced list. */
+    async function _loadSyncedAlbums() {
+        var config = await apiGet("/config");
+        if (!config) return;
+        var albums = (config.sync && config.sync.immich && config.sync.immich.albums) || [];
+        _renderSyncedAlbums(albums);
     }
 
     async function loadSync() {
@@ -1911,26 +1966,8 @@
         setChecked("cfg-immich-strict", imm.strict_sync === true);
         _toggleImmichInterval(imm.enabled || false);
 
-        // Preselect the configured album (if any) in the dropdown
-        var albumSelect = document.getElementById("cfg-immich-album");
-        var configuredAlbum = imm.album_name || "";
-        if (albumSelect && configuredAlbum) {
-            var exists = false;
-            for (var i = 0; i < albumSelect.options.length; i++) {
-                if (albumSelect.options[i].value === configuredAlbum) {
-                    albumSelect.selectedIndex = i;
-                    exists = true;
-                    break;
-                }
-            }
-            if (!exists && configuredAlbum) {
-                var opt = document.createElement("option");
-                opt.value = configuredAlbum;
-                opt.textContent = configuredAlbum + " (saved)";
-                opt.selected = true;
-                albumSelect.appendChild(opt);
-            }
-        }
+        // Render the configured (synced) albums list
+        await _loadSyncedAlbums();
 
         // Refresh sync status
         await refreshSyncStatus();
@@ -1982,45 +2019,54 @@
 
             // -- Fetch Albums --
             document.getElementById("btn-fetch-albums")?.addEventListener("click", async () => {
-                var select = document.getElementById("cfg-immich-album");
-                if (!select) return;
-                select.disabled = true;
-                select.innerHTML = '<option value="">Loading…</option>';
+                var picker = document.getElementById("album-picker");
+                if (!picker) return;
+                picker.disabled = true;
+                picker.innerHTML = '<option value="">Loading…</option>';
 
                 var data = await apiGet("/immich/albums");
                 if (!data || data.error) {
-                    select.innerHTML = '<option value="">— Failed to load —</option>';
-                    select.disabled = false;
+                    picker.innerHTML = '<option value="">— Failed to load —</option>';
+                    picker.disabled = false;
                     showToast("Failed to fetch albums: " + ((data && data.error) || "Network error"), "error", 5000);
                     return;
                 }
 
-                // Store albums for search filtering
                 _albumData = data;
-                _populateAlbumSelect(data);
-                select.disabled = false;
-
-                // Show search input
-                var searchInput = document.getElementById("album-search");
-                if (searchInput) { searchInput.style.display = ""; searchInput.value = ""; }
+                _populateAlbumPicker(data);
                 showToast("Loaded " + data.length + " album(s)", "info");
             });
 
             // Album search filter
             document.getElementById("album-search")?.addEventListener("input", function () {
-                if (_albumData) _populateAlbumSelect(_albumData, this.value);
+                if (_albumData) _populateAlbumPicker(_albumData, this.value);
+            });
+
+            // -- Add selected album --
+            document.getElementById("btn-add-album")?.addEventListener("click", async () => {
+                var picker = document.getElementById("album-picker");
+                if (!picker || !picker.value) return;
+                var album = null;
+                for (var i = 0; i < _albumData.length; i++) {
+                    if (_albumData[i].id === picker.value) { album = _albumData[i]; break; }
+                }
+                if (!album) return;
+                var result = await apiPost("/immich/albums/add", { id: album.id, name: album.name });
+                if (result && result.status === "ok") {
+                    showToast("Added \"" + album.name + "\" to sync", "success");
+                    await _loadSyncedAlbums();
+                } else {
+                    showToast("Failed to add album", "error");
+                }
             });
 
             // -- Save Immich Settings --
             document.getElementById("btn-save-immich")?.addEventListener("click", async () => {
-                var albumSelect = document.getElementById("cfg-immich-album");
-                var albumName = albumSelect ? albumSelect.value : "";
                 var result = await apiPut("/config/sync", {
                     immich: {
                         enabled: document.getElementById("cfg-immich-enabled").checked,
                         server_url: document.getElementById("cfg-immich-url").value,
                         api_key: document.getElementById("cfg-immich-key").value,
-                        album_name: albumName,
                         sync_dir: document.getElementById("cfg-immich-sync-dir").value,
                         strict_sync: document.getElementById("cfg-immich-strict").checked,
                         poll_interval_seconds: Math.round(parseFloat(document.getElementById("cfg-immich-interval").value) * 3600) || 3600,
@@ -2028,8 +2074,6 @@
                 });
                 if (result) {
                     showToast("Immich settings saved!", "success");
-                    // Remember the selected album for future fetches
-                    if (albumSelect) albumSelect.setAttribute("data-saved", albumName);
                 } else {
                     showToast("Failed to save Immich settings", "error");
                 }
@@ -2040,14 +2084,7 @@
                 var btn = document.getElementById("btn-sync-now");
                 if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
 
-                // Optionally override album from the picker
-                var albumSelect = document.getElementById("cfg-immich-album");
-                var body = {};
-                if (albumSelect && albumSelect.value) {
-                    body.album_name = albumSelect.value;
-                }
-
-                var result = await apiPost("/immich/sync", body);
+                var result = await apiPost("/immich/sync", {});
                 if (result && result.status === "started") {
                     showToast("Sync started — check status below", "info");
                     _syncWasActive = true;  // Set immediately — sync may finish before first poll
@@ -2170,12 +2207,38 @@
 
         // Summary line
         var parts = [];
-        if (s.total_remote > 0) parts.push(s.total_remote + " assets in album");
+        if (s.total_remote > 0) parts.push(s.total_remote + " assets");
         if (s.downloaded > 0) parts.push(s.downloaded + " downloaded");
         if (s.skipped > 0) parts.push(s.skipped + " skipped");
         if (s.deleted > 0) parts.push(s.deleted + " deleted");
         if (s.duration_seconds) parts.push("took " + s.duration_seconds + "s");
         detailEl.textContent = parts.join(" · ");
+
+        // Per-album rows
+        var albumsEl = document.getElementById("sync-albums");
+        if (albumsEl) {
+            var perAlbum = s.albums || [];
+            if (perAlbum.length > 0) {
+                var ah = '<div style="font-weight:600;font-size:0.75rem;color:var(--text-muted);margin-bottom:0.2rem;text-transform:uppercase;letter-spacing:0.04em">Albums</div>';
+                perAlbum.forEach(function (a) {
+                    var statusTxt = a.success ? "OK" : (a.errors && a.errors.length ? a.errors[0] : "Error");
+                    var color = a.success ? "var(--text)" : "#f0a030";
+                    var counts = [];
+                    if (a.total_remote > 0) counts.push(a.total_remote + " remote");
+                    if (a.downloaded > 0) counts.push(a.downloaded + " down");
+                    if (a.deleted > 0) counts.push(a.deleted + " del");
+                    ah += '<div style="display:flex;align-items:center;gap:0.4rem;padding:0.25rem 0;border-bottom:1px solid var(--border)">'
+                        + '<span class="material-symbols-outlined" style="font-size:0.9rem;color:var(--text-muted)">photo_library</span>'
+                        + '<span style="flex:1;font-size:0.78rem">' + escapeHtml(a.album_name || "?") + '</span>'
+                        + '<span style="font-size:0.7rem;color:var(--text-muted)">' + counts.join(" · ") + '</span>'
+                        + '<span style="font-size:0.72rem;color:' + color + '">' + escapeHtml(statusTxt) + '</span>'
+                        + '</div>';
+                });
+                albumsEl.innerHTML = ah;
+            } else {
+                albumsEl.innerHTML = "";
+            }
+        }
 
         // Error list (excluding Cancelled which is shown in the status line)
         if (errorsEl) {

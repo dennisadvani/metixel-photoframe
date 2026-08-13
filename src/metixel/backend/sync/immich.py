@@ -54,19 +54,44 @@ _SYNC_CANCEL_FILE = "/run/metixel/immich_sync_cancel"
 
 
 @dataclass
-class SyncResult:
-    """Outcome of a single sync cycle."""
+class AlbumSyncResult:
+    """Outcome of syncing a single album."""
 
-    started_at: float = 0.0
-    finished_at: float = 0.0
-    album_name: str = ""
     album_id: str = ""
+    album_name: str = ""
     total_remote: int = 0
     downloaded: int = 0
     skipped: int = 0
     deleted: int = 0
     errors: list[str] = field(default_factory=list)
     success: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "album_id": self.album_id,
+            "album_name": self.album_name,
+            "total_remote": self.total_remote,
+            "downloaded": self.downloaded,
+            "skipped": self.skipped,
+            "deleted": self.deleted,
+            "errors": self.errors,
+            "success": self.success,
+        }
+
+
+@dataclass
+class SyncResult:
+    """Outcome of a single sync cycle (aggregated across all albums)."""
+
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    total_remote: int = 0
+    downloaded: int = 0
+    skipped: int = 0
+    deleted: int = 0
+    errors: list[str] = field(default_factory=list)
+    success: bool = False
+    albums: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def duration_seconds(self) -> float:
@@ -77,14 +102,13 @@ class SyncResult:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "duration_seconds": round(self.duration_seconds, 1),
-            "album_name": self.album_name,
-            "album_id": self.album_id,
             "total_remote": self.total_remote,
             "downloaded": self.downloaded,
             "skipped": self.skipped,
             "deleted": self.deleted,
             "errors": self.errors,
             "success": self.success,
+            "albums": self.albums,
         }
 
 
@@ -119,22 +143,33 @@ class ImmichSyncer:
         """Main sync loop — polls Immich at the configured interval."""
         self._running = True
         logger.info(
-            "Immich syncer started (server: %s, interval: %ds, strict: %s)",
+            "Immich syncer started (server: %s, interval: %ds, strict: %s, albums: %d)",
             self._base_url,
             self._poll_interval,
             self._strict_sync,
+            len(self._albums),
         )
+
+        # One-time migration from the legacy single-album flat layout.
+        # Attempt even if sync is currently disabled so existing root files
+        # get moved into album_<id>/ folders without requiring a manual sync.
+        try:
+            self._migrate_legacy_layout()
+        except Exception:  # noqa: BLE001
+            logger.exception("Legacy layout migration attempt failed at startup")
+        # Re-read config — migration may have rewritten the albums list.
+        self._reload_config()
 
         while self._running:
             try:
                 self._reload_config()
-                if self._enabled and self._album_name:
+                if self._enabled and self._albums:
                     if self._syncing:
                         logger.debug("Previous sync still in progress — skipping this cycle")
                     else:
                         self._sync()
                 else:
-                    logger.debug("Immich sync disabled or no album configured — skipping cycle")
+                    logger.debug("Immich sync disabled or no albums configured — skipping cycle")
             except requests.exceptions.ConnectionError:
                 logger.warning("Immich server unreachable — will retry")
             except requests.exceptions.Timeout:
@@ -212,6 +247,9 @@ class ImmichSyncer:
         self._enabled: bool = immich_cfg.get("enabled", False)
         self._base_url: str = immich_cfg["server_url"].rstrip("/")
         self._api_key: str = immich_cfg["api_key"]
+        # Multi-album list of {id, name}.  ``album_name`` remains supported
+        # only as a legacy key for one-time migration (see _migrate_legacy_layout).
+        self._albums: list[dict[str, Any]] = list(immich_cfg.get("albums") or [])
         self._album_name: str = immich_cfg.get("album_name", "")
         self._strict_sync: bool = immich_cfg.get("strict_sync", False)
         self._poll_interval: int = immich_cfg.get("poll_interval_seconds", 3600)
@@ -262,7 +300,12 @@ class ImmichSyncer:
             self._clear_progress()
 
     def _do_sync(self) -> SyncResult:
-        """Internal sync implementation — caller must hold the logical lock."""
+        """Internal sync implementation — caller must hold the logical lock.
+
+        Syncs every configured album sequentially into its own
+        ``album_<id>`` folder under the sync directory, then aggregates
+        the per-album results.
+        """
         result = SyncResult(started_at=time.time())
         logger.info("=== Immich sync cycle starting ===")
         self._write_progress("starting", 0, 0, "")
@@ -275,165 +318,61 @@ class ImmichSyncer:
             self._persist_result(result)
             return result
 
-        if not self._album_name:
-            result.errors.append("No album name configured")
+        # 2. One-time migration from the old single-album flat layout
+        self._migrate_legacy_layout()
+        # Re-read config — migration may have rewritten the albums list.
+        self._reload_config()
+
+        albums = list(self._albums)
+        if not albums:
+            result.errors.append("No albums configured")
             result.finished_at = time.time()
-            self._write_progress("error", 0, 0, "No album name configured")
+            self._write_progress("error", 0, 0, "No albums configured")
             self._persist_result(result)
             return result
 
-        # 2. Resolve album name → ID
-        self._write_progress("resolving_album", 0, 0, self._album_name)
-        try:
-            album_id = self._resolve_album_id(self._album_name)
-        except Exception as e:
-            logger.error("Failed to resolve album '%s': %s", self._album_name, e)
-            result.errors.append(f"Album resolution failed: {e}")
-            result.finished_at = time.time()
-            self._write_progress("error", 0, 0, str(e))
-            self._persist_result(result)
-            return result
+        album_total = len(albums)
+        logger.info("Syncing %d album(s)", album_total)
 
-        if not album_id:
-            result.errors.append(f"Album '{self._album_name}' not found on server")
-            result.finished_at = time.time()
-            self._write_progress("error", 0, 0, f"Album '{self._album_name}' not found")
-            self._persist_result(result)
-            return result
-
-        result.album_name = self._album_name
-        result.album_id = album_id
-        logger.info("Resolved album '%s' → id=%s", self._album_name, album_id)
-
-        if self._cancel_requested:
-            result.errors.append("Cancelled by user")
-            result.finished_at = time.time()
-            self._write_progress("cancelled", 0, 0, "")
-            self._persist_result(result)
-            return result
-
-        # 3. Fetch all remote assets
-        self._write_progress("fetching_assets", 0, 0, "")
-        try:
-            remote_assets = self._fetch_album_assets(album_id)
-        except Exception as e:
-            logger.error("Failed to fetch assets for album %s: %s", album_id, e)
-            result.errors.append(f"Asset fetch failed: {e}")
-            result.finished_at = time.time()
-            self._write_progress("error", 0, 0, str(e))
-            self._persist_result(result)
-            return result
-
-        result.total_remote = len(remote_assets)
-        logger.info("Remote album has %d assets", result.total_remote)
-
-        if self._cancel_requested:
-            result.errors.append("Cancelled by user")
-            result.finished_at = time.time()
-            self._write_progress("cancelled", 0, 0, "")
-            self._persist_result(result)
-            return result
-
-        # 4. Build expected local filenames
-        remote_map: dict[str, dict[str, Any]] = {}
-        for asset in remote_assets:
-            asset_id = asset["id"]
-            ext = self._extract_extension(asset)
-            filename = f"immich_{asset_id}{ext}"
-            remote_map[filename] = asset
-
-        # 5. Scan local sync directory
-        self._sync_dir.mkdir(parents=True, exist_ok=True)
-        local_files: set[str] = set()
-        try:
-            for entry in self._sync_dir.iterdir():
-                if entry.is_file():
-                    local_files.add(entry.name)
-        except OSError as e:
-            logger.error("Cannot read sync directory %s: %s", self._sync_dir, e)
-            result.errors.append(f"Local directory read error: {e}")
-            result.finished_at = time.time()
-            self._write_progress("error", 0, 0, str(e))
-            self._persist_result(result)
-            return result
-
-        # 6. Determine downloads needed
-        to_download: set[str] = set(remote_map.keys()) - local_files
-        download_total = len(to_download)
-        logger.info(
-            "Local: %d files | Remote: %d assets | To download: %d",
-            len(local_files),
-            result.total_remote,
-            download_total,
-        )
-
-        # 7. Download new assets
-        downloaded = 0
-        for filename in sorted(to_download):
+        # 3. Sync each album
+        for index, album in enumerate(albums):
             if self._cancel_requested:
                 result.errors.append("Cancelled by user")
-                logger.info("Sync cancelled — %d/%d downloaded", downloaded, download_total)
                 break
 
-            asset = remote_map[filename]
-            self._write_progress("downloading", download_total, downloaded, filename)
-            try:
-                self._download_asset(asset, filename)
-                result.downloaded += 1
-                downloaded += 1
-            except Exception as e:
-                logger.error("Failed to download %s: %s", filename, e)
-                result.errors.append(f"Download failed for {filename}: {e}")
-                self._write_progress(
-                    "downloading", download_total, downloaded, f"{filename} — FAILED"
-                )
-
-        result.skipped = (
-            result.total_remote
-            - result.downloaded
-            - len([e for e in result.errors if e.startswith("Download failed")])
-        )
-
-        if self._cancel_requested and "Cancelled" not in " ".join(result.errors):
-            result.errors.append("Cancelled by user")
-
-        # 8. Strict sync: delete local files not in remote
-        if self._strict_sync and not self._cancel_requested:
-            to_delete = local_files - set(remote_map.keys())
-            if to_delete:
-                logger.info("Strict sync: %d local files to delete", len(to_delete))
-                self._write_progress("cleaning", len(to_delete), 0, "")
-            deleted = 0
-            for filename in sorted(to_delete):
-                if self._cancel_requested:
-                    break
-                file_path = self._sync_dir / filename
-                try:
-                    file_path.unlink()
-                    logger.info("Deleted (not in album): %s", filename)
-                    result.deleted += 1
-                    deleted += 1
-                    self._write_progress("cleaning", len(to_delete), deleted, filename)
-                except OSError as e:
-                    logger.error("Failed to delete %s: %s", filename, e)
-                    result.errors.append(f"Delete failed for {filename}: {e}")
-        elif not self._strict_sync:
-            logger.debug(
-                "Pull-only mode — %d local files not in album are preserved",
-                len(local_files - set(remote_map.keys())),
+            album_name = album.get("name", "")
+            self._write_progress(
+                "syncing_album",
+                album_total,
+                index + 1,
+                album_name,
+                album_name=album_name,
+                album_index=index + 1,
+                album_total=album_total,
             )
+            album_result = self._sync_one_album(album, index + 1, album_total)
+            result.albums.append(album_result.to_dict())
+            result.total_remote += album_result.total_remote
+            result.downloaded += album_result.downloaded
+            result.skipped += album_result.skipped
+            result.deleted += album_result.deleted
+            result.errors.extend(album_result.errors)
 
-        result.success = len(result.errors) == 0
+        if not result.albums:
+            result.errors.append("Cancelled before any album synced")
+
+        result.success = len(result.errors) == 0 and bool(result.albums)
         result.finished_at = time.time()
 
         logger.info(
             "=== Immich sync complete: %d downloaded, %d skipped, "
-            "%d deleted, %d errors (%.1fs) ===",
+            "%d deleted, %d errors (%.1fs) across %d album(s) ===",
             result.downloaded,
             result.skipped,
             result.deleted,
             len(result.errors),
             result.duration_seconds,
+            len(result.albums),
         )
 
         self._last_result = result
@@ -441,6 +380,239 @@ class ImmichSyncer:
         phase = "cancelled" if "Cancelled" in " ".join(result.errors) else "complete"
         self._write_progress(phase, 0, 0, "")
         return result
+
+    def _sync_one_album(
+        self, album: dict[str, Any], index: int, total: int
+    ) -> AlbumSyncResult:
+        """Sync a single album into its ``album_<id>`` folder.
+
+        Returns an ``AlbumSyncResult``.  A missing/deleted album is
+        reported as an error but local files are never removed (safe
+        fallback — the user decides whether to remove the album).
+        """
+        res = AlbumSyncResult(
+            album_id=album.get("id", ""),
+            album_name=album.get("name", ""),
+        )
+        album_name = res.album_name
+        album_id = res.album_id
+
+        # Resolve the ID if missing (e.g. a pending legacy entry).
+        if not album_id:
+            try:
+                album_id = self._resolve_album_id(album_name) or ""
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to resolve album '%s': %s", album_name, e)
+                res.errors.append(f"Album resolution failed: {e}")
+                res.success = False
+                return res
+            res.album_id = album_id
+
+        if not album_id:
+            # Album deleted/unavailable on the server — keep local files (option A).
+            logger.warning("Album '%s' not found on server — local files kept", album_name)
+            res.errors.append(f"Album '{album_name}' not found on server — local files kept")
+            res.success = False
+            return res
+
+        if self._cancel_requested:
+            res.errors.append("Cancelled by user")
+            return res
+
+        # Fetch all remote assets
+        self._write_progress(
+            "fetching_assets", total, index, album_name,
+            album_name=album_name, album_index=index, album_total=total,
+        )
+        try:
+            remote_assets = self._fetch_album_assets(album_id)
+        except Exception as e:  # noqa: BLE001
+            logger.error("Failed to fetch assets for album %s: %s", album_id, e)
+            res.errors.append(f"Asset fetch failed for '{album_name}': {e}")
+            res.success = False
+            return res
+
+        res.total_remote = len(remote_assets)
+        logger.info("Album '%s' (%s) has %d assets", album_name, album_id, res.total_remote)
+
+        if self._cancel_requested:
+            res.errors.append("Cancelled by user")
+            return res
+
+        # Build expected local filenames
+        remote_map: dict[str, dict[str, Any]] = {}
+        for asset in remote_assets:
+            filename = f"immich_{asset['id']}{self._extract_extension(asset)}"
+            remote_map[filename] = asset
+
+        # Per-album folder: <sync_dir>/album_<id>/
+        album_dir = self._sync_dir / f"album_{album_id}"
+        album_dir.mkdir(parents=True, exist_ok=True)
+
+        # Scan the album folder (files directly inside it only)
+        local_files: set[str] = set()
+        try:
+            for entry in album_dir.iterdir():
+                if entry.is_file():
+                    local_files.add(entry.name)
+        except OSError as e:
+            logger.error("Cannot read album directory %s: %s", album_dir, e)
+            res.errors.append(f"Local directory read error: {e}")
+            res.success = False
+            return res
+
+        # Determine downloads needed
+        to_download: set[str] = set(remote_map.keys()) - local_files
+        download_total = len(to_download)
+        logger.info(
+            "Album '%s': local=%d, remote=%d, to download=%d",
+            album_name,
+            len(local_files),
+            res.total_remote,
+            download_total,
+        )
+
+        # Download new assets
+        downloaded = 0
+        for filename in sorted(to_download):
+            if self._cancel_requested:
+                res.errors.append("Cancelled by user")
+                logger.info(
+                    "Album '%s' sync cancelled — %d/%d downloaded",
+                    album_name,
+                    downloaded,
+                    download_total,
+                )
+                break
+
+            asset = remote_map[filename]
+            self._write_progress(
+                "downloading", download_total, downloaded, filename,
+                album_name=album_name, album_index=index, album_total=total,
+            )
+            try:
+                self._download_asset(asset, filename, album_dir)
+                res.downloaded += 1
+                downloaded += 1
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to download %s: %s", filename, e)
+                res.errors.append(f"Download failed for {filename}: {e}")
+                self._write_progress(
+                    "downloading", download_total, downloaded, f"{filename} — FAILED",
+                    album_name=album_name, album_index=index, album_total=total,
+                )
+
+        res.skipped = (
+            res.total_remote
+            - res.downloaded
+            - len([e for e in res.errors if e.startswith("Download failed")])
+        )
+
+        if self._cancel_requested and "Cancelled" not in " ".join(res.errors):
+            res.errors.append("Cancelled by user")
+
+        # Strict sync: delete local files in THIS album folder only.
+        if self._strict_sync and not self._cancel_requested:
+            to_delete = local_files - set(remote_map.keys())
+            if to_delete:
+                logger.info(
+                    "Strict sync: %d local files to delete in album '%s'",
+                    len(to_delete),
+                    album_name,
+                )
+            deleted = 0
+            for filename in sorted(to_delete):
+                if self._cancel_requested:
+                    break
+                try:
+                    (album_dir / filename).unlink()
+                    logger.info("Deleted (not in album '%s'): %s", album_name, filename)
+                    res.deleted += 1
+                    deleted += 1
+                except OSError as e:
+                    logger.error("Failed to delete %s: %s", filename, e)
+                    res.errors.append(f"Delete failed for {filename}: {e}")
+        elif not self._strict_sync:
+            logger.debug(
+                "Pull-only mode — %d local files not in album '%s' are preserved",
+                len(local_files - set(remote_map.keys())),
+                album_name,
+            )
+
+        res.success = len(res.errors) == 0
+        return res
+
+    def _migrate_legacy_layout(self) -> None:
+        """One-time migration from the old single-album flat layout.
+
+        If the config still carries the legacy ``album_name`` key, resolves
+        it to an ID, moves all files in the sync root into
+        ``album_<id>/``, writes the ``albums`` list, and removes the legacy
+        key.  If the album cannot be resolved (renamed/deleted/offline),
+        nothing is moved and the migration retries on the next cycle.
+        """
+        config = self._state.config
+        immich_cfg = config.sync["immich"]
+        if "album_name" not in immich_cfg:
+            return
+
+        legacy_name = immich_cfg.get("album_name") or ""
+        if not legacy_name:
+            # Legacy key present but empty — just drop it.
+            data = config.to_dict()
+            data["sync"]["immich"].pop("album_name", None)
+            self._state.replace_config(data)
+            return
+
+        # Resolve the legacy album by name.
+        try:
+            album_id = self._resolve_album_id(legacy_name)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Legacy migration: cannot resolve album '%s' (%s) — will retry",
+                legacy_name,
+                e,
+            )
+            return
+        if not album_id:
+            logger.warning(
+                "Legacy migration: album '%s' not found on server — will retry",
+                legacy_name,
+            )
+            return
+
+        # Move root files into album_<id>/ (filenames already match, no re-download).
+        album_dir = self._sync_dir / f"album_{album_id}"
+        moved = 0
+        if self._sync_dir.is_dir():
+            album_dir.mkdir(parents=True, exist_ok=True)
+            for entry in self._sync_dir.iterdir():
+                if not entry.is_file():
+                    continue
+                dest = album_dir / entry.name
+                if dest.exists():
+                    continue  # already present — leave the source for later cleanup
+                try:
+                    os.replace(str(entry), str(dest))
+                    moved += 1
+                except OSError as e:
+                    logger.warning("Legacy migration: could not move %s: %s", entry.name, e)
+
+        # Rewrite config: albums list + drop legacy key.
+        albums = list(immich_cfg.get("albums") or [])
+        if not any(a.get("id") == album_id for a in albums):
+            albums.append({"id": album_id, "name": legacy_name})
+        data = config.to_dict()
+        data["sync"]["immich"]["albums"] = albums
+        data["sync"]["immich"].pop("album_name", None)
+        self._state.replace_config(data)
+
+        logger.info(
+            "Legacy layout migrated: album '%s' → album_%s (%d files moved)",
+            legacy_name,
+            album_id,
+            moved,
+        )
 
     # -- Immich API helpers ---------------------------------------------------
 
@@ -533,20 +705,25 @@ class ImmichSyncer:
         )
         return all_assets
 
-    def _download_asset(self, asset: dict[str, Any], filename: str) -> None:
-        """Download a single asset to the sync directory.
+    def _download_asset(
+        self, asset: dict[str, Any], filename: str, target_dir: Path | None = None
+    ) -> None:
+        """Download a single asset to the given directory.
 
-        Saves as ``immich_{assetId}.{ext}`` in the sync directory.
-        Uses a temporary file + atomic rename to avoid partial writes.
+        Saves as ``immich_{assetId}.{ext}`` in ``target_dir`` (defaults to
+        the sync directory).  Uses a temporary file + atomic rename to
+        avoid partial writes.
         """
+        if target_dir is None:
+            target_dir = self._sync_dir
         asset_id = asset["id"]
         url = f"{self._base_url}{_API_ASSET_DOWNLOAD.format(asset_id=asset_id)}"
         headers = {
             "Accept": "application/octet-stream",
             "x-api-key": self._api_key,
         }
-        tmp_path = self._sync_dir / f".{filename}.tmp"
-        final_path = self._sync_dir / filename
+        tmp_path = target_dir / f".{filename}.tmp"
+        final_path = target_dir / filename
 
         # Check available disk space (rough)
         self._check_disk_space(final_path)
@@ -694,6 +871,9 @@ class ImmichSyncer:
         total: int,
         processed: int,
         current_file: str,
+        album_name: str = "",
+        album_index: int = 0,
+        album_total: int = 0,
     ) -> None:
         """Write a live progress snapshot for the web dashboard to poll."""
         try:
@@ -705,6 +885,9 @@ class ImmichSyncer:
                 "processed": processed,
                 "current_file": current_file,
                 "syncing": self._syncing,
+                "album_name": album_name,
+                "album_index": album_index,
+                "album_total": album_total,
                 "timestamp": time.time(),
             }
             with open(tmp, "w") as f:
