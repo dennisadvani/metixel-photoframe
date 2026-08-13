@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/dennisadvani/metixel-photoframe">
-    <img src="docs/images/metixel_logo_red_white.png" alt="Metixel Photoframe" width="450">
+    <img src="docs\images\metixel_logo_red_white_background.png" alt="Metixel Photoframe" width="450">
   </a>
 </p>
 
@@ -34,7 +34,7 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 - **Screen Off Hours** — turn off the screen at night to save power
 - **Over the Air Updates** — update via the web UI
 - **EXIF Auto Rotation** — automatically rotate photos based on EXIF metadata
-- **Video Transcoding** — convert videos to a format that a Pi 2 can play
+- **Video Transcoding** — convert videos to a format that older Pi's can play
 - **Keyboard and Remote Support** — assign keys to controls via the web UI
 - **Network Management** — Wi-Fi scanning + connection, AP fallback with captive portal + PIN gate, auto-deactivation, connectivity check
 
@@ -50,6 +50,10 @@ I recommend repurposing a TV or old monitor to build your digital picture frame.
 ## Hardware Support
 
 ### Supported Models
+
+A Raspberry Pi 3 with 1GB+ RAM is recommended for 1080p playback, a Raspberry Pi 5 with 2GB+ RAM is recommended for 4K platback.
+
+A Raspberry Pi 2 will work but transcoding is very slow.
 
 | Model | GPU | Max Playback | Transcoding | Status | OS | IMG Available |
 |---|---|---|---|---|---|---|
