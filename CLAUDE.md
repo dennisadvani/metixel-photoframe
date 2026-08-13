@@ -27,7 +27,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
    ```
    This file contains the complete system design, component relationships, and implementation roadmap.
 
-2. **Respect the display backend abstraction.** Never import `pi3d` directly in presentation or widget code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only file that may import pi3d is `metixel/display/dispmanx_backend.py`.
+2. **Respect the display backend abstraction.** Never import `pi3d` directly in presentation or widget code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only file that may import pi3d is `src/metixel/display/dispmanx_backend.py`.
 
 3. **Respect the 4-phase media pipeline.** Media flows through four distinct phases:
    - **Phase 1 (Watch):** `FolderWatcher` gathers metadata only — file type, dimensions, video codec. Does NOT process, resize, or transcode. Pushes `MediaItem` stubs to the `OptimisationQueue`.
@@ -65,13 +65,21 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 10. **The web UI is served from the backend process** on port 8080. It's a lightweight SPA (vanilla JS). No React/Angular — keep the bundle under 200KB.
 
-11. **Test on desktop first.** The `dev_backend.py` (pygame-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
+11. **Test on desktop first.** The `tk_backend.py` (tkinter-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
 
 12. **Phase 1 vs Phase 2 awareness.** When writing code:
     - Check `metixel.display.__init__.detect_backend()` to know which pipeline is active
     - Phase 1: pi3d runs under cage + XWayland on Trixie (Mesa EGL)
     - Phase 2: uses Mesa EGL, Wayland compositor, or DRM/KMS directly
     - `/opt/vc/` paths only exist on legacy Bullseye; never assume them on Trixie
+
+13. **Respect the Clean Architecture (`src/` layout + dependency inversion).**
+    - **`src/` layout:** All application packages live under `src/metixel/`. Never add new top-level packages at the repository root.
+    - **Ports & Adapters (dependency inversion):** Core business logic must NEVER import third-party libraries directly (`requests`, `paho-mqtt`, `libcec`, ...). Define a `typing.Protocol` *port* in `src/metixel/shared/ports.py`, a concrete *adapter* in `src/metixel/shared/adapters.py`, and inject the port via constructor with a **real default** (behaviour stays identical when nothing is injected). Bundle injectable dependencies with the `Ports` dataclass (`BackendDaemon(..., ports=Ports(http=...))`).
+    - **Composition root:** `src/metixel/__main__.py` is thin — CLI parsing + logging only; it delegates to `build_backend()` (`backend/daemon.py`) and `build_renderer()` (`frontend/renderer.py`). Never put business logic in `__main__.py`.
+    - **New external systems:** when adding a new external dependency, add a Protocol + adapter — do not import the library into core. See `ARCHITECTURE.md` §6.7.
+
+14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
 ## Build & Run Commands
 
@@ -98,10 +106,10 @@ sudo bash scripts/build_phase1.sh
 sudo bash scripts/build_phase2.sh
 
 # Lint
-ruff check metixel/
+ruff check src/metixel/
 
 # Type check
-mypy metixel/
+mypy src/metixel/
 ```
 
 ## Key File Locations
@@ -109,20 +117,25 @@ mypy metixel/
 | File | Purpose |
 |---|---|
 | `ARCHITECTURE.md` | **READ THIS FIRST** — complete system design |
-| `metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
-| `metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
-| `metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
-| `metixel/display/dev_backend.py` | Desktop dev: pygame-based software renderer |
-| `metixel/display/__init__.py` | Backend auto-detection factory |
-| `metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
-| `metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue |
-| `metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
-| `metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
-| `metixel/backend/processing/video.py` | ffmpeg transcode + thumbnail + first/last frame extraction + `needs_optimisation()` codec/resolution check |
-| `metixel/backend/sync/folder_watcher.py` | Phase 1 WATCH: metadata-only scanning, pushes to OptimisationQueue |
-| `metixel/backend/sync/immich.py` | Phase 4 SYNC: Immich API client, downloads to `media/sync/immich/` |
-| `metixel/frontend/presentation/engine.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
-| `metixel/shared/config.py` | Config schema, validation, defaults (includes `image` and `video` thresholds) |
+| `src/metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
+| `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
+| `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
+| `src/metixel/display/dev_backend.py` | Desktop dev: pygame-based software renderer |
+| `src/metixel/display/__init__.py` | Backend auto-detection factory |
+| `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
+| `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue |
+| `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
+| `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
+| `src/metixel/backend/processing/video.py` | ffmpeg transcode + thumbnail + first/last frame extraction + `needs_optimisation()` codec/resolution check |
+| `src/metixel/backend/sync/folder_watcher.py` | Phase 1 WATCH: metadata-only scanning, pushes to OptimisationQueue |
+| `src/metixel/backend/sync/immich.py` | Phase 4 SYNC: Immich API client, downloads to `media/sync/immich/` |
+| `src/metixel/frontend/presentation/engine.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
+| `src/metixel/shared/config.py` | Config schema, validation, defaults (includes `image` and `video` thresholds) |
+| `src/metixel/shared/ports.py` | Clean Architecture **ports** — `typing.Protocol` interfaces (HttpGateway, MqttGateway, CecController, IrSocket, DisplayDriver) + `Ports` bundle |
+| `src/metixel/shared/adapters.py` | Concrete **adapters** wrapping the real libraries (RequestsHttpGateway, PahoMqttGateway, LibCecAdapter, LircSocketAdapter) |
+| `src/metixel/backend/daemon.py` | Main daemon + `build_backend()` composition-root factory |
+| `src/metixel/frontend/renderer.py` | Frontend renderer + `build_renderer()` composition-root factory |
+| `src/metixel/__main__.py` | Thin composition root — CLI parsing + logging, delegates to the factories |
 | `etc/config.json` | Runtime configuration file |
 | `scripts/quiet_boot.sh` | Silent boot configuration |
 
@@ -132,5 +145,5 @@ mypy metixel/
 - Check if the change affects both Phase 1 and Phase 2
 - Verify memory constraints for Pi Zero 2 W (512MB)
 - Ensure the display backend abstraction isn't leaked
-- **Video frame extraction is a backend responsibility.** The frontend must never import ffmpeg/ffprobe or extract frames. Frames are generated by `VideoProcessor` during Phase 2 (OPTIMISE) and referenced via `MediaItem.first_frame_path` / `MediaItem.last_frame_path`.
-- Run `cat ARCHITECTURE.md` to re-establish project context
+- **Video frame extraction is a backend responsibility.** The frontend must never import ffmpeg/ffprobe or extract frames. Frames are generated by `VideoProcessor` during Phase 2 (OPTIMISE) and referenced via `MediaItem.first_frame_path` / `MediaItem.last_frame_path`.- **Never import third-party libraries in core** — add a Protocol port + adapter and inject it (see rule 13)
+- Verify your change with the full test suite on the Pi (`python3 -m pytest tests/`) after desktop tests- Run `cat ARCHITECTURE.md` to re-establish project context

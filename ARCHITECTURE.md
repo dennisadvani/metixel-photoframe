@@ -40,7 +40,7 @@ All Pi models use the same `Pi3dBackend`. The underlying driver is determined by
 The application does NOT import pi3d directly. It imports from a display backend interface:
 
 ```
-metixel/
+src/metixel/
 ├── display/
 │   ├── __init__.py          # Factory: auto-detect hardware, return correct backend
 │   ├── backend.py           # Abstract base class: DisplayBackend
@@ -188,75 +188,76 @@ The system runs as **two systemd services**:
 
 ```
 metixel-photoframe/                           # Repository root
-├── metixel/                           # Python package
-│   ├── __init__.py
-│   ├── __main__.py                    # Entry point
-│   │
-│   ├── backend/                       # Backend daemon
-│   │   ├── __init__.py
-│   │   ├── daemon.py                  # Main daemon orchestrator
-│   │   ├── sync/
-│   │   │   ├── __init__.py
-│   │   │   ├── immich.py             # Immich API client
-│   │   │   ├── folder_watcher.py     # inotify-based folder sync
-│   │   │   └── scheduler.py          # Cron-like sync scheduling
-│   │   ├── processing/
-│   │   │   ├── __init__.py
-│   │   │   ├── image.py              # EXIF parse, resize, downsample, rotate
-│   │   │   ├── video.py              # ffmpeg transcode, thumbnail, first/last frame extraction
-│   │   │   ├── optimisation_queue.py # 4-phase pipeline orchestrator
-│   │   │   └── matte.py              # Virtual matte board generation
-│   │   ├── web/
-│   │   │   ├── __init__.py
-│   │   │   ├── server.py             # Flask application
-│   │   │   ├── routes/
-│   │   │   │   ├── __init__.py
-│   │   │   │   ├── config.py         # GET/PUT config endpoints
-│   │   │   │   ├── media.py          # Upload, list, delete media
-│   │   │   │   ├── logs.py           # System log viewer
-│   │   │   │   └── widgets.py        # Widget configuration CRUD
-│   │   │   ├── static/
-│   │   │   │   ├── css/
-│   │   │   │   │   └── dashboard.css
-│   │   │   │   └── js/
-│   │   │   │       └── dashboard.js
-│   │   │   └── templates/
-│   │   │       └── index.html
-│   │   ├── input_handlers/
-│   │   │   ├── __init__.py
-│   │   │   ├── cec.py                # HDMI-CEC via libcec
-│   │   │   └── ir.py                 # LIRC-based IR remote
-│   │   ├── mqtt_client.py            # Home Assistant MQTT integration
-│   │   └── state.py                  # StateManager
-│   │
-│   ├── frontend/                      # Display renderer
-│   │   ├── __init__.py
-│   │   ├── renderer.py               # Main render loop, frame timing
-│   │   ├── presentation/
-│   │   │   ├── __init__.py
-│   │   │   ├── engine.py             # Slideshow orchestrator
-│   │   │   ├── transitions.py        # Fade, slide, zoom, Ken Burns math
-│   │   │   ├── layout.py             # Fit-to-screen, virtual matte, smart crop
-│   │   │   └── video_player.py       # Hardware-accel video playback
-│   │   ├── widgets/
-│   │   │   ├── __init__.py
-│   │   │   ├── base.py               # Widget ABC
-│   │   │   ├── clock.py              # Digital & analog clock widget
-│   │   │   ├── weather.py            # Weather forecast widget
-│   │   │   └── calendar.py           # Calendar events widget
-│   │
-│   ├── display/                       # Display backend abstraction
-│   │   ├── __init__.py               # detect_backend() → returns correct Backend
-│   │   ├── backend.py                # DisplayBackend ABC
-│   │   ├── dispmanx_backend.py       # Phase 1: pi3d wrapper
-│   │   ├── wayland_backend.py        # Phase 2: PyOpenGL on DRM/Wayland (future)
-│   │   └── dev_backend.py            # Desktop dev: pygame-based
-│   │
-│   └── shared/                        # Shared types and utilities
+├── src/                                # Source layout (packages installed from here)
+│   └── metixel/                        # Python package
 │       ├── __init__.py
-│       ├── config.py                  # Config schema, validation, defaults
-│       ├── models.py                  # Data classes: MediaItem, Album, Widget, etc.
-│       └── ipc.py                     # Unix socket protocol (JSON messages)
+│       ├── __main__.py                 # Entry point
+│       │
+│       ├── backend/                    # Backend daemon
+│       │   ├── __init__.py
+│       │   ├── daemon.py               # Main daemon orchestrator
+│       │   ├── sync/
+│       │   │   ├── __init__.py
+│       │   │   ├── immich.py           # Immich API client
+│       │   │   ├── folder_watcher.py   # inotify-based folder sync
+│       │   │   └── scheduler.py        # Cron-like sync scheduling
+│       │   ├── processing/
+│       │   │   ├── __init__.py
+│       │   │   ├── image.py            # EXIF parse, resize, downsample, rotate
+│       │   │   ├── video.py            # ffmpeg transcode, thumbnail, first/last frame extraction
+│       │   │   ├── optimisation_queue.py  # 4-phase pipeline orchestrator
+│       │   │   └── matte.py            # Virtual matte board generation
+│       │   ├── web/
+│       │   │   ├── __init__.py
+│       │   │   ├── server.py           # Flask application
+│       │   │   ├── routes/
+│       │   │   │   ├── __init__.py
+│       │   │   │   ├── config.py       # GET/PUT config endpoints
+│       │   │   │   ├── media.py        # Upload, list, delete media
+│       │   │   │   ├── logs.py         # System log viewer
+│       │   │   │   └── widgets.py      # Widget configuration CRUD
+│       │   │   ├── static/
+│       │   │   │   ├── css/
+│       │   │   │   │   └── dashboard.css
+│       │   │   │   └── js/
+│       │   │   │       └── dashboard.js
+│       │   │   └── templates/
+│       │   │       └── index.html
+│       │   ├── input_handlers/
+│       │   │   ├── __init__.py
+│       │   │   ├── cec.py              # HDMI-CEC via libcec
+│       │   │   └── ir.py               # LIRC-based IR remote
+│       │   ├── mqtt_client.py          # Home Assistant MQTT integration
+│       │   └── state.py                # StateManager
+│       │
+│       ├── frontend/                   # Display renderer
+│       │   ├── __init__.py
+│       │   ├── renderer.py             # Main render loop, frame timing
+│       │   ├── presentation/
+│       │   │   ├── __init__.py
+│       │   │   ├── engine.py           # Slideshow orchestrator
+│       │   │   ├── transitions.py      # Fade, slide, zoom, Ken Burns math
+│       │   │   ├── layout.py           # Fit-to-screen, virtual matte, smart crop
+│       │   │   └── video_player.py     # Hardware-accel video playback
+│       │   ├── widgets/
+│       │   │   ├── __init__.py
+│       │   │   ├── base.py             # Widget ABC
+│       │   │   ├── clock.py            # Digital & analog clock widget
+│       │   │   ├── weather.py          # Weather forecast widget
+│       │   │   └── calendar.py         # Calendar events widget
+│       │
+│       ├── display/                    # Display backend abstraction
+│       │   ├── __init__.py             # detect_backend() → returns correct Backend
+│       │   ├── backend.py              # DisplayBackend ABC
+│       │   ├── dispmanx_backend.py     # Phase 1: pi3d wrapper
+│       │   ├── wayland_backend.py      # Phase 2: PyOpenGL on DRM/Wayland (future)
+│       │   └── dev_backend.py          # Desktop dev: pygame-based
+│       │
+│       └── shared/                     # Shared types and utilities
+│           ├── __init__.py
+│           ├── config.py               # Config schema, validation, defaults
+│           ├── models.py               # Data classes: MediaItem, Album, Widget, etc.
+│           └── ipc.py                  # Unix socket protocol (JSON messages)
 │
 ├── etc/                               # Configuration files
 │   ├── config.json                    # Main runtime configuration
@@ -274,10 +275,11 @@ metixel-photoframe/                           # Repository root
 │   ├── metixel-cage.service          # Frontend under cage (Trixie/KMS)
 │   └── metixel-frontend.service      # Frontend direct (legacy Bullseye)
 │
-├── tests/                             # Automated tests
-│   ├── test_backend/
-│   ├── test_frontend/
-│   └── test_display/
+├── tests/                             # Automated tests (mirrors src/metixel domains)
+│   ├── backend/
+│   ├── frontend/
+│   ├── display/
+│   └── shared/
 │
 ├── docs/                              # Additional documentation
 │   ├── API.md
@@ -661,6 +663,64 @@ Update flow:
 4. Update `/boot/autoboot.txt`
 5. Set bootloader `tryboot` flag → reboot
 6. Boot success → mark good; 3 failures → fallback
+
+---
+
+### 6.7 Dependency Inversion (Ports & Adapters)
+
+The backend depends on external systems (Raspberry Pi hardware and third-party
+APIs) through **ports** — `typing.Protocol` interfaces defined in
+`src/metixel/shared/ports.py`. Concrete **adapters** in
+`src/metixel/shared/adapters.py` wrap the real libraries; they are injected at
+the composition root (`BackendDaemon(..., ports=Ports(...))`).
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Core business logic (backend/daemon.py, sync, input_handlers) │
+│   depends only on Protocols in shared/ports.py                │
+└──────────────────────────────┬─────────────────────────────────┘
+                               │ dependency inversion
+┌──────────────────────────────▼─────────────────────────────────┐
+│ Adapters (shared/adapters.py)  — real implementations         │
+│   RequestsHttpGateway · PahoMqttGateway · LibCecAdapter        │
+│   LircSocketAdapter · (DisplayBackend already abstracted)     │
+└────────────────────────────────────────────────────────────────┘
+```
+
+| Port (Protocol) | Real adapter | External dependency |
+|---|---|---|
+| `HttpGateway` | `RequestsHttpGateway` | Immich API, GitHub API (OTA) |
+| `MqttGateway` | `PahoMqttGateway` | Home Assistant broker |
+| `CecController` | `LibCecAdapter` | HDMI-CEC (TV remote) |
+| `IrSocket` | `LircSocketAdapter` | LIRC IR remote |
+| `DisplayDriver` | display factory (`detect_backend`) | pi3d / PyOpenGL / tkinter |
+
+Every service constructor accepts its port with a **real default**, so existing
+behaviour is unchanged when no ports are injected; tests inject lightweight
+fakes. The display backend was already abstracted via the `DisplayBackend` ABC
+— `DisplayDriver` documents that contract as a port.
+
+The **composition root** is `src/metixel/__main__.py`: it parses CLI args,
+configures logging, then delegates to `build_backend()` / `build_renderer()`.
+Those factories (in `backend/daemon.py` and `frontend/renderer.py`) resolve the
+default adapters and return the runnable object — keeping `__main__.py` free of
+business logic and giving tests a single seam to inject fakes
+(e.g. `build_backend(config, ports=Ports(http=fake))`).
+
+**Rules of thumb (for AI-assisted development):**
+- Core business logic must NEVER import third-party libraries directly — add a
+  `typing.Protocol` port in `src/metixel/shared/ports.py` and a concrete adapter
+  in `src/metixel/shared/adapters.py`, then inject it via constructor with a
+  **real default** (behaviour unchanged when nothing is injected).
+- New external dependencies (APIs, hardware, services) get a Protocol + adapter —
+  never a direct import in core.
+- `src/metixel/__main__.py` stays thin: CLI parsing + logging only, delegating to
+  the `build_*` factories.
+- Unit tests mirror the package (`tests/backend|frontend|display|shared/`) and use
+  fakes implementing the ports (the Protocols are `@runtime_checkable`, so
+  `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use
+  `pytest.importorskip`. Web tests use the shared fixtures in
+  `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
 ---
 

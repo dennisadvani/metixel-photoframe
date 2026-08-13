@@ -12,7 +12,7 @@ Type=simple
 User=pi
 Group=pi
 WorkingDirectory=/opt/metixel
-Environment=PYTHONPATH=/opt/metixel
+Environment=PYTHONPATH=/opt/metixel/src
 Environment=PYTHONUNBUFFERED=1
 Environment=METIXEL_DISPLAY_BACKEND=auto
 

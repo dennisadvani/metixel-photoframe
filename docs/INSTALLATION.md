@@ -152,10 +152,10 @@ the Pi. Use the VS Code terminal (SSH) to run commands on the Pi:
 cd /opt/metixel && python -m pytest tests/ -v
 
 # Lint
-cd /opt/metixel && ruff check metixel/
+cd /opt/metixel && ruff check src/metixel/
 
 # Type check
-cd /opt/metixel && mypy metixel/
+cd /opt/metixel && mypy src/metixel/
 
 # Restart services to test changes
 sudo systemctl restart metixel-backend metixel-cage

@@ -6,10 +6,10 @@
 
 set -euo pipefail
 
-# Only bump if metixel/__init__.py is already staged (i.e., part of this commit)
+# Only bump if src/metixel/__init__.py is already staged (i.e., part of this commit)
 # or if there are other staged changes — avoids bumping on empty commits.
 if ! git diff --cached --quiet; then
     python3 scripts/bump_version.py
-    git add metixel/__init__.py
+    git add src/metixel/__init__.py
     echo "[pre-commit] Version bumped automatically."
 fi
