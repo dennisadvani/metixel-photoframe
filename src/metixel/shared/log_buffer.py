@@ -39,7 +39,7 @@ class LogRingBuffer(logging.Handler):
         entry = {
             "timestamp": self.formatter.formatTime(record, self.formatter.datefmt)
             if self.formatter
-            else record.asctime or "",
+            else getattr(record, "asctime", None) or "",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

@@ -1,60 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
-"""Tests for the config REST API endpoints."""
+"""Tests for the config REST API endpoints.
+
+Uses the shared fixtures from ``conftest.py``, which build the *real* Flask
+app via ``create_app()`` with mocked outbound dependencies (IPC, update
+manager), so the config blueprint is exercised through the production wiring.
+"""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import time
+from types import SimpleNamespace
 from unittest import mock
-
-import pytest
-
-from metixel.shared.config import Config
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def mock_state(tmp_path: Path):
-    """Create a StateManager with a temp config path."""
-    from metixel.backend.state import StateManager
-
-    config_path = tmp_path / "config.json"
-    return StateManager(config_path, run_dir=tmp_path / "run")
-
-
-@pytest.fixture
-def mock_ipc():
-    """Create a mock IPC client."""
-    return mock.MagicMock()
-
-
-@pytest.fixture
-def app(mock_state, mock_ipc):
-    """Create a Flask test app with the config blueprint only."""
-    from flask import Flask
-
-    test_app = Flask(__name__)
-    test_app.config["METIXEL_STATE"] = mock_state
-    test_app.config["METIXEL_IPC"] = mock_ipc
-    test_app.config["METIXEL_OPT_QUEUE"] = None
-    test_app.config["METIXEL_UPDATE_MGR"] = None
-    test_app.config["METIXEL_DAEMON"] = None
-
-    from metixel.backend.web.routes.config import config_bp
-    test_app.register_blueprint(config_bp, url_prefix="/api/config")
-
-    return test_app
-
-
-@pytest.fixture
-def client(app):
-    """Flask test client."""
-    return app.test_client()
-
 
 # ---------------------------------------------------------------------------
 # GET /api/config — full config
@@ -208,3 +166,132 @@ class TestVideoProfiles:
         resp = client.get("/api/config/video/profiles")
         data = json.loads(resp.data)
         assert data["current"] == ""
+
+
+# ---------------------------------------------------------------------------
+# System commands — restart/reboot/shutdown/time/ntp/quiet-boot
+# ---------------------------------------------------------------------------
+
+
+def _wait_for_call(callable_mock, timeout: float = 3.0) -> None:
+    """Busy-wait until a background thread has invoked the mock."""
+    deadline = time.time() + timeout
+    while time.time() < deadline and callable_mock.call_count == 0:
+        time.sleep(0.01)
+
+
+class TestSystemCommands:
+    """System-command endpoints with ``subprocess.run`` mocked."""
+
+    @staticmethod
+    def _ok_result() -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    def test_server_time(self, client):
+        resp = client.get("/api/config/time")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert {"iso", "unix", "time", "date", "timezone", "utc_offset"} <= set(data)
+
+    def test_timezones_list(self, client):
+        resp = client.get("/api/config/timezones")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        # Present in both the curated shortlist (non-Linux) and the real
+        # /usr/share/zoneinfo/zone.tab on Linux — deterministic everywhere.
+        assert data["timezones"]
+        assert "America/New_York" in data["timezones"]
+
+    def test_set_timezone(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        resp = client.post("/api/config/timezone", json={"timezone": "Australia/Sydney"})
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["status"] == "ok"
+        fake.assert_called_once()
+        cmd = fake.call_args[0][0]
+        assert cmd[:4] == ["sudo", "-n", "timedatectl", "set-timezone"]
+        assert cmd[-1] == "Australia/Sydney"
+
+    def test_set_timezone_missing(self, client):
+        resp = client.post("/api/config/timezone", json={})
+        assert resp.status_code == 400
+
+    def test_set_timezone_failure(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(
+            return_value=SimpleNamespace(returncode=1, stderr="boom", stdout="")
+        )
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        resp = client.post("/api/config/timezone", json={"timezone": "UTC"})
+        assert resp.status_code == 500
+
+    def test_ntp_enable(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        resp = client.post(
+            "/api/config/ntp", json={"enabled": True, "servers": ["0.pool.ntp.org"]}
+        )
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["ntp"] == "enabled"
+
+    def test_ntp_missing_enabled(self, client):
+        resp = client.post("/api/config/ntp", json={})
+        assert resp.status_code == 400
+
+    def test_quiet_boot_enable(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        resp = client.post("/api/config/quiet-boot", json={"enabled": True})
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["quiet_boot"] is True
+
+    def test_quiet_boot_missing(self, client):
+        resp = client.post("/api/config/quiet-boot", json={})
+        assert resp.status_code == 400
+
+    def test_reload(self, client):
+        resp = client.post("/api/config/reload")
+        assert resp.status_code == 200
+        assert json.loads(resp.data) == {"status": "ok"}
+
+    def test_restart(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+        resp = client.post("/api/config/restart")
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["status"] == "ok"
+        _wait_for_call(fake)
+        assert fake.call_args[0][0][:3] == ["sudo", "-n", "systemctl"]
+
+    def test_reboot(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+        resp = client.post("/api/config/reboot")
+        assert resp.status_code == 200
+        _wait_for_call(fake)
+        assert fake.call_args[0][0][:3] == ["sudo", "-n", "reboot"]
+
+    def test_shutdown(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+        resp = client.post("/api/config/shutdown")
+        assert resp.status_code == 200
+        _wait_for_call(fake)
+        assert fake.call_args[0][0][:3] == ["sudo", "-n", "shutdown"]
