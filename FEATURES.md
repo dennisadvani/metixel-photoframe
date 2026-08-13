@@ -99,7 +99,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **Graceful degradation** | Never crash, never show a traceback — log errors and continue with available media |
 | **Quiet boot** | No kernel messages, no login prompt — display goes straight to the boot screen |
 | **Log rotation** | 5 log files, configurable log level applied to both processes |
-| **Samba shares** | Production: media folder only (`metixel-media`); Dev: full project tree (`metixel`) |
+| **Samba share** | Production: media folder only (`metixel-media`) |
 
 ---
 
@@ -158,4 +158,4 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **pytest** | Test suite with coverage reporting |
 | **ruff** | Fast Python linter |
 | **mypy** | Static type checking |
-| **Dev Samba share** | Full project tree shared over SMB for VS Code remote editing |
+| **VS Code sync tasks** | `.vscode/sync-to-pi.ps1` + `.vscode/tasks.json` mirror `src/metixel/` to the Pi over SSH and restart services — the dev workflow |

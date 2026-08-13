@@ -14,7 +14,9 @@ venv/
 env/
 
 # IDE
-.vscode/
+.vscode/*
+!.vscode/sync-to-pi.ps1
+!.vscode/tasks.json
 .idea/
 *.swp
 *.swo

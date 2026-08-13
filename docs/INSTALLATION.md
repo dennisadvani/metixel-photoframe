@@ -112,60 +112,92 @@ Follow the **[Getting Started guide](GETTING_STARTED.md)** from Step 4.
 
 ---
 
-## Path C: Development setup (remote via Samba)
+## Path C: Development setup (VS Code sync to Pi)
 
 Metixel development requires a Pi — the display backend (pi3d + Mesa)
 doesn't run on a desktop. The workflow is to edit code on your workstation
-and run it on the Pi over a Samba mount.
+and sync it to the Pi over SSH using the bundled VS Code tasks
+(`.vscode/tasks.json` + `.vscode/sync-to-pi.ps1`).
 
 ### 1. Set up a Pi
 
 First, install Metixel on a Pi using **Path A** or **Path B** above.
 
-### 2. Run the dev environment script on the Pi
+### 2. One-time SSH setup on your workstation
 
-SSH into the Pi and run:
+The sync workflow uses passwordless SSH from your VS Code PC to the Pi.
+Do this once per PC:
 
-```bash
-sudo bash /opt/metixel/scripts/setup_trixie_dev_env.sh
-```
+1. **Generate an SSH key pair** (skip if you already have one):
 
-This adds a second Samba share (`metixel`) that exposes the full project
-tree at `/opt/metixel` — including all source code, not just the media
-folder.
+   ```powershell
+   ssh-keygen -t ed25519
+   ```
 
-### 3. Mount the project from your workstation
+2. **Install your public key on the Pi:**
 
-| OS | How |
+   ```powershell
+   type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh pi@<pi-ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+   ```
+
+   Replace `<pi-ip>` with your Pi's IP address. Enter the Pi's password
+   when prompted (this is the only time it's needed).
+
+3. **Add the Pi to your known hosts** and verify the connection:
+
+   ```powershell
+   ssh pi@<pi-ip> "echo ok"
+   ```
+
+   Answer `yes` when asked to trust the host key. The sync script also
+   passes `StrictHostKeyChecking=accept-new`, so first-run connections
+   work even without this step — but verifying once here confirms your
+   key is installed correctly.
+
+4. **Verify passwordless sudo** works on the Pi:
+
+   ```powershell
+   ssh pi@<pi-ip> "sudo -n true && echo sudo-ok"
+   ```
+
+   The sync script uses `sudo rsync` to install files into the
+   root-owned tree under `/opt/metixel`. The default Raspberry Pi OS
+   `pi` user has passwordless sudo, so this normally just works. If it
+   prints nothing, enable it with `sudo visudo` and add:
+   `pi ALL=(ALL) NOPASSWD: ALL`.
+
+### 3. Point the tasks at your Pi
+
+Edit `.vscode/tasks.json` and update the IP addresses in the `piHost`
+input (search for `"id": "piHost"`) to match your Pi(s). The tasks
+prompt you to pick a target Pi every time they run.
+
+### 4. Sync and run
+
+Use the VS Code task runner (**Terminal → Run Task…** or
+`Ctrl+Shift+P` → "Tasks: Run Task"):
+
+| Task | What it does |
 |---|---|
-| **Windows** | Open File Explorer → `\\metixel\metixel` → map as a network drive |
-| **macOS** | Finder → Go → Connect to Server → `smb://metixel/metixel` |
-| **Linux** | `sudo mount -t cifs //metixel/metixel /mnt/metixel -o username=pi` |
+| **📦 Sync Code to Pi (scp)** | Mirrors `src/metixel/` to `/opt/metixel/src/metixel/` on the Pi (robocopy → scp to staging → sudo rsync; excludes caches) |
+| **📦 Sync + Restart All** | Syncs, then restarts both systemd services |
+| **📦 Sync + Restart Backend** | Syncs, then restarts only the backend |
+| **Run Tests** | Runs `pytest` on the Pi |
+| **Lint (ruff)** / **Type Check (mypy)** | Run quality checks on the Pi |
+| **Follow Logs** | Tails both services' journal |
+| **Restart All / Backend / Frontend** | Quick service restarts without syncing |
 
-### 4. Open in VS Code
+> **Note:** the sync task only mirrors `src/metixel/`. Test files under
+> `tests/` are not synced — copy them manually when you change tests:
+>
+> ```powershell
+> scp -r tests/ pi@<pi-ip>:/opt/metixel/tests/
+> ```
 
-Open the mounted folder in VS Code. You're now editing files directly on
-the Pi. Use the VS Code terminal (SSH) to run commands on the Pi:
-
-```bash
-# Run tests
-cd /opt/metixel && python -m pytest tests/ -v
-
-# Lint
-cd /opt/metixel && ruff check src/metixel/
-
-# Type check
-cd /opt/metixel && mypy src/metixel/
-
-# Restart services to test changes
-sudo systemctl restart metixel-backend metixel-cage
-
-# Follow logs
-sudo journalctl -u metixel-backend -u metixel-cage -f
-```
-
-The Pi's IP is `192.168.222.211` by default when using the dev environment
-script (Ethernet static IP).
+The sync script (`.vscode/sync-to-pi.ps1`) mirrors the package to a temp
+folder with `robocopy` (excluding `__pycache__` and caches), then copies
+it to the Pi with `scp`, matching the `src/` layout used by the systemd
+units (`PYTHONPATH=/opt/metixel/src`).
 
 ---
 
