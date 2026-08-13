@@ -55,13 +55,13 @@ A Raspberry Pi 3 with 1GB+ RAM is recommended for 1080p playback, a Raspberry Pi
 
 A Raspberry Pi 2 will work but transcoding is very slow.
 
-| Model | GPU | Max Playback | Transcoding | Status | OS | IMG Available |
+| Model | GPU | Max Playback | Video Transcoding | Tested | OS | .img Available |
 |---|---|---|---|---|---|---|
-| Pi 5 | VideoCore VII | 4K | Yes — HW H.265 | Yes | Trixie 13 Lite (64-bit) | Yes |
-| Pi 4 | VideoCore VI | 4K (untested) | Yes | Untested | Trixie 13 Lite (64-bit) | Yes |
+| Pi 5 | VideoCore VII | 4K | Yes | Yes | Trixie 13 Lite (64-bit) | Yes |
+| Pi 4 | VideoCore VI | 4K (untested) | Yes | No | Trixie 13 Lite (64-bit) | Yes |
 | Pi 3 B/B+ | VideoCore IV | 1080p | Yes  | Yes | Trixie 13 Lite (64-bit) | Yes |
 | Pi 2 B | VideoCore IV | 1080p | Yes  | Yes | Trixie 13 Lite (32-bit) | No — Manual Install |
-| Pi Zero 2 W | VideoCore IV | No (RAM Limit) | No (RAM Limit) | Untested | Trixie 13 Lite (32-bit) | No — Manual Install |
+| Pi Zero 2 W | VideoCore IV | No (RAM Limit) | No (RAM Limit) | No | Trixie 13 Lite (32-bit) | No — Manual Install |
 
 ### RAM Requirements
 
