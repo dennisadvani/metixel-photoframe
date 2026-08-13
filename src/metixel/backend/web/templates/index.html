@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=9">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=10">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -579,7 +579,7 @@
                         </select>
                     </div>
                     <p class="hint">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</p>
-                    <p class="hint" style="color:var(--warning,#e6a817)">⚠️ <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
+                    <p class="hint" style="color:var(--warning,#e6a817)"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span> <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
                     <button id="btn-save-system">Save System Settings</button>
                     <button id="btn-restart-services" class="btn--secondary" style="margin-left:0.5rem">Restart Services</button>
                     <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
@@ -822,6 +822,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script src="/static/js/dashboard.js?v=11"></script>
+    <script src="/static/js/dashboard.js?v=12"></script>
 </body>
 </html>

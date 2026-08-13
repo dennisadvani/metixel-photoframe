@@ -757,7 +757,7 @@ button:focus-visible {
 }
 
 .processing-phase.is-complete {
-    color: var(--success);
+    color: var(--text);
 }
 
 .processing-phase.is-error {
@@ -1360,7 +1360,7 @@ footer {
 }
 
 .update-status-uptodate {
-    color: var(--success);
+    color: var(--text);
     font-weight: 500;
 }
 

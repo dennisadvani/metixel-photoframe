@@ -143,7 +143,7 @@
             font-size: 0.88rem;
             display: none;
         }
-        .status-msg.success { display: block; background: rgba(46,204,113,0.15); color: var(--success); }
+        .status-msg.success { display: block; background: rgba(46,204,113,0.15); color: var(--text); }
         .status-msg.error { display: block; background: rgba(231,76,60,0.15); color: var(--danger); }
         .status-msg.loading { display: block; background: rgba(255,255,255,0.05); color: var(--text-muted); }
         .spinner {
@@ -208,7 +208,7 @@
 
     <!-- Step 3: Success -->
     <div class="card" id="step-done" style="display:none;text-align:center">
-        <h2 style="color:var(--success)">✓ Connected!</h2>
+        <h2 style="display:inline-flex;align-items:center;gap:8px"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>Connected!</h2>
         <p style="margin:12px 0;color:var(--text-muted)">
             Your Metixel frame is now online.
         </p>
@@ -348,12 +348,12 @@
                 }
 
                 var hasLock = n.security && n.security !== "--";
-                var lockIcon = hasLock ? ' 🔒' : '';
+                var lockSvg = '<svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM12 17c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>';
 
                 item.innerHTML =
                     '<div class="network-signal">' + bars + '</div>' +
                     '<span class="network-name">' + escapeHTML(n.ssid) + '</span>' +
-                    '<span class="network-lock">' + (hasLock ? '🔒' : '') + '</span>';
+                    '<span class="network-lock">' + (hasLock ? lockSvg : '') + '</span>';
 
                 item.addEventListener("click", function() {
                     selectNetwork(n.ssid, n.security, item);

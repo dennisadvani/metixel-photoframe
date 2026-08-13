@@ -597,7 +597,7 @@
                     _kbdPollTimer = null;
                     if (status) {
                         status.style.background = "rgba(34,197,94,0.15)";
-                        status.style.color = "var(--success)";
+                        status.style.color = "var(--text)";
                         status.textContent = 'Mapped ' + result.name + ' → ' + result.command;
                         setTimeout(function () { status.style.display = "none"; }, 3000);
                     }
@@ -1028,7 +1028,7 @@
         if (status.wifi_radio_enabled === false) {
             var wifiOffWarning =
                 '<div style="margin-top:6px;padding:6px 10px;background:rgba(240,160,48,0.12);border-radius:5px;font-size:0.8rem;color:#f0a030">'
-                + '⚠ WiFi is disabled at the OS level.<br>'
+                + '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span> WiFi is disabled at the OS level.<br>'
                 + 'Enable it via <code>sudo raspi-config</code> → System Options → Wireless LAN, '
                 + 'or run <code>sudo nmcli radio wifi on</code>.</div>';
 
@@ -1096,7 +1096,7 @@
         if (status.connected) {
             el.innerHTML =
                 '<div style="display:flex;align-items:center;gap:12px">'
-                + '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--success)">wifi</span>'
+                + '<span class="material-symbols-outlined" style="font-size:2rem;color:var(--text)">wifi</span>'
                 + '<div style="flex:1">'
                 + '<strong>' + escapeHtml(status.ssid || "Unknown") + '</strong><br>'
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">IP: ' + escapeHtml(status.ip || "—") + '</span><br>'
@@ -1960,11 +1960,11 @@
                     api_key: document.getElementById("cfg-immich-key").value,
                 });
                 if (!data) {
-                    if (resultEl) { resultEl.textContent = "❌ Request failed"; resultEl.style.color = "var(--danger)"; }
+                    if (resultEl) { resultEl.textContent = "Request failed"; resultEl.style.color = "var(--danger)"; }
                     return;
                 }
                 if (data.ok) {
-                    if (resultEl) { resultEl.textContent = "✅ " + data.message; resultEl.style.color = "var(--success)"; }
+                    if (resultEl) { resultEl.textContent = data.message; resultEl.style.color = "var(--text)"; }
                     showToast("Connection successful!", "success");
                     // Save server URL and API key so Fetch Albums works
                     // immediately without a separate save step.
@@ -1975,7 +1975,7 @@
                         },
                     });
                 } else {
-                    if (resultEl) { resultEl.textContent = "❌ " + (data.error || "Unknown error"); resultEl.style.color = "var(--danger)"; }
+                    if (resultEl) { resultEl.textContent = (data.error || "Unknown error"); resultEl.style.color = "var(--danger)"; }
                     showToast("Connection failed: " + data.error, "error", 5000);
                 }
             });
