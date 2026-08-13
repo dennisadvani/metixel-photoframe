@@ -60,6 +60,7 @@ Documentation = "https://github.com/dennisadvani/metixel-photoframe/blob/main/AR
 Repository = "https://github.com/dennisadvani/metixel-photoframe"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["metixel*"]
 
 [tool.setuptools.package-data]
@@ -81,4 +82,5 @@ disallow_untyped_defs = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+pythonpath = ["src"]
 addopts = "-v --cov=metixel --cov-report=term-missing"

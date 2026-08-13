@@ -13,6 +13,7 @@ import time
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.ports import CecController
 
 logger = logging.getLogger(__name__)
 
@@ -37,31 +38,34 @@ class CECHandler:
         0x00: "resume",  # Select / OK → resume
     }
 
-    def __init__(self, state: StateManager, ipc: IPCClient) -> None:
+    def __init__(
+        self,
+        state: StateManager,
+        ipc: IPCClient,
+        cec: CecController | None = None,
+    ) -> None:
         self._state = state
         self._ipc = ipc
         self._running = False
-        self._cec_config = None
-        self._cec_client = None
+        self._cec = cec  # injected CecController port (None → real adapter in run())
 
     def run(self) -> None:
         """Initialize CEC and process incoming commands."""
-        try:
-            import cec
-        except ImportError:
-            logger.warning("python-cec not installed — CEC disabled")
-            return
+        gw = self._cec
+        if gw is None:
+            try:
+                from metixel.shared.adapters import LibCecAdapter
+
+                gw = LibCecAdapter()
+                self._cec = gw
+            except ImportError:
+                logger.warning("python-cec not installed — CEC disabled")
+                return
 
         try:
-            self._cec_config = cec.libcec_configuration()
-            self._cec_config.strDeviceName = "Metixel Frame"
-            self._cec_config.bActivateSource = 0
-            self._cec_config.deviceTypes.Add(cec.CEC_DEVICE_TYPE_PLAYBACK_DEVICE)
-            self._cec_config.clientVersion = cec.LIBCEC_VERSION_CURRENT
-            self._cec_config.SetLogCallback(self._cec_log_callback)
-            self._cec_config.SetKeyPressCallback(self._cec_key_callback)
-
-            self._cec_client = cec.ICECAdapter.Create(self._cec_config)
+            gw.set_log_callback(self._cec_log_callback)
+            gw.set_keypress_callback(self._cec_key_callback)
+            gw.initialize(device_name="Metixel Frame")
         except AttributeError:
             logger.warning(
                 "CEC library API mismatch — CEC disabled. "
@@ -74,12 +78,11 @@ class CECHandler:
             return
 
         try:
-            adapters = self._cec_client.DetectAdapters()
-            if not adapters:
+            com_port = gw.detect_and_open()
+            if com_port is None:
                 logger.warning("No CEC adapters detected — CEC disabled")
                 return
-            self._cec_client.Open(adapters[0].strComName)
-            logger.info("CEC handler started on %s", adapters[0].strComName)
+            logger.info("CEC handler started on %s", com_port)
         except Exception:
             logger.warning(
                 "Failed to open CEC adapter — CEC disabled. "
@@ -93,8 +96,8 @@ class CECHandler:
 
     def stop(self) -> None:
         self._running = False
-        if self._cec_client:
-            self._cec_client.Close()
+        if self._cec is not None:
+            self._cec.close()
 
     def _cec_key_callback(self, keypress, duration) -> None:
         """Called by libcec when a remote key is pressed."""

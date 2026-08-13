@@ -23,10 +23,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import requests
-
 from metixel import __version__
 from metixel.backend.state import StateManager
+from metixel.shared.adapters import RequestsHttpGateway
+from metixel.shared.ports import HttpGateway
 
 logger = logging.getLogger(__name__)
 
@@ -106,8 +106,9 @@ class UpdateManager:
     callers acquire it to read status or queue operations.
     """
 
-    def __init__(self, state: StateManager) -> None:
+    def __init__(self, state: StateManager, http: HttpGateway | None = None) -> None:
         self._state = state
+        self._http = http if http is not None else RequestsHttpGateway()
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
@@ -556,7 +557,7 @@ rm -f "$0"
         page = 1
 
         while len(all_releases) < per_page:
-            resp = requests.get(
+            resp = self._http.get(
                 url,
                 params={"per_page": min(per_page, 100), "page": page},
                 headers=headers,
@@ -585,7 +586,7 @@ rm -f "$0"
         url = f"{GITHUB_API_BASE}{COMMITS_ENDPOINT.format(repo=self.repo)}"
         headers = {"Accept": "application/vnd.github.v3+json"}
 
-        resp = requests.get(
+        resp = self._http.get(
             url,
             params={"sha": branch, "per_page": 1},
             headers=headers,

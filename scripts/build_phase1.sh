@@ -94,8 +94,8 @@ fi
 
 # Install Metixel Photoframe
 echo "  Installing Metixel Photoframe application..."
-sudo mkdir -p "${MOUNT_DIR}/opt/metixel"
-sudo cp -r "${PROJECT_ROOT}/metixel" "${MOUNT_DIR}/opt/metixel/"
+sudo mkdir -p "${MOUNT_DIR}/opt/metixel" "${MOUNT_DIR}/opt/metixel/src"
+sudo cp -r "${PROJECT_ROOT}/src/metixel" "${MOUNT_DIR}/opt/metixel/src/"
 sudo cp -r "${PROJECT_ROOT}/etc" "${MOUNT_DIR}/opt/metixel/"
 sudo cp "${PROJECT_ROOT}/requirements-pip.txt" "${MOUNT_DIR}/opt/metixel/"
 

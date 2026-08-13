@@ -96,7 +96,7 @@ if ($LASTEXITCODE -ne 0) {
 
 # bump_version.py prints a multi-line success message like:
 #   Bumped version: 0.2.8-beta.9
-#     File: C:\...\metixel\__init__.py
+#     File: C:\...\src\metixel\__init__.py
 # PowerShell may capture this as a string array; join first, then
 # extract just the version number from the first line.
 $BumpText = if ($BumpOutput -is [array]) { $BumpOutput -join "`n" } else { "$BumpOutput" }
@@ -118,13 +118,13 @@ if ($DryRun) {
     Write-Host "Would tag: v$NewVersion"
     Write-Host "Would push: dev + main + tags"
     # Revert the bump
-    git checkout -- metixel/__init__.py
+    git checkout -- src/metixel/__init__.py
     exit 0
 }
 
 # -- Commit version bump on dev ---------------------------------------------
 
-git add metixel/__init__.py
+git add src/metixel/__init__.py
 git commit -m "Bump version to $NewVersion"
 if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
 Write-Host "Version bump committed on dev." -ForegroundColor Green

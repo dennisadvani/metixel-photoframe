@@ -100,7 +100,7 @@ When the user clicks **Install**, the backend:
 ## Bumping the Version
 
 Use the `scripts/bump_version.py` script.  It reads and writes
-`metixel/__init__.py` only — tags and changelogs are separate steps.
+`src/metixel/__init__.py` only — tags and changelogs are separate steps.
 
 ### Basic bumps
 
@@ -174,7 +174,7 @@ python scripts/bump_version.py --minor --beta 1
 #    - Bug Y
 
 # 3. Commit the version bump + changelog
-git add metixel/__init__.py CHANGELOG.md
+git add src/metixel/__init__.py CHANGELOG.md
 git commit -m "chore: bump version to 0.2.0-beta.1"
 
 # 4. Create an annotated tag (MUST match the version)
@@ -211,7 +211,7 @@ python scripts/bump_version.py --minor   # strips pre-release automatically
 #    Move [Unreleased] items into the release section, set the date.
 
 # 3. Commit
-git add metixel/__init__.py CHANGELOG.md
+git add src/metixel/__init__.py CHANGELOG.md
 git commit -m "chore: release v0.2.0"
 
 # 4. Tag
@@ -263,7 +263,7 @@ be empty.  Add a new empty `[Unreleased]` section for future work:
 | `v0.2.0beta1` | No | (won't parse — needs `.` or `-` separator) |
 
 The tag name after stripping the leading `v` must match the
-`__version__` string in `metixel/__init__.py` **exactly**.
+`__version__` string in `src/metixel/__init__.py` **exactly**.
 
 ### Config Reference
 
@@ -284,7 +284,7 @@ The tag name after stripping the leading `v` must match the
 
 | File | Role |
 |---|---|
-| `metixel/__init__.py` | Canonical version string (`__version__`) |
+| `src/metixel/__init__.py` | Canonical version string (`__version__`) |
 | `scripts/bump_version.py` | Bump the version programmatically |
 | `CHANGELOG.md` | Human-readable release notes |
 | `pyproject.toml` | Package metadata (version is dynamic, reads `__version__`) |

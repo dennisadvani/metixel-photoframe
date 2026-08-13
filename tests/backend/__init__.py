@@ -3,7 +3,7 @@
 """Tests for the backend daemon."""
 
 
-def test_backend_imports():
+def test_imports():
     """Verify backend modules can be imported."""
     from metixel.backend.daemon import BackendDaemon
     from metixel.backend.state import StateManager

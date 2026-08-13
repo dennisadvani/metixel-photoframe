@@ -14,6 +14,7 @@ import time
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.ports import MqttGateway
 
 logger = logging.getLogger(__name__)
 
@@ -32,35 +33,42 @@ class MQTTClient:
     - ``{prefix}/album/set`` — switch to a specific album
     """
 
-    def __init__(self, state: StateManager, ipc: IPCClient) -> None:
+    def __init__(
+        self,
+        state: StateManager,
+        ipc: IPCClient,
+        mqtt: MqttGateway | None = None,
+    ) -> None:
         self._state = state
         self._ipc = ipc
         self._running = False
-        self._client = None  # paho.mqtt.client.Client
+        self._mqtt = mqtt  # injected MqttGateway port (None → real adapter in run())
 
     def run(self) -> None:
         """Connect to MQTT broker and start the event loop."""
-        try:
-            import paho.mqtt.client as mqtt
-        except ImportError:
-            logger.warning("paho-mqtt not installed — MQTT disabled")
-            return
+        gw = self._mqtt
+        if gw is None:
+            try:
+                from metixel.shared.adapters import PahoMqttGateway
+
+                gw = PahoMqttGateway()
+                self._mqtt = gw
+            except ImportError:
+                logger.warning("paho-mqtt not installed — MQTT disabled")
+                return
 
         config = self._state.config.mqtt
         prefix = config["topic_prefix"]
 
-        self._client = mqtt.Client(client_id=f"metixel-{id(self)}")
-        self._client.on_connect = self._on_connect
-        self._client.on_message = self._on_message
-
         if config.get("username"):
-            self._client.username_pw_set(config["username"], config.get("password", ""))
+            gw.set_credentials(config["username"], config.get("password", ""))
 
         # Set Last Will to publish offline status on disconnect
-        self._client.will_set(f"{prefix}/status", "offline", retain=True)
+        gw.set_will(f"{prefix}/status", "offline", retain=True)
+        gw.set_handlers(self._on_connect, self._on_message)
 
         try:
-            self._client.connect(config["broker"], config["port"], keepalive=60)
+            gw.connect(config["broker"], config["port"], keepalive=60)
         except Exception:
             logger.error(
                 "Failed to connect to MQTT broker at %s:%d", config["broker"], config["port"]
@@ -68,18 +76,18 @@ class MQTTClient:
             return
 
         self._running = True
-        self._client.publish(f"{prefix}/status", "online", retain=True)
+        gw.publish(f"{prefix}/status", "online", retain=True)
         logger.info("MQTT client connected to %s:%d", config["broker"], config["port"])
 
-        self._client.loop_start()
+        gw.loop_start()
 
         # Publish health periodically
         while self._running:
             self._publish_health(prefix)
             time.sleep(30)
 
-        self._client.loop_stop()
-        self._client.disconnect()
+        gw.loop_stop()
+        gw.disconnect()
 
     def stop(self) -> None:
         """Disconnect from MQTT broker."""
@@ -90,8 +98,11 @@ class MQTTClient:
     def _on_connect(self, client, userdata, flags, rc) -> None:
         """Subscribe to control topics on connect."""
         prefix = self._state.config.mqtt["topic_prefix"]
-        client.subscribe(f"{prefix}/cmd")
-        client.subscribe(f"{prefix}/album/set")
+        gw = self._mqtt
+        if gw is None:
+            return
+        gw.subscribe(f"{prefix}/cmd")
+        gw.subscribe(f"{prefix}/album/set")
         logger.debug("MQTT subscribed to %s/cmd and %s/album/set", prefix, prefix)
 
     def _on_message(self, client, userdata, msg) -> None:
@@ -123,4 +134,6 @@ class MQTTClient:
     def _publish_health(self, prefix: str) -> None:
         """Publish system health metrics."""
         health = self._state.get_system_health()
-        self._client.publish(f"{prefix}/health", json.dumps(health))
+        gw = self._mqtt
+        if gw is not None:
+            gw.publish(f"{prefix}/health", json.dumps(health))

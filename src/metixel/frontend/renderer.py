@@ -48,10 +48,10 @@ class FrontendRenderer:
     - Watch for config file changes via inotify (or polling fallback)
     """
 
-    def __init__(self, config_path: Path) -> None:
+    def __init__(self, config_path: Path, backend: DisplayBackend | None = None) -> None:
         self._config_path = config_path.resolve()
         self._config: Config = Config.load(config_path)
-        self._backend: DisplayBackend | None = None
+        self._backend = backend  # injected DisplayDriver port (None → detect_backend() in run())
         self._presentation: PresentationEngine | None = None
         self._overlay: OverlayManager | None = None
         self._ipc_server = IPCServer()
@@ -165,7 +165,8 @@ class FrontendRenderer:
 
         # ── Initialize display backend immediately ───────────────────
         # pi3d auto-detects native resolution when width=0 in config.
-        self._backend = detect_backend()
+        if self._backend is None:
+            self._backend = detect_backend()
         self._backend.create(
             width=display_cfg["width"],
             height=display_cfg["height"],
@@ -901,3 +902,16 @@ class FrontendRenderer:
             self._backend = None
 
         logger.info("Frontend shutdown complete")
+
+
+def build_renderer(
+    config_path: Path,
+    backend: DisplayBackend | None = None,
+) -> FrontendRenderer:
+    """Composition root for the frontend process.
+
+    Constructs :class:`FrontendRenderer` with the display backend selected
+    by :func:`metixel.display.detect_backend` (or an injected backend for
+    tests and alternate deployments).
+    """
+    return FrontendRenderer(config_path=config_path, backend=backend)

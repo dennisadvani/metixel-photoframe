@@ -12,6 +12,7 @@ import logging
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.ports import IrSocket
 
 logger = logging.getLogger(__name__)
 
@@ -37,23 +38,39 @@ class IRHandler:
         "KEY_LEFT": "prev",
     }
 
-    def __init__(self, state: StateManager, ipc: IPCClient) -> None:
+    def __init__(
+        self,
+        state: StateManager,
+        ipc: IPCClient,
+        ir: IrSocket | None = None,
+    ) -> None:
         self._state = state
         self._ipc = ipc
         self._running = False
+        self._ir = ir  # injected IrSocket port (None → real adapter in run())
         self._device: str = state.config.input.get("ir_device", "/dev/lirc0")
 
     def run(self) -> None:
         """Open LIRC socket and process incoming IR commands."""
-        import socket
+        import socket  # used for socket.timeout below
 
         lirc_socket = "/var/run/lirc/lircd"
         self._running = True
         logger.info("IR handler starting (socket: %s)", lirc_socket)
 
-        sock = None
+        sock = self._ir
+        if sock is None:
+            try:
+                from metixel.shared.adapters import LircSocketAdapter
+
+                sock = LircSocketAdapter()
+                self._ir = sock
+            except Exception:
+                logger.exception("Failed to connect to LIRC")
+                self._running = False
+                return
+
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             sock.connect(lirc_socket)
             sock.settimeout(1.0)
             logger.info("IR handler connected to LIRC socket")
@@ -82,8 +99,7 @@ class IRHandler:
                 logger.exception("IR handler error")
                 break
 
-        if sock:
-            sock.close()
+        sock.close()
         logger.info("IR handler stopped")
 
     def stop(self) -> None:

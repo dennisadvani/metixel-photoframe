@@ -121,13 +121,13 @@ if $DRY_RUN; then
     echo "Would tag: v$NEW_VERSION"
     echo "Would push: dev + main + tags"
     # Revert the bump
-    git checkout -- metixel/__init__.py
+    git checkout -- src/metixel/__init__.py
     exit 0
 fi
 
 # -- Commit version bump on dev ---------------------------------------------
 
-git add metixel/__init__.py
+git add src/metixel/__init__.py
 git commit -m "Bump version to $NEW_VERSION"
 
 echo -e "${GREEN}Version bump committed on dev.${NC}"

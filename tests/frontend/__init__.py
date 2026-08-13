@@ -3,7 +3,7 @@
 """Tests for the frontend."""
 
 
-def test_frontend_imports():
+def test_imports():
     """Verify frontend modules can be imported."""
     from metixel.frontend.renderer import FrontendRenderer
     from metixel.frontend.presentation.engine import PresentationEngine

@@ -26,6 +26,8 @@ from typing import Any
 import requests
 
 from metixel.backend.state import StateManager
+from metixel.shared.adapters import RequestsHttpGateway
+from metixel.shared.ports import HttpGateway
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +103,9 @@ class ImmichSyncer:
       Existing local files that are not in the album are left untouched.
     """
 
-    def __init__(self, state: StateManager) -> None:
+    def __init__(self, state: StateManager, http: HttpGateway | None = None) -> None:
         self._state = state
+        self._http = http if http is not None else RequestsHttpGateway()
         self._reload_config()
         self._running: bool = False
         self._last_result: SyncResult | None = None
@@ -459,7 +462,7 @@ class ImmichSyncer:
         url = f"{self._base_url}{_API_ALBUMS}"
         logger.debug("Listing albums: GET %s", url)
 
-        resp = requests.get(
+        resp = self._http.get(
             url,
             headers=self._get_headers(),
             timeout=_REQUEST_TIMEOUT,
@@ -483,7 +486,7 @@ class ImmichSyncer:
     def _list_albums(self) -> list[dict[str, Any]]:
         """Return all albums from the Immich server (for the UI picker)."""
         url = f"{self._base_url}{_API_ALBUMS}"
-        resp = requests.get(
+        resp = self._http.get(
             url,
             headers=self._get_headers(),
             timeout=_REQUEST_TIMEOUT,
@@ -508,7 +511,7 @@ class ImmichSyncer:
             if page is not None:
                 payload["page"] = page
 
-            resp = requests.post(
+            resp = self._http.post(
                 url,
                 headers=headers,
                 json=payload,
@@ -552,7 +555,7 @@ class ImmichSyncer:
 
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                with requests.get(
+                with self._http.get(
                     url,
                     headers=headers,
                     stream=True,

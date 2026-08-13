@@ -6,6 +6,7 @@ from metixel.shared.config import Config, load_config
 from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.log_buffer import LogRingBuffer
 from metixel.shared.models import Album, MediaItem, MediaType
+from metixel.shared.ports import Ports
 
 __all__ = [
     "Config",
@@ -16,4 +17,5 @@ __all__ = [
     "MediaType",
     "ControlMessage",
     "IPCServer",
+    "Ports",
 ]

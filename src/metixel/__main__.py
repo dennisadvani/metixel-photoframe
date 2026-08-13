@@ -157,15 +157,15 @@ def main() -> None:
     logger.info("Metixel Photoframe v%s starting in %s mode", __version__, args.mode)
 
     if args.mode == "backend":
-        from metixel.backend.daemon import BackendDaemon
+        # Composition root: wire the real adapters and start the daemon.
+        from metixel.backend.daemon import build_backend
 
-        daemon = BackendDaemon(config_path=args.config)
-        daemon.run()
+        build_backend(config_path=args.config).run()
     elif args.mode == "frontend":
-        from metixel.frontend.renderer import FrontendRenderer
+        # Composition root: select the display backend and start the renderer.
+        from metixel.frontend.renderer import build_renderer
 
-        renderer = FrontendRenderer(config_path=args.config)
-        renderer.run()
+        build_renderer(config_path=args.config).run()
 
 if __name__ == "__main__":
     main()

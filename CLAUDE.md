@@ -27,7 +27,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
    ```
    This file contains the complete system design, component relationships, and implementation roadmap.
 
-2. **Respect the display backend abstraction.** Never import `pi3d` directly in presentation or widget code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only file that may import pi3d is `metixel/display/dispmanx_backend.py`.
+2. **Respect the display backend abstraction.** Never import `pi3d` directly in presentation or widget code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only file that may import pi3d is `src/metixel/display/dispmanx_backend.py`.
 
 3. **Respect the 4-phase media pipeline.** Media flows through four distinct phases:
    - **Phase 1 (Watch):** `FolderWatcher` gathers metadata only — file type, dimensions, video codec. Does NOT process, resize, or transcode. Pushes `MediaItem` stubs to the `OptimisationQueue`.
@@ -98,10 +98,10 @@ sudo bash scripts/build_phase1.sh
 sudo bash scripts/build_phase2.sh
 
 # Lint
-ruff check metixel/
+ruff check src/metixel/
 
 # Type check
-mypy metixel/
+mypy src/metixel/
 ```
 
 ## Key File Locations
@@ -109,20 +109,20 @@ mypy metixel/
 | File | Purpose |
 |---|---|
 | `ARCHITECTURE.md` | **READ THIS FIRST** — complete system design |
-| `metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
-| `metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
-| `metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
-| `metixel/display/dev_backend.py` | Desktop dev: pygame-based software renderer |
-| `metixel/display/__init__.py` | Backend auto-detection factory |
-| `metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
-| `metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue |
-| `metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
-| `metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
-| `metixel/backend/processing/video.py` | ffmpeg transcode + thumbnail + first/last frame extraction + `needs_optimisation()` codec/resolution check |
-| `metixel/backend/sync/folder_watcher.py` | Phase 1 WATCH: metadata-only scanning, pushes to OptimisationQueue |
-| `metixel/backend/sync/immich.py` | Phase 4 SYNC: Immich API client, downloads to `media/sync/immich/` |
-| `metixel/frontend/presentation/engine.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
-| `metixel/shared/config.py` | Config schema, validation, defaults (includes `image` and `video` thresholds) |
+| `src/metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
+| `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
+| `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
+| `src/metixel/display/dev_backend.py` | Desktop dev: pygame-based software renderer |
+| `src/metixel/display/__init__.py` | Backend auto-detection factory |
+| `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
+| `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue |
+| `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
+| `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
+| `src/metixel/backend/processing/video.py` | ffmpeg transcode + thumbnail + first/last frame extraction + `needs_optimisation()` codec/resolution check |
+| `src/metixel/backend/sync/folder_watcher.py` | Phase 1 WATCH: metadata-only scanning, pushes to OptimisationQueue |
+| `src/metixel/backend/sync/immich.py` | Phase 4 SYNC: Immich API client, downloads to `media/sync/immich/` |
+| `src/metixel/frontend/presentation/engine.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
+| `src/metixel/shared/config.py` | Config schema, validation, defaults (includes `image` and `video` thresholds) |
 | `etc/config.json` | Runtime configuration file |
 | `scripts/quiet_boot.sh` | Silent boot configuration |
 

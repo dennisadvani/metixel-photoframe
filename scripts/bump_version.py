@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump the version in metixel/__init__.py.
+"""Bump the version in src/metixel/__init__.py.
 
 Usage:
     python scripts/bump_version.py                # bump patch (0.1.0 → 0.1.1)
@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-INIT_FILE = REPO_ROOT / "metixel" / "__init__.py"
+INIT_FILE = REPO_ROOT / "src" / "metixel" / "__init__.py"
 
 # Matches the same semver shape as UpdateManager._SEMVER_RE:
 #   "0.1.3"  or  "0.2.0-beta.1"  or  "1.0.0-rc.2"
@@ -36,7 +36,7 @@ PRE_LABELS = {"beta", "rc", "alpha", "pre"}
 
 
 def read_version() -> dict[str, Any]:
-    """Read the current version from metixel/__init__.py.
+    """Read the current version from src/metixel/__init__.py.
 
     Returns a dict with keys: major, minor, patch, pre_label (str|None), pre_num (int).
     """
@@ -65,7 +65,7 @@ def _format_version(ver: dict[str, Any]) -> str:
 
 
 def write_version(ver: dict[str, Any]) -> str:
-    """Write the version dict back to metixel/__init__.py.
+    """Write the version dict back to src/metixel/__init__.py.
 
     Returns the formatted version string.
     """

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import IPCClient
+from metixel.shared.ports import Ports
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,9 @@ class BackendDaemon:
     - Input handlers (CEC, IR) — background threads
     """
 
-    def __init__(self, config_path: Path) -> None:
+    def __init__(self, config_path: Path, ports: Ports | None = None) -> None:
         self._config_path = config_path.resolve()
+        self._ports = ports if ports is not None else Ports()
         self._state = StateManager(self._config_path)
         self._ipc = IPCClient()
         self._running = False
@@ -142,7 +144,7 @@ class BackendDaemon:
             logger.info("Immich sync enabled — starting sync engine")
             from metixel.backend.sync.immich import ImmichSyncer
 
-            syncer = ImmichSyncer(self._state)
+            syncer = ImmichSyncer(self._state, http=self._ports.http)
             t = threading.Thread(target=syncer.run, name="immich-syncer", daemon=True)
             t.start()
             self._threads.append(t)
@@ -168,7 +170,7 @@ class BackendDaemon:
             logger.info("MQTT enabled — starting client")
             from metixel.backend.mqtt_client import MQTTClient
 
-            client = MQTTClient(self._state, self._ipc)
+            client = MQTTClient(self._state, self._ipc, mqtt=self._ports.mqtt)
             t = threading.Thread(target=client.run, name="mqtt-client", daemon=True)
             t.start()
             self._threads.append(t)
@@ -180,7 +182,7 @@ class BackendDaemon:
         if config.input.get("cec_enabled", True):
             from metixel.backend.input_handlers.cec import CECHandler
 
-            cec = CECHandler(self._state, self._ipc)
+            cec = CECHandler(self._state, self._ipc, cec=self._ports.cec)
             t = threading.Thread(target=cec.run, name="cec-handler", daemon=True)
             t.start()
             self._threads.append(t)
@@ -188,7 +190,7 @@ class BackendDaemon:
         if config.input.get("ir_enabled", False):
             from metixel.backend.input_handlers.ir import IRHandler
 
-            ir = IRHandler(self._state, self._ipc)
+            ir = IRHandler(self._state, self._ipc, ir=self._ports.ir)
             t = threading.Thread(target=ir.run, name="ir-handler", daemon=True)
             t.start()
             self._threads.append(t)
@@ -543,7 +545,7 @@ class BackendDaemon:
         """
         from metixel.backend.update_manager import UpdateManager
 
-        self._update_mgr = UpdateManager(self._state)
+        self._update_mgr = UpdateManager(self._state, http=self._ports.http)
         t = threading.Thread(
             target=self._update_mgr.run,
             name="update-manager",
@@ -644,3 +646,13 @@ class BackendDaemon:
         for t in self._threads:
             if t.is_alive():
                 t.join(timeout=5.0)
+
+
+def build_backend(config_path: Path, ports: Ports | None = None) -> BackendDaemon:
+    """Composition root for the backend process.
+
+    Constructs :class:`BackendDaemon` with its external dependencies.
+    Ports left ``None`` resolve to the real adapters inside each service
+    (default behaviour); tests and alternate deployments inject fakes.
+    """
+    return BackendDaemon(config_path, ports=ports)
