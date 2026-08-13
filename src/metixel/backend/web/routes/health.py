@@ -7,13 +7,27 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify
 
 logger = logging.getLogger(__name__)
 
 health_bp = Blueprint("health", __name__)
+
+
+def _read_json(path: str) -> dict | None:
+    """Read a JSON status file written by the frontend.
+
+    Returns ``None`` if the file is missing, unreadable, or malformed.
+    """
+    try:
+        if os.path.isfile(path):
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 @health_bp.route("/health", methods=["GET"])
@@ -54,19 +68,10 @@ def get_processing_status():
     Reads from the same file the frontend uses for its splash screen
     progress bar (``/run/metixel/processing_status.json``).
     """
-    import os
-
-    path = "/run/metixel/processing_status.json"
-    try:
-        if os.path.isfile(path):
-            import json as _json
-
-            with open(path) as f:
-                data = _json.load(f)
-            return jsonify(data)
-    except (OSError, ValueError):
-        pass
-    return jsonify({"phase": "unknown", "total": 0, "processed": 0, "current_file": ""})
+    data = _read_json("/run/metixel/processing_status.json")
+    if data is None:
+        return jsonify({"phase": "unknown", "total": 0, "processed": 0, "current_file": ""})
+    return jsonify(data)
 
 
 def _read_current_media() -> dict | None:
@@ -74,42 +79,26 @@ def _read_current_media() -> dict | None:
 
     Resolves any thumbnail path into a URL the dashboard can fetch.
     """
-    import os
+    data = _read_json("/run/metixel/current_media.json")
+    if data is None:
+        return None
 
-    path = "/run/metixel/current_media.json"
-    try:
-        if os.path.isfile(path):
-            import json
+    # Convert thumbnail_path → thumbnail_url
+    thumb_path = data.get("thumbnail_path")
+    if thumb_path:
+        # The path could be a thumbnail hash (cache/thumbnails/<hash>.jpg)
+        # or a video frame cache (<video>.<N>.frame).
+        fname = os.path.basename(thumb_path)
+        data["thumbnail_url"] = f"/api/media/thumbnail/{fname}"
+    else:
+        data["thumbnail_url"] = None
 
-            with open(path) as f:
-                data = json.load(f)
-
-            # Convert thumbnail_path → thumbnail_url
-            thumb_path = data.get("thumbnail_path")
-            if thumb_path:
-                # The path could be a thumbnail hash (cache/thumbnails/<hash>.jpg)
-                # or a video frame cache (<video>.<N>.frame).
-                fname = os.path.basename(thumb_path)
-                data["thumbnail_url"] = f"/api/media/thumbnail/{fname}"
-            else:
-                data["thumbnail_url"] = None
-
-            return data
-    except (OSError, ValueError):
-        pass
-    return None
+    return data
 
 
 def _read_display_info() -> dict | None:
     """Read the display info status file written by the frontend."""
-    try:
-        info_path = "/run/metixel/display_info.json"
-        if os.path.isfile(info_path):
-            with open(info_path) as f:
-                return json.load(f)
-    except (OSError, ValueError, json.JSONDecodeError):
-        pass
-    return None
+    return _read_json("/run/metixel/display_info.json")
 
 
 @health_bp.route("/processing-status", methods=["GET"])
@@ -121,11 +110,7 @@ def processing_status():
     renders a separate progress bar for each phase so the user can see
     all queue states at once, without flickering between them.
     """
-    try:
-        path = Path("/run/metixel/processing_status.json")
-        if not path.exists():
-            return jsonify({"active": None, "phases": {}})
-        with open(path, encoding="utf-8") as f:
-            return jsonify(json.load(f))
-    except Exception:
+    data = _read_json("/run/metixel/processing_status.json")
+    if data is None:
         return jsonify({"active": None, "phases": {}})
+    return jsonify(data)

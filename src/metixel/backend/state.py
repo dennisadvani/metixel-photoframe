@@ -18,6 +18,7 @@ from typing import Any
 
 from metixel.shared.config import Config
 from metixel.shared.models import MediaItem
+from metixel.shared.system_stats import read_meminfo
 
 logger = logging.getLogger(__name__)
 
@@ -322,30 +323,18 @@ class StateManager:
             Dict with keys ``percent``, ``used_gb``, ``total_gb``.
             Falls back to zeros if ``/proc/meminfo`` cannot be read.
         """
-        try:
-            with open("/proc/meminfo") as f:
-                lines = f.readlines()
-            mem = {}
-            for line in lines:
-                if ":" in line:
-                    key, val = line.split(":", 1)
-                    # Value is " 12345 kB" — extract the number
-                    parts = val.strip().split()
-                    if parts:
-                        mem[key.strip()] = int(parts[0])
-            total_kb = mem.get("MemTotal", 0)
-            available_kb = mem.get("MemAvailable", 0)
-            if total_kb <= 0:
-                return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
-            used_kb = total_kb - available_kb
-            pct = round(used_kb / total_kb * 100.0, 1)
-            return {
-                "percent": max(0.0, min(100.0, pct)),
-                "used_gb": round(used_kb / (1024 * 1024), 1),
-                "total_gb": round(total_kb / (1024 * 1024), 1),
-            }
-        except Exception:
+        mem = read_meminfo()
+        total_kb = mem.get("MemTotal", 0)
+        available_kb = mem.get("MemAvailable", 0)
+        if total_kb <= 0:
             return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
+        used_kb = total_kb - available_kb
+        pct = round(used_kb / total_kb * 100.0, 1)
+        return {
+            "percent": max(0.0, min(100.0, pct)),
+            "used_gb": round(used_kb / (1024 * 1024), 1),
+            "total_gb": round(total_kb / (1024 * 1024), 1),
+        }
 
     @staticmethod
     def _get_swap_stats() -> dict[str, float]:
@@ -355,29 +344,18 @@ class StateManager:
             Dict with keys ``percent``, ``used_gb``, ``total_gb``.
             Falls back to zeros if swap is disabled or unreadable.
         """
-        try:
-            with open("/proc/meminfo") as f:
-                lines = f.readlines()
-            mem = {}
-            for line in lines:
-                if ":" in line:
-                    key, val = line.split(":", 1)
-                    parts = val.strip().split()
-                    if parts:
-                        mem[key.strip()] = int(parts[0])
-            total_kb = mem.get("SwapTotal", 0)
-            free_kb = mem.get("SwapFree", 0)
-            if total_kb <= 0:
-                return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
-            used_kb = total_kb - free_kb
-            pct = round(used_kb / total_kb * 100.0, 1)
-            return {
-                "percent": max(0.0, min(100.0, pct)),
-                "used_gb": round(used_kb / (1024 * 1024), 1),
-                "total_gb": round(total_kb / (1024 * 1024), 1),
-            }
-        except Exception:
+        mem = read_meminfo()
+        total_kb = mem.get("SwapTotal", 0)
+        free_kb = mem.get("SwapFree", 0)
+        if total_kb <= 0:
             return {"percent": 0.0, "used_gb": 0.0, "total_gb": 0.0}
+        used_kb = total_kb - free_kb
+        pct = round(used_kb / total_kb * 100.0, 1)
+        return {
+            "percent": max(0.0, min(100.0, pct)),
+            "used_gb": round(used_kb / (1024 * 1024), 1),
+            "total_gb": round(total_kb / (1024 * 1024), 1),
+        }
 
     # -- Playlist Management -------------------------------------------------
 

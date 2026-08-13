@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from metixel.display.backend import DisplayBackend
+from metixel.shared.platform import is_raspberry_pi, read_vcgencmd_mem, read_vcgencmd_mem_str
 
 logger = logging.getLogger(__name__)
 
@@ -633,47 +634,16 @@ class Pi3dBackend(DisplayBackend):
             "max_textures": self._max_textures,
         }
 
-        try:
-            # ── vcgencmd get_mem gpu ──────────────────────────────────
-            result = subprocess.run(
-                ["vcgencmd", "get_mem", "gpu"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            if result.returncode == 0 and "=" in result.stdout:
-                val = result.stdout.strip().split("=")[-1].rstrip("M")
-                info["gpu_total_mb"] = int(val)
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            pass
-
-        try:
-            # ── vcgencmd get_mem reloc ────────────────────────────────
-            result = subprocess.run(
-                ["vcgencmd", "get_mem", "reloc"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            if result.returncode == 0 and "=" in result.stdout:
-                val = result.stdout.strip().split("=")[-1].rstrip("M")
-                info["reloc_used_mb"] = int(val)
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            pass
-
-        try:
-            # ── vcgencmd get_mem malloc ───────────────────────────────
-            result = subprocess.run(
-                ["vcgencmd", "get_mem", "malloc"],
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-            if result.returncode == 0 and "=" in result.stdout:
-                val = result.stdout.strip().split("=")[-1].rstrip("M")
-                info["malloc_used_mb"] = int(val)
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            pass
+        # ── vcgencmd get_mem gpu / reloc / malloc ─────────────────────
+        gpu_total_mb = read_vcgencmd_mem("gpu")
+        if gpu_total_mb is not None:
+            info["gpu_total_mb"] = gpu_total_mb
+        reloc_mb = read_vcgencmd_mem("reloc")
+        if reloc_mb is not None:
+            info["reloc_used_mb"] = reloc_mb
+        malloc_mb = read_vcgencmd_mem("malloc")
+        if malloc_mb is not None:
+            info["malloc_used_mb"] = malloc_mb
 
         try:
             # ── /sys/kernel/debug/dri/0/bo_stats ──────────────────────
@@ -974,25 +944,12 @@ class Pi3dBackend(DisplayBackend):
     @staticmethod
     def _is_pi() -> bool:
         """Check if running on a Raspberry Pi."""
-        try:
-            with open("/proc/device-tree/model") as f:
-                return "Raspberry Pi" in f.read()
-        except (OSError, FileNotFoundError):
-            return os.path.exists("/opt/vc/lib/libEGL.so")
+        return is_raspberry_pi()
 
     @staticmethod
     def _get_gpu_mem() -> str:
         """Get GPU memory allocation from vcgencmd."""
-        try:
-            result = subprocess.run(
-                ["vcgencmd", "get_mem", "gpu"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            return result.stdout.strip()
-        except Exception:
-            return "unknown"
+        return read_vcgencmd_mem_str("gpu", fallback="unknown")
 
     @staticmethod
     def _get_drm_driver() -> str:

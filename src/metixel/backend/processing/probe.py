@@ -15,52 +15,24 @@ from pathlib import Path
 
 from metixel.backend.processing.ffmpeg_cmds import probe_cmd, validate_cmd
 from metixel.backend.processing.utils import nice_cmd
+from metixel.shared.platform import detect_pi_model as _detect_pi_model
+from metixel.shared.system_stats import available_ram_bytes as _available_ram_bytes
 
 logger = logging.getLogger(__name__)
 
 
 def available_ram_bytes() -> int | None:
-    """Read available system RAM from ``/proc/meminfo``.
-
-    Returns ``MemAvailable`` in bytes, or ``None`` if the file cannot
-    be read (e.g. on a non-Linux dev machine).
-    """
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        return int(parts[1]) * 1024  # kB → bytes
-    except (OSError, ValueError):
-        pass
-    return None
+    """Read available system RAM from ``/proc/meminfo`` (in bytes)."""
+    return _available_ram_bytes()
 
 
 def detect_pi_model() -> str | None:
-    """Detect the Raspberry Pi model from ``/proc/device-tree/model``.
+    """Detect the Raspberry Pi model (transcode profile key).
 
     Returns the profile key (``pi2``, ``pi3``, ``pi4``, ``pi5``) or
     ``None`` if the model can't be determined.
     """
-    try:
-        with open("/proc/device-tree/model") as f:
-            model = f.read().strip("\x00").strip()
-    except (OSError, FileNotFoundError):
-        return None
-
-    model_lower = model.lower()
-    if "raspberry pi 5" in model_lower:
-        return "pi5"
-    if "raspberry pi 4" in model_lower or "raspberry pi 400" in model_lower:
-        return "pi4"
-    if "raspberry pi 3" in model_lower:
-        return "pi3"
-    if "raspberry pi 2" in model_lower:
-        return "pi2"
-    if "raspberry pi zero 2" in model_lower:
-        return "pi3"  # Zero 2 W has similar VideoCore IV to Pi 3
-    return None
+    return _detect_pi_model()
 
 
 def probe_video(path: Path, timeout: int) -> dict:

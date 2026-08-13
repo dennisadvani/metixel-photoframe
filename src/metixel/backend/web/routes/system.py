@@ -6,137 +6,105 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import threading
+import time
 
 from flask import Blueprint, jsonify, request
+
+from metixel.shared.platform import read_device_tree_model, read_vcgencmd_mem_str
 
 logger = logging.getLogger(__name__)
 
 system_bp = Blueprint("system", __name__)
 
 
+def _schedule_sudo(
+    cmd: list[str],
+    *,
+    ok_message: str,
+    fail_message: str,
+    thread_name: str,
+    delay: float = 2.0,
+) -> None:
+    """Run ``sudo -n <cmd>`` in a background thread after a short delay.
+
+    The delay lets the HTTP response flush before the service reboots
+    or the system shuts down.  Requires a NOPASSWD sudoers entry for
+    the command.  Failures are logged (never raised) so the endpoint
+    returns immediately and errors surface in the journal.
+    """
+
+    def _run() -> None:
+        time.sleep(delay)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode != 0:
+                tail = (result.stderr or result.stdout or "").strip()[-300:]
+                logger.error("%s failed (rc=%d): %s", fail_message, result.returncode, tail)
+            else:
+                logger.info("%s", ok_message)
+        except subprocess.TimeoutExpired:
+            logger.error("%s timed out after 15s", fail_message)
+        except FileNotFoundError:
+            logger.error("%s: command not found", fail_message)
+        except Exception as exc:
+            logger.error("%s failed: %s", fail_message, exc)
+
+    thread = threading.Thread(target=_run, daemon=True, name=thread_name)
+    thread.start()
+
+
 @system_bp.route("/restart", methods=["POST"])
 def restart_services():
     """Restart all Metixel systemd services via sudo systemctl.
 
-    Returns immediately with a success response, then schedules a
-    delayed restart in a background thread.  The 2-second delay ensures
-    the HTTP response is fully sent before the services are restarted.
-
-    Uses ``sudo systemctl restart metixel-backend metixel-cage``.
-    Requires a NOPASSWD sudoers entry for systemctl.  If the sudo
-    call fails (e.g. missing sudoers entry), returns an error so the
-    frontend can surface it — no silent fallback to os.kill.
-
-    This is typically called after clearing the media cache, since
-    stale cached-file references in the running frontend cause
-    missing-file errors until the services are restarted.
+    Returns immediately, then restarts ``metixel-backend`` and
+    ``metixel-cage`` after a 2-second delay so the response is fully
+    sent first.  Typically called after clearing the media cache so
+    stale cached-file references are dropped.
     """
-    import threading
-    import time as _time
-
-    def _do_restart() -> None:
-        _time.sleep(2)
-        try:
-            result = subprocess.run(
-                ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0:
-                tail = (result.stderr or result.stdout or "").strip()[-300:]
-                logger.error("sudo systemctl restart failed (rc=%d): %s", result.returncode, tail)
-            else:
-                logger.info("Services restarted via sudo systemctl")
-        except subprocess.TimeoutExpired:
-            logger.error("sudo systemctl restart timed out after 15s")
-        except FileNotFoundError:
-            logger.error("systemctl not found — cannot restart services")
-        except Exception as exc:
-            logger.error("sudo systemctl restart failed: %s", exc)
-
-    thread = threading.Thread(target=_do_restart, daemon=True, name="svc-restart")
-    thread.start()
+    _schedule_sudo(
+        ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
+        ok_message="Services restarted via sudo systemctl",
+        fail_message="sudo systemctl restart",
+        thread_name="svc-restart",
+    )
     logger.info("Service restart scheduled (will execute in 2s)")
     return jsonify({"status": "ok", "message": "Restarting services in 2 seconds…"})
 
 
 @system_bp.route("/reboot", methods=["POST"])
 def reboot_system():
-    """Reboot the system via sudo reboot now.
+    """Reboot the system via ``sudo reboot now``.
 
-    Returns immediately with a success response, then schedules a
-    delayed reboot in a background thread.  The 2-second delay ensures
-    the HTTP response is fully sent before the system goes down.
-
-    Requires a NOPASSWD sudoers entry for reboot.
+    Returns immediately, then reboots after a 2-second delay so the
+    response is fully sent first.  Requires a NOPASSWD sudoers entry
+    for reboot.
     """
-    import threading
-    import time as _time
-
-    def _do_reboot() -> None:
-        _time.sleep(2)
-        try:
-            result = subprocess.run(
-                ["sudo", "-n", "reboot", "now"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0:
-                tail = (result.stderr or result.stdout or "").strip()[-300:]
-                logger.error("sudo reboot now failed (rc=%d): %s", result.returncode, tail)
-            else:
-                logger.info("System reboot initiated via sudo reboot now")
-        except subprocess.TimeoutExpired:
-            logger.error("sudo reboot now timed out after 15s")
-        except FileNotFoundError:
-            logger.error("reboot not found — cannot reboot system")
-        except Exception as exc:
-            logger.error("sudo reboot now failed: %s", exc)
-
-    thread = threading.Thread(target=_do_reboot, daemon=True, name="sys-reboot")
-    thread.start()
+    _schedule_sudo(
+        ["sudo", "-n", "reboot", "now"],
+        ok_message="System reboot initiated via sudo reboot now",
+        fail_message="sudo reboot now",
+        thread_name="sys-reboot",
+    )
     logger.info("System reboot scheduled (will execute in 2s)")
     return jsonify({"status": "ok", "message": "Rebooting system in 2 seconds…"})
 
 
 @system_bp.route("/shutdown", methods=["POST"])
 def shutdown_system():
-    """Shut down the system via sudo shutdown now.
+    """Shut down the system via ``sudo shutdown now``.
 
-    Returns immediately with a success response, then schedules a
-    delayed shutdown in a background thread.  The 2-second delay ensures
-    the HTTP response is fully sent before the system goes down.
-
-    Requires a NOPASSWD sudoers entry for shutdown.
+    Returns immediately, then shuts down after a 2-second delay so the
+    response is fully sent first.  Requires a NOPASSWD sudoers entry
+    for shutdown.
     """
-    import threading
-    import time as _time
-
-    def _do_shutdown() -> None:
-        _time.sleep(2)
-        try:
-            result = subprocess.run(
-                ["sudo", "-n", "shutdown", "now"],
-                capture_output=True,
-                text=True,
-                timeout=15,
-            )
-            if result.returncode != 0:
-                tail = (result.stderr or result.stdout or "").strip()[-300:]
-                logger.error("sudo shutdown now failed (rc=%d): %s", result.returncode, tail)
-            else:
-                logger.info("System shutdown initiated via sudo shutdown now")
-        except subprocess.TimeoutExpired:
-            logger.error("sudo shutdown now timed out after 15s")
-        except FileNotFoundError:
-            logger.error("shutdown not found — cannot shut down system")
-        except Exception as exc:
-            logger.error("sudo shutdown now failed: %s", exc)
-
-    thread = threading.Thread(target=_do_shutdown, daemon=True, name="sys-shutdown")
-    thread.start()
+    _schedule_sudo(
+        ["sudo", "-n", "shutdown", "now"],
+        ok_message="System shutdown initiated via sudo shutdown now",
+        fail_message="sudo shutdown now",
+        thread_name="sys-shutdown",
+    )
     logger.info("System shutdown scheduled (will execute in 2s)")
     return jsonify({"status": "ok", "message": "Shutting down system in 2 seconds…"})
 
@@ -222,11 +190,7 @@ def get_system_info():
         info["app_version"] = "unknown"
 
     # -- Pi hardware model ---------------------------------------------------
-    try:
-        with open("/proc/device-tree/model") as f:
-            info["pi_model"] = f.read().strip("\x00\n\t ")
-    except (OSError, FileNotFoundError):
-        info["pi_model"] = "not a Raspberry Pi"
+    info["pi_model"] = read_device_tree_model() or "not a Raspberry Pi"
 
     # -- OS release ----------------------------------------------------------
     try:
@@ -255,19 +219,7 @@ def get_system_info():
         info["pi3d_version"] = "not installed"
 
     # -- GPU memory ----------------------------------------------------------
-    try:
-        result = subprocess.run(
-            ["vcgencmd", "get_mem", "gpu"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            info["gpu_memory"] = result.stdout.strip()
-        else:
-            info["gpu_memory"] = "unavailable"
-    except Exception:
-        info["gpu_memory"] = "unavailable"
+    info["gpu_memory"] = read_vcgencmd_mem_str("gpu", fallback="unavailable")
 
     # -- DRM driver ----------------------------------------------------------
     try:

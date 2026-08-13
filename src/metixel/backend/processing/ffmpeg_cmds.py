@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from metixel.backend.processing.utils import nice_cmd
+from metixel.shared.system_stats import read_meminfo
 
 logger = logging.getLogger(__name__)
 
@@ -233,18 +234,8 @@ def _libx265_preset() -> str:
     libx265 uses 2–3× more RAM than libx264 at the same preset, so use a
     lighter preset on devices with ≤2GB to avoid OOM.
     """
-    preset = "fast"
-    total_ram = 0
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemTotal:"):
-                    total_ram = int(line.split()[1]) * 1024
-                    break
-    except Exception:
-        pass
-    preset = "ultrafast" if total_ram > 0 and total_ram <= 3 * 1024 * 1024 * 1024 else "superfast"
-    return preset
+    total_ram = read_meminfo().get("MemTotal", 0) * 1024
+    return "ultrafast" if total_ram > 0 and total_ram <= 3 * 1024 * 1024 * 1024 else "superfast"
 
 
 def wrap_with_throttle(

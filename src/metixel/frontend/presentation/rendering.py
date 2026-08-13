@@ -9,6 +9,7 @@ from typing import Any
 
 from metixel.frontend.presentation.base import BaseEngineState
 from metixel.shared.models import MediaItem
+from metixel.shared.system_stats import format_gpu_stats
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +51,7 @@ class FrameRendererMixin(BaseEngineState):
                     getattr(item, "original_path", item),
                 )
                 if gpu_info:
-                    logger.debug(
-                        "GPU mem at sync load: total=%sM reloc=%sM V3D=%skb/%sBOs textures=%s/%s",
-                        gpu_info.get("gpu_total_mb", "?"),
-                        gpu_info.get("reloc_used_mb", "?"),
-                        gpu_info.get("v3d_bo_kb", "?"),
-                        gpu_info.get("v3d_bo_count", "?"),
-                        gpu_info.get("texture_count", "?"),
-                        gpu_info.get("max_textures", "?"),
-                    )
+                    logger.debug("GPU mem at sync load: %s", format_gpu_stats(gpu_info))
                 self._load_texture_for_slot(self._active, item)
                 tex = self._tex[self._active]
             if tex is None:
@@ -71,16 +64,7 @@ class FrameRendererMixin(BaseEngineState):
                     self._current_idx,
                 )
                 if gpu_info:
-                    logger.warning(
-                        "GPU mem at black screen: total=%sM reloc=%sM "
-                        "V3D=%skb/%sBOs textures=%s/%s",
-                        gpu_info.get("gpu_total_mb", "?"),
-                        gpu_info.get("reloc_used_mb", "?"),
-                        gpu_info.get("v3d_bo_kb", "?"),
-                        gpu_info.get("v3d_bo_count", "?"),
-                        gpu_info.get("texture_count", "?"),
-                        gpu_info.get("max_textures", "?"),
-                    )
+                    logger.warning("GPU mem at black screen: %s", format_gpu_stats(gpu_info))
                 return
             texture = tex
 

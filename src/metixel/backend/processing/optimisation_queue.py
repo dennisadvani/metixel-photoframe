@@ -37,6 +37,7 @@ from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.processing.video import VideoProcessor
 from metixel.backend.state import StateManager
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
+from metixel.shared.system_stats import read_meminfo, read_system_stats
 
 logger = logging.getLogger(__name__)
 
@@ -735,19 +736,10 @@ class OptimisationQueue:
 
         Returns 0 if /proc/meminfo is unavailable (e.g. Windows).
         """
-        try:
-            with open("/proc/meminfo") as f:
-                meminfo: dict[str, int] = {}
-                for line in f:
-                    if ":" in line:
-                        key, val = line.split(":", 1)
-                        val = val.strip().split()[0]
-                        meminfo[key.strip()] = int(val)
-            total = meminfo.get("MemTotal", 0) // 1024
-            avail = meminfo.get("MemAvailable", 0) // 1024
-            return total - avail if total > 0 else 0
-        except (OSError, ValueError):
-            return 0
+        mem = read_meminfo()
+        total = mem.get("MemTotal", 0) // 1024
+        avail = mem.get("MemAvailable", 0) // 1024
+        return total - avail if total > 0 else 0
 
     def _process_video_queue(self) -> None:
         """Process items in the video optimisation queue.
@@ -905,57 +897,19 @@ class OptimisationQueue:
         Reads ``/proc/stat``, ``/proc/meminfo``, and ``/proc/loadavg``.
         Silent on non-Linux (dev/Win) systems.
         """
-        try:
-            # ── CPU utilisation via /proc/stat ───────────────────────
-            with open("/proc/stat") as f:
-                cpu_line = f.readline()
-            parts = cpu_line.split()
-            if parts[0] == "cpu" and len(parts) >= 8:
-                user, nice, system, idle = (
-                    int(parts[1]),
-                    int(parts[2]),
-                    int(parts[3]),
-                    int(parts[4]),
-                )
-                total = user + nice + system + idle
-                active = user + nice + system
-                cpu_pct = (active / total * 100) if total > 0 else 0.0
-            else:
-                cpu_pct = -1.0
-
-            # ── Memory + swap via /proc/meminfo ──────────────────────
-            meminfo: dict[str, int] = {}
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    if ":" in line:
-                        key, val = line.split(":", 1)
-                        val = val.strip().split()[0]
-                        meminfo[key.strip()] = int(val)
-
-            total_mb = meminfo.get("MemTotal", 0) // 1024
-            avail_mb = meminfo.get("MemAvailable", 0) // 1024
-            used_mb = total_mb - avail_mb if total_mb > 0 else 0
-            mem_pct = (used_mb / total_mb * 100) if total_mb > 0 else 0.0
-
-            swap_total = meminfo.get("SwapTotal", 0) // 1024
-            swap_free = meminfo.get("SwapFree", 0) // 1024
-            swap_used = swap_total - swap_free
-
-            # ── Load average ─────────────────────────────────────────
-            with open("/proc/loadavg") as f:
-                load = f.readline().split()[:3]
-
-            logger.debug(
-                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  SWAP=%d/%dMB  LOAD=%s %s %s",
-                cpu_pct,
-                used_mb,
-                total_mb,
-                mem_pct,
-                swap_used,
-                swap_total,
-                load[0],
-                load[1],
-                load[2],
-            )
-        except (OSError, ValueError, IndexError):
-            pass  # Non-Linux or /proc not available
+        stats = read_system_stats()
+        if stats is None:
+            return  # Non-Linux or /proc not available
+        load = stats["loadavg"]
+        logger.debug(
+            "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  SWAP=%d/%dMB  LOAD=%s %s %s",
+            stats["cpu_percent"],
+            stats["mem_used_mb"],
+            stats["mem_total_mb"],
+            stats["mem_percent"],
+            stats["swap_used_mb"],
+            stats["swap_total_mb"],
+            load[0],
+            load[1],
+            load[2],
+        )
