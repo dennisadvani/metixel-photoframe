@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from metixel.display.backend import DisplayBackend
 
+from metixel.shared.platform import is_raspberry_pi, read_device_tree_model
+
 logger = logging.getLogger(__name__)
 
 
@@ -80,23 +82,12 @@ def detect_backend() -> DisplayBackend:
 
 
 def _is_raspberry_pi() -> bool:
-    """Check if running on a Raspberry Pi by reading /proc/device-tree/model."""
-    try:
-        with open("/proc/device-tree/model") as f:
-            model = f.read().strip()
-            is_pi = "Raspberry Pi" in model
-            if is_pi:
-                logger.info("Pi model: %s", model)
-            return is_pi
-    except (OSError, FileNotFoundError):
-        pass
-
-    # Fallback: check for /opt/vc/lib (legacy Broadcom path)
-    if os.path.exists("/opt/vc/lib/libEGL.so"):
-        logger.info("Pi detected via legacy Broadcom libs at /opt/vc/lib")
-        return True
-
-    return False
+    """Check if running on a Raspberry Pi (model file or legacy libs)."""
+    is_pi = is_raspberry_pi()
+    model = read_device_tree_model()
+    if is_pi and model:
+        logger.info("Pi model: %s", model)
+    return is_pi
 
 
 def _pi3d_available() -> bool:

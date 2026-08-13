@@ -11,7 +11,7 @@ import pytest
 
 def test_default_config():
     """Verify default config can be created."""
-    from metixel.shared.config import DEFAULT_CONFIG, Config
+    from metixel.shared.config import Config
 
     config = Config()
     assert config.display["width"] == 0
@@ -197,10 +197,9 @@ def test_video_section_save_load(tmp_path):
 
 def test_video_section_legacy_fallback():
     """Verify the video section synthesises values from legacy slideshow keys."""
-    from metixel.shared.config import DEFAULT_CONFIG, Config
-
-    # Simulate an older config without the "video" key
     import copy
+
+    from metixel.shared.config import DEFAULT_CONFIG, Config
     old_data = copy.deepcopy(DEFAULT_CONFIG)
     old_data["slideshow"]["video_playback_enabled"] = False
     old_data["slideshow"]["video_max_duration_seconds"] = 60
@@ -264,7 +263,7 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("sync.immich.enabled", False),
     ("sync.immich.server_url", "https://immich.example.com"),
     ("sync.immich.api_key", ""),
-    ("sync.immich.album_name", ""),
+    ("sync.immich.albums", []),
     ("sync.immich.strict_sync", False),
     ("sync.immich.sync_dir", "media/sync/immich/"),
     ("sync.immich.poll_interval_seconds", 3600),
@@ -420,7 +419,7 @@ class TestConfigTimeout:
 
     def test_timeout_section_missing_entirely(self) -> None:
         """timeout() still returns defaults when timeouts section is absent.
-        
+
         The ``timeouts`` property auto-creates the section and fills in
         all defaults, so even a missing section behaves correctly.
         """
@@ -524,11 +523,12 @@ class TestResolveWatchPaths:
         assert Path("/legacy/path/") in paths
 
     def test_default_watch_paths(self) -> None:
-        """Default config has 3 enabled watch paths, resolved to absolute."""
+        """Default config has 3 enabled watch paths, resolved to the base dir."""
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
-        paths = resolve_watch_paths(cfg, base_dir="/opt/metixel")
+        base = Path("/opt/metixel")
+        paths = resolve_watch_paths(cfg, base_dir=str(base))
         assert len(paths) == 3
-        # All default paths are relative → resolved to /opt/metixel/...
-        assert all(p.is_absolute() for p in paths)
+        # All default paths are relative → resolved under the base dir
+        assert all(str(p).startswith(str(base)) for p in paths)

@@ -65,7 +65,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": False,
             "server_url": "https://immich.example.com",
             "api_key": "",
-            "album_name": "",
+            "albums": [],  # [{"id": ..., "name": ...}] — multi-album sync
             "strict_sync": False,
             "sync_dir": "media/sync/immich/",
             "poll_interval_seconds": 3600,  # 60 minutes

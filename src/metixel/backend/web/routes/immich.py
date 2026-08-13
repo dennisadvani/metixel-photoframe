@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
@@ -50,31 +51,80 @@ def list_albums():
         }
         for a in albums
     ]
-    # Sort alphabetically
+    # Sort alphabetically, cap the list (the UI filters client-side).
     result.sort(key=lambda a: a["name"].lower())
+    result = result[:5000]
     return jsonify(result)
+
+
+@immich_bp.route("/albums/add", methods=["POST"])
+def add_album():
+    """Add an album to the configured sync group (deduplicated by id)."""
+
+    data = request.get_json(silent=True) or {}
+    album_id = (data.get("id") or "").strip()
+    name = (data.get("name") or "").strip()
+    if not album_id or not name:
+        return jsonify({"error": "Missing album id or name"}), 400
+
+    state = current_app.config["METIXEL_STATE"]
+    config = state.config
+    albums = list(config.sync["immich"].get("albums") or [])
+    if not any(a.get("id") == album_id for a in albums):
+        albums.append({"id": album_id, "name": name})
+        state.update_config("sync", {"immich": {"albums": albums}})
+        logger.info("Added Immich album to sync group: %s (%s)", name, album_id)
+
+    return jsonify({"status": "ok", "albums": albums})
+
+
+@immich_bp.route("/albums/remove", methods=["POST"])
+def remove_album():
+    """Remove an album from the sync group and delete its local folder.
+
+    The UI confirms before calling this — the ``album_<id>`` folder and
+    all downloaded files are deleted.
+    """
+
+    data = request.get_json(silent=True) or {}
+    album_id = (data.get("id") or "").strip()
+    if not album_id:
+        return jsonify({"error": "Missing album id"}), 400
+
+    state = current_app.config["METIXEL_STATE"]
+    config = state.config
+    albums = [
+        a for a in (config.sync["immich"].get("albums") or []) if a.get("id") != album_id
+    ]
+    state.update_config("sync", {"immich": {"albums": albums}})
+
+    # Delete the local album folder (best-effort).
+    import shutil
+
+    sync_dir = config.sync["immich"].get("sync_dir", "media/sync/immich/")
+    sync_dir_path = Path(sync_dir)
+    if not sync_dir_path.is_absolute():
+        sync_dir_path = Path("/opt/metixel") / sync_dir_path
+    album_dir = sync_dir_path / f"album_{album_id}"
+    deleted = False
+    if album_dir.is_dir():
+        shutil.rmtree(album_dir, ignore_errors=True)
+        deleted = True
+        logger.info("Removed Immich album %s and deleted local folder %s", album_id, album_dir)
+
+    return jsonify({"status": "ok", "albums": albums, "deleted_folder": deleted})
 
 
 @immich_bp.route("/sync", methods=["POST"])
 def trigger_sync():
-    """Trigger a manual Immich sync cycle.
+    """Trigger a manual Immich sync cycle (all configured albums).
 
     Runs synchronously in a background thread so the HTTP request returns
     quickly. The result can be polled via ``GET /api/immich/status``.
-
-    Body (optional JSON):
-        ``{"album_name": "My Album"}`` — override the configured album for
-        this one-time sync.
     """
 
     state = current_app.config["METIXEL_STATE"]
     syncer = _get_or_create_syncer(state)
-
-    data = request.get_json(silent=True) or {}
-
-    # Optionally override album name for this sync
-    if "album_name" in data:
-        syncer._album_name = data["album_name"]  # noqa: SLF001
 
     # Run sync in a background thread so the request returns immediately
     def _run():

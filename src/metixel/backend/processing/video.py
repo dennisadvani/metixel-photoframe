@@ -2,18 +2,13 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Video processor — ffmpeg-based transcoding and thumbnail extraction.
 
-Uses software encoding (libx264) by default for the best quality.
-Hardware-accelerated encoding (h264_v4l2m2m on Pi) is available as an
-opt-in alternative when speed is preferred over quality.
+Facade for the video processing pipeline.  The heavy lifting now lives in:
+- ``probe`` — ffprobe metadata probes plus RAM / Pi model detection
+- ``ffmpeg_cmds`` — pure ffmpeg/ffprobe command builders
+- ``frames`` — thumbnail and first/last frame extraction execution
 
-Transcoding is configurable:
-- On/off toggle (when off, original file is used directly)
-- Target resolution (aspect-ratio-preserving scale-to-fit)
-- Quality (CRF for software, bitrate for hardware encoders)
-- Software vs hardware encoder selection
-- CPU throttling via ``cpulimit`` or ``nice`` to keep the photoframe
-  responsive during transcoding
-- Transcode timeout (default 2 hours)
+``VideoProcessor`` keeps the public API, profile/threshold logic and the
+process orchestration, delegating the mechanics to those modules.
 """
 
 from __future__ import annotations
@@ -21,60 +16,32 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
-import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
-from metixel.backend.processing.utils import nice_cmd
+from metixel.backend.processing.ffmpeg_cmds import (
+    compute_thread_limit,
+    select_encoders,
+    transcode_cmd,
+    wrap_with_throttle,
+)
+from metixel.backend.processing.frames import (
+    cleanup_cached_video,
+    extract_thumbnail,
+    extract_video_frames,
+)
+from metixel.backend.processing.probe import (
+    available_ram_bytes,
+    probe_video,
+    validate_cached_video,
+)
+from metixel.backend.processing.probe import (
+    detect_pi_model as _detect_pi_model,
+)
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 logger = logging.getLogger(__name__)
-
-
-def _get_available_ram_bytes() -> int | None:
-    """Read available system RAM from ``/proc/meminfo``.
-
-    Returns ``MemAvailable`` in bytes, or ``None`` if the file cannot
-    be read (e.g. on a non-Linux dev machine).
-    """
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        return int(parts[1]) * 1024  # kB → bytes
-    except (OSError, ValueError):
-        pass
-    return None
-
-
-def _detect_pi_model() -> str | None:
-    """Detect the Raspberry Pi model from ``/proc/device-tree/model``.
-
-    Returns the profile key (``pi2``, ``pi3``, ``pi4``, ``pi5``) or
-    ``None`` if the model can't be determined.
-    """
-    try:
-        with open("/proc/device-tree/model") as f:
-            model = f.read().strip("\x00").strip()
-    except (OSError, FileNotFoundError):
-        return None
-
-    model_lower = model.lower()
-    if "raspberry pi 5" in model_lower:
-        return "pi5"
-    if "raspberry pi 4" in model_lower or "raspberry pi 400" in model_lower:
-        return "pi4"
-    if "raspberry pi 3" in model_lower:
-        return "pi3"
-    if "raspberry pi 2" in model_lower:
-        return "pi2"
-    if "raspberry pi zero 2" in model_lower:
-        return "pi3"  # Zero 2 W has similar VideoCore IV to Pi 3
-    return None
 
 
 class VideoProcessor:
@@ -84,29 +51,21 @@ class VideoProcessor:
     Hardware-accelerated encoding (h264_v4l2m2m on Pi) is available as an
     opt-in alternative when speed is preferred over quality.
 
-    Transcoding is configurable:
-    - On/off toggle (when off, original file is used directly)
-    - Target resolution (aspect-ratio-preserving scale-to-fit)
-    - Quality (CRF for software, bitrate for hardware encoders)
-    - Software vs hardware encoder selection
-    - CPU throttling via ``cpulimit`` or ``nice`` to keep the photoframe
-      responsive during transcoding
-    - Transcode timeout (default 2 hours)
-
     Threshold gating:
     - Use :meth:`needs_optimisation` to check whether a video needs
       transcoding BEFORE calling :meth:`process`.
-    - Videos already in H.264 within the resolution limits skip transcoding
-      and can go directly to the slideshow playlist.
+    - Videos already in H.264 within the resolution limits skip transcoding.
     """
 
     #: Known H.264 codec names that skip transcoding when within limits.
+
     H264_CODECS = {"h264", "avc", "avc1", "h.264", "avc1."}
 
     #: Known H.265 / HEVC codec names.
+
     HEVC_CODECS = {"hevc", "h265", "h.265", "hev1", "hvc1"}
 
-    # -- Transcoding profiles -------------------------------------------------
+    # -- Transcoding profiles -----------------------------------------
 
     PROFILES: dict[str, dict[str, Any]] = {
         "pi2": {
@@ -167,6 +126,10 @@ class VideoProcessor:
         },
     }
 
+    # Minimum free RAM (bytes) required before attempting a transcode.
+
+    _MIN_FREE_RAM_FOR_TRANSCODE: int = 192 * 1024 * 1024  # 192 MB
+
     def __init__(
         self,
         cache_dir: Path,
@@ -205,8 +168,6 @@ class VideoProcessor:
 
         # Track currently transcoding files (by hash) so we can check guardrails
         self._transcoding: set[str] = set()
-
-    # -- Public API ----------------------------------------------------------
 
     def is_transcoding(self, file_hash: str) -> bool:
         """Check if a specific video is currently being transcoded."""
@@ -542,13 +503,44 @@ class VideoProcessor:
             logger.exception("Failed to process video: %s", source_path)
             return None
 
-    # -- Helpers -------------------------------------------------------------
+    @staticmethod
+    def _hash_file(path: Path) -> str:
+        sha = hashlib.sha256()
+        with open(path, "rb") as f:
+            sha.update(f.read(1024 * 1024))
+            f.seek(-1024, 2)
+            sha.update(f.read(1024))
+        return sha.hexdigest()[:16]
 
-    # Minimum free RAM (bytes) required before attempting a transcode.
-    # On a Pi 3 (1 GB) or Pi Zero 2 W (512 MB), a single ffmpeg process
-    # with libx264 can consume 400–800 MB for a 4K source.  If less than
-    # this is available, skip transcoding and fall back to the original file.
-    _MIN_FREE_RAM_FOR_TRANSCODE: int = 192 * 1024 * 1024  # 192 MB
+    def _build_item(
+        self,
+        source: Path,
+        cached: Path,
+        thumb: Path,
+        info: dict,
+        source_name: str,
+        file_hash: str,
+        *,
+        status: TranscodeStatus,
+        first_frame: Path | None = None,
+        last_frame: Path | None = None,
+    ) -> MediaItem:
+        return MediaItem(
+            id=file_hash,
+            original_path=source,
+            cached_path=cached,
+            media_type=MediaType.VIDEO,
+            width=info.get("width", 0),
+            height=info.get("height", 0),
+            duration_seconds=info.get("duration", 0.0),
+            thumbnail_path=thumb,
+            first_frame_path=first_frame,
+            last_frame_path=last_frame,
+            source=source_name,
+            transcode_status=status,
+        )
+
+    # -- Helpers (delegated to probe / ffmpeg_cmds / frames) -----------------
 
     def _transcode(self, source: Path, dest: Path, info: dict | None = None) -> None:
         """Transcode video to the profile's optimal format."""
@@ -556,7 +548,7 @@ class VideoProcessor:
         if profile is None:
             profile = VideoProcessor.PROFILES.get("pi3", VideoProcessor.PROFILES["pi3"])
 
-        avail = _get_available_ram_bytes()
+        avail = available_ram_bytes()
         if avail is not None and avail < self._MIN_FREE_RAM_FOR_TRANSCODE:
             raise RuntimeError(
                 f"Insufficient free RAM for transcode "
@@ -564,134 +556,29 @@ class VideoProcessor:
                 f"need: {self._MIN_FREE_RAM_FOR_TRANSCODE // (1024 * 1024)} MB)"
             )
 
-        max_w = profile.get("max_width", self._transcode_max_w)
-        max_h = profile.get("max_height", self._transcode_max_h)
-        max_fps = profile.get("max_fps", 0)
-        target_encoder = profile.get("encoder", "libx264")
-        h264_level = str(profile.get("h264_level", ""))
-        h264_profile = profile.get("h264_profile", "high")
-        color_depth = profile.get("color_depth", 8)
-        hdr_support = profile.get("hdr_support", False)
-
-        scale_filter = (
-            f"scale='min({max_w},iw)':'min({max_h},ih)'"
-            f":force_original_aspect_ratio=decrease"
-            f",pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
-        )
-        # Color depth: use source depth, capped to profile limit.
-        # Never upscale 8-bit → 10-bit — just wastes bitrate.
-        src_depth = (info or {}).get("color_depth", 8) or 8
-        out_depth = min(src_depth, color_depth)
-        if out_depth >= 10:
-            scale_filter += ",format=yuv420p10le"
-        else:
-            scale_filter += ",format=yuv420p"
-
         thread_limit = self._compute_thread_limit()
-
+        target_encoder = profile.get("encoder", "libx264")
         encoders = [target_encoder]
         if target_encoder not in ("libx264", "libx265"):
             encoders.append("libx264")
         if "libx264" not in encoders:
             encoders.append("libx264")
 
+        timeout = max(60, self._transcode_timeout)
         for encoder in encoders:
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                str(source),
-                "-c:v",
+            cmd = transcode_cmd(
+                source,
+                dest,
                 encoder,
-                "-vf",
-                scale_filter,
-            ]
-
-            if encoder in ("libx264", "libx265"):
-                crf = max(0, min(51, self._transcode_quality))
-                preset = "fast"
-                if encoder == "libx265":
-                    # libx265 uses 2-3× more RAM than libx264 at the same
-                    # preset.  Use a lighter preset on memory-constrained
-                    # devices (Pi with ≤2GB) to avoid OOM.
-                    avail = _get_available_ram_bytes()
-                    total_ram = 0
-                    try:
-                        with open("/proc/meminfo") as f:
-                            for line in f:
-                                if line.startswith("MemTotal:"):
-                                    total_ram = int(line.split()[1]) * 1024
-                                    break
-                    except Exception:
-                        pass
-                    if total_ram > 0 and total_ram <= 3 * 1024 * 1024 * 1024:  # ≤3GB
-                        preset = "ultrafast"
-                    else:
-                        preset = "superfast"
-
-                # Use profile CRF if set, otherwise fall back to the
-                # global transcode_quality config value.
-                effective_crf = profile.get("crf", crf)
-                cmd += ["-preset", preset, "-crf", str(effective_crf)]
-
-                if thread_limit is not None and thread_limit > 0:
-                    param_key = "-x264-params" if encoder == "libx264" else "-x265-params"
-                    cmd += [param_key, f"threads={thread_limit}"]
-            else:
-                q = self._transcode_quality
-                bitrate = "2M" if q <= 24 else "1M"
-                cmd += ["-b:v", bitrate]
-
-            # Profile constraints for smooth Pi playback
-            if encoder == "libx264" and h264_level:
-                cmd += ["-level", h264_level]
-            if encoder == "libx264" and h264_profile:
-                cmd += ["-profile:v", h264_profile]
-            if encoder in ("libx264", "libx265"):
-                cmd += ["-refs", "2", "-g", "30"]
-
-            # Framerate: always set explicitly to prevent ffmpeg from
-            # silently changing the output FPS (observed: 23.98→29.97).
-            # Cap to profile max, but never upscale.
-            src_fps = info.get("fps", 0) or 0
-            if src_fps > 0:
-                target_fps = min(src_fps, max_fps) if max_fps else src_fps
-                cmd += ["-r", str(target_fps)]
-
-            # Audio: keep or strip
-            keep_audio = self._cfg.get("keep_audio", False)
-            if not keep_audio:
-                cmd += ["-an"]
-
-            # HDR → SDR downgrade
-            if not hdr_support:
-                cmd += [
-                    "-colorspace",
-                    "bt709",
-                    "-color_primaries",
-                    "bt709",
-                    "-color_trc",
-                    "bt709",
-                ]
-
-            # Max bitrate constraint — never exceed source quality.
-            # Cap to min(source_bitrate, profile_max) so a 5.5 Mbps
-            # source doesn't get upscaled to the 7 Mbps profile cap.
-            max_br = profile.get("max_bitrate", 0)
-            src_br = (info or {}).get("bitrate", 0) or 0
-            if max_br and max_br > 0:
-                effective_max = min(src_br, max_br) if src_br else max_br
-                cmd += ["-maxrate", f"{effective_max}M", "-bufsize", f"{effective_max * 2}M"]
-
-            cmd += [
-                "-movflags",
-                "+faststart",
-                str(dest),
-            ]
-
+                profile,
+                info,
+                transcode_quality=self._transcode_quality,
+                thread_limit=thread_limit,
+                keep_audio=self._cfg.get("keep_audio", False),
+                fallback_max_w=self._transcode_max_w,
+                fallback_max_h=self._transcode_max_h,
+            )
             final_cmd = self._wrap_with_throttle(cmd)
-            timeout = max(60, self._transcode_timeout)
-
             try:
                 subprocess.run(
                     final_cmd,
@@ -731,383 +618,49 @@ class VideoProcessor:
         raise RuntimeError(f"All encoders failed for: {source.name}")
 
     def _wrap_with_throttle(self, cmd: list[str]) -> list[str]:
-        """Wrap an ffmpeg command with CPU throttling.
-
-        Layered strategy:
-        1. ``nice -n 19`` — lowest scheduling priority (ALWAYS applied
-           when available, regardless of throttle settings).  The kernel
-           gives the frontend render loop priority, so the slideshow
-           never stutters — even at 100% CPU with throttling disabled.
-        2. ``cpulimit -l N%`` — hard percentage cap (only when
-           ``cpu_throttle_enabled`` is true).  Adds a ceiling when you
-           want guaranteed headroom beyond what nice provides.
-
-        The ``-threads`` limit is applied directly to ffmpeg args in
-        :meth:`_transcode` when throttling is enabled.
-        """
-        # Strategy 1: nice — ALWAYS apply via the shared utility.
-        # This ensures the frontend slideshow always gets CPU priority
-        # over transcoding.  It costs nothing and prevents stutter
-        # without any hard CPU cap.
-        cmd = nice_cmd(cmd)
-
-        if not self._cpu_throttle_enabled:
-            return cmd
-
-        # Strategy 2: cpulimit — hard CPU ceiling (only when enabled).
-        if shutil.which("cpulimit"):
-            limit = max(5, min(1000, self._cpu_throttle_pct))
-            logger.debug("Throttling transcode to %d%% CPU via cpulimit", limit)
-            return [
-                "cpulimit",
-                "-l",
-                str(limit),
-                "-f",  # foreground: wait for child to exit (CRITICAL!)
-                "--",
-            ] + cmd
-
-        logger.debug("cpulimit not installed — using nice + -threads only")
-        return cmd
+        """Wrap an ffmpeg command with CPU throttling (see ffmpeg_cmds)."""
+        return wrap_with_throttle(cmd, self._cpu_throttle_enabled, self._cpu_throttle_pct)
 
     def _compute_thread_limit(self) -> int | None:
-        """Compute ffmpeg thread limit from the throttle percentage.
-
-        Maps the user-facing percentage (0-1000, representing percentage
-        of a single core) to a concrete thread count.  Returns ``None``
-        if no limit should be applied (throttle disabled or > 4 cores).
-
-        Mapping:
-        -   1–100  → 1 thread  (up to 1 core)
-        - 101–200  → 2 threads (up to 2 cores)
-        - 201–300  → 3 threads (up to 3 cores)
-        - 301–400  → 4 threads (up to 4 cores)
-        - 401+     → None (auto, use all cores)
-        """
-        if not self._cpu_throttle_enabled:
-            return None
-
-        pct = max(1, min(1000, self._cpu_throttle_pct))
-        cores = os.cpu_count() or 4
-
-        if pct >= 401:
-            return None  # Let ffmpeg auto-detect (4+ cores worth)
-
-        # Each 100 = 1 core worth of CPU
-        threads = (pct + 99) // 100  # ceil division
-        return min(threads, cores)
+        """Compute ffmpeg thread limit from the throttle percentage."""
+        return compute_thread_limit(self._cpu_throttle_enabled, self._cpu_throttle_pct)
 
     def _extract_thumbnail(self, source: Path, dest: Path) -> None:
-        """Extract a thumbnail frame at 2 seconds into the video.
-
-        Uses fast (keyframe) seeking with ``-ss`` before ``-i`` plus
-        ``-noaccurate_seek`` to avoid decoding from the start.  Frame
-        is downscaled to the display resolution to match image
-        optimisation limits and avoid wasting GPU memory.
-        """
-        vf = (
-            f"scale='min({self._screen_w},iw)':'min({self._screen_h},ih)'"
-            f":force_original_aspect_ratio=decrease,"
-            f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
-        )
-        cmd = nice_cmd(
-            [
-                "ffmpeg",
-                "-y",
-                "-noaccurate_seek",
-                "-ss",
-                "2",
-                "-i",
-                str(source),
-                "-vf",
-                vf,
-                "-vframes",
-                "1",
-                "-q:v",
-                "2",
-                str(dest),
-            ]
-        )
-        # Single-frame extraction — use nice only (no cpulimit).
-        # Thumbnails are quick one-shot operations; cpulimit is for
-        # long-running transcodes.
-        subprocess.run(
-            cmd,
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=self._timeout("thumbnail_extract", 300),
+        """Extract a thumbnail frame at 2 seconds into the video."""
+        extract_thumbnail(
+            source,
+            dest,
+            self._screen_w,
+            self._screen_h,
+            self._timeout("thumbnail_extract", 300),
         )
 
     def _probe(self, path: Path) -> dict:
-        """Probe video file for metadata using ffprobe.
-
-        Returns a dict with keys: width, height, duration, codec_name,
-        fps, bitrate, color_depth, h264_profile, h264_level,
-        color_primaries, color_trc, colorspace, pix_fmt.
-        """
-        cmd = nice_cmd(
-            [
-                "ffprobe",
-                "-v",
-                "quiet",
-                "-print_format",
-                "json",
-                "-show_format",
-                "-show_streams",
-                str(path),
-            ]
-        )
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=self._timeout("ffprobe_probe", 120)
-        )
-        import json
-
-        data = json.loads(result.stdout)
-        info: dict = {
-            "width": 0,
-            "height": 0,
-            "duration": 0.0,
-            "codec_name": "",
-            "fps": 0.0,
-            "bitrate": 0,
-            "color_depth": 8,
-            "h264_profile": "",
-            "h264_level": "",
-            "color_primaries": "",
-            "color_trc": "",
-            "colorspace": "",
-            "pix_fmt": "",
-        }
-        for stream in data.get("streams", []):
-            if stream.get("codec_type") == "video":
-                info["width"] = stream.get("width", 0)
-                info["height"] = stream.get("height", 0)
-                info["codec_name"] = stream.get("codec_name", "")
-                info["pix_fmt"] = stream.get("pix_fmt", "")
-                info["h264_profile"] = stream.get("profile", "")
-                info["h264_level"] = stream.get("level", "")
-                # Normalise ffprobe level: integer 40 → float 4.0
-                if isinstance(info["h264_level"], int) and info["h264_level"] > 9:
-                    info["h264_level"] = float(info["h264_level"]) / 10.0
-                elif info["h264_level"]:
-                    try:
-                        info["h264_level"] = float(info["h264_level"])
-                    except (ValueError, TypeError):
-                        info["h264_level"] = ""
-                info["color_primaries"] = stream.get("color_primaries", "")
-                info["color_trc"] = stream.get("color_transfer", "")
-                info["colorspace"] = stream.get("color_space", "")
-
-                # Framerate
-                fps_str = stream.get("r_frame_rate", "0/1")
-                try:
-                    num, den = fps_str.split("/")
-                    info["fps"] = round(float(num) / float(den), 2)
-                except (ValueError, ZeroDivisionError):
-                    info["fps"] = 0.0
-
-                # Bitrate (prefer stream-level, fall back to format-level)
-                if stream.get("bit_rate"):
-                    info["bitrate"] = int(stream["bit_rate"]) // 1_000_000
-                break
-
-        # Format-level bitrate fallback
-        fmt = data.get("format", {})
-        if info["bitrate"] == 0 and fmt.get("bit_rate"):
-            info["bitrate"] = int(fmt["bit_rate"]) // 1_000_000
-        info["duration"] = float(fmt.get("duration", 0))
-
-        # Detect color depth from pixel format
-        pf = info["pix_fmt"]
-        if pf and "10" in pf:
-            info["color_depth"] = 10
-        elif pf and "12" in pf:
-            info["color_depth"] = 12
-
-        return info
+        """Probe video file for metadata using ffprobe (see probe.probe_video)."""
+        return probe_video(path, self._timeout("ffprobe_probe", 120))
 
     def _select_encoders(self) -> list[str]:
-        """Return the H.264 encoder(s) to try, in priority order.
-
-        When ``transcode_use_software_encoder`` is True (the default),
-        only libx264 is used — it produces far better quality at the same
-        bitrate than Pi hardware encoders.
-
-        When False, hardware encoders are tried first with libx264 as a
-        fallback.  This is useful when transcoding speed matters more
-        than quality (e.g. batch-processing many short clips).
-        """
-        if self._force_software_encoder:
-            logger.debug("Software encoder forced — using libx264 only")
-            return ["libx264"]
-
-        # Detect available hardware encoders
-        encoders: list[str] = []
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-encoders"],
-                capture_output=True,
-                text=True,
-                timeout=self._timeout("hw_codec_detect", 30),
-            )
-            if "h264_v4l2m2m" in result.stdout:
-                encoders.append("h264_v4l2m2m")
-            if "h264_mmal" in result.stdout:
-                encoders.append("h264_mmal")
-            if "h264_vaapi" in result.stdout:
-                encoders.append("h264_vaapi")
-        except Exception:
-            pass
-        # Software fallback always available
-        encoders.append("libx264")
-        logger.debug("Available video encoders: %s", encoders)
-        return encoders
+        """Return the H.264 encoder(s) to try, in priority order."""
+        return select_encoders(self._force_software_encoder, self._timeout("hw_codec_detect", 30))
 
     def _validate_cached_video(self, path: Path) -> bool:
-        """Check that a cached video file is valid (not corrupt/partial).
-
-        Runs a quick ``ffprobe`` to verify the file has a readable video
-        stream.  Returns ``True`` if the file is valid.
-
-        The timeout is generous (60 s) because on CPU-starved Pi 2/3
-        hardware, ffprobe can take 20–30 s just to open a file when
-        another transcode is saturating the I/O and CPU.
-        """
-        try:
-            result = subprocess.run(
-                nice_cmd(
-                    [
-                        "ffprobe",
-                        "-v",
-                        "error",
-                        "-show_entries",
-                        "stream=codec_type",
-                        "-of",
-                        "csv=p=0",
-                        str(path),
-                    ]
-                ),
-                capture_output=True,
-                text=True,
-                timeout=self._timeout("ffprobe_validate", 60),
-            )
-            return result.returncode == 0 and "video" in result.stdout.lower()
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "ffprobe timed out validating cached video — system may be overloaded: %s",
-                path.name,
-            )
-            return False
-        except OSError:
-            return False
+        """Check that a cached video file is valid (see probe.validate_cached_video)."""
+        return validate_cached_video(path, self._timeout("ffprobe_validate", 60))
 
     def _extract_video_frames(
         self,
         source: Path,
         file_hash: str,
     ) -> tuple[Path | None, Path | None]:
-        """Extract first (t=0) and last (``-sseof``) frame JPEGs.
-
-        Returns ``(first_frame_path, last_frame_path)``.  Either may be
-        ``None`` if extraction fails for that frame.
-
-        This is called during Phase 2 (OPTIMISE) so the frontend never
-        needs to run ffmpeg — it just loads the pre-generated cache files.
-        """
-        frame_dir = self._video_cache
-        first_path = frame_dir / f"{file_hash}.1.frame.jpg"
-        last_path = frame_dir / f"{file_hash}.2.frame.jpg"
-
-        # Resolve the scale cap for frame extraction — use the display
-        # resolution (same as image optimisation) so frames don't exceed
-        # what the GPU can handle.
-        vf = (
-            f"scale='min({self._screen_w},iw)':'min({self._screen_h},ih)'"
-            f":force_original_aspect_ratio=decrease,"
-            f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
+        """Extract first and last frame JPEGs (see frames.extract_video_frames)."""
+        return extract_video_frames(
+            source,
+            file_hash,
+            self._video_cache,
+            self._screen_w,
+            self._screen_h,
+            self._timeout,
         )
-
-        # ── First frame (t=0, keyframe seek) ──────────────────────────
-        if not first_path.exists() or first_path.stat().st_size == 0:
-            cmd = nice_cmd(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-noaccurate_seek",
-                    "-ss",
-                    "0",
-                    "-i",
-                    str(source),
-                    "-vf",
-                    vf,
-                    "-vframes",
-                    "1",
-                    "-q:v",
-                    "2",
-                    "-f",
-                    "image2",
-                    str(first_path),
-                ]
-            )
-            try:
-                subprocess.run(
-                    cmd,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=self._timeout("frame_extract_first", 180),
-                )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                logger.warning("Failed to extract first frame: %s", source.name)
-                with contextlib.suppress(OSError):
-                    first_path.unlink()
-                first_path = None  # type: ignore[assignment]
-
-        # ── Last frame (sseof -1, decode final second) ────────────────
-        # Decode ALL frames from 1 s before EOF to the actual end and
-        # keep only the last one.  ``-update 1`` tells ffmpeg to
-        # overwrite the output file with each frame, so the file on
-        # disk is always the *latest* decoded frame — i.e. the true
-        # final frame regardless of keyframe placement.
-        # Using ``-vframes 1`` would grab the *first* frame after the
-        # seek position, which is typically a keyframe several seconds
-        # before the real end — causing a visible jitter when VLC
-        # exits and the last frame appears underneath.
-        if not last_path.exists() or last_path.stat().st_size == 0:
-            cmd = nice_cmd(
-                [
-                    "ffmpeg",
-                    "-y",
-                    "-sseof",
-                    "-1",
-                    "-i",
-                    str(source),
-                    "-vf",
-                    vf,
-                    "-q:v",
-                    "2",
-                    "-f",
-                    "image2",
-                    "-update",
-                    "1",
-                    str(last_path),
-                ]
-            )
-            try:
-                subprocess.run(
-                    cmd,
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=self._timeout("frame_extract_last", 120),
-                )
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                logger.warning("Failed to extract last frame: %s", source.name)
-                with contextlib.suppress(OSError):
-                    last_path.unlink()
-                last_path = None  # type: ignore[assignment]
-
-        return first_path, last_path
 
     @staticmethod
     def _cleanup_cached_video(cached_path: Path, thumb_path: Path, file_hash: str) -> None:
@@ -1116,52 +669,4 @@ class VideoProcessor:
         The thumbnail is NOT deleted — it's generated from the source
         file and is independent of the transcode output.
         """
-        # Delete the corrupt video
-        with contextlib.suppress(OSError):
-            cached_path.unlink()
-        # Delete frame files (named with the content hash, same as
-        # _extract_video_frames uses).
-        frame_dir = cached_path.parent
-        for frame_num in (1, 2):
-            frame_file = frame_dir / f"{file_hash}.{frame_num}.frame.jpg"
-            if frame_file.exists():
-                with contextlib.suppress(OSError):
-                    frame_file.unlink()
-                    logger.debug("Cleaned up stale frame file: %s", frame_file.name)
-
-    @staticmethod
-    def _hash_file(path: Path) -> str:
-        sha = hashlib.sha256()
-        with open(path, "rb") as f:
-            sha.update(f.read(1024 * 1024))
-            f.seek(-1024, 2)
-            sha.update(f.read(1024))
-        return sha.hexdigest()[:16]
-
-    def _build_item(
-        self,
-        source: Path,
-        cached: Path,
-        thumb: Path,
-        info: dict,
-        source_name: str,
-        file_hash: str,
-        *,
-        status: TranscodeStatus,
-        first_frame: Path | None = None,
-        last_frame: Path | None = None,
-    ) -> MediaItem:
-        return MediaItem(
-            id=file_hash,
-            original_path=source,
-            cached_path=cached,
-            media_type=MediaType.VIDEO,
-            width=info.get("width", 0),
-            height=info.get("height", 0),
-            duration_seconds=info.get("duration", 0.0),
-            thumbnail_path=thumb,
-            first_frame_path=first_frame,
-            last_frame_path=last_frame,
-            source=source_name,
-            transcode_status=status,
-        )
+        cleanup_cached_video(cached_path, file_hash)

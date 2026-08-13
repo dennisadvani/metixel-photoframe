@@ -140,14 +140,17 @@ class BackendDaemon:
         """
         config = self._state.config
 
-        if config.sync.get("immich", {}).get("enabled", False):
-            logger.info("Immich sync enabled — starting sync engine")
-            from metixel.backend.sync.immich import ImmichSyncer
+        # Always start the Immich syncer thread — it performs the one-time
+        # legacy layout migration at startup, and the ``enabled`` flag is
+        # re-read every cycle (hot-reload), so enabling Immich sync from
+        # the web UI takes effect without a backend restart.
+        logger.info("Starting Immich sync engine")
+        from metixel.backend.sync.immich import ImmichSyncer
 
-            syncer = ImmichSyncer(self._state, http=self._ports.http)
-            t = threading.Thread(target=syncer.run, name="immich-syncer", daemon=True)
-            t.start()
-            self._threads.append(t)
+        syncer = ImmichSyncer(self._state, http=self._ports.http)
+        t = threading.Thread(target=syncer.run, name="immich-syncer", daemon=True)
+        t.start()
+        self._threads.append(t)
 
         if config.sync.get("local", {}).get("enabled", True):
             logger.info("Local folder sync enabled — starting folder watcher")

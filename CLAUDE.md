@@ -63,7 +63,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 9. **Systemd is the process manager.** Two services: `metixel-backend.service` and `metixel-cage.service` (on Trixie, the frontend runs under cage). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
 
-10. **The web UI is served from the backend process** on port 8080. It's a lightweight SPA (vanilla JS). No React/Angular — keep the bundle under 200KB.
+10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks; keep the total bundle under 200KB. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
 
 11. **Test on desktop first.** The `tk_backend.py` (tkinter-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
 
@@ -81,6 +81,64 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
+## Web UI Style Guide
+
+The dashboard (`metixel/backend/web/`) is a vanilla-JS SPA with a burgundy-on-white design system. **Keep styling consistent** — follow these rules for any UI change.
+
+### JavaScript architecture — native ES6 modules (no bundler)
+
+The dashboard JS lives in `src/metixel/backend/web/static/js/` and is organised as **native ES6 modules** — no bundler, no build step, no minification, no framework. **Do not reintroduce a single-file monolith.**
+
+- **`main.js`** is the ONLY entry point (loaded by `index.html` as `<script type="module" src="/static/js/main.js?v=N">`). It imports `core.js` + every page module, binds the nav/burger shell, registers pages, and boots the SPA. No page logic lives here.
+- **`core.js`** is the shared-infrastructure module and must stay page-agnostic: the API layer (`apiGet`/`apiPut`/`apiPost` + private connection tracking), the SPA router (`navigateTo`/`registerPage`), `showToast`, `openDrawer`/`closeDrawer`, and DOM/string utils (`escapeHtml`, `sanitizeInt`, `setChecked`, `setValue`, `setStat`, `updatePowerButton`, `timeAgo`).
+- **One module per feature area**, each exporting its page loader and keeping its own state module-private: `dashboard-page.js`, `settings-page.js`, `network-page.js`, `sync-page.js`, `media-page.js`, `logs-page.js`, `advanced-page.js`, `updates-page.js`.
+- **Router pattern (no circular imports):** page modules call `registerPage("name", loader)`; `navigateTo(page)` dispatches through core's registry. `core.js` must never import page modules, and page modules must only import the cross-module symbols listed below.
+  - Allowed cross-module edges (keep the import graph a DAG): `sync-page → media-page` (`loadMedia`), `advanced-page → logs-page` (`refreshLogs`) and `advanced-page → updates-page` (`loadUpdateStatus`, `bindUpdateControls`). Everything else imports `core.js` only.
+- **Scoping & state:** use strict `import`/`export`; modules are strict-mode by default (no `"use strict"`, no IIFE wrapper). Keep module-level state private inside its own module — never share mutable state across page modules; only `core.js` holds cross-cutting state (API connection tracking).
+- **Line endings:** all web JS files are **CRLF**. When a script regenerates files, normalise `\r\n`→`\n` internally and write `\n`→`\r\n`.
+- **ES modules are deferred**, so `document` is fully parsed when module top-level code runs (e.g. `core.js` may cache `#nav-drawer`/`#nav-backdrop` at load).
+- **Serving:** Flask serves `/static/` via `send_from_directory` with `Cache-Control: no-cache` and no CSP that would block modules — relative `import "./x.js"` works as-is. A backend restart is only needed when editing `templates/*.html` (Jinja template cache).
+- **Keep it modular:** if a page module grows past ~500 lines, split it further (e.g. sub-helpers per concern) rather than consolidating. During refactors, move code verbatim — never change logic, API endpoints, or CSS classes.
+
+### Icons — monochrome only
+
+- Use **Google Material Symbols** (`material-symbols-outlined` font, already loaded in `index.html`) for ALL icons.
+- **NEVER use coloured emoji as UI icons** (`✅`, `❌`, `⚠`, `⚠️`, `🔒`, `⏹`, `🖼`, …). Replace them with a Material Symbol or plain text.
+- Standard pattern:
+  ```html
+  <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span>
+  ```
+- Colour icons with `style="color:var(--text-muted)"` (or another token) — Material Symbols inherit `currentColor`.
+- **Captive portal** (`captive.html`) does NOT load the Material Symbols font — use small inline SVG icons with `fill="currentColor"` there (see the lock / check-circle examples).
+
+### Status colours — green is background-only
+
+| State | Colour |
+|---|---|
+| Success **text** | `var(--text)` (white) — **never** `var(--success)` |
+| Error text | `var(--danger)` (red) |
+| Cancelled / neutral text | `var(--text-muted)` |
+| Warning text | `#f0a030` (amber — no token exists) |
+| Green `var(--success)` / `#059669` | backgrounds/accents ONLY: Connected button, toast background, progress-bar fill, connected-row border/tint |
+
+### Use design tokens
+
+Prefer CSS variables over raw hex: `var(--primary)` (brand burgundy `#8B1A2B`), `var(--text)`, `var(--text-secondary)`, `var(--text-muted)`, `var(--danger)`, `var(--success)`, `var(--border)`, `var(--bg)`, `var(--surface)`. The only raw colour allowed in text is the amber `#f0a030` (no token).
+
+### Mobile (max-width 480px) button behaviour
+
+The mobile block forces `button { width: 100% }`. Small inline buttons must keep their natural width — add `btn--sm` / `btn-browse` classes or scope the rule to `.watch-path-row button`. Never let an inline action (browse, fetch, set, add, remove) stretch full-width and crush a form row.
+
+### Cache-busting
+
+When editing `dashboard.css` or any file under `static/js/` (SPA entry point is `main.js`), **bump the `?v=` query** on both the stylesheet `<link>` and the `<script src>` in `index.html` (e.g. `main.js?v=15` → `v=16`). Otherwise browsers serve stale assets.
+
+### General
+
+- Keep the bundle under 200KB, no frameworks.
+- Settings live in `.card` blocks with an `<h2>` title; fields use `.form-group` + `.form-label`; primary save buttons are `.btn--primary`.
+- The sync task mirrors only `src/metixel/` — UI files under `src/metixel/backend/web/` ARE included, but `tests/` are not (copy separately).
+
 ## Build & Run Commands
 
 ```bash
@@ -90,7 +148,7 @@ pip install -r requirements-pip.txt
 # Run the backend daemon (development)
 python -m metixel --mode backend --config etc/config.json
 
-# Run the frontend renderer (development, uses dev_backend on desktop)
+# Run the frontend renderer (development, uses tk_backend on desktop)
 python -m metixel --mode frontend --config etc/config.json
 
 # Run the frontend under cage (Trixie/Pi hardware)
@@ -120,24 +178,32 @@ mypy src/metixel/
 | `src/metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
 | `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
 | `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
-| `src/metixel/display/dev_backend.py` | Desktop dev: pygame-based software renderer |
+| `src/metixel/display/tk_backend.py` | Desktop dev: tkinter-based software renderer |
 | `src/metixel/display/__init__.py` | Backend auto-detection factory |
 | `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue |
 | `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
 | `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
-| `src/metixel/backend/processing/video.py` | ffmpeg transcode + thumbnail + first/last frame extraction + `needs_optimisation()` codec/resolution check |
+| `src/metixel/backend/processing/video.py` | `VideoProcessor` facade — `process()` + `needs_optimisation()`; delegates ffmpeg work to `probe`/`ffmpeg_cmds`/`frames` |
+| `src/metixel/backend/processing/probe.py` | ffprobe wrappers, `available_ram_bytes()`, Pi-model detection |
+| `src/metixel/backend/processing/ffmpeg_cmds.py` | Pure ffmpeg/ffprobe command builders (`transcode_cmd`, thumbnail/frame/probe cmds, throttle helpers) |
+| `src/metixel/backend/processing/frames.py` | Thumbnail + first/last frame extraction and cache cleanup |
 | `src/metixel/backend/sync/folder_watcher.py` | Phase 1 WATCH: metadata-only scanning, pushes to OptimisationQueue |
 | `src/metixel/backend/sync/immich.py` | Phase 4 SYNC: Immich API client, downloads to `media/sync/immich/` |
 | `src/metixel/frontend/presentation/engine.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
 | `src/metixel/shared/config.py` | Config schema, validation, defaults (includes `image` and `video` thresholds) |
 | `src/metixel/shared/ports.py` | Clean Architecture **ports** — `typing.Protocol` interfaces (HttpGateway, MqttGateway, CecController, IrSocket, DisplayDriver) + `Ports` bundle |
 | `src/metixel/shared/adapters.py` | Concrete **adapters** wrapping the real libraries (RequestsHttpGateway, PahoMqttGateway, LibCecAdapter, LircSocketAdapter) |
+| `src/metixel/shared/system_stats.py` | `/proc` system stats + GPU log formatting — single home for meminfo/stat/loadavg parsers |
+| `src/metixel/shared/platform.py` | Raspberry Pi detection (`is_raspberry_pi`, `detect_pi_model`) + `vcgencmd get_mem` helpers |
 | `src/metixel/backend/daemon.py` | Main daemon + `build_backend()` composition-root factory |
 | `src/metixel/frontend/renderer.py` | Frontend renderer + `build_renderer()` composition-root factory |
 | `src/metixel/__main__.py` | Thin composition root — CLI parsing + logging, delegates to the factories |
 | `etc/config.json` | Runtime configuration file |
 | `scripts/quiet_boot.sh` | Silent boot configuration |
+| `src/metixel/backend/web/static/js/main.js` | Web SPA entry point — wires core + page modules to the router |
+| `src/metixel/backend/web/static/js/core.js` | Web SPA shared infra — API layer, router (`navigateTo`/`registerPage`), toast, DOM utils |
+| `src/metixel/backend/web/static/js/*-page.js` | Web SPA — one ES module per page (dashboard/settings/network/sync/media/logs/advanced/updates) |
 
 ## If You're Unsure
 
@@ -146,4 +212,6 @@ mypy src/metixel/
 - Verify memory constraints for Pi Zero 2 W (512MB)
 - Ensure the display backend abstraction isn't leaked
 - **Video frame extraction is a backend responsibility.** The frontend must never import ffmpeg/ffprobe or extract frames. Frames are generated by `VideoProcessor` during Phase 2 (OPTIMISE) and referenced via `MediaItem.first_frame_path` / `MediaItem.last_frame_path`.- **Never import third-party libraries in core** — add a Protocol port + adapter and inject it (see rule 13)
-- Verify your change with the full test suite on the Pi (`python3 -m pytest tests/`) after desktop tests- Run `cat ARCHITECTURE.md` to re-establish project context
+- Verify your change with the full test suite on the Pi (`python3 -m pytest tests/`) after desktop tests
+- Run `cat ARCHITECTURE.md` to re-establish project context
+- **Keep the web JS modular** — native ES6 modules, no bundler; see Web UI Style Guide → JavaScript architecture before touching `static/js/`

@@ -1297,6 +1297,22 @@ footer {
     height: 0.85rem;
 }
 
+/* ── Immich synced-album list ─────────────────────────────────────────── */
+
+.synced-album {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.synced-album .btn-remove-album {
+    flex-shrink: 0;
+}
+
+#album-picker {
+    min-height: 8rem;
+}
+
 /* ── List.js pagination (unused — we use custom controls) ── */
 .log-list + .pagination {
     display: none;

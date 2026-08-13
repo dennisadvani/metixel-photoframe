@@ -23,6 +23,7 @@ from metixel.frontend.presentation.engine import PresentationEngine
 from metixel.shared.config import Config
 from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
+from metixel.shared.system_stats import format_gpu_stats, read_system_stats
 
 logger = logging.getLogger(__name__)
 
@@ -393,7 +394,7 @@ class FrontendRenderer:
             logger.debug("Failed to notify backend of slideshow start (backend may not be ready)")
 
     def _log_resources(self) -> None:
-        """Log CPU, memory, and swap usage every 30 seconds (DEBUG only).
+        """Log CPU, memory, swap, and GPU usage every 30 seconds (DEBUG only).
 
         Reads from ``/proc/stat``, ``/proc/meminfo``, and ``/proc/loadavg``.
         Non-Linux systems (dev/Win) are silently skipped.
@@ -403,78 +404,28 @@ class FrontendRenderer:
             return
         FrontendRenderer._last_resource_log = now
 
-        try:
-            # ── CPU utilisation via /proc/stat ───────────────────────
-            with open("/proc/stat") as f:
-                cpu_line = f.readline()
-            parts = cpu_line.split()
-            if parts[0] == "cpu" and len(parts) >= 8:
-                user, nice, system, idle = (
-                    int(parts[1]),
-                    int(parts[2]),
-                    int(parts[3]),
-                    int(parts[4]),
-                )
-                total = user + nice + system + idle
-                active = user + nice + system
-                cpu_pct = (active / total * 100) if total > 0 else 0.0
-            else:
-                cpu_pct = -1.0
+        stats = read_system_stats()
+        if stats is None:
+            return  # Non-Linux or /proc not available
+        load = stats["loadavg"]
+        logger.debug(
+            "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  SWAP=%d/%dMB  LOAD=%s %s %s",
+            stats["cpu_percent"],
+            stats["mem_used_mb"],
+            stats["mem_total_mb"],
+            stats["mem_percent"],
+            stats["swap_used_mb"],
+            stats["swap_total_mb"],
+            load[0],
+            load[1],
+            load[2],
+        )
 
-            # ── Memory + swap via /proc/meminfo ──────────────────────
-            meminfo: dict[str, int] = {}
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    if ":" in line:
-                        key, val = line.split(":", 1)
-                        val = val.strip().split()[0]
-                        meminfo[key.strip()] = int(val)
-
-            total_mb = meminfo.get("MemTotal", 0) // 1024
-            avail_mb = meminfo.get("MemAvailable", 0) // 1024
-            used_mb = total_mb - avail_mb if total_mb > 0 else 0
-            mem_pct = (used_mb / total_mb * 100) if total_mb > 0 else 0.0
-
-            swap_total = meminfo.get("SwapTotal", 0) // 1024
-            swap_free = meminfo.get("SwapFree", 0) // 1024
-            swap_used = swap_total - swap_free
-
-            # ── Load average ─────────────────────────────────────────
-            with open("/proc/loadavg") as f:
-                load = f.readline().split()[:3]
-
-            logger.debug(
-                "RES: CPU=%.1f%%  MEM=%d/%dMB (%.1f%%)  SWAP=%d/%dMB  LOAD=%s %s %s",
-                cpu_pct,
-                used_mb,
-                total_mb,
-                mem_pct,
-                swap_used,
-                swap_total,
-                load[0],
-                load[1],
-                load[2],
-            )
-
-            # ── GPU memory (Pi only) ─────────────────────────────────
-            if self._backend:
-                gpu = self._backend.gpu_memory_info()
-                if gpu and "gpu_total_mb" in gpu:
-                    reloc = gpu.get("reloc_used_mb", 0)
-                    total = gpu["gpu_total_mb"]
-                    pct = (reloc / total * 100) if total > 0 else 0.0
-                    logger.debug(
-                        "GPU: %d/%dMB (%.0f%%) | V3D: %skb/%sBOs | textures: %s/%s",
-                        reloc,
-                        total,
-                        pct,
-                        gpu.get("v3d_bo_kb", "?"),
-                        gpu.get("v3d_bo_count", "?"),
-                        gpu.get("texture_count", "?"),
-                        gpu.get("max_textures", "?"),
-                    )
-        except (OSError, ValueError, IndexError):
-            pass  # Non-Linux or /proc not available
+        # ── GPU memory (Pi only) ─────────────────────────────────────
+        if self._backend:
+            gpu = self._backend.gpu_memory_info()
+            if gpu and "gpu_total_mb" in gpu:
+                logger.debug("GPU: %s", format_gpu_stats(gpu))
 
     def _render_frame(self) -> None:
         """Render a single frame."""

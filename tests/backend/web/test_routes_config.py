@@ -188,13 +188,13 @@ class TestSystemCommands:
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     def test_server_time(self, client):
-        resp = client.get("/api/config/time")
+        resp = client.get("/api/time")
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert {"iso", "unix", "time", "date", "timezone", "utc_offset"} <= set(data)
 
     def test_timezones_list(self, client):
-        resp = client.get("/api/config/timezones")
+        resp = client.get("/api/time/timezones")
         assert resp.status_code == 200
         data = json.loads(resp.data)
         # Present in both the curated shortlist (non-Linux) and the real
@@ -203,11 +203,11 @@ class TestSystemCommands:
         assert "America/New_York" in data["timezones"]
 
     def test_set_timezone(self, client, monkeypatch):
-        import metixel.backend.web.routes.config as config_mod
+        import metixel.backend.web.routes.time as time_mod
 
         fake = mock.MagicMock(return_value=self._ok_result())
-        monkeypatch.setattr(config_mod.subprocess, "run", fake)
-        resp = client.post("/api/config/timezone", json={"timezone": "Australia/Sydney"})
+        monkeypatch.setattr(time_mod.subprocess, "run", fake)
+        resp = client.post("/api/time/timezone", json={"timezone": "Australia/Sydney"})
         assert resp.status_code == 200
         assert json.loads(resp.data)["status"] == "ok"
         fake.assert_called_once()
@@ -216,45 +216,45 @@ class TestSystemCommands:
         assert cmd[-1] == "Australia/Sydney"
 
     def test_set_timezone_missing(self, client):
-        resp = client.post("/api/config/timezone", json={})
+        resp = client.post("/api/time/timezone", json={})
         assert resp.status_code == 400
 
     def test_set_timezone_failure(self, client, monkeypatch):
-        import metixel.backend.web.routes.config as config_mod
+        import metixel.backend.web.routes.time as time_mod
 
         fake = mock.MagicMock(
             return_value=SimpleNamespace(returncode=1, stderr="boom", stdout="")
         )
-        monkeypatch.setattr(config_mod.subprocess, "run", fake)
-        resp = client.post("/api/config/timezone", json={"timezone": "UTC"})
+        monkeypatch.setattr(time_mod.subprocess, "run", fake)
+        resp = client.post("/api/time/timezone", json={"timezone": "UTC"})
         assert resp.status_code == 500
 
     def test_ntp_enable(self, client, monkeypatch):
-        import metixel.backend.web.routes.config as config_mod
+        import metixel.backend.web.routes.time as time_mod
 
         fake = mock.MagicMock(return_value=self._ok_result())
-        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        monkeypatch.setattr(time_mod.subprocess, "run", fake)
         resp = client.post(
-            "/api/config/ntp", json={"enabled": True, "servers": ["0.pool.ntp.org"]}
+            "/api/time/ntp", json={"enabled": True, "servers": ["0.pool.ntp.org"]}
         )
         assert resp.status_code == 200
         assert json.loads(resp.data)["ntp"] == "enabled"
 
     def test_ntp_missing_enabled(self, client):
-        resp = client.post("/api/config/ntp", json={})
+        resp = client.post("/api/time/ntp", json={})
         assert resp.status_code == 400
 
     def test_quiet_boot_enable(self, client, monkeypatch):
-        import metixel.backend.web.routes.config as config_mod
+        import metixel.backend.web.routes.system as system_mod
 
         fake = mock.MagicMock(return_value=self._ok_result())
-        monkeypatch.setattr(config_mod.subprocess, "run", fake)
-        resp = client.post("/api/config/quiet-boot", json={"enabled": True})
+        monkeypatch.setattr(system_mod.subprocess, "run", fake)
+        resp = client.post("/api/system/quiet-boot", json={"enabled": True})
         assert resp.status_code == 200
         assert json.loads(resp.data)["quiet_boot"] is True
 
     def test_quiet_boot_missing(self, client):
-        resp = client.post("/api/config/quiet-boot", json={})
+        resp = client.post("/api/system/quiet-boot", json={})
         assert resp.status_code == 400
 
     def test_reload(self, client):
@@ -263,35 +263,35 @@ class TestSystemCommands:
         assert json.loads(resp.data) == {"status": "ok"}
 
     def test_restart(self, client, monkeypatch):
-        import metixel.backend.web.routes.config as config_mod
+        import metixel.backend.web.routes.system as system_mod
 
         fake = mock.MagicMock(return_value=self._ok_result())
-        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        monkeypatch.setattr(system_mod.subprocess, "run", fake)
         monkeypatch.setattr(time, "sleep", lambda _s: None)
-        resp = client.post("/api/config/restart")
+        resp = client.post("/api/system/restart")
         assert resp.status_code == 200
         assert json.loads(resp.data)["status"] == "ok"
         _wait_for_call(fake)
         assert fake.call_args[0][0][:3] == ["sudo", "-n", "systemctl"]
 
     def test_reboot(self, client, monkeypatch):
-        import metixel.backend.web.routes.config as config_mod
+        import metixel.backend.web.routes.system as system_mod
 
         fake = mock.MagicMock(return_value=self._ok_result())
-        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        monkeypatch.setattr(system_mod.subprocess, "run", fake)
         monkeypatch.setattr(time, "sleep", lambda _s: None)
-        resp = client.post("/api/config/reboot")
+        resp = client.post("/api/system/reboot")
         assert resp.status_code == 200
         _wait_for_call(fake)
         assert fake.call_args[0][0][:3] == ["sudo", "-n", "reboot"]
 
     def test_shutdown(self, client, monkeypatch):
-        import metixel.backend.web.routes.config as config_mod
+        import metixel.backend.web.routes.system as system_mod
 
         fake = mock.MagicMock(return_value=self._ok_result())
-        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        monkeypatch.setattr(system_mod.subprocess, "run", fake)
         monkeypatch.setattr(time, "sleep", lambda _s: None)
-        resp = client.post("/api/config/shutdown")
+        resp = client.post("/api/system/shutdown")
         assert resp.status_code == 200
         _wait_for_call(fake)
         assert fake.call_args[0][0][:3] == ["sudo", "-n", "shutdown"]
