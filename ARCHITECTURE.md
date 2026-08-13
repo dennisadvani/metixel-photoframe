@@ -707,6 +707,21 @@ default adapters and return the runnable object — keeping `__main__.py` free o
 business logic and giving tests a single seam to inject fakes
 (e.g. `build_backend(config, ports=Ports(http=fake))`).
 
+**Rules of thumb (for AI-assisted development):**
+- Core business logic must NEVER import third-party libraries directly — add a
+  `typing.Protocol` port in `src/metixel/shared/ports.py` and a concrete adapter
+  in `src/metixel/shared/adapters.py`, then inject it via constructor with a
+  **real default** (behaviour unchanged when nothing is injected).
+- New external dependencies (APIs, hardware, services) get a Protocol + adapter —
+  never a direct import in core.
+- `src/metixel/__main__.py` stays thin: CLI parsing + logging only, delegating to
+  the `build_*` factories.
+- Unit tests mirror the package (`tests/backend|frontend|display|shared/`) and use
+  fakes implementing the ports (the Protocols are `@runtime_checkable`, so
+  `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use
+  `pytest.importorskip`. Web tests use the shared fixtures in
+  `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
+
 ---
 
 ## Appendix A: Key Technical Constraints
