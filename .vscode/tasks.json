@@ -1,0 +1,280 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Restart All Services and Clear Cache",
+            "type": "shell",
+            "command": "sudo systemctl stop metixel-backend metixel-cage; rm -f /run/metixel/playlist.json; rm -rf /opt/metixel/cache/* 2>/dev/null;  sudo systemctl reset-failed metixel-backend metixel-cage; sudo systemctl start metixel-backend metixel-cage; echo restarted",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "silent",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Restart Backend",
+            "type": "shell",
+            "command": "sudo systemctl restart metixel-backend",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "silent",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Restart Frontend (cage)",
+            "type": "shell",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "command": "sudo systemctl restart metixel-cage",
+            "presentation": {
+                "reveal": "silent",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Restart All Services",
+            "type": "shell",
+            "command": "sudo systemctl restart metixel-backend metixel-cage",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Stop All Services",
+            "type": "shell",
+            "command": "sudo systemctl stop metixel-backend metixel-cage",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Follow Logs",
+            "type": "shell",
+            "command": "sudo journalctl -u metixel-backend -u metixel-cage -f",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "Run Tests",
+            "type": "shell",
+            "command": "cd /opt/metixel && python -m pytest tests/ -v",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": "$python"
+        },
+        {
+            "label": "Lint (ruff)",
+            "type": "shell",
+            "command": "cd /opt/metixel && ruff check metixel/",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Type Check (mypy)",
+            "type": "shell",
+            "command": "cd /opt/metixel && mypy metixel/",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Release",
+            "type": "shell",
+            "command": ".\\scripts\\release.ps1 ${input:releaseType}",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "📦 Sync Code to Pi (scp)",
+            "detail": "Copies the metixel folder to the selected Pi. Excludes __pycache__ and cache dirs.",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.vscode\\sync-to-pi.ps1 -PiHost ${input:piHost}",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-File"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "📦 Sync + Restart All",
+            "detail": "Syncs code, then restarts both backend and frontend on the selected Pi.",
+            "dependsOn": [
+                "📦 Sync Code to Pi (scp)"
+            ],
+            "dependsOrder": "sequence",
+            "type": "shell",
+            "command": "sudo systemctl restart metixel-backend metixel-cage && echo '=== Services restarted ==='",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "build"
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "📦 Sync + Restart Backend",
+            "detail": "Syncs code, then restarts only the backend on the selected Pi.",
+            "dependsOn": [
+                "📦 Sync Code to Pi (scp)"
+            ],
+            "dependsOrder": "sequence",
+            "type": "shell",
+            "command": "sudo systemctl restart metixel-backend && echo '=== Backend restarted ==='",
+            "options": {
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
+                    "args": [
+                        "pi@${input:piHost}"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "build"
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "piHost",
+            "type": "pickString",
+            "description": "Select target Raspberry Pi",
+            "options": [
+                "192.168.222.122",
+                "192.168.222.143",
+                "192.168.222.230"
+            ],
+            "default": "192.168.222.122"
+        },
+        {
+            "id": "releaseType",
+            "type": "pickString",
+            "description": "Release type",
+            "options": ["beta", "rc", "stable", "minor", "major"],
+            "default": "beta"
+        }
+    ]
+}

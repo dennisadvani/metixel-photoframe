@@ -156,7 +156,7 @@ Contributions are welcome! Before diving in:
 
 1. Read [`ARCHITECTURE.md`](ARCHITECTURE.md) — it's the single source of truth
 2. Check the [issues](https://github.com/dennisadvani/metixel-photoframe/issues) for open tasks
-3. Set up a dev environment — see **[Development Setup →](docs/INSTALLATION.md#path-c-development-setup-remote-via-samba)**
+3. Set up a dev environment — see **[Development Setup →](docs/INSTALLATION.md#path-c-development-setup-vs-code-sync-to-pi)**
 
 
 ---
