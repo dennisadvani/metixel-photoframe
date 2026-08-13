@@ -77,7 +77,7 @@ git pull origin dev
 if ($LASTEXITCODE -ne 0) { throw "git pull failed" }
 
 # Check clean working tree
-$Dirty = git diff-index --quiet HEAD --
+git diff-index --quiet HEAD --
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Working tree is dirty. Commit or stash changes first." -ForegroundColor Red
     exit 1

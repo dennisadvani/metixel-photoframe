@@ -95,8 +95,13 @@ class MQTTClient:
 
     # -- Callbacks -----------------------------------------------------------
 
-    def _on_connect(self, client, userdata, flags, rc) -> None:
-        """Subscribe to control topics on connect."""
+    def _on_connect(self, client, userdata, flags, reason_code, *extra) -> None:
+        """Subscribe to control topics on connect.
+
+        The trailing ``*extra`` keeps this compatible with both the paho 1.x
+        (4-arg) and paho 2.x VERSION2 (5-arg) callback APIs; the additional
+        arguments are not used here.
+        """
         prefix = self._state.config.mqtt["topic_prefix"]
         gw = self._mqtt
         if gw is None:

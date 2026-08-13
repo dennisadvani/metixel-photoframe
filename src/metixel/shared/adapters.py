@@ -70,7 +70,14 @@ class PahoMqttGateway(MqttGateway):
     def __init__(self) -> None:
         import paho.mqtt.client as mqtt  # type: ignore[import-not-found, import-untyped]
 
-        self._client = mqtt.Client(client_id=f"metixel-{id(self)}")
+        # Use the current VERSION2 callback API so paho-mqtt 2.x doesn't
+        # emit a DeprecationWarning (VERSION1 is deprecated in 2.x). Falls
+        # back gracefully on paho-mqtt 1.x, where CallbackAPIVersion does
+        # not exist and VERSION1 is the only (non-deprecated) option.
+        kwargs: dict[str, Any] = {"client_id": f"metixel-{id(self)}"}
+        if hasattr(mqtt, "CallbackAPIVersion"):
+            kwargs["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION2
+        self._client = mqtt.Client(**kwargs)
 
     def connect(self, host: str, port: int, *, keepalive: int = 60) -> None:
         self._client.connect(host, port, keepalive=keepalive)
