@@ -520,16 +520,27 @@ rm -f "$0"
     # -- Internal: Git Operations --------------------------------------------
 
     def _resolve_repo_root(self) -> Path | None:
-        """Find the git repository root (parent of .git)."""
-        # Check the install location first
-        candidates = [
-            Path("/opt/metixel"),
-            Path(__file__).resolve().parent.parent.parent,  # repo root from this file
-        ]
-        for candidate in candidates:
-            if (candidate / ".git").is_dir():
-                return candidate
-        # Try git rev-parse as a last resort
+        """Find the git repository root (the directory containing ``.git``).
+
+        Layout-agnostic: checks the canonical install location first, then
+        walks up from this module's file — so it works whether the package
+        lives at the repo root (flat layout) or under ``src/`` (src/ layout).
+        """
+        # Fast path: the canonical install location (Pi deployments).
+        if (Path("/opt/metixel") / ".git").is_dir():
+            return Path("/opt/metixel")
+
+        # Walk up from this module to the nearest directory containing .git.
+        current = Path(__file__).resolve().parent
+        while True:
+            if (current / ".git").is_dir():
+                return current
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+
+        # Last resort: ask git directly.
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
