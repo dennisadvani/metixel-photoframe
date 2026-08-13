@@ -5,6 +5,21 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **Web dashboard JS modularised** — the 2,961-line `dashboard.js` monolith split into native ES6 modules (`main.js` entry + `core.js` + one module per page); no bundler/build step.
+- **Frontend presentation decomposition** — `presentation/engine.py` and `presentation/video_player.py` split into facades + mixins (`base`, `queue`, `scheduler`, `rendering`, `preload`, `video_state`); VLC and ffmpeg players extracted (`vlc_player.py`, `ffmpeg_player.py`).
+- **Backend processing decomposition** — `processing/video.py` reduced to a facade; probe logic, ffmpeg command building, and frame extraction moved to `probe.py`, `ffmpeg_cmds.py`, `frames.py`.
+- **Web routes decomposition** — the catch-all `routes/config.py` split into sub-resource modules (`system`, `time`, `input`, `control`, `health`, `browse`) registered on the same `/api/config` prefix (URL contract unchanged).
+- **Shared system/GPU stats dedup** — new `shared/system_stats.py` consolidates 7 `/proc/meminfo` parsers, the duplicated `_log_resources()` loggers, and the 4 GPU-log formatting sites.
+- **Shared platform detection dedup** — new `shared/platform.py` consolidates Pi-model detection and `vcgencmd get_mem` calls across the probe helpers, display backends, and the system-info endpoint.
+
+### Added
+
+- **Unit tests** for the new processing seams (`tests/backend/test_video_processing.py`), the shared system-stats module (`tests/shared/test_system_stats.py`), and the shared platform module (`tests/shared/test_platform.py`).
+
 ## [1.1.4-beta.4]
 
 ### Changed

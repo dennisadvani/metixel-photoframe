@@ -148,7 +148,7 @@ pip install -r requirements-pip.txt
 # Run the backend daemon (development)
 python -m metixel --mode backend --config etc/config.json
 
-# Run the frontend renderer (development, uses dev_backend on desktop)
+# Run the frontend renderer (development, uses tk_backend on desktop)
 python -m metixel --mode frontend --config etc/config.json
 
 # Run the frontend under cage (Trixie/Pi hardware)
@@ -178,19 +178,24 @@ mypy src/metixel/
 | `src/metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
 | `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
 | `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
-| `src/metixel/display/dev_backend.py` | Desktop dev: pygame-based software renderer |
+| `src/metixel/display/tk_backend.py` | Desktop dev: tkinter-based software renderer |
 | `src/metixel/display/__init__.py` | Backend auto-detection factory |
 | `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue |
 | `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
 | `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
-| `src/metixel/backend/processing/video.py` | ffmpeg transcode + thumbnail + first/last frame extraction + `needs_optimisation()` codec/resolution check |
+| `src/metixel/backend/processing/video.py` | `VideoProcessor` facade — `process()` + `needs_optimisation()`; delegates ffmpeg work to `probe`/`ffmpeg_cmds`/`frames` |
+| `src/metixel/backend/processing/probe.py` | ffprobe wrappers, `available_ram_bytes()`, Pi-model detection |
+| `src/metixel/backend/processing/ffmpeg_cmds.py` | Pure ffmpeg/ffprobe command builders (`transcode_cmd`, thumbnail/frame/probe cmds, throttle helpers) |
+| `src/metixel/backend/processing/frames.py` | Thumbnail + first/last frame extraction and cache cleanup |
 | `src/metixel/backend/sync/folder_watcher.py` | Phase 1 WATCH: metadata-only scanning, pushes to OptimisationQueue |
 | `src/metixel/backend/sync/immich.py` | Phase 4 SYNC: Immich API client, downloads to `media/sync/immich/` |
 | `src/metixel/frontend/presentation/engine.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
 | `src/metixel/shared/config.py` | Config schema, validation, defaults (includes `image` and `video` thresholds) |
 | `src/metixel/shared/ports.py` | Clean Architecture **ports** — `typing.Protocol` interfaces (HttpGateway, MqttGateway, CecController, IrSocket, DisplayDriver) + `Ports` bundle |
 | `src/metixel/shared/adapters.py` | Concrete **adapters** wrapping the real libraries (RequestsHttpGateway, PahoMqttGateway, LibCecAdapter, LircSocketAdapter) |
+| `src/metixel/shared/system_stats.py` | `/proc` system stats + GPU log formatting — single home for meminfo/stat/loadavg parsers |
+| `src/metixel/shared/platform.py` | Raspberry Pi detection (`is_raspberry_pi`, `detect_pi_model`) + `vcgencmd get_mem` helpers |
 | `src/metixel/backend/daemon.py` | Main daemon + `build_backend()` composition-root factory |
 | `src/metixel/frontend/renderer.py` | Frontend renderer + `build_renderer()` composition-root factory |
 | `src/metixel/__main__.py` | Thin composition root — CLI parsing + logging, delegates to the factories |

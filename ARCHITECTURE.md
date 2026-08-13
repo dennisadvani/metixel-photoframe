@@ -45,8 +45,8 @@ src/metixel/
 │   ├── __init__.py          # Factory: auto-detect hardware, return correct backend
 │   ├── backend.py           # Abstract base class: DisplayBackend
 │   ├── dispmanx_backend.py  # Phase 1: wraps pi3d, uses Mesa EGL via cage/XWayland
-│   └── wayland_backend.py   # Phase 2: PyOpenGL + EGL on Wayland/DRM (future)
-│   └── dev_backend.py       # Desktop dev: pygame-based software renderer
+│   ├── wayland_backend.py   # Phase 2: PyOpenGL + EGL on Wayland/DRM (future)
+│   └── tk_backend.py        # Desktop dev: tkinter-based software renderer
 ```
 
 ### 1.3 Per-Model OS & Graphics Strategy
@@ -106,7 +106,6 @@ graph TB
         subgraph "Backend Daemon (Python)"
             SYNC[Sync Engine<br/>Immich + Folder Watcher]
             OPTQ[Optimisation Queue<br/>Image resize + Video transcode]
-            PROC[Media Processor<br/>Resize/Transcode/EXIF]
             STATE[State Manager<br/>JSON Config + inotify]
             HTTP[Web Server<br/>Flask on :8080]
             MQTT[MQTT Client<br/>paho-mqtt]
@@ -134,7 +133,7 @@ graph TB
     end
 
     subgraph "OS Layer"
-        SYSTEMD[systemd Services<br/>metixel-backend.service<br/>metixel-frontend.service]
+        SYSTEMD[systemd Services<br/>metixel-backend.service<br/>metixel-cage.service]
         NETWORK[wpa_supplicant<br/>Wi-Fi Portal fallback]
         OTA[OTA Updater<br/>A/B Partition or Balena]
     end
@@ -204,7 +203,13 @@ metixel-photoframe/                           # Repository root
 │       │   ├── processing/
 │       │   │   ├── __init__.py
 │       │   │   ├── image.py            # EXIF parse, resize, downsample, rotate
-│       │   │   ├── video.py            # ffmpeg transcode, thumbnail, first/last frame extraction
+│       │   │   ├── video.py            # Facade: process(), needs_optimisation(), delegates to helpers
+│       │   │   ├── probe.py            # ffprobe wrappers, RAM/Pi-model detection
+│       │   │   ├── ffmpeg_cmds.py      # Pure ffmpeg/ffprobe command builders
+│       │   │   ├── frames.py           # Thumbnail + first/last frame extraction, cache cleanup
+│       │   │   ├── thumbnail.py        # Image thumbnail generation
+│       │   │   ├── worker.py           # Subprocess worker for heavy PIL work
+│       │   │   ├── utils.py            # nice_cmd + shared helpers
 │       │   │   ├── optimisation_queue.py  # 4-phase pipeline orchestrator
 │       │   │   └── matte.py            # Virtual matte board generation
 │       │   ├── web/
@@ -212,10 +217,19 @@ metixel-photoframe/                           # Repository root
 │       │   │   ├── server.py           # Flask application
 │       │   │   ├── routes/
 │       │   │   │   ├── __init__.py
-│       │   │   │   ├── config.py       # GET/PUT config endpoints
+│       │   │   │   ├── config.py       # Config CRUD (core sections)
+│       │   │   │   ├── system.py       # Restart/reboot/shutdown, quiet boot, system info
+│       │   │   │   ├── time.py         # Server time, timezone, NTP
+│       │   │   │   ├── input.py        # Keyboard mapping + learn
+│       │   │   │   ├── control.py      # Realtime frontend control (IPC)
+│       │   │   │   ├── health.py       # Status/diagnostics endpoints
+│       │   │   │   ├── browse.py       # Filesystem folder browser
 │       │   │   │   ├── media.py        # Upload, list, delete media
 │       │   │   │   ├── logs.py         # System log viewer
-│       │   │   │   └── widgets.py      # Widget configuration CRUD
+│       │   │   │   ├── immich.py       # Immich sync status/config
+│       │   │   │   ├── messages.py     # On-screen message endpoints
+│       │   │   │   ├── network.py      # Wi-Fi/network configuration
+│       │   │   │   └── updates.py      # OTA update endpoints
 │       │   │   ├── static/
 │       │   │   │   ├── css/
 │       │   │   │   │   └── dashboard.css
@@ -244,10 +258,18 @@ metixel-photoframe/                           # Repository root
 │       │   ├── renderer.py             # Main render loop, frame timing
 │       │   ├── presentation/
 │       │   │   ├── __init__.py
-│       │   │   ├── engine.py           # Slideshow orchestrator
+│       │   │   ├── engine.py           # Facade: PresentationEngine (mixins)
+│       │   │   ├── base.py             # BaseEngineState — shared engine state
+│       │   │   ├── queue.py            # Playlist controller mixin
+│       │   │   ├── scheduler.py        # Slideshow scheduler mixin
+│       │   │   ├── rendering.py        # Frame rendering + crossfade mixin
+│       │   │   ├── preload.py          # Texture preload mixin
+│       │   │   ├── video_state.py      # Video state machine mixin
 │       │   │   ├── transitions.py      # Fade, slide, zoom, Ken Burns math
 │       │   │   ├── layout.py           # Fit-to-screen, virtual matte, smart crop
-│       │   │   └── video_player.py     # Hardware-accel video playback
+│       │   │   ├── video_player.py     # Facade: VlcVideoPlayer/VideoPlayer re-exports
+│       │   │   ├── vlc_player.py       # VLC-based video playback
+│       │   │   └── ffmpeg_player.py    # ffmpeg-frame video playback (experimental)
 │       │   ├── widgets/
 │       │   │   ├── __init__.py
 │       │   │   ├── base.py             # Widget ABC
@@ -260,13 +282,18 @@ metixel-photoframe/                           # Repository root
 │       │   ├── backend.py              # DisplayBackend ABC
 │       │   ├── dispmanx_backend.py     # Phase 1: pi3d wrapper
 │       │   ├── wayland_backend.py      # Phase 2: PyOpenGL on DRM/Wayland (future)
-│       │   └── dev_backend.py          # Desktop dev: pygame-based
+│       │   └── tk_backend.py           # Desktop dev: tkinter-based
 │       │
 │       └── shared/                     # Shared types and utilities
 │           ├── __init__.py
 │           ├── config.py               # Config schema, validation, defaults
 │           ├── models.py               # Data classes: MediaItem, Album, Widget, etc.
-│           └── ipc.py                  # Unix socket protocol (JSON messages)
+│           ├── ipc.py                  # Unix socket protocol (JSON messages)
+│           ├── log_buffer.py           # In-memory log ring buffer
+│           ├── ports.py                # Clean Architecture Protocol ports
+│           ├── adapters.py             # Concrete adapters (requests, paho, libcec…)
+│           ├── system_stats.py         # /proc system stats + GPU log formatting
+│           └── platform.py             # Pi detection + vcgencmd helpers
 │
 ├── etc/                               # Configuration files
 │   ├── config.json                    # Main runtime configuration
@@ -365,7 +392,7 @@ Next frame reflects change
 
 1. [x] Initialize monorepo with directory structure
 2. [x] Create `pyproject.toml` with dependencies
-3. Create `dev_backend.py` (pygame-based) for local testing without Pi hardware
+3. Create `tk_backend.py` (tkinter-based) for local testing without Pi hardware
 4. Write the `DisplayBackend` ABC with all methods documented
 5. Set up GitHub Actions for linting (ruff), type checking (mypy), and unit tests
 
@@ -515,6 +542,31 @@ Next frame reflects change
 │  Schedule-based or manually triggered.                      │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Image optimisation** is handled by ``ImageProcessor``: EXIF orientation is
+applied, oversized images are resized to the display threshold, and a thumbnail
+is written to ``cache/thumbnails/``.  Heavy PIL work runs in a subprocess worker
+(``processing/worker.py``) so RAM is reclaimed on exit and a crash never takes
+down the backend daemon.  Videos land in ``cache/videos/`` with their first/last
+frames (``.1.frame`` / ``.2.frame``) alongside.
+
+### Image Render Path (Frontend)
+
+Images reach the screen through a double-buffered texture-slot swap, so the
+next slide is already on the GPU when the crossfade begins:
+
+1. **Preload** — ``TexturePreloader`` (background thread) decodes the next
+   image from disk into a numpy array.
+2. **Upload** — on the render thread, ``load_texture()`` copies the array into
+   the inactive GPU slot, then ``tex.load_opengl()`` forces the GL upload and
+   the backend ``flush_gpu()`` (``glFinish``) ensures the DMA transfer completes
+   before ``free_after_load`` releases the CPU buffer.
+3. **Crossfade** — at the slide boundary, ``FrameRenderer`` blends the two
+   slots in a single GPU pass (crossfade shader).
+4. **Swap** — the slots swap; the old active slot becomes the preload target
+   for the next image.
+
+At most three textures are GPU-resident at any time (current, next, blend).
 
 ### Video Playback Architecture (Frontend)
 
