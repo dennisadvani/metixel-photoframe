@@ -5,7 +5,7 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.6-beta.6]
 
 ### Added
 
@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **`CONTRIBUTING.md`** — contribution guide covering dev setup, the testing
   workflow (Python unit tests + Playwright web UI tests), code style, and the
   change-submission checklist; linked from the README.
+- **GitHub issue templates** — `.github/ISSUE_TEMPLATE/` adds structured bug
+  report and feature request forms (Pi model, install method, OS, affected
+  area, repro steps, logs) plus an issues-page config linking to the
+  contributing guide.
 
 ## [1.1.5-beta.5]
 
