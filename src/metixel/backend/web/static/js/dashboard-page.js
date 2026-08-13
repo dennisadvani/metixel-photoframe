@@ -70,7 +70,7 @@ import {
     }
 
     async function refreshDashboard() {
-        const health = await apiGet("/config/health");
+        const health = await apiGet("/health");
         if (!health) return;
 
         updatePowerButton(health.display_on !== false);
@@ -244,14 +244,14 @@ import {
         if (!_dashboardBound) {
             _dashboardBound = true;
             document.getElementById("btn-next")?.addEventListener("click", async () => {
-                await apiPost("/config/control", { cmd: "next" });
+                await apiPost("/control", { cmd: "next" });
                 // Next implicitly resumes — sync the button
                 var pauseBtn = document.getElementById("btn-pause-toggle");
                 if (pauseBtn) pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause';
                 showToast("Skipped to next", "info");
             });
             document.getElementById("btn-prev")?.addEventListener("click", async () => {
-                await apiPost("/config/control", { cmd: "prev" });
+                await apiPost("/control", { cmd: "prev" });
                 // Prev implicitly resumes — sync the button
                 var pauseBtn = document.getElementById("btn-pause-toggle");
                 if (pauseBtn) pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause';
@@ -261,14 +261,14 @@ import {
             pauseBtn?.addEventListener("click", async () => {
                 // Read actual state from the health data (updated every poll)
                 // rather than trusting the button text.
-                var health = await apiGet("/config/health");
+                var health = await apiGet("/health");
                 var isPaused = health && health.current_media && health.current_media.paused;
                 if (isPaused) {
-                    await apiPost("/config/control", { cmd: "resume" });
+                    await apiPost("/control", { cmd: "resume" });
                     pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause';
                     showToast("Slideshow resumed", "info");
                 } else {
-                    await apiPost("/config/control", { cmd: "pause" });
+                    await apiPost("/control", { cmd: "pause" });
                     pauseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">play_arrow</span> Resume';
                     showToast("Slideshow paused", "info");
                 }
@@ -392,7 +392,7 @@ import {
      */
 
     async function refreshProcessing() {
-        var status = await apiGet("/config/processing-status");
+        var status = await apiGet("/health/processing-status");
         if (!status) return;
 
         // Check whether image/video optimisation are enabled so

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 control_bp = Blueprint("control", __name__)
 
 
-@control_bp.route("/control", methods=["POST"])
+@control_bp.route("", methods=["POST"])
 def send_control():
     """Send a real-time control command to the frontend via IPC.
 

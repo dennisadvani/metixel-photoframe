@@ -30,7 +30,7 @@ def _read_json(path: str) -> dict | None:
     return None
 
 
-@health_bp.route("/health", methods=["GET"])
+@health_bp.route("", methods=["GET"])
 def health_check():
     """System health endpoint."""
     state = current_app.config["METIXEL_STATE"]

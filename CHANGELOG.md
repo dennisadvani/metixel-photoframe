@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Web routes decomposition** — the catch-all `routes/config.py` split into sub-resource modules (`system`, `time`, `input`, `control`, `health`, `browse`) registered on the same `/api/config` prefix (URL contract unchanged).
 - **Shared system/GPU stats dedup** — new `shared/system_stats.py` consolidates 7 `/proc/meminfo` parsers, the duplicated `_log_resources()` loggers, and the 4 GPU-log formatting sites.
 - **Shared platform detection dedup** — new `shared/platform.py` consolidates Pi-model detection and `vcgencmd get_mem` calls across the probe helpers, display backends, and the system-info endpoint.
+- **Web API URLs restructured (breaking)** — config sub-resource routes moved from the `/api/config/*` umbrella to self-describing prefixes: `/api/system/*` (restart/reboot/shutdown/quiet-boot/info), `/api/time/*`, `/api/input/keyboard/*`, `/api/control`, `/api/health/*`, `/api/browse`. The old `/api/config/...` paths for these now return 404; the dashboard JS, tests, and `docs/API.md` were updated to match.
 
 ### Added
 

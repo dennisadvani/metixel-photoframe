@@ -99,14 +99,14 @@ def create_app(
     from metixel.backend.web.routes.updates import updates_bp
 
     app.register_blueprint(config_bp, url_prefix="/api/config")
-    # Config sub-resource blueprints share the /api/config prefix so the
-    # URL contract is unchanged (routes moved out of the old catch-all).
-    app.register_blueprint(system_bp, url_prefix="/api/config")
-    app.register_blueprint(time_bp, url_prefix="/api/config")
-    app.register_blueprint(input_bp, url_prefix="/api/config")
-    app.register_blueprint(control_bp, url_prefix="/api/config")
-    app.register_blueprint(health_bp, url_prefix="/api/config")
-    app.register_blueprint(browse_bp, url_prefix="/api/config")
+    # Each config sub-resource module is registered under its own prefix so
+    # the URLs mirror the modules (system/time/input/control/health/browse).
+    app.register_blueprint(system_bp, url_prefix="/api/system")
+    app.register_blueprint(time_bp, url_prefix="/api/time")
+    app.register_blueprint(input_bp, url_prefix="/api/input")
+    app.register_blueprint(control_bp, url_prefix="/api/control")
+    app.register_blueprint(health_bp, url_prefix="/api/health")
+    app.register_blueprint(browse_bp, url_prefix="/api/browse")
     app.register_blueprint(media_bp, url_prefix="/api/media")
     app.register_blueprint(logs_bp, url_prefix="/api/logs")
     app.register_blueprint(immich_bp, url_prefix="/api/immich")

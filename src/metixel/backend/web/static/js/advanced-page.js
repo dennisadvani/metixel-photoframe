@@ -59,7 +59,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         var el = document.getElementById("server-clock");
         if (!el) return;
         try {
-            var data = await apiGet("/config/time");
+            var data = await apiGet("/time");
             if (data && data.time) {
                 el.textContent = data.time;
                 el.title = data.date + " " + data.timezone + " (UTC" + (data.utc_offset || "") + ")";
@@ -74,7 +74,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         if (!sel) return;
         sel.innerHTML = '<option value="">Auto-detect</option>';
         try {
-            var data = await apiGet("/config/timezones");
+            var data = await apiGet("/time/timezones");
             if (data && data.timezones) {
                 data.timezones.forEach(function (tz) {
                     var opt = document.createElement("option");
@@ -106,7 +106,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
 
     async function _loadKeyboardMap() {
         try {
-            var resp = await fetch("/api/config/input/keyboard/map?_=" + Date.now());
+            var resp = await fetch("/api/input/keyboard/map?_=" + Date.now());
             if (!resp.ok) return;
             var data = await resp.json();
             var tbody = document.getElementById("kbd-map-body");
@@ -148,7 +148,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
 
             if (clearBtn) {
                 // Clear all mappings for this command
-                await apiPost("/config/input/keyboard/learn", { cmd: "clear", target: cmd });
+                await apiPost("/input/keyboard/learn", { cmd: "clear", target: cmd });
                 _loadKeyboardMap();
                 return;
             }
@@ -163,12 +163,12 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             }
 
             _kbdLearningCmd = cmd;
-            await apiPost("/config/input/keyboard/learn", { cmd: "start", target: cmd });
+            await apiPost("/input/keyboard/learn", { cmd: "start", target: cmd });
 
             // Poll for result
             if (_kbdPollTimer) clearInterval(_kbdPollTimer);
             _kbdPollTimer = setInterval(async function () {
-                var result = await apiPost("/config/input/keyboard/learn", { cmd: "check" });
+                var result = await apiPost("/input/keyboard/learn", { cmd: "check" });
                 if (!result) return;
 
                 if (result.status === "learned") {
@@ -234,7 +234,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         toggleResolutionFields(isAuto);
 
         // Fetch detected display resolution from the frontend
-        apiGet("/config/display/info").then(function (info) {
+        apiGet("/health/display/info").then(function (info) {
             if (info && info.width > 0 && info.height > 0) {
                 var el = document.getElementById("display-detected-res");
                 if (el) {
@@ -265,7 +265,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         _clockTimer = setInterval(_refreshServerClock, 10000);
 
         // Updates / System Info
-        apiGet("/config/info").then(function (info) {
+        apiGet("/system/info").then(function (info) {
             if (!info) return;
             setStat("info-app-version", "v" + (info.app_version || "--"));
             setStat("info-pi-model", info.pi_model || "--");
@@ -313,16 +313,16 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             // Display power toggle — reads actual state from health endpoint
             var powerBtn = document.getElementById("btn-display-power");
             powerBtn?.addEventListener("click", async () => {
-                var health = await apiGet("/config/health");
+                var health = await apiGet("/health");
                 var currentlyOn = health ? health.display_on !== false : true;
                 var newState = !currentlyOn;
-                await apiPost("/config/control", { cmd: newState ? "screen_on" : "screen_off" });
+                await apiPost("/control", { cmd: newState ? "screen_on" : "screen_off" });
                 updatePowerButton(newState);
                 showToast(newState ? "Display turned on" : "Display turned off", "info");
             });
             // Initial state from health poll
             (async function _initPowerBtn() {
-                var health = await apiGet("/config/health");
+                var health = await apiGet("/health");
                 updatePowerButton(health ? health.display_on !== false : true);
             })();
 
@@ -346,7 +346,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                     btnSave.disabled = true;
                 }
                 try {
-                    qbResult = await apiPost("/config/quiet-boot", { enabled: quietBoot });
+                    qbResult = await apiPost("/system/quiet-boot", { enabled: quietBoot });
                 } finally {
                     if (btnSave) {
                         btnSave.textContent = originalLabel;
@@ -388,12 +388,12 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 });
                 // Apply NTP settings via systemd-timesyncd
                 if (ntpEnabled) {
-                    await apiPost("/config/ntp", {
+                    await apiPost("/time/ntp", {
                         enabled: true,
                         servers: ntpServers,
                     });
                 } else {
-                    await apiPost("/config/ntp", { enabled: false });
+                    await apiPost("/time/ntp", { enabled: false });
                 }
                 showToast("Time settings saved" + (ntpEnabled ? " — NTP enabled" : ""), "success");
             });
@@ -429,7 +429,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                     );
                     // Restart services to prevent stale cached-file errors
                     try {
-                        await apiPost("/config/restart");
+                        await apiPost("/system/restart");
                     } catch (_) {
                         // Expected — the backend is restarting, so the request may fail
                     }
@@ -450,7 +450,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 restartBtn.textContent = "Restarting…";
                 showToast("Restarting services…", "info", 5000);
                 try {
-                    await apiPost("/config/restart");
+                    await apiPost("/system/restart");
                 } catch (_) {
                     // Expected — the backend is restarting
                 }
@@ -467,7 +467,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 rebootBtn.textContent = "Rebooting…";
                 showToast("Rebooting system…", "info", 5000);
                 try {
-                    await apiPost("/config/reboot");
+                    await apiPost("/system/reboot");
                 } catch (_) {
                     // Expected — the system is going down
                 }
@@ -483,7 +483,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 shutdownBtn.textContent = "Shutting down…";
                 showToast("Shutting down system…", "info", 5000);
                 try {
-                    await apiPost("/config/shutdown");
+                    await apiPost("/system/shutdown");
                 } catch (_) {
                     // Expected — the system is going down
                 }

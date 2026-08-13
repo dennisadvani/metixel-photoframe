@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 time_bp = Blueprint("time", __name__)
 
 
-@time_bp.route("/time", methods=["GET"])
+@time_bp.route("", methods=["GET"])
 def get_server_time():
     """Return the current server time in ISO 8601 and local formats.
 

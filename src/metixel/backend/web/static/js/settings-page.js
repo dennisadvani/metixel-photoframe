@@ -386,7 +386,7 @@ import {
             document.getElementById("btn-save-timezone")?.addEventListener("click", async function () {
                 var tz = document.getElementById("cfg-timezone").value;
                 if (!tz) { showToast("Select a timezone first", "info"); return; }
-                var result = await apiPost("/config/timezone", { timezone: tz });
+                var result = await apiPost("/time/timezone", { timezone: tz });
                 if (result && result.status === "ok") {
                     showToast("Timezone set to " + tz, "success");
                     _refreshServerClock();
@@ -563,7 +563,7 @@ import {
 
         listEl.innerHTML = '<li style="padding:0.5rem;color:var(--text-muted)">Loading…</li>';
 
-        var data = await apiGet("/config/browse?path=" + encodeURIComponent(folderPath));
+        var data = await apiGet("/browse?path=" + encodeURIComponent(folderPath));
         if (!data || data.error) {
             listEl.innerHTML = '<li style="padding:0.5rem;color:var(--danger)">' + escapeHtml((data && data.error) || "Cannot browse folder") + '</li>';
             return;

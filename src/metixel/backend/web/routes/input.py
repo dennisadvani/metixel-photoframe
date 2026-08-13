@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 input_bp = Blueprint("input", __name__)
 
 
-@input_bp.route("/input/keyboard/map", methods=["GET"])
+@input_bp.route("/keyboard/map", methods=["GET"])
 def keyboard_map():
     """Get the current keyboard key mapping."""
     state = current_app.config["METIXEL_STATE"]
@@ -30,7 +30,7 @@ def keyboard_map():
     return jsonify({"map": result})
 
 
-@input_bp.route("/input/keyboard/learn", methods=["POST"])
+@input_bp.route("/keyboard/learn", methods=["POST"])
 def keyboard_learn():
     """Start or check keyboard learn mode.
 

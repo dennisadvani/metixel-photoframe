@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 browse_bp = Blueprint("browse", __name__)
 
 
-@browse_bp.route("/browse", methods=["GET"])
+@browse_bp.route("", methods=["GET"])
 def browse_folder():
     """Browse the filesystem for folder selection in the web UI.
 
