@@ -18,8 +18,8 @@ npx playwright test
 
 Or from VS Code (**Terminal → Run Task**):
 
-- **🌐 Install Playwright (Web UI tests)** — one-time dependency install.
-- **🌐 Run Web UI Tests (Playwright)** — runs the suite against the Pi you
+- **Install Playwright (Web UI tests)** — one-time dependency install.
+- **Run Web UI Tests (Playwright)** — runs the suite against the Pi you
   pick (reuses the `piHost` picker from the other tasks).
 
 ## What it covers

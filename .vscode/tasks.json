@@ -178,7 +178,7 @@
             "problemMatcher": []
         },
         {
-            "label": "📦 Sync Code to Pi (scp)",
+            "label": "Sync Code to Pi (scp)",
             "detail": "Copies the metixel folder to the selected Pi. Excludes __pycache__ and cache dirs.",
             "type": "shell",
             "command": "${workspaceFolder}\\.vscode\\sync-to-pi.ps1 -PiHost ${input:piHost}",
@@ -205,10 +205,10 @@
             "problemMatcher": []
         },
         {
-            "label": "📦 Sync + Restart All",
+            "label": "Sync + Restart All",
             "detail": "Syncs code, then restarts both backend and frontend on the selected Pi.",
             "dependsOn": [
-                "📦 Sync Code to Pi (scp)"
+                "Sync Code to Pi (scp)"
             ],
             "dependsOrder": "sequence",
             "type": "shell",
@@ -231,10 +231,10 @@
             "problemMatcher": []
         },
         {
-            "label": "📦 Sync + Restart Backend",
+            "label": "Sync + Restart Backend",
             "detail": "Syncs code, then restarts only the backend on the selected Pi.",
             "dependsOn": [
-                "📦 Sync Code to Pi (scp)"
+                "Sync Code to Pi (scp)"
             ],
             "dependsOrder": "sequence",
             "type": "shell",
@@ -257,7 +257,7 @@
             "problemMatcher": []
         },
         {
-            "label": "🌐 Install Playwright (Web UI tests)",
+            "label": "Install Playwright (Web UI tests)",
             "detail": "Installs the Playwright runner + Chromium for the dashboard E2E suite (run once).",
             "type": "shell",
             "command": "npm install; npx playwright install chromium",
@@ -279,7 +279,7 @@
             "problemMatcher": []
         },
         {
-            "label": "🌐 Run Web UI Tests (Playwright)",
+            "label": "Run Web UI Tests (Playwright)",
             "detail": "Runs the dashboard Playwright suite from this workstation against the selected Pi.",
             "type": "shell",
             "command": "npx playwright test",
