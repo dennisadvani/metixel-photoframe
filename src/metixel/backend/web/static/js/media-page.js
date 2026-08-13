@@ -31,7 +31,9 @@ import {
         var el = document.getElementById("media-list");
         el.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
 
-        // Populate folder filter dropdown from all watch paths
+        // Populate folder filter dropdown from enabled watch paths only.
+        // The media API only scans enabled paths, so a disabled folder
+        // would always show 0 results and look broken to the user.
         var config = await apiGet("/config");
         if (config && config.sync && config.sync.local && config.sync.local.watch_paths) {
             var paths = config.sync.local.watch_paths;
@@ -40,6 +42,8 @@ import {
                 // Keep the "All folders" option
                 sel.innerHTML = '<option value="">All folders</option>';
                 paths.forEach(function (p) {
+                    // Skip disabled watch paths (object format with enabled:false)
+                    if (typeof p === "object" && p.enabled === false) return;
                     var pathVal = typeof p === "object" ? p.path : String(p);
                     if (pathVal) {
                         // Value = folder name (matches API's item.folder = root.name)
@@ -86,9 +90,15 @@ import {
         }
 
         if (filtered.length === 0) {
-            el.innerHTML = '<p style="color:var(--text-muted)">No media match the current filters.</p>';
-            // Rebuild summary with grid container
+            var emptyMsg = "No media match the current filters.";
+            if (folderFilter) {
+                emptyMsg = 'No media in &quot;' + escapeHtml(folderFilter)
+                    + '&quot; — check the folder is enabled under Settings → Local Folders.';
+            } else if (nameFilter || typeFilter) {
+                emptyMsg = "No media match the current filters — try clearing the search or type filter.";
+            }
             el.innerHTML = '<p class="media-summary">0 files</p>'
+                + '<p style="color:var(--text-muted)">' + emptyMsg + '</p>'
                 + '<div class="media-grid" id="media-grid"></div>';
             return;
         }

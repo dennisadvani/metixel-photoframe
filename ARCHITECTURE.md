@@ -1,10 +1,5 @@
 # Metixel Photoframe — Architecture & Implementation Plan
 
-> **Version:** 1.1.0
-> **Status:** Implementation Phase 1
-> **Target Hardware Phase 1:** Raspberry Pi 2, 3, 4, 5, Zero 2 W (Mesa/DRM on Trixie). Pi 5 (2GB+) recommended. Pi 4 untested. Pi 2 and Pi Zero 2 W are 32‑bit manual‑install only.
-> **Target Hardware Phase 2:** Non-Pi SBCs like the Radxa Zero 3W (Mesa/DRM/Wayland)
-
 ---
 
 ## Table of Contents
@@ -135,7 +130,7 @@ graph TB
     subgraph "OS Layer"
         SYSTEMD[systemd Services<br/>metixel-backend.service<br/>metixel-cage.service]
         NETWORK[wpa_supplicant<br/>Wi-Fi Portal fallback]
-        OTA[OTA Updater<br/>A/B Partition or Balena]
+        OTA[OTA Updater<br/>git-based (GitHub Releases)]
     end
 
     IMMICH -->|HTTPS| SYNC
@@ -460,7 +455,9 @@ Next frame reflects change
 - Containerized metixel with fleet management
 
 #### Step 2.4: OTA Updates (Non-Balena)
-- A/B root partition scheme with signed updates
+- Git-based in-place self-update via `UpdateManager` + GitHub Releases — already
+  live in Phase 1, no bootloader A/B scheme required
+- Optional future: signed A/B partition updates for non-git prebuilt images
 
 ### Phase 3: Polish & Ecosystem
 
@@ -709,21 +706,43 @@ Debug mode: `/boot/debug` file OR GPIO 17 pulled HIGH → verbose boot.
 
 ### 6.6 OTA Update Mechanism
 
-A/B partition layout:
-```
-/dev/mmcblk0p1  /boot   (FAT32, shared)
-/dev/mmcblk0p2  /       (ext4, partition A — active)
-/dev/mmcblk0p3  /       (ext4, partition B — standby)
-/dev/mmcblk0p4  /data   (ext4, persistent user data)
-```
+Updates are applied **in-place** by `UpdateManager` (`backend/update_manager.py`)
+via a **git-based self-update** — there is no A/B root partition scheme, no
+signed tarball download, no `/boot/autoboot.txt`, and no bootloader `tryboot`
+flag. The live git checkout at `/opt/metixel/` is the update target.
 
-Update flow:
-1. Download signed update tarball
-2. Verify signature against embedded public key
-3. Extract to standby partition
-4. Update `/boot/autoboot.txt`
-5. Set bootloader `tryboot` flag → reboot
-6. Boot success → mark good; 3 failures → fallback
+#### Discovery
+
+`UpdateManager` polls the GitHub API (default every 6 hours; results cached for
+5 minutes) and categorises what is available into three channels:
+
+| Channel | GitHub source | Target ref |
+|---|---|---|
+| **stable** | Latest non-prerelease release tag | `refs/tags/vX.Y.Z` |
+| **beta** | Latest pre-release tag | `refs/tags/vX.Y.Z-beta.N` |
+| **dev** | HEAD of `origin/dev` | commit SHA |
+
+The repository is read from the `updates.github_repo` config field; the channel
+from `updates.channel`. Auto-checking is governed by `updates.auto_check` and
+`updates.check_interval_hours`.
+
+#### Apply flow
+
+The apply step cannot run inside the backend process — stopping the service
+kills the process. `UpdateManager` therefore writes a self-contained shell
+script to `/opt/metixel/cache/metixel-update.sh` and launches it with
+`systemd-run` as a **transient unit** (`metixel-update`, `--collect`), so it
+runs in its own cgroup and survives the backend being stopped:
+
+1. Stop `metixel-cage.service` (frontend renderer), then `metixel-backend.service`
+2. `git config --system --add safe.directory /opt/metixel`
+3. `git fetch --tags --force origin`
+4. `git reset --hard <target ref>` (stable/beta tag or dev HEAD)
+5. Install missing system packages listed in `requirements-system.txt` (idempotent)
+6. `pip install --break-system-packages -e /opt/metixel` (pick up dependency changes)
+7. A `trap` on EXIT guarantees `systemctl restart metixel-backend metixel-cage`
+   runs whether the update succeeded or failed — the frame is never left black
+8. The script deletes itself; the transient unit is collected on exit
 
 ---
 

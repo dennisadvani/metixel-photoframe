@@ -1,0 +1,16 @@
+{
+  "name": "metixel-web-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright end-to-end tests for the Metixel Photoframe web dashboard. Targets a LIVE frame — save buttons, dashboard, controls and fields are exercised against the real backend.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:destructive": "set RUN_DESTRUCTIVE=1 && playwright test tests/destructive.spec.js",
+    "test:walk": "playwright test tests/walk.spec.js",
+    "install:browsers": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.45.0"
+  }
+}
