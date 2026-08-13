@@ -220,7 +220,16 @@ metixel-photoframe/                           # Repository root
 │       │   │   │   ├── css/
 │       │   │   │   │   └── dashboard.css
 │       │   │   │   └── js/
-│       │   │   │       └── dashboard.js
+│       │   │   │       ├── main.js            # SPA entry (ES module orchestration)
+│       │   │   │       ├── core.js            # shared infra (router, api, utils)
+│       │   │   │       ├── dashboard-page.js
+│       │   │   │       ├── settings-page.js
+│       │   │   │       ├── network-page.js
+│       │   │   │       ├── sync-page.js
+│       │   │   │       ├── media-page.js
+│       │   │   │       ├── logs-page.js
+│       │   │   │       ├── advanced-page.js
+│       │   │   │       └── updates-page.js
 │       │   │   └── templates/
 │       │   │       └── index.html
 │       │   ├── input_handlers/

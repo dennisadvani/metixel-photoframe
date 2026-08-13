@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * Metixel Photoframe Dashboard — Vanilla JS SPA (application shell).
+ * Metixel Photoframe Dashboard — Vanilla JS SPA (entry point).
  *
- * Wires the shared router (core.js) to the page modules. All page logic
- * lives in the page modules; this file only boots the SPA.
+ * Wires the shared router (core.js) to the page modules and boots the SPA.
+ * All page logic lives in the page modules; this file only orchestrates.
  */
 
 import {

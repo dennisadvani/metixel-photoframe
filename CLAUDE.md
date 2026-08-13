@@ -63,7 +63,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 9. **Systemd is the process manager.** Two services: `metixel-backend.service` and `metixel-cage.service` (on Trixie, the frontend runs under cage). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
 
-10. **The web UI is served from the backend process** on port 8080. It's a lightweight SPA (vanilla JS). No React/Angular — keep the bundle under 200KB.
+10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks; keep the total bundle under 200KB. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
 
 11. **Test on desktop first.** The `tk_backend.py` (tkinter-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
 
@@ -84,6 +84,21 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 ## Web UI Style Guide
 
 The dashboard (`metixel/backend/web/`) is a vanilla-JS SPA with a burgundy-on-white design system. **Keep styling consistent** — follow these rules for any UI change.
+
+### JavaScript architecture — native ES6 modules (no bundler)
+
+The dashboard JS lives in `src/metixel/backend/web/static/js/` and is organised as **native ES6 modules** — no bundler, no build step, no minification, no framework. **Do not reintroduce a single-file monolith.**
+
+- **`main.js`** is the ONLY entry point (loaded by `index.html` as `<script type="module" src="/static/js/main.js?v=N">`). It imports `core.js` + every page module, binds the nav/burger shell, registers pages, and boots the SPA. No page logic lives here.
+- **`core.js`** is the shared-infrastructure module and must stay page-agnostic: the API layer (`apiGet`/`apiPut`/`apiPost` + private connection tracking), the SPA router (`navigateTo`/`registerPage`), `showToast`, `openDrawer`/`closeDrawer`, and DOM/string utils (`escapeHtml`, `sanitizeInt`, `setChecked`, `setValue`, `setStat`, `updatePowerButton`, `timeAgo`).
+- **One module per feature area**, each exporting its page loader and keeping its own state module-private: `dashboard-page.js`, `settings-page.js`, `network-page.js`, `sync-page.js`, `media-page.js`, `logs-page.js`, `advanced-page.js`, `updates-page.js`.
+- **Router pattern (no circular imports):** page modules call `registerPage("name", loader)`; `navigateTo(page)` dispatches through core's registry. `core.js` must never import page modules, and page modules must only import the cross-module symbols listed below.
+  - Allowed cross-module edges (keep the import graph a DAG): `sync-page → media-page` (`loadMedia`), `advanced-page → logs-page` (`refreshLogs`) and `advanced-page → updates-page` (`loadUpdateStatus`, `bindUpdateControls`). Everything else imports `core.js` only.
+- **Scoping & state:** use strict `import`/`export`; modules are strict-mode by default (no `"use strict"`, no IIFE wrapper). Keep module-level state private inside its own module — never share mutable state across page modules; only `core.js` holds cross-cutting state (API connection tracking).
+- **Line endings:** all web JS files are **CRLF**. When a script regenerates files, normalise `\r\n`→`\n` internally and write `\n`→`\r\n`.
+- **ES modules are deferred**, so `document` is fully parsed when module top-level code runs (e.g. `core.js` may cache `#nav-drawer`/`#nav-backdrop` at load).
+- **Serving:** Flask serves `/static/` via `send_from_directory` with `Cache-Control: no-cache` and no CSP that would block modules — relative `import "./x.js"` works as-is. A backend restart is only needed when editing `templates/*.html` (Jinja template cache).
+- **Keep it modular:** if a page module grows past ~500 lines, split it further (e.g. sub-helpers per concern) rather than consolidating. During refactors, move code verbatim — never change logic, API endpoints, or CSS classes.
 
 ### Icons — monochrome only
 
@@ -116,7 +131,7 @@ The mobile block forces `button { width: 100% }`. Small inline buttons must keep
 
 ### Cache-busting
 
-When editing `dashboard.css` or `dashboard.js`, **bump the `?v=` query** on both the stylesheet `<link>` and the `<script src>` in `index.html` (e.g. `dashboard.css?v=10` → `v=11`). Otherwise browsers serve stale assets.
+When editing `dashboard.css` or any file under `static/js/` (SPA entry point is `main.js`), **bump the `?v=` query** on both the stylesheet `<link>` and the `<script src>` in `index.html` (e.g. `main.js?v=15` → `v=16`). Otherwise browsers serve stale assets.
 
 ### General
 
@@ -181,6 +196,9 @@ mypy src/metixel/
 | `src/metixel/__main__.py` | Thin composition root — CLI parsing + logging, delegates to the factories |
 | `etc/config.json` | Runtime configuration file |
 | `scripts/quiet_boot.sh` | Silent boot configuration |
+| `src/metixel/backend/web/static/js/main.js` | Web SPA entry point — wires core + page modules to the router |
+| `src/metixel/backend/web/static/js/core.js` | Web SPA shared infra — API layer, router (`navigateTo`/`registerPage`), toast, DOM utils |
+| `src/metixel/backend/web/static/js/*-page.js` | Web SPA — one ES module per page (dashboard/settings/network/sync/media/logs/advanced/updates) |
 
 ## If You're Unsure
 
@@ -189,4 +207,6 @@ mypy src/metixel/
 - Verify memory constraints for Pi Zero 2 W (512MB)
 - Ensure the display backend abstraction isn't leaked
 - **Video frame extraction is a backend responsibility.** The frontend must never import ffmpeg/ffprobe or extract frames. Frames are generated by `VideoProcessor` during Phase 2 (OPTIMISE) and referenced via `MediaItem.first_frame_path` / `MediaItem.last_frame_path`.- **Never import third-party libraries in core** — add a Protocol port + adapter and inject it (see rule 13)
-- Verify your change with the full test suite on the Pi (`python3 -m pytest tests/`) after desktop tests- Run `cat ARCHITECTURE.md` to re-establish project context
+- Verify your change with the full test suite on the Pi (`python3 -m pytest tests/`) after desktop tests
+- Run `cat ARCHITECTURE.md` to re-establish project context
+- **Keep the web JS modular** — native ES6 modules, no bundler; see Web UI Style Guide → JavaScript architecture before touching `static/js/`
