@@ -1,0 +1,56 @@
+name: Feature request
+description: Suggest a new feature or improvement for Metixel Photoframe.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature. Please check the existing issues and
+        [FEATURES.md](https://github.com/dennisadvani/metixel-photoframe/blob/main/FEATURES.md)
+        to make sure it isn't already planned.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to achieve that Metixel does not currently support?
+      placeholder: "I want to ..."
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: Describe the feature or change you would like to see.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or alternative approaches you have tried.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Which part of Metixel would this affect?
+      options:
+        - Web UI / dashboard
+        - Slideshow / display / rendering
+        - Video playback / transcoding
+        - Immich sync
+        - Local media / watch folders
+        - Network / Wi-Fi
+        - Audio
+        - Updates
+        - Installation / boot
+        - Other
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Can you help implement it?
+      description: Would you be able to contribute a pull request for this?
+      options:
+        - "Yes, I can help build it"
+        - "Maybe — point me to the right place"
+        - "No, I am reporting it only"

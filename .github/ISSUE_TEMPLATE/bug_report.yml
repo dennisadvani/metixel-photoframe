@@ -1,0 +1,109 @@
+name: Bug report
+description: Report a problem with Metixel Photoframe — something that does not work as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report. Please search the
+        existing issues first to avoid duplicates, and read the
+        [CONTRIBUTING guide](https://github.com/dennisadvani/metixel-photoframe/blob/main/CONTRIBUTING.md)
+        before opening a report.
+  - type: input
+    id: version
+    attributes:
+      label: Metixel version
+      description: Version shown in the web UI footer or in `src/metixel/__init__.py` (e.g. 1.1.5-beta.5).
+      placeholder: "e.g. 1.1.5-beta.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: pi-model
+    attributes:
+      label: Raspberry Pi model
+      description: Which Pi are you running on?
+      options:
+        - Raspberry Pi 5
+        - Raspberry Pi 4
+        - Raspberry Pi 3
+        - Raspberry Pi 2
+        - Raspberry Pi Zero 2 W
+        - Raspberry Pi Zero
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      description: How did you install Metixel?
+      options:
+        - Pre-built image (Path A)
+        - Manual install / setup script (Path B)
+        - Development setup (VS Code sync to Pi)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      description: Which OS image is on the Pi?
+      options:
+        - Debian Trixie 13 Lite (64-bit)
+        - Debian Trixie 13 (64-bit, desktop)
+        - Debian Bookworm (32-bit)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Which part of Metixel is affected?
+      options:
+        - Web UI / dashboard
+        - Slideshow / display / rendering
+        - Video playback / transcoding
+        - Immich sync
+        - Local media / watch folders
+        - Network / Wi-Fi
+        - Audio
+        - Updates
+        - Installation / boot
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: A clear description of the problem, including what you expected to happen.
+      placeholder: "When I ... , Metixel ... instead of ..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: How can we reproduce it? Be specific.
+      placeholder: |
+        1. Go to ...
+        2. Click on ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output from the services. Run the command below on the Pi and paste the output here.
+      placeholder: |
+        sudo journalctl -u metixel-backend -u metixel-cage -n 200 --no-pager
+      render: shell
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Anything else that might help — screenshots, config (`etc/config.json` with secrets removed), media details, network setup.
