@@ -31,7 +31,7 @@ def detect_backend() -> DisplayBackend:
     Detection order:
     1. Check for ``METIXEL_DISPLAY_BACKEND`` environment variable override
     2. On Raspberry Pi with pi3d installed: use Pi3dBackend (Mesa EGL)
-    3. On other Linux: use Wayland/DRM backend
+    3. On other Linux with a Wayland session: use WaylandBackend (Phase 2)
     4. On desktop / unknown: use TkBackend (tkinter)
     """
     logger.info(
@@ -66,9 +66,14 @@ def detect_backend() -> DisplayBackend:
 
         return Pi3dBackend()
 
-    # -- Linux (non-Pi, or Pi without pi3d) ----------------------------------
-    if sys.platform == "linux":
-        logger.info("Detected Linux → WaylandBackend")
+    # -- Linux with a Wayland session (non-Pi SBCs, Phase 2) -----------------
+    # Only auto-select WaylandBackend when a Wayland compositor is actually
+    # present — on plain desktop Linux (no Wayland) we fall through to the
+    # TkBackend dev renderer.
+    if sys.platform == "linux" and (
+        os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+    ):
+        logger.info("Detected Linux + Wayland → WaylandBackend")
         from metixel.display.wayland_backend import WaylandBackend
 
         return WaylandBackend()

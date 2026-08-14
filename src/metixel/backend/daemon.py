@@ -38,10 +38,21 @@ class BackendDaemon:
     - Input handlers (CEC, IR) — background threads
     """
 
-    def __init__(self, config_path: Path, ports: Ports | None = None) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        ports: Ports | None = None,
+        run_dir: Path | None = None,
+    ) -> None:
         self._config_path = config_path.resolve()
         self._ports = ports if ports is not None else Ports()
-        self._state = StateManager(self._config_path)
+        # Honour METIXEL_RUN_DIR (same env var the frontend uses) so desktop
+        # runs and tests can use a writable run directory; /run/metixel is the
+        # systemd default on the Pi.
+        self._state = StateManager(
+            self._config_path,
+            run_dir=run_dir or Path(os.environ.get("METIXEL_RUN_DIR", "/run/metixel")),
+        )
         self._ipc = IPCClient()
         self._running = False
         self._config = self._state.config
@@ -656,11 +667,15 @@ class BackendDaemon:
                 t.join(timeout=5.0)
 
 
-def build_backend(config_path: Path, ports: Ports | None = None) -> BackendDaemon:
+def build_backend(
+    config_path: Path,
+    ports: Ports | None = None,
+    run_dir: Path | None = None,
+) -> BackendDaemon:
     """Composition root for the backend process.
 
     Constructs :class:`BackendDaemon` with its external dependencies.
     Ports left ``None`` resolve to the real adapters inside each service
     (default behaviour); tests and alternate deployments inject fakes.
     """
-    return BackendDaemon(config_path, ports=ports)
+    return BackendDaemon(config_path, ports=ports, run_dir=run_dir)
