@@ -5,7 +5,9 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.1.7-beta.7]
+## [Unreleased]
+
+## [1.1.8-beta.8]
 
 ### Added
 
