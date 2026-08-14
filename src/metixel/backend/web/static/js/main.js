@@ -60,4 +60,10 @@ import { loadAdvanced } from "./advanced-page.js";
     var validPages = ["dashboard", "media", "settings", "sync", "network", "advanced"];
     var startPage = validPages.indexOf(hash) >= 0 ? hash : "dashboard";
     navigateTo(startPage);
+
+    // Support plain <a href="#page"> links anywhere (e.g. the welcome card).
+    window.addEventListener("hashchange", function () {
+        var p = location.hash.substring(1);
+        if (validPages.indexOf(p) >= 0) navigateTo(p);
+    });
 })();

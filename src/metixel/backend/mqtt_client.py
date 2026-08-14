@@ -70,6 +70,11 @@ class MQTTClient:
         self._reject_warned = False  # avoid log spam on repeated auth failures
         self._last_discovery_publish: float = 0.0
 
+        # Broker connection state for the dashboard (see ``status()``).
+        self._status: str = "idle"  # idle | connecting | connected | rejected
+        self._last_error: str | None = None
+        self._connecting_since: float | None = None
+
     def run(self) -> None:
         """Connect to MQTT broker and start the event loop."""
         gw = self._mqtt
@@ -108,6 +113,8 @@ class MQTTClient:
             return
 
         self._running = True
+        self._status = "connecting"
+        self._connecting_since = time.monotonic()
         logger.info(
             "MQTT client starting — connecting to %s:%d",
             self._broker_host,
@@ -137,6 +144,39 @@ class MQTTClient:
         """Disconnect from MQTT broker."""
         self._running = False
 
+    def status(self) -> dict[str, Any]:
+        """Report the current broker connection state for the dashboard.
+
+        Returns one of:
+        - ``disabled`` — MQTT is not enabled in config
+        - ``connected`` — broker accepted us (CONNACK 0)
+        - ``auth_error`` — broker rejected the connection (e.g. bad credentials)
+        - ``connecting`` — connect attempt in progress
+        - ``not_responding`` — connect attempt stuck for 15+ seconds
+        - ``disconnected`` — not connected for another reason
+        """
+        cfg = self._state.config.mqtt
+        enabled = bool(cfg.get("enabled", False))
+        broker = getattr(self, "_broker_host", None) or cfg.get("broker", "localhost")
+        port = getattr(self, "_broker_port", None) or int(cfg.get("port", 1883))
+        base: dict[str, Any] = {"enabled": enabled, "broker": broker, "port": port}
+
+        if not enabled:
+            return {**base, "status": "disabled"}
+        if self._connected:
+            return {**base, "status": "connected"}
+        if self._status == "rejected":
+            return {**base, "status": "auth_error", "error": self._last_error}
+        if self._status == "connecting":
+            stuck = (
+                self._connecting_since is not None
+                and (time.monotonic() - self._connecting_since) > 15
+            )
+            if stuck:
+                return {**base, "status": "not_responding"}
+            return {**base, "status": "connecting"}
+        return {**base, "status": "disconnected"}
+
     # -- Callbacks -----------------------------------------------------------
 
     def _on_connect(self, client, userdata, flags, reason_code, *extra) -> None:
@@ -156,6 +196,8 @@ class MQTTClient:
         if reason_code != 0:
             was_connected = self._connected
             self._connected = False
+            self._status = "rejected"
+            self._last_error = str(reason_code)
             if was_connected:
                 logger.warning("MQTT broker connection lost (reason_code=%s)", reason_code)
                 self._reject_warned = False
@@ -169,6 +211,8 @@ class MQTTClient:
             return
 
         self._connected = True
+        self._status = "connected"
+        self._last_error = None
         self._reject_warned = False
         logger.info(
             "MQTT client connected to %s:%d",

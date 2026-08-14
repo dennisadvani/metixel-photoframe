@@ -282,7 +282,7 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("mqtt.username", ""),
     ("mqtt.password", ""),
     # input
-    ("input.cec_enabled", True),
+    ("input.cec_enabled", False),
     ("input.ir_enabled", False),
     ("input.ir_device", "/dev/lirc0"),
     ("input.keyboard_enabled", True),

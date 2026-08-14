@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=13">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=14">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -76,14 +76,13 @@
                             </div>
                         </div>
                         <div class="welcome-item">
-                            <span class="material-symbols-outlined">folder_open</span>
+                            <span class="material-symbols-outlined">upload</span>
                             <div>
-                                <strong>Upload Media via SMB</strong>
+                                <strong>Upload Media</strong>
                                 <p>
-                                    <strong>Windows:</strong> <code>\\metixel\metixel-media</code><br>
-                                    <strong>Mac:</strong> <code>smb://metixel/metixel-media</code><br>
-                                    <strong>Username:</strong> <code>pi</code><br>
-                                    <strong>Password:</strong> <code>raspberry</code>
+                                    Open the <a href="#media">Media Library</a> and tap
+                                    <strong>Upload Media</strong> — or drag &amp; drop
+                                    photos and videos straight from any device on your network.
                                 </p>
                             </div>
                         </div>
@@ -216,6 +215,14 @@
             <section id="page-media" class="page">
                 <div class="card">
                     <h2>Media Library</h2>
+                    <div class="media-toolbar">
+                        <button id="btn-upload-media" type="button">
+                            <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">upload</span> Upload Media
+                        </button>
+                        <input type="file" id="file-upload" accept="image/*,video/*" multiple style="display:none">
+                        <span class="media-toolbar-hint">Tap to pick photos/videos, or drag &amp; drop onto the grid</span>
+                    </div>
+                    <div id="upload-progress" class="upload-progress" style="display:none"></div>
                     <div class="media-filter-bar">
                         <input type="text" id="media-filter-name" placeholder="Filter by filename…" autocomplete="off">
                         <select id="media-filter-folder">
@@ -768,6 +775,10 @@
                     <label class="checkbox-row">
                         <input type="checkbox" id="cfg-mqtt-enabled"> Enable MQTT
                     </label>
+                    <p id="mqtt-status" class="mqtt-status">
+                        <span id="mqtt-status-pill" class="mqtt-status-pill mqtt-status--disabled">—</span>
+                        <span id="mqtt-status-detail" class="mqtt-status-detail"></span>
+                    </p>
                     <div id="mqtt-fields" style="margin-top:0.6rem">
                         <div class="form-group">
                             <span class="form-label">Device ID</span>
@@ -805,7 +816,10 @@
                         </div>
                     </div>
                     <p class="hint">MQTT connects on backend start — restart services after saving to apply changes.</p>
-                    <button id="btn-save-mqtt">Save MQTT Settings</button>
+                    <div class="mqtt-actions">
+                        <button id="btn-save-mqtt">Save MQTT Settings</button>
+                        <button id="btn-restart-mqtt" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Restart Services</button>
+                    </div>
                 </div>
 
                 <!-- Web Server card hidden — uncomment to re-enable
@@ -878,6 +892,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=20"></script>
+    <script type="module" src="/static/js/main.js?v=23"></script>
 </body>
 </html>

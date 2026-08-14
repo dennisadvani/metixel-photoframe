@@ -72,7 +72,7 @@
     "discovery_prefix": "homeassistant"
   },
   "input": {
-    "cec_enabled": true,
+    "cec_enabled": false,
     "ir_enabled": false,
     "ir_device": "/dev/lirc0"
   },

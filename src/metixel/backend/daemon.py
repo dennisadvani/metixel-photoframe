@@ -192,6 +192,8 @@ class BackendDaemon:
             # Pass the daemon so the MQTT client can expose the real
             # screen-power state to Home Assistant.
             client = MQTTClient(self._state, self._ipc, mqtt=self._ports.mqtt, daemon=self)
+            # Keep a reference so the web UI can report broker status.
+            self._mqtt_client = client
             t = threading.Thread(target=client.run, name="mqtt-client", daemon=True)
             t.start()
             self._threads.append(t)

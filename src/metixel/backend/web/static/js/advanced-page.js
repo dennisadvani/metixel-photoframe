@@ -54,11 +54,56 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
     function toggleMqttFields(enabled) {
         var fields = document.getElementById("mqtt-fields");
         if (fields) fields.style.display = enabled ? "block" : "none";
+        // The broker status pill only makes sense while MQTT is enabled.
+        var status = document.getElementById("mqtt-status");
+        if (status) status.style.display = enabled ? "" : "none";
+    }
+
+    /** Map an MQTT status string to a pill class + label. */
+    function _mqttStatusStyle(status) {
+        switch (status) {
+            case "connected":
+                return { cls: "mqtt-status--ok", label: "Connected" };
+            case "auth_error":
+                return { cls: "mqtt-status--err", label: "Auth error" };
+            case "not_responding":
+                return { cls: "mqtt-status--warn", label: "Not responding" };
+            case "connecting":
+                return { cls: "mqtt-status--warn", label: "Connecting…" };
+            case "disabled":
+                return { cls: "mqtt-status--disabled", label: "Disabled" };
+            default:
+                return { cls: "mqtt-status--disabled", label: "Unknown" };
+        }
+    }
+
+    async function _refreshMqttStatus() {
+        var pill = document.getElementById("mqtt-status-pill");
+        var detail = document.getElementById("mqtt-status-detail");
+        if (!pill || !detail) return;
+
+        var data = await apiGet("/system/mqtt-status");
+        if (!data) {
+            pill.className = "mqtt-status-pill mqtt-status--disabled";
+            pill.textContent = "Unknown";
+            detail.textContent = "Status endpoint unreachable";
+            return;
+        }
+
+        var style = _mqttStatusStyle(data.status);
+        pill.className = "mqtt-status-pill " + style.cls;
+        pill.textContent = style.label;
+
+        var parts = [];
+        if (data.broker) parts.push(data.broker + ":" + data.port);
+        if (data.error) parts.push(data.error);
+        detail.textContent = parts.join(" · ");
     }
 
     /** @type {number|null} */
 
     var _clockTimer = null;
+    var _mqttStatusTimer = null;
 
     async function _refreshServerClock() {
         var el = document.getElementById("server-clock");
@@ -251,6 +296,18 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         setValue("cfg-mqtt-discovery-prefix", m.discovery_prefix || "homeassistant");
         toggleMqttFields(m.enabled === true);
 
+        // Refresh the MQTT broker status indicator (and poll while visible).
+        _refreshMqttStatus();
+        if (_mqttStatusTimer) clearInterval(_mqttStatusTimer);
+        _mqttStatusTimer = setInterval(function () {
+            if (document.getElementById("page-advanced").classList.contains("active")) {
+                _refreshMqttStatus();
+            } else {
+                clearInterval(_mqttStatusTimer);
+                _mqttStatusTimer = null;
+            }
+        }, 5000);
+
         // Fetch detected display resolution from the frontend
         apiGet("/health/display/info").then(function (info) {
             if (info && info.width > 0 && info.height > 0) {
@@ -367,6 +424,20 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                     showToast("MQTT settings saved — restart services to apply", "success", 5000);
                 } else {
                     showToast("Failed to save MQTT settings", "error");
+                }
+            });
+
+            document.getElementById("btn-restart-mqtt")?.addEventListener("click", async () => {
+                var btn = document.getElementById("btn-restart-mqtt");
+                var original = btn ? btn.textContent : "Restart Services";
+                if (btn) { btn.textContent = "Restarting…"; btn.disabled = true; }
+                try {
+                    var r = await apiPost("/system/restart");
+                    showToast(r && r.message ? r.message : "Restarting services…", "info", 4000);
+                    // The backend restarts in ~2s; show a hopeful status meanwhile.
+                    setTimeout(_refreshMqttStatus, 3000);
+                } finally {
+                    if (btn) { btn.textContent = original; btn.disabled = false; }
                 }
             });
 

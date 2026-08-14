@@ -97,7 +97,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "discovery_prefix": "homeassistant",  # HA discovery base topic
     },
     "input": {
-        "cec_enabled": True,
+        # HDMI-CEC is opt-in: it needs the Debian python3-libcec bindings
+        # (apt) and a CEC-capable TV.  Leave off unless you use a TV remote.
+        "cec_enabled": False,
         "ir_enabled": False,
         "ir_device": "/dev/lirc0",
         "keyboard_enabled": True,

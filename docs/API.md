@@ -20,6 +20,9 @@ Base URL: `http://<frame-ip>/api` (port 8080 also works — Flask listens direct
 - `POST /api/system/shutdown` — Shut down the system
 - `POST /api/system/quiet-boot` — Toggle quiet boot
 - `GET /api/system/info` — System/version info (Pi model, GPU memory, DRM driver)
+- `GET /api/system/mqtt-status` — MQTT broker connection state
+  (`disabled` | `connected` | `auth_error` | `connecting` | `not_responding`), plus
+  `broker`/`port` and the rejection `error` (e.g. `Not authorized`) when applicable.
 
 ### Time
 - `GET /api/time` — Current server time
@@ -45,8 +48,31 @@ Base URL: `http://<frame-ip>/api` (port 8080 also works — Flask listens direct
 
 ### Media
 - `GET /api/media/list` — List media items
-- `POST /api/media/upload` — Upload file
+- `POST /api/media/upload` — Upload media files (see below)
 - `DELETE /api/media/<id>` — Delete item
+
+#### Uploading media (`POST /api/media/upload`)
+
+Accepts `multipart/form-data` with one or more files under the **`files`**
+field name.  Files are streamed to `media/my_media/` (an enabled watch path),
+so the folder watcher picks them up and they flow into the slideshow.
+
+Behaviour:
+- **Extension whitelist** — only image/video formats are accepted
+  (`.jpg`, `.jpeg`, `.png`, `.bmp`, `.gif`, `.webp`, `.mp4`, `.mov`, `.avi`,
+  `.mkv`, `.webm`, `.m4v`, `.mpg`, `.mpeg`).  Anything else is rejected.
+- **HEIC/HEIF** — iPhone photos are converted to JPEG (quality 90, EXIF
+  orientation preserved) on arrival, because the media pipeline only handles
+  the classic formats.
+- **Auto-rename** — on a filename collision the file is saved as
+  `name-1.ext`, `name-2.ext`, … (never overwrites).
+- **Free-space guard** — an upload is refused if it would leave less than 5%
+  of the filesystem free.
+- **Filename sanitisation** — path components and unsafe characters are
+  stripped.
+
+Response: `{saved: [{name, saved_as, size}], errors: [{name, error}],
+saved_count, error_count}` with HTTP 201 when anything was saved, else 400.
 
 ### Logs
 - `GET /api/logs/recent` — Recent log entries

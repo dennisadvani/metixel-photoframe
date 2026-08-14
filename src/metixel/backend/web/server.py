@@ -88,6 +88,11 @@ def create_app(
     app.config["METIXEL_UPDATE_MGR"] = update_mgr
     app.config["METIXEL_DAEMON"] = daemon
 
+    # Hard cap on the request body size.  Media uploads are streamed to disk,
+    # but a pathological request must not be allowed to fill tmpfs (RAM) with
+    # unbounded multipart data on a small Pi.
+    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024**3  # 2 GiB
+
     # Silence Flask's HTTP access logs (they flood the log output)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
 

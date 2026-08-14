@@ -93,7 +93,7 @@ class TestGetConfigSection:
         resp = client.get("/api/config/input")
         assert resp.status_code == 200
         data = json.loads(resp.data)
-        assert data["cec_enabled"] is True
+        assert data["cec_enabled"] is False
         assert data["keyboard_enabled"] is True
 
     def test_get_messages_section(self, client):
