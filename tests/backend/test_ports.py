@@ -117,6 +117,7 @@ class TestCompositionRoots:
         from metixel.shared.ports import Ports
 
         monkeypatch.setattr(daemon_mod, "IPCClient", _FakeIPC)
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path / "run"))
         http = RequestsHttpGateway()
         daemon = daemon_mod.build_backend(self._write_config(tmp_path), ports=Ports(http=http))
         assert daemon._ports.http is http
@@ -125,6 +126,7 @@ class TestCompositionRoots:
         import metixel.backend.daemon as daemon_mod
 
         monkeypatch.setattr(daemon_mod, "IPCClient", _FakeIPC)
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path / "run"))
         daemon = daemon_mod.build_backend(self._write_config(tmp_path))
         assert daemon._ports.http is None
         assert daemon._ports.mqtt is None

@@ -204,7 +204,7 @@ class DisplayBackend(ABC):
         """
         # Default: unload old, load new (works everywhere but is slow)
         self.unload_texture(texture)
-        return self.load_texture(data)
+        self.load_texture(data)
 
     def gpu_memory_info(self) -> dict[str, Any] | None:
         """Return GPU memory usage statistics, or ``None`` if unavailable.
@@ -231,6 +231,27 @@ class DisplayBackend(ABC):
         Default is a no-op — safe for dev backends without a GPU.
         """
         pass
+
+    def clear_depth(self) -> None:  # noqa: B027
+        """Clear the depth buffer so overlay draws appear on top.
+
+        The slideshow's rendering may write depth values that would occlude
+        overlay content (widgets, pop-up messages).  Call this after the
+        slideshow renders and before drawing overlay elements.
+
+        Default is a no-op — safe for software renderers without a depth
+        buffer (tkinter); GPU backends should clear their depth buffer.
+        """
+        pass
+
+    @property
+    def supports_video(self) -> bool:
+        """Whether this backend can render video playback.
+
+        Video playback requires GL texture support (pi3d).  Software
+        renderers (tkinter) cannot play videos — the frontend skips them.
+        """
+        return True
 
     # -- Text Rendering ------------------------------------------------------
 

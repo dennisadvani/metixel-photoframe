@@ -8,6 +8,11 @@
   <em>A custom, open-source digital photo frame OS for Raspberry Pi.<br>Beautiful slideshows. Immich integration. Web UI. Zero-cloud. Just pictures and videos.</em>
 </p>
 
+<p align="center">
+  <a href="https://github.com/dennisadvani/metixel-photoframe/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/dennisadvani/metixel-photoframe/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue">
+</p>
+
 <!-- <p align="center">
   <img src="docs/images/digital_frame_wall.PNG" alt="Metixel digital photo frame on a wall" width="70%">
 </p> -->

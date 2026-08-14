@@ -80,7 +80,7 @@ class TexturePreloaderMixin(BaseEngineState):
 
             ImageFile.LOAD_TRUNCATED_IMAGES = True
 
-            img = Image.open(path_to_load)
+            img: Image.Image = Image.open(path_to_load)
             img = ImageOps.exif_transpose(img)
 
             if img.mode == "RGBA":
@@ -92,7 +92,7 @@ class TexturePreloaderMixin(BaseEngineState):
 
             if img.width > max_w or img.height > max_h:
                 orig_w, orig_h = img.width, img.height
-                img.thumbnail((max_w, max_h), Image.LANCZOS)
+                img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
                 logger.debug(
                     "Downscaled [%s]: %dx%d → %dx%d",
                     path_to_load,
@@ -183,7 +183,7 @@ class TexturePreloaderMixin(BaseEngineState):
                         self._preload_array = None
                     return
 
-            img = Image.open(path_to_load)
+            img: Image.Image = Image.open(path_to_load)
             img = ImageOps.exif_transpose(img)
 
             if img.mode == "RGBA":
@@ -197,7 +197,7 @@ class TexturePreloaderMixin(BaseEngineState):
             max_h = int(self._backend.height * 1.2)
             if img.width > max_w or img.height > max_h:
                 orig_w, orig_h = img.width, img.height
-                img.thumbnail((max_w, max_h), Image.LANCZOS)
+                img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
                 logger.debug(
                     "Preload downscaled [%s]: %dx%d → %dx%d",
                     path_to_load,

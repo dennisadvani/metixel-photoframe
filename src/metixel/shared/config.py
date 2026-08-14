@@ -9,7 +9,7 @@ import logging
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -161,15 +161,19 @@ class Config:
     def __init__(self, data: dict[str, Any] | None = None) -> None:
         self._data: dict[str, Any] = deepcopy(data) if data else deepcopy(DEFAULT_CONFIG)
 
+    def _section(self, key: str) -> dict[str, Any]:
+        """Return a top-level config section as a typed dict."""
+        return cast(dict[str, Any], self._data[key])
+
     # -- Accessors -----------------------------------------------------------
 
     @property
     def display(self) -> dict[str, Any]:
-        return self._data["display"]
+        return self._section("display")
 
     @property
     def slideshow(self) -> dict[str, Any]:
-        return self._data["slideshow"]
+        return self._section("slideshow")
 
     @property
     def image(self) -> dict[str, Any]:
@@ -186,7 +190,7 @@ class Config:
                 "optimise_max_height": 0,
             }
             self._data["image"] = img
-        return img
+        return cast(dict[str, Any], img)
 
     @property
     def video(self) -> dict[str, Any]:
@@ -218,7 +222,7 @@ class Config:
             }
             self._data["video"] = v
 
-        return v
+        return cast(dict[str, Any], v)
 
     @property
     def timeouts(self) -> dict[str, Any]:
@@ -231,7 +235,7 @@ class Config:
         defaults = DEFAULT_CONFIG.get("timeouts", {})
         for key, val in defaults.items():
             t.setdefault(key, val)
-        return t
+        return cast(dict[str, Any], t)
 
     def timeout(self, key: str, fallback: int) -> int:
         """Read a single timeout value, falling back to *fallback* if
@@ -289,31 +293,31 @@ class Config:
 
     @property
     def sync(self) -> dict[str, Any]:
-        return self._data["sync"]
+        return self._section("sync")
 
     @property
     def web(self) -> dict[str, Any]:
-        return self._data["web"]
+        return self._section("web")
 
     @property
     def mqtt(self) -> dict[str, Any]:
-        return self._data["mqtt"]
+        return self._section("mqtt")
 
     @property
     def input(self) -> dict[str, Any]:
-        return self._data["input"]
+        return self._section("input")
 
     @property
     def messages(self) -> dict[str, Any]:
-        return self._data["messages"]
+        return self._section("messages")
 
     @property
     def network(self) -> dict[str, Any]:
-        return self._data["network"]
+        return self._section("network")
 
     @property
     def system(self) -> dict[str, Any]:
-        return self._data["system"]
+        return self._section("system")
 
     @property
     def updates(self) -> dict[str, Any]:
@@ -333,7 +337,7 @@ class Config:
                 "last_update": None,
             }
             self._data["update"] = u
-        return u
+        return cast(dict[str, Any], u)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a top-level config value."""

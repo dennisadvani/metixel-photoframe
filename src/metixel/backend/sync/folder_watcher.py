@@ -29,6 +29,7 @@ from metixel.backend.processing.thumbnail import (
 )
 from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.state import StateManager
+from metixel.shared.config import resolve_watch_paths
 from metixel.shared.models import MediaItem, MediaType
 
 if TYPE_CHECKING:
@@ -117,29 +118,18 @@ class FolderWatcher:
     def _resolve_watch_paths(self) -> list[Path]:
         """Resolve the watch_paths config to a list of enabled Path objects.
 
-        Handles both the new object format (``[{"path": "...", "enabled": true}]``)
-        and the legacy flat-list format (``["media/", ...]``).
+        Delegates to the shared :func:`config.resolve_watch_paths` helper,
+        which handles both the new object format
+        (``[{"path": "...", "enabled": true}]``) and the legacy flat-list
+        format (``["media/", ...]``), and resolves relative paths against
+        the platform-appropriate base (``/opt/metixel`` on Linux, the
+        working directory on desktop).
 
         Always reads from the **live** ``self._state.config`` so that
         watch paths added via the web UI are picked up on the next
         periodic refresh.
         """
-        raw = self._state.config.sync["local"].get("watch_paths", [])
-        paths: list[Path] = []
-        for entry in raw:
-            if isinstance(entry, dict):
-                if entry.get("enabled", True):
-                    p = Path(entry["path"])
-                    if not p.is_absolute():
-                        p = Path("/opt/metixel") / p
-                    paths.append(p)
-            elif isinstance(entry, str):
-                # Legacy flat-list format — treat as enabled
-                p = Path(entry)
-                if not p.is_absolute():
-                    p = Path("/opt/metixel") / p
-                paths.append(p)
-        return paths
+        return resolve_watch_paths(self._state.config)
 
     def run(self) -> None:
         """Main watch loop."""

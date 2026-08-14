@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import tkinter as tk
 from pathlib import Path
 from typing import Any
 
@@ -29,15 +30,14 @@ class TkBackend(DisplayBackend):
 
     Uses a tkinter Canvas for rendering — no external libraries needed
     beyond Pillow (which is already a core dependency).
+
+    tkinter is only needed on desktop dev machines. On headless Pis (no
+    tkinter installed) this module can still be imported without error
+    because `display/__init__.py`'s detect_backend() only imports
+    .tk_backend when actually creating a TkBackend.
     """
 
     def __init__(self) -> None:
-        # tkinter is imported lazily — only needed on desktop dev machines.
-        # On headless Pis (no tkinter installed) the module can still be
-        # imported without error because `__init__.py`'s detect_backend()
-        # only imports .tk_backend when actually creating a TkBackend.
-        import tkinter as tk
-
         self._root: tk.Tk | None = None
         self._canvas: tk.Canvas | None = None
         self._running: bool = False
@@ -46,7 +46,8 @@ class TkBackend(DisplayBackend):
         self._bg_color: str = "black"
         self._fps_limit: int = 30
         self._textures: dict[int, Any] = {}  # id → PIL Image
-        self._photo_cache: dict[int, ImageTk.PhotoImage] = {}  # id → tk PhotoImage
+        # (texture id, alpha) → tk PhotoImage
+        self._photo_cache: dict[tuple[int, float], ImageTk.PhotoImage] = {}
         self._texture_counter: int = 0
         self._frame_delay_ms: int = 33  # ~30 FPS
 
@@ -63,6 +64,11 @@ class TkBackend(DisplayBackend):
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def supports_video(self) -> bool:
+        """Software renderer — VLC/GL video playback is not supported."""
+        return False
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -199,7 +205,7 @@ class TkBackend(DisplayBackend):
 
         # Resize
         try:
-            resized = pil_img.resize((int(w), int(h)), Image.LANCZOS)
+            resized = pil_img.resize((int(w), int(h)), Image.Resampling.LANCZOS)
         except Exception:
             return
 

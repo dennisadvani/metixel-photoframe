@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +50,13 @@ def _wrap_worker_cmd(worker_cmd: list[str]) -> list[str]:
     On a Pi 3 with 4 cores, ``cpulimit -l 50`` means the worker uses
     at most half of one core — the other 3.5 cores stay free for the
     frontend renderer and Flask web server.
+
+    ``nice``/``cpulimit`` are Unix-only.  On Windows (desktop dev via
+    TkBackend) neither exists, so the worker command is returned
+    unchanged.
     """
+    if os.name != "posix":
+        return worker_cmd
     cpulimit = _detect_cpulimit()
     if cpulimit:
         # cpulimit -l 50 -f -- nice -n 19 python3 ...
@@ -279,7 +286,9 @@ class ImageProcessor:
         try:
             with Image.open(cached_path) as img:
                 thumb = img.copy()
-                thumb.thumbnail((self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE), Image.LANCZOS)
+                thumb.thumbnail(
+                    (self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE), Image.Resampling.LANCZOS
+                )
                 thumb.save(thumb_path, "JPEG", quality=70)
             logger.debug("Thumbnail regenerated: %s", thumb_path.name)
         except Exception:

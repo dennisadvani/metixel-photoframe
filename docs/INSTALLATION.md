@@ -179,13 +179,13 @@ Use the VS Code task runner (**Terminal → Run Task…** or
 
 | Task | What it does |
 |---|---|
-| **Sync Code to Pi (scp)** | Mirrors `src/metixel/` to `/opt/metixel/src/metixel/` on the Pi (robocopy → scp to staging → sudo rsync; excludes caches) |
-| **Sync + Restart All** | Syncs, then restarts both systemd services |
-| **Sync + Restart Backend** | Syncs, then restarts only the backend |
-| **Run Tests** | Runs `pytest` on the Pi |
-| **Lint (ruff)** / **Type Check (mypy)** | Run quality checks on the Pi |
-| **Follow Logs** | Tails both services' journal |
-| **Restart All / Backend / Frontend** | Quick service restarts without syncing |
+| **[Pi] Sync Code (scp)** | Mirrors `src/metixel/` to `/opt/metixel/src/metixel/` on the Pi (robocopy → scp to staging → sudo rsync; excludes caches) |
+| **[Pi] Sync + Restart All (scp)** | Syncs, then restarts both systemd services |
+| **[Pi] Sync + Restart Backend (scp)** | Syncs, then restarts only the backend |
+| **[Pi] Run Tests** | Runs `pytest` on the Pi |
+| **[Pi] Lint** / **[Pi] Type Check** | Run quality checks on the Pi |
+| **[Pi] Follow Logs** | Tails both services' journal |
+| **[Pi] Restart All / Backend / Frontend** | Quick service restarts without syncing |
 
 > **Note:** the sync task only mirrors `src/metixel/`. Test files under
 > `tests/` are not synced — copy them manually when you change tests:

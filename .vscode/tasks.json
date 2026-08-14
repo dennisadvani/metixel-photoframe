@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Restart All Services and Clear Cache",
+            "label": "[Pi] Restart All Services and Clear Cache",
             "type": "shell",
             "command": "sudo systemctl stop metixel-backend metixel-cage; rm -f /run/metixel/playlist.json; rm -rf /opt/metixel/cache/* 2>/dev/null;  sudo systemctl reset-failed metixel-backend metixel-cage; sudo systemctl start metixel-backend metixel-cage; echo restarted",
             "options": {
@@ -20,7 +20,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Restart Backend",
+            "label": "[Pi] Restart Backend",
             "type": "shell",
             "command": "sudo systemctl restart metixel-backend",
             "options": {
@@ -38,7 +38,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Restart Frontend (cage)",
+            "label": "[Pi] Restart Frontend",
             "type": "shell",
             "options": {
                 "shell": {
@@ -56,7 +56,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Restart All Services",
+            "label": "[Pi] Restart All Services",
             "type": "shell",
             "command": "sudo systemctl restart metixel-backend metixel-cage",
             "options": {
@@ -74,7 +74,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Stop All Services",
+            "label": "[Pi] Stop All Services",
             "type": "shell",
             "command": "sudo systemctl stop metixel-backend metixel-cage",
             "options": {
@@ -92,7 +92,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Follow Logs",
+            "label": "[Pi] Follow Logs",
             "type": "shell",
             "command": "sudo journalctl -u metixel-backend -u metixel-cage -f",
             "options": {
@@ -107,7 +107,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Run Tests",
+            "label": "[Pi] Run Tests",
             "type": "shell",
             "command": "cd /opt/metixel && python -m pytest tests/ -q --no-cov",
             "options": {
@@ -125,7 +125,7 @@
             "problemMatcher": "$python"
         },
         {
-            "label": "Lint (ruff)",
+            "label": "[Pi] Lint",
             "type": "shell",
             "command": "cd /opt/metixel && ruff check metixel/",
             "options": {
@@ -143,7 +143,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Type Check (mypy)",
+            "label": "[Pi] Type Check",
             "type": "shell",
             "command": "cd /opt/metixel && mypy metixel/",
             "options": {
@@ -157,7 +157,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Release",
+            "label": "[Local] Release",
             "type": "shell",
             "command": ".\\scripts\\release.ps1 ${input:releaseType}",
             "options": {
@@ -178,7 +178,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Sync Code to Pi (scp)",
+            "label": "[Pi] Sync Code (scp)",
             "detail": "Copies the metixel folder to the selected Pi. Excludes __pycache__ and cache dirs.",
             "type": "shell",
             "command": "${workspaceFolder}\\.vscode\\sync-to-pi.ps1 -PiHost ${input:piHost}",
@@ -205,10 +205,10 @@
             "problemMatcher": []
         },
         {
-            "label": "Sync + Restart All",
+            "label": "[Pi] Sync + Restart All (scp)",
             "detail": "Syncs code, then restarts both backend and frontend on the selected Pi.",
             "dependsOn": [
-                "Sync Code to Pi (scp)"
+                "[Pi] Sync Code (scp)"
             ],
             "dependsOrder": "sequence",
             "type": "shell",
@@ -231,10 +231,10 @@
             "problemMatcher": []
         },
         {
-            "label": "Sync + Restart Backend",
+            "label": "[Pi] Sync + Restart Backend (scp)",
             "detail": "Syncs code, then restarts only the backend on the selected Pi.",
             "dependsOn": [
-                "Sync Code to Pi (scp)"
+                "[Pi] Sync Code (scp)"
             ],
             "dependsOrder": "sequence",
             "type": "shell",
@@ -257,7 +257,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Install Playwright (Web UI tests)",
+            "label": "[Local] Install Playwright (Web UI Test)",
             "detail": "Installs the Playwright runner + Chromium for the dashboard E2E suite (run once).",
             "type": "shell",
             "command": "npm install; npx playwright install chromium",
@@ -279,7 +279,7 @@
             "problemMatcher": []
         },
         {
-            "label": "Run Web UI Tests (Playwright)",
+            "label": "[Local] Run Web UI Tests (Web UI Test)",
             "detail": "Runs the dashboard Playwright suite from this workstation against the selected Pi.",
             "type": "shell",
             "command": "npx playwright test",
@@ -303,6 +303,141 @@
             "presentation": {
                 "reveal": "always",
                 "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Run Backend",
+            "detail": "Runs the metixel backend daemon on this PC (scans media, builds the playlist, serves the web UI on :8080).",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m metixel --mode backend --config etc/config.json",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONPATH": "src"
+                },
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Run Frontend (Tk)",
+            "detail": "Runs the frontend renderer on this PC using the tkinter desktop backend (opens a Tk slideshow window). Start the backend first.",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m metixel --mode frontend --config etc/config.json",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONPATH": "src"
+                },
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Stop Services",
+            "detail": "Stops the locally running metixel backend/frontend python processes on this PC.",
+            "type": "shell",
+            "command": "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Where-Object { $_.CommandLine -match 'metixel' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Write-Host 'Local metixel processes stopped'",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Run Tests",
+            "detail": "Runs the pytest suite on this PC using the .venv interpreter (no coverage).",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m pytest tests/ -q --no-cov",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "test"
+            },
+            "problemMatcher": "$python"
+        },
+        {
+            "label": "[Local] Lint",
+            "detail": "Runs ruff check on src/metixel/ on this PC using the .venv interpreter.",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m ruff check src/metixel/",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "build"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Type Check",
+            "detail": "Runs mypy on src/metixel/ on this PC using the .venv interpreter.",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m mypy src/metixel/",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "build"
             },
             "problemMatcher": []
         }

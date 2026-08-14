@@ -167,5 +167,6 @@ def main() -> None:
 
         build_renderer(config_path=args.config).run()
 
+
 if __name__ == "__main__":
     main()

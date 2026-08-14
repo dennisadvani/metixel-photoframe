@@ -52,7 +52,6 @@ class IRHandler:
 
     def run(self) -> None:
         """Open LIRC socket and process incoming IR commands."""
-        import socket  # used for socket.timeout below
 
         lirc_socket = "/var/run/lirc/lircd"
         self._running = True
@@ -93,7 +92,7 @@ class IRHandler:
                 while "\n" in buffer:
                     line, buffer = buffer.split("\n", 1)
                     self._process_line(line.strip())
-            except socket.timeout:
+            except TimeoutError:
                 continue
             except Exception:
                 logger.exception("IR handler error")

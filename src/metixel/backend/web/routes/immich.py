@@ -11,9 +11,12 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, current_app, jsonify, request
+
+if TYPE_CHECKING:
+    from metixel.backend.sync.immich import ImmichSyncer
 
 logger = logging.getLogger(__name__)
 
@@ -93,9 +96,7 @@ def remove_album():
 
     state = current_app.config["METIXEL_STATE"]
     config = state.config
-    albums = [
-        a for a in (config.sync["immich"].get("albums") or []) if a.get("id") != album_id
-    ]
+    albums = [a for a in (config.sync["immich"].get("albums") or []) if a.get("id") != album_id]
     state.update_config("sync", {"immich": {"albums": albums}})
 
     # Delete the local album folder (best-effort).
@@ -260,10 +261,10 @@ def test_connection():
 
 # ── Module-level syncer cache ───────────────────────────────────────────────
 
-_syncer_cache: Any = None
+_syncer_cache: ImmichSyncer | None = None
 
 
-def _get_or_create_syncer(state) -> ImmichSyncer:  # noqa: F821
+def _get_or_create_syncer(state) -> ImmichSyncer:
     """Return a cached ``ImmichSyncer`` for the current state manager.
 
     The syncer is lightweight — it just wraps API calls. We reuse it

@@ -83,6 +83,29 @@ class OverlayLayer(ABC):
         """Reset the z-offset counter for a new frame."""
         self._z_offset = 0.0
 
+    # -- Optional layer actions ---------------------------------------------
+    # Default no-ops so the messages layer can be handled generically via
+    # ``get_layer()``; subclasses that support these override them.
+
+    def show(
+        self,
+        title: str = "",
+        body: str = "",
+        severity: str = "info",
+        duration: float = 5.0,
+        icon: str = "",
+    ) -> str:  # noqa: B027
+        """Queue a message and return its id (no-op unless supported)."""
+        return ""
+
+    def dismiss(self, msg_id: str) -> bool:  # noqa: B027
+        """Dismiss a message by id (no-op unless supported)."""
+        return False
+
+    def dismiss_all(self) -> int:  # noqa: B027
+        """Dismiss all messages (no-op unless supported)."""
+        return 0
+
     # -- Interface -----------------------------------------------------------
 
     @abstractmethod

@@ -423,7 +423,7 @@ class BootLayer(OverlayLayer):
             total = opt.get("total", 0)
             processed = opt.get("processed", 0)
             if total > 0 and processed > 0:
-                return min(100.0, (processed / total) * 100.0)
+                return float(min(100.0, (processed / total) * 100.0))
             return self._progress_pct
         except (json.JSONDecodeError, OSError, ValueError):
             return self._progress_pct

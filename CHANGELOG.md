@@ -5,6 +5,32 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.7-beta.7]
+
+### Added
+
+- **GitHub Actions CI** — `.github/workflows/ci.yml` runs `ruff check`,
+  `ruff format --check`, `mypy`, and `pytest` on Python 3.11 and 3.13 for
+  every pull request and push to `main`/`dev`.
+- **Dependabot** — `.github/dependabot.yml` opens weekly dependency-update PRs
+  for `pip` and the `web-tests/` npm packages.
+- **CI status badge** — README now shows the workflow status (and license).
+- **Widget base class** — `frontend/widgets/base.py` adds the documented
+  `Widget` ABC (was missing, which left `clock.py` unimportable).
+
+### Changed
+
+- **Python 3.11 minimum** — `requires-python` raised to `>=3.11`; ruff and
+  mypy targets bumped to 3.11; classifiers updated to 3.11–3.13.
+- **Mypy now clean** — all pre-existing type errors fixed across the
+  codebase (0 errors in 81 files, previously ~100).
+- **Windows/local-dev fixes** — IPC client `AF_UNIX` guard, platform-aware
+  watch-path and cache resolution, `nice`/`cpulimit` skipped on non-posix,
+  cross-platform `shutil.disk_usage`, and Unix-only signal guards.
+- **Video playback capability** — `DisplayBackend.supports_video` lets software
+  renderers (TkBackend) opt out; the frontend filters videos out of the
+  playlist with a single log instead of erroring every cycle.
+
 ## [1.1.6-beta.6]
 
 ### Added

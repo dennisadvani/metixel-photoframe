@@ -14,10 +14,15 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import IPCClient
 from metixel.shared.ports import Ports
+
+if TYPE_CHECKING:
+    from metixel.backend.network_controller import NetworkController, NetworkState
+    from metixel.backend.update_manager import UpdateManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,15 +38,26 @@ class BackendDaemon:
     - Input handlers (CEC, IR) — background threads
     """
 
-    def __init__(self, config_path: Path, ports: Ports | None = None) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        ports: Ports | None = None,
+        run_dir: Path | None = None,
+    ) -> None:
         self._config_path = config_path.resolve()
         self._ports = ports if ports is not None else Ports()
-        self._state = StateManager(self._config_path)
+        # Honour METIXEL_RUN_DIR (same env var the frontend uses) so desktop
+        # runs and tests can use a writable run directory; /run/metixel is the
+        # systemd default on the Pi.
+        self._state = StateManager(
+            self._config_path,
+            run_dir=run_dir or Path(os.environ.get("METIXEL_RUN_DIR", "/run/metixel")),
+        )
         self._ipc = IPCClient()
         self._running = False
         self._config = self._state.config
         self._threads: list[threading.Thread] = []
-        self._update_mgr: object | None = None
+        self._update_mgr: UpdateManager | None = None
         # Set by the web API when the frontend signals that the
         # slideshow has started — used to defer network checks.
         self._slideshow_started = threading.Event()
@@ -337,8 +353,8 @@ class BackendDaemon:
 
     def _drain_actions(
         self,
-        controller: NetworkController,  # noqa: F821
-        actions: list[NetworkState],  # noqa: F821
+        controller: NetworkController,
+        actions: list[NetworkState],
     ) -> None:
         """Execute side effects for each pending state transition."""
         from metixel.backend.network_controller import NetworkState
@@ -651,11 +667,15 @@ class BackendDaemon:
                 t.join(timeout=5.0)
 
 
-def build_backend(config_path: Path, ports: Ports | None = None) -> BackendDaemon:
+def build_backend(
+    config_path: Path,
+    ports: Ports | None = None,
+    run_dir: Path | None = None,
+) -> BackendDaemon:
     """Composition root for the backend process.
 
     Constructs :class:`BackendDaemon` with its external dependencies.
     Ports left ``None`` resolve to the real adapters inside each service
     (default behaviour); tests and alternate deployments inject fakes.
     """
-    return BackendDaemon(config_path, ports=ports)
+    return BackendDaemon(config_path, ports=ports, run_dir=run_dir)

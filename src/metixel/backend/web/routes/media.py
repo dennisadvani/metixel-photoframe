@@ -113,10 +113,10 @@ def _serve_resized_frame(path: Path) -> Response:
     try:
         from PIL import Image
 
-        img = Image.open(path)
+        img: Image.Image = Image.open(path)
         if img.mode not in ("RGB", "RGBA", "L"):
             img = img.convert("RGB")
-        img.thumbnail((THUMB, THUMB), Image.LANCZOS)
+        img.thumbnail((THUMB, THUMB), Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=70)
         buf.seek(0)
