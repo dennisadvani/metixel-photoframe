@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.10-beta.10]
+
+### Fixed
+
+- **`cage_launch.sh` executable bit** — the cage systemd unit execs
+  `scripts/cage_launch.sh` directly as its Wayland client, but the file was
+  tracked as mode `100644` in git, so every OTA update (`git reset --hard` +
+  checkout) recreated it non-executable. cage then failed with `Failed to
+  spawn client: Permission denied`, crash-looping `metixel-cage` after an
+  upgrade. The file is now `100755` in git.
+
 ### Changed
 
 - **PR-based release workflow** — the `main` branch is now protected by a
