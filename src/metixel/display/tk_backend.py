@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import tkinter as tk
 from pathlib import Path
 from typing import Any
 
@@ -29,15 +30,14 @@ class TkBackend(DisplayBackend):
 
     Uses a tkinter Canvas for rendering — no external libraries needed
     beyond Pillow (which is already a core dependency).
+
+    tkinter is only needed on desktop dev machines. On headless Pis (no
+    tkinter installed) this module can still be imported without error
+    because `display/__init__.py`'s detect_backend() only imports
+    .tk_backend when actually creating a TkBackend.
     """
 
     def __init__(self) -> None:
-        # tkinter is imported lazily — only needed on desktop dev machines.
-        # On headless Pis (no tkinter installed) the module can still be
-        # imported without error because `__init__.py`'s detect_backend()
-        # only imports .tk_backend when actually creating a TkBackend.
-        import tkinter as tk
-
         self._root: tk.Tk | None = None
         self._canvas: tk.Canvas | None = None
         self._running: bool = False

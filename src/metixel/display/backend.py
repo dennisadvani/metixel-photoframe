@@ -232,6 +232,18 @@ class DisplayBackend(ABC):
         """
         pass
 
+    def clear_depth(self) -> None:  # noqa: B027
+        """Clear the depth buffer so overlay draws appear on top.
+
+        The slideshow's rendering may write depth values that would occlude
+        overlay content (widgets, pop-up messages).  Call this after the
+        slideshow renders and before drawing overlay elements.
+
+        Default is a no-op — safe for software renderers without a depth
+        buffer (tkinter); GPU backends should clear their depth buffer.
+        """
+        pass
+
     # -- Text Rendering ------------------------------------------------------
 
     @abstractmethod

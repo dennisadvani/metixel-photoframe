@@ -106,10 +106,19 @@ class IPCClient:
 
     def __init__(self, socket_path: str = DEFAULT_SOCKET_PATH) -> None:
         self._socket_path = socket_path
-        self._socket: socket.SocketType | None = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self._socket: socket.SocketType | None = None
+        # On Windows (no AF_UNIX), IPC is disabled — mirror the server's
+        # behaviour so the backend daemon can still start on a desktop.
+        if not hasattr(socket, "AF_UNIX"):
+            logger.debug("AF_UNIX not available (Windows) — IPC disabled")
+            return
+        self._socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
 
     def send(self, message: ControlMessage) -> bool:
         """Send a control message to the frontend. Returns True on success."""
+        if self._socket is None:
+            logger.debug("IPC disabled — dropping %s", message.cmd)
+            return False
         try:
             data = message.to_json().encode("utf-8")
             self._socket.sendto(data, self._socket_path)
