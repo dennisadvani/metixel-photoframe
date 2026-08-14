@@ -5,6 +5,18 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **PR-based release workflow** — the `main` branch is now protected by a
+  ruleset that requires a pull request before merging, so direct
+  `git push origin main` is rejected. `scripts/release.ps1` and
+  `scripts/release.sh` now push a `release/<version>` branch, open a PR to
+  `main`, wait for CI checks to pass, merge the PR, then tag `main` and push
+  the tag. Both require the GitHub CLI (`gh`) to be installed and
+  authenticated. `docs/RELEASING.md` updated with the new manual steps.
+
 ## [1.1.9-beta.9]
 
 ### Added

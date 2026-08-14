@@ -160,6 +160,23 @@ python scripts/bump_version.py --minor --beta 1 --dry-run
 A beta is a **pre-release** — it appears on the **beta** channel in the
 Updates card.  Use this for wider testing before a stable release.
 
+The fastest path is the release script, which handles everything:
+
+```bash
+# Bump, commit on dev, open a PR to main, wait for CI, merge, tag, push
+scripts/release.sh beta      # or: scripts/release.ps1 beta   (Windows)
+```
+
+> **Note:** the `main` branch is protected by a ruleset that **requires a
+> pull request** — direct `git push origin main` is rejected. The release
+> scripts push a `release/<version>` branch and open a PR instead.
+>
+> If the ruleset also requires an approving review, set
+> `required_approving_review_count` to `0` (solo maintainer) or have a
+> collaborator approve the PR — you cannot approve your own PR.
+
+Doing it by hand:
+
 ```bash
 # 1. Bump the version
 python scripts/bump_version.py --minor --beta 1
@@ -174,14 +191,17 @@ python scripts/bump_version.py --minor --beta 1
 #    - Bug Y
 
 # 3. Commit the version bump + changelog
+#    (requires gh authenticated: gh auth login)
 git add src/metixel/__init__.py CHANGELOG.md
 git commit -m "chore: bump version to 0.2.0-beta.1"
 
-# 4. Create an annotated tag (MUST match the version)
-git tag -a v0.2.0-beta.1 -m "Beta 1: short summary of what's new"
+# 4. Push the release branch and open a PR to main
+git push origin dev:release/0.2.0-beta.1
+gh pr create --base main --head release/0.2.0-beta.1 --title "Release 0.2.0-beta.1"
 
-# 5. Push
-git push origin main
+# 5. After CI passes and the PR merges, tag on main
+git checkout main && git pull origin main
+git tag -a v0.2.0-beta.1 -m "Beta 1: short summary of what's new"
 git push origin v0.2.0-beta.1
 
 # 6. Create the GitHub Release at:
@@ -201,6 +221,13 @@ A stable release appears on the **stable** channel.  Do this after
 betas/RCs have been tested.
 
 ```bash
+# One-shot: bump, PR to main, wait for CI, merge, tag, push
+scripts/release.sh stable   # or: scripts/release.ps1 stable   (Windows)
+```
+
+Doing it by hand:
+
+```bash
 # 1. If coming from a beta/rc, strip the pre-release label:
 python scripts/bump_version.py --release
 
@@ -210,15 +237,18 @@ python scripts/bump_version.py --minor   # strips pre-release automatically
 # 2. Finalise CHANGELOG.md
 #    Move [Unreleased] items into the release section, set the date.
 
-# 3. Commit
+# 3. Commit (requires gh authenticated: gh auth login)
 git add src/metixel/__init__.py CHANGELOG.md
 git commit -m "chore: release v0.2.0"
 
-# 4. Tag
-git tag -a v0.2.0 -m "Release v0.2.0: summary of changes"
+# 4. Push the release branch and open a PR to main
+git push origin dev:release/0.2.0
+git push origin dev
+gh pr create --base main --head release/0.2.0 --title "Release 0.2.0"
 
-# 5. Push
-git push origin main
+# 5. After CI passes and the PR merges, tag on main
+git checkout main && git pull origin main
+git tag -a v0.2.0 -m "Release v0.2.0: summary of changes"
 git push origin v0.2.0
 
 # 6. Create the GitHub Release:

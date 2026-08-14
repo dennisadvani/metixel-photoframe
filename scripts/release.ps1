@@ -6,7 +6,16 @@
 
 .DESCRIPTION
     Switches to dev, pulls latest, bumps the version, commits on dev,
-    merges dev into main (fast-forward), tags on main, and pushes everything.
+    pushes a release branch, opens a pull request to main, waits for CI
+    checks, merges the PR, then tags main and pushes the tag.
+
+    Requires the GitHub CLI (gh) installed and authenticated:
+      gh auth login
+
+    NOTE: the "main" branch ruleset requires a pull request before merging.
+    If the ruleset also requires an approving review, the PR cannot be
+    self-approved — set required_approving_review_count to 0 (solo
+    maintainer) or have a collaborator approve the PR.
 
 .PARAMETER Type
     Release type: beta, rc, stable, minor, or major.
@@ -83,6 +92,21 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# gh is required to open/merge the release PR
+$Gh = Get-Command gh -ErrorAction SilentlyContinue
+if (-not $Gh) {
+    Write-Host "ERROR: GitHub CLI (gh) is not installed." -ForegroundColor Red
+    Write-Host "  Install: winget install --id GitHub.cli"
+    Write-Host "  Auth:    gh auth login"
+    exit 1
+}
+gh auth status *> $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: gh is not authenticated." -ForegroundColor Red
+    Write-Host "  Run: gh auth login"
+    exit 1
+}
+
 # -- Bump version -----------------------------------------------------------
 
 Write-Host "Bumping version: $Type" -ForegroundColor Green
@@ -114,9 +138,12 @@ if ($DryRun) {
     Write-Host ""
     Write-Host "--- DRY RUN (no changes made) ---" -ForegroundColor Yellow
     Write-Host "Would commit version bump on dev: v$NewVersion"
-    Write-Host "Would merge dev -> main (fast-forward)"
-    Write-Host "Would tag: v$NewVersion"
-    Write-Host "Would push: dev + main + tags"
+    Write-Host "Would push dev"
+    Write-Host "Would create + push release branch: release/$NewVersion"
+    Write-Host "Would open PR release/$NewVersion -> main"
+    Write-Host "Would wait for CI checks and merge the PR"
+    Write-Host "Would tag main: v$NewVersion"
+    Write-Host "Would push tag: v$NewVersion"
     # Revert the bump
     git checkout -- src/metixel/__init__.py
     exit 0
@@ -129,35 +156,81 @@ git commit -m "Bump version to $NewVersion"
 if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
 Write-Host "Version bump committed on dev." -ForegroundColor Green
 
-# -- Merge dev -> main -------------------------------------------------------
+# -- Push dev ----------------------------------------------------------------
 
-Write-Host "Switching to main..." -ForegroundColor Green
-git checkout main
-git pull origin main
+Write-Host "Pushing dev..." -ForegroundColor Green
+git push origin dev
+if ($LASTEXITCODE -ne 0) { throw "git push dev failed" }
 
-Write-Host "Merging dev into main..." -ForegroundColor Green
-git merge dev --no-ff -m "Release $NewVersion"
-if ($LASTEXITCODE -ne 0) { throw "git merge failed" }
+# -- Create release branch ---------------------------------------------------
 
-# -- Tag on main ------------------------------------------------------------
+$ReleaseBranch = "release/$NewVersion"
+Write-Host "Creating release branch $ReleaseBranch..." -ForegroundColor Green
+git checkout -b $ReleaseBranch
+if ($LASTEXITCODE -ne 0) { throw "Failed to create release branch" }
+
+Write-Host "Pushing release branch..." -ForegroundColor Green
+git push -u origin $ReleaseBranch
+if ($LASTEXITCODE -ne 0) { throw "git push release branch failed" }
+
+# -- Open pull request to main ----------------------------------------------
+
+Write-Host "Opening pull request to main..." -ForegroundColor Green
+$PrBody = @"
+Release $NewVersion
+
+Automated by scripts/release.ps1. Once CI passes, this PR merges into
+main and the release tag v$NewVersion is created.
+"@
+$PrUrl = gh pr create --base main --head $ReleaseBranch --title "Release $NewVersion" --body $PrBody
+if ($LASTEXITCODE -ne 0) { throw "gh pr create failed" }
+Write-Host "PR opened: $PrUrl" -ForegroundColor Cyan
+
+# -- Wait for CI checks ------------------------------------------------------
+
+Write-Host "Waiting for CI checks to pass..." -ForegroundColor Green
+gh pr checks $ReleaseBranch --watch --interval 15
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "ERROR: CI checks failed. Fix the issues on the PR or close it:" -ForegroundColor Red
+    Write-Host "  $PrUrl"
+    throw "CI checks failed"
+}
+
+# -- Merge the PR ------------------------------------------------------------
+
+Write-Host "Merging PR into main..." -ForegroundColor Green
+gh pr merge $ReleaseBranch --merge --delete-branch
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "ERROR: Could not merge the PR automatically." -ForegroundColor Red
+    Write-Host "If the ruleset requires an approving review, have a collaborator" -ForegroundColor Yellow
+    Write-Host "approve it (or set required_approving_review_count to 0), then merge:" -ForegroundColor Yellow
+    Write-Host "  $PrUrl"
+    throw "gh pr merge failed"
+}
+
+# -- Tag on main -------------------------------------------------------------
 
 $Tag = "v$NewVersion"
+Write-Host "Fetching main after merge..." -ForegroundColor Green
+git checkout main
+if ($LASTEXITCODE -ne 0) { throw "Failed to switch to main" }
+git pull origin main
+if ($LASTEXITCODE -ne 0) { throw "git pull main failed" }
+
 Write-Host "Tagging " -ForegroundColor Green -NoNewline
 Write-Host $Tag -ForegroundColor Yellow -NoNewline
 Write-Host " on main..." -ForegroundColor Green
 git tag -a $Tag -m "Release $NewVersion"
-
-# -- Push everything --------------------------------------------------------
-
-Write-Host "Pushing dev, main, and tags..." -ForegroundColor Green
-git push origin dev
-git push origin main
 git push origin $Tag
+if ($LASTEXITCODE -ne 0) { throw "git push tag failed" }
 
 # -- Done -------------------------------------------------------------------
 
 Write-Host "Switching back to dev..." -ForegroundColor Green
 git checkout dev
+git branch -D $ReleaseBranch 2>$null
 
 Write-Host ""
 Write-Host "=== Release $NewVersion ready ===" -ForegroundColor Green
