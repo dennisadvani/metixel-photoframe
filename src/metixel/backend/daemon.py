@@ -189,7 +189,9 @@ class BackendDaemon:
             logger.info("MQTT enabled — starting client")
             from metixel.backend.mqtt_client import MQTTClient
 
-            client = MQTTClient(self._state, self._ipc, mqtt=self._ports.mqtt)
+            # Pass the daemon so the MQTT client can expose the real
+            # screen-power state to Home Assistant.
+            client = MQTTClient(self._state, self._ipc, mqtt=self._ports.mqtt, daemon=self)
             t = threading.Thread(target=client.run, name="mqtt-client", daemon=True)
             t.start()
             self._threads.append(t)

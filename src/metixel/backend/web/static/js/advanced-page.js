@@ -51,6 +51,11 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         if (group) group.style.display = enabled ? "block" : "none";
     }
 
+    function toggleMqttFields(enabled) {
+        var fields = document.getElementById("mqtt-fields");
+        if (fields) fields.style.display = enabled ? "block" : "none";
+    }
+
     /** @type {number|null} */
 
     var _clockTimer = null;
@@ -233,12 +238,27 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         toggleScheduleFields(d.schedule_enabled === true);
         toggleResolutionFields(isAuto);
 
+        // MQTT / Home Assistant Settings
+        const m = config.mqtt || {};
+        setChecked("cfg-mqtt-enabled", m.enabled === true);
+        setValue("cfg-mqtt-device-id", m.device_id || "");
+        setValue("cfg-mqtt-broker", m.broker || "localhost");
+        setValue("cfg-mqtt-port", m.port || 1883);
+        setValue("cfg-mqtt-prefix", m.topic_prefix || "metixel");
+        setValue("cfg-mqtt-username", m.username || "");
+        setValue("cfg-mqtt-password", m.password || "");
+        setChecked("cfg-mqtt-discovery", m.discovery_enabled !== false);
+        setValue("cfg-mqtt-discovery-prefix", m.discovery_prefix || "homeassistant");
+        toggleMqttFields(m.enabled === true);
+
         // Fetch detected display resolution from the frontend
         apiGet("/health/display/info").then(function (info) {
             if (info && info.width > 0 && info.height > 0) {
                 var el = document.getElementById("display-detected-res");
                 if (el) {
-                    el.textContent = "Detected: " + info.width + " × " + info.height;
+                    var text = "Detected: " + info.width + " × " + info.height;
+                    if (info.output) text += " · connected via " + info.output;
+                    el.textContent = text;
                     el.style.color = "var(--text-muted)";
                 }
             }
@@ -325,6 +345,30 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 var health = await apiGet("/health");
                 updatePowerButton(health ? health.display_on !== false : true);
             })();
+
+            // MQTT / Home Assistant settings
+            document.getElementById("cfg-mqtt-enabled")?.addEventListener("change", function () {
+                toggleMqttFields(this.checked);
+            });
+
+            document.getElementById("btn-save-mqtt")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/mqtt", {
+                    enabled: document.getElementById("cfg-mqtt-enabled").checked,
+                    device_id: document.getElementById("cfg-mqtt-device-id").value.trim(),
+                    broker: document.getElementById("cfg-mqtt-broker").value.trim(),
+                    port: sanitizeInt(document.getElementById("cfg-mqtt-port").value, 1883),
+                    topic_prefix: document.getElementById("cfg-mqtt-prefix").value.trim() || "metixel",
+                    username: document.getElementById("cfg-mqtt-username").value,
+                    password: document.getElementById("cfg-mqtt-password").value,
+                    discovery_enabled: document.getElementById("cfg-mqtt-discovery").checked,
+                    discovery_prefix: document.getElementById("cfg-mqtt-discovery-prefix").value.trim() || "homeassistant",
+                });
+                if (result) {
+                    showToast("MQTT settings saved — restart services to apply", "success", 5000);
+                } else {
+                    showToast("Failed to save MQTT settings", "error");
+                }
+            });
 
             document.getElementById("btn-save-system")?.addEventListener("click", async () => {
                 var logLevel = document.getElementById("cfg-log-level").value;

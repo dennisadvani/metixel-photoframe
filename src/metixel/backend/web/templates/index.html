@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=12">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=13">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -761,6 +761,53 @@
                     <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
                 </div>
 
+                <!-- MQTT / Home Assistant Settings -->
+                <div class="card">
+                    <h2>MQTT / Home Assistant</h2>
+                    <p class="hint">Connect to an MQTT broker so Home Assistant can control the frame and read its state.</p>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-mqtt-enabled"> Enable MQTT
+                    </label>
+                    <div id="mqtt-fields" style="margin-top:0.6rem">
+                        <div class="form-group">
+                            <span class="form-label">Device ID</span>
+                            <input type="text" id="cfg-mqtt-device-id" placeholder="(hostname)">
+                        </div>
+                        <p class="hint">Unique per frame (defaults to the hostname) so Home Assistant treats each frame as a separate device. When running multiple frames on one broker, also give each a different <strong>Topic Prefix</strong>.</p>
+                        <div class="form-group">
+                            <span class="form-label">Broker</span>
+                            <input type="text" id="cfg-mqtt-broker" placeholder="localhost">
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">Port</span>
+                            <input type="number" id="cfg-mqtt-port" min="1" max="65535" value="1883">
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">Topic Prefix</span>
+                            <input type="text" id="cfg-mqtt-prefix" placeholder="metixel">
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">Username</span>
+                            <input type="text" id="cfg-mqtt-username" placeholder="(optional)" autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">Password</span>
+                            <input type="password" id="cfg-mqtt-password" placeholder="(optional)" autocomplete="new-password">
+                        </div>
+                        <hr style="border-color:var(--border);margin:0.7rem 0">
+                        <label class="checkbox-row">
+                            <input type="checkbox" id="cfg-mqtt-discovery" checked> Home Assistant Discovery
+                        </label>
+                        <p class="hint">Publishes entity configs to <code>homeassistant/</code> so HA auto-discovers the frame (buttons, screen-power switch, sensors).</p>
+                        <div class="form-group">
+                            <span class="form-label">Discovery Prefix</span>
+                            <input type="text" id="cfg-mqtt-discovery-prefix" placeholder="homeassistant">
+                        </div>
+                    </div>
+                    <p class="hint">MQTT connects on backend start — restart services after saving to apply changes.</p>
+                    <button id="btn-save-mqtt">Save MQTT Settings</button>
+                </div>
+
                 <!-- Web Server card hidden — uncomment to re-enable
                 <div class="card">
                     <h2>Web Server</h2>
@@ -831,6 +878,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=18"></script>
+    <script type="module" src="/static/js/main.js?v=20"></script>
 </body>
 </html>

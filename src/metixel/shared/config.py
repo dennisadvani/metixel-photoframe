@@ -90,8 +90,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "broker": "localhost",
         "port": 1883,
         "topic_prefix": "metixel",
+        "device_id": "",  # unique per frame; "" = hostname (HA device identity)
         "username": "",
         "password": "",
+        "discovery_enabled": True,  # Home Assistant MQTT Discovery
+        "discovery_prefix": "homeassistant",  # HA discovery base topic
     },
     "input": {
         "cec_enabled": True,
