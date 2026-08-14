@@ -70,7 +70,8 @@ class CECHandler:
             logger.warning(
                 "CEC library API mismatch — CEC disabled. "
                 "The installed 'cec' package does not match the expected API. "
-                "Try: sudo apt install python3-libcec"
+                "Install the Debian bindings with: sudo apt install python3-libcec "
+                "(and remove the incompatible PyPI package: sudo pip3 uninstall -y cec)"
             )
             return
         except Exception:

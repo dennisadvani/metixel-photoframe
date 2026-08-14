@@ -196,6 +196,9 @@ class FrontendRenderer:
                 "width": int(self._backend.width),
                 "height": int(self._backend.height),
                 "backend": type(self._backend).__name__,
+                # The connected Wayland output (e.g. "HDMI-A-2") so the
+                # Web UI can show which HDMI port the monitor is on.
+                "output": getattr(self._backend, "connected_output", lambda: None)(),
             }
             tmp_path = info_path.with_suffix(".tmp")
             with open(tmp_path, "w") as f:

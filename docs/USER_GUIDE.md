@@ -66,9 +66,21 @@ connections, or forget saved networks from there.
 
 ## 4. Adding Your Photos & Videos
 
-### Option A: Samba Share (easiest)
+### Option A: Web Upload (easiest)
 
-Metixel creates a shared folder on your network:
+Open the dashboard on any device (phone, tablet, or computer) and use the
+**Media Library → Upload Media** button (or drag & drop files onto the grid):
+
+- **Phone (iOS/Android):** the upload button opens your photo gallery — pick
+  one or many photos/videos and tap done.
+- **Computer:** tap Upload Media to pick files, or drag & drop them onto the
+  media grid.
+- HEIC photos from an iPhone are converted automatically, and the frame
+  starts showing new uploads within about 30 seconds.
+
+### Option B: Samba Share
+
+Metixel also creates a shared folder on your network:
 
 - **Windows:** Open File Explorer, type `\\metixel` or `\\<ip-address>` in the
   address bar. Open the `metixel-media` folder. Use `pi` / `raspberry` to log

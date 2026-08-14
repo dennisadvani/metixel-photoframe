@@ -105,6 +105,7 @@ You have several options — pick whichever fits your setup:
 
 | Method | Best for | How |
 |---|---|---|
+| **Web upload** | Anyone on the network | Dashboard → Media Library → Upload Media (or drag & drop); opens the phone gallery on mobile |
 | **Samba share** | Windows/Mac users | Open `\\metixel\metixel-media` (Windows) or `smb://metixel/metixel-media` (Mac), drag files in |
 | **USB drive** | One-time bulk import | Plug in a USB drive, add its mount path as a watch folder in the dashboard |
 | **Immich** | Existing Immich users | Enter your Immich server URL + API key in the dashboard → Sync tab |

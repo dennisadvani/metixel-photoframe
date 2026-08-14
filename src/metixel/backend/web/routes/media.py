@@ -5,9 +5,13 @@
 import hashlib
 import io
 import logging
+import os
+import re
+import shutil
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
 
@@ -17,6 +21,15 @@ media_bp = Blueprint("media", __name__)
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
+HEIC_EXTENSIONS = {".heic", ".heif"}
+
+# Upload target subfolder under media_dir (an enabled watch path).
+UPLOAD_SUBDIR = "my_media"
+# Reject uploads that would leave less than this fraction of disk free.
+FREE_SPACE_BUFFER_FRACTION = 0.05
+# Hard safety cap — multipart data is spooled before the view runs, so a
+# pathological request must not be allowed to fill tmpfs (RAM) unbounded.
+MAX_UPLOAD_BYTES = 2 * 1024**3  # 2 GiB
 
 # ── Lightweight file-list cache ──────────────────────────────────────
 # Avoids re-scanning the filesystem on every paginated request.
@@ -359,6 +372,164 @@ def _watch_folder_name(file_path: Path, roots: list[Path]) -> str:
             continue
     # Not inside any watch root — use immediate parent directory name
     return file_path.parent.name
+
+
+# -- Upload ---------------------------------------------------------------
+
+
+def _resolve_upload_dir(state) -> Path:
+    """Return the user-upload folder (``media/my_media``), creating it if needed.
+
+    ``my_media`` is an enabled watch path in the default config, so files
+    written here are picked up by the FolderWatcher and flow through the
+    optimisation pipeline into the slideshow.
+    """
+    config = state.config
+    media_dir = Path(config.system.get("media_dir", "media/"))
+    if not media_dir.is_absolute():
+        media_dir = Path("/opt/metixel") / media_dir
+    upload_dir = media_dir / UPLOAD_SUBDIR
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    return upload_dir
+
+
+def _sanitize_filename(name: str) -> str:
+    """Strip path components and characters that are unsafe in a filesystem."""
+    name = Path(name or "").name
+    name = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip(" .")
+    return name or "upload"
+
+
+def _unique_path(directory: Path, name: str) -> Path:
+    """Return a non-colliding path, appending ``-1``, ``-2``, … on collision."""
+    candidate = directory / name
+    if not candidate.exists():
+        return candidate
+    stem, suffix = os.path.splitext(name)
+    i = 1
+    while (directory / f"{stem}-{i}{suffix}").exists():
+        i += 1
+    return directory / f"{stem}-{i}{suffix}"
+
+
+def _has_free_space(path: Path, size_bytes: int) -> bool:
+    """True if writing ``size_bytes`` keeps at least 5% of the disk free."""
+    try:
+        usage = shutil.disk_usage(path)
+    except OSError:
+        return False
+    return (usage.free - size_bytes) >= usage.total * FREE_SPACE_BUFFER_FRACTION
+
+
+def _stream_size(stream) -> int:
+    """Return the byte length of a seekable stream, restoring its position."""
+    try:
+        stream.seek(0, os.SEEK_END)
+        size = int(stream.tell())
+        stream.seek(0)
+        return size
+    except (OSError, AttributeError, ValueError):
+        return 0
+
+
+def _convert_heic(source, out_path: Path) -> bool:
+    """Convert a HEIC/HEIF image to JPEG, preserving EXIF orientation.
+
+    iPhones default to HEIC; the media pipeline only handles the classic
+    formats, so we normalise to JPEG on arrival.  Returns True on success.
+    """
+    try:
+        import pillow_heif  # type: ignore[import-not-found, import-untyped]  # optional dep, no stubs
+        from PIL import Image, ImageOps
+
+        pillow_heif.register_heif_opener()
+        with Image.open(source) as opened:
+            img: Image.Image = ImageOps.exif_transpose(opened)
+            if img.mode not in ("RGB", "RGBA", "L"):
+                img = img.convert("RGB")
+            img.save(out_path, "JPEG", quality=90)
+        return True
+    except Exception:  # noqa: BLE001
+        logger.warning("HEIC conversion failed for %s", out_path.name, exc_info=True)
+        return False
+
+
+@media_bp.route("/upload", methods=["POST"])
+def upload_media():
+    """Upload media files into the user-media watch folder.
+
+    Accepts ``multipart/form-data`` with multiple files under the ``files``
+    field name.  Files land in ``media/my_media/`` (an enabled watch path),
+    are auto-renamed on name collision, and must satisfy the extension
+    whitelist.  HEIC/HEIF images are converted to JPEG on arrival because
+    the media pipeline only handles the classic image formats.  Uploads are
+    rejected when they would leave less than 5% of the filesystem free.
+
+    Returns:
+        JSON ``{saved: [...], errors: [...]}`` with per-file results.
+    """
+    state = current_app.config["METIXEL_STATE"]
+    upload_dir = _resolve_upload_dir(state)
+
+    files = request.files.getlist("files")
+    if not files:
+        return (
+            jsonify({"saved": [], "errors": [{"name": None, "error": "No files supplied"}]}),
+            400,
+        )
+
+    saved: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    for f in files:
+        original = _sanitize_filename(f.filename or "")
+        if not original:
+            errors.append({"name": f.filename, "error": "Invalid filename"})
+            continue
+
+        suffix = os.path.splitext(original)[1].lower()
+        if suffix not in (IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | HEIC_EXTENSIONS):
+            errors.append({"name": original, "error": f"Unsupported file type: {suffix}"})
+            continue
+
+        size = _stream_size(f.stream)
+        if size <= 0:
+            errors.append({"name": original, "error": "Empty file"})
+            continue
+        if not _has_free_space(upload_dir, size):
+            errors.append({"name": original, "error": "Insufficient disk space"})
+            continue
+
+        if suffix in HEIC_EXTENSIONS:
+            out_name = os.path.splitext(original)[0] + ".jpg"
+            out_path = _unique_path(upload_dir, out_name)
+            if not _convert_heic(f.stream, out_path):
+                errors.append({"name": original, "error": "HEIC conversion failed"})
+                continue
+            saved.append(
+                {"name": original, "saved_as": out_path.name, "size": out_path.stat().st_size}
+            )
+        else:
+            out_path = _unique_path(upload_dir, original)
+            try:
+                f.save(str(out_path))
+            except OSError:
+                errors.append({"name": original, "error": "Failed to save file"})
+                continue
+            saved.append({"name": original, "saved_as": out_path.name, "size": size})
+
+    status = 201 if saved else 400
+    return (
+        jsonify(
+            {
+                "saved": saved,
+                "errors": errors,
+                "saved_count": len(saved),
+                "error_count": len(errors),
+            }
+        ),
+        status,
+    )
 
 
 @media_bp.route("/cache/clear", methods=["POST"])

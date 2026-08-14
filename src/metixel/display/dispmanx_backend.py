@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import json
 import logging
 import os
 import subprocess
@@ -93,6 +94,12 @@ class Pi3dBackend(DisplayBackend):
         # Text cache — avoids recreating FixedString every frame
         self._text_cache: dict[tuple, Any] = {}
 
+        # Detected wlr-randr output name — cached after first detection.
+        # A Raspberry Pi exposes two HDMI connectors; only one usually has
+        # a real monitor.  We auto-detect the correct one (see
+        # ``_detect_wlr_output``) instead of hardcoding ``HDMI-A-1``.
+        self._wlr_output: str | None = None
+
     # -- Properties ----------------------------------------------------------
 
     @property
@@ -147,6 +154,11 @@ class Pi3dBackend(DisplayBackend):
         self._fps_limit = fps_limit
         self._frame_period = 1.0 / max(fps_limit, 1)
         self._last_frame_time = 0.0
+
+        # Disable Wayland outputs with no real monitor attached BEFORE
+        # creating the pi3d display, so the auto-detected resolution is
+        # the real monitor's native size (see ``_disable_empty_outputs``).
+        self._disable_empty_outputs()
 
         # Resolve GL_RGB constant — pi3d 2.50+ moved it to pi3d.constants
         global GPU_TEXTURE_FORMAT_GL_RGB
@@ -811,9 +823,6 @@ class Pi3dBackend(DisplayBackend):
 
     # -- Power Management ----------------------------------------------------
 
-    # Default Wayland output name for wlr-randr (configurable via env)
-    _WLR_OUTPUT = os.environ.get("METIXEL_WLR_OUTPUT", "HDMI-A-1")
-
     def display_power(self, on: bool) -> None:
         """Control HDMI display power.
 
@@ -850,11 +859,127 @@ class Pi3dBackend(DisplayBackend):
             logger.warning("vcgencmd not found — display power control unavailable")
 
     @staticmethod
-    def _wlr_randr(on: bool) -> bool:
+    def _wlr_override() -> str:
+        """Explicit output override from ``METIXEL_WLR_OUTPUT`` (empty if unset).
+
+        Read live at call time so it works regardless of import order.
+        """
+        return os.environ.get("METIXEL_WLR_OUTPUT", "").strip()
+
+    def _disable_empty_outputs(self) -> None:
+        """Disable Wayland outputs that have no real monitor (no EDID).
+
+        A Raspberry Pi exposes two HDMI connectors.  An unplugged port is
+        still reported by the compositor as an ``enabled`` output using a
+        low-resolution fallback mode (e.g. 1024x768).  Leaving it enabled
+        widens the logical screen (1920 + 1024 -> 2944px), so pi3d renders
+        a 2944-wide canvas that is scaled back down to the 1920-wide
+        monitor — distorting the slideshow aspect ratio.
+
+        This disables such phantom outputs so the frame renders at the
+        real monitor's native resolution.  Skipped entirely when
+        ``METIXEL_WLR_OUTPUT`` explicitly selects an output to control.
+        """
+        if self._wlr_override():
+            return
+        wlr_bin = "/usr/bin/wlr-randr"
+        if not os.path.exists(wlr_bin):
+            logger.debug("wlr-randr not installed — cannot clean up outputs")
+            return
+        try:
+            result = subprocess.run(
+                [wlr_bin, "--json"],
+                capture_output=True,
+                timeout=5,
+                env=self._wlr_env(),
+            )
+            if result.returncode != 0:
+                return
+            outputs = json.loads(result.stdout.decode(errors="replace") or "[]")
+        except Exception:
+            logger.warning("Failed to enumerate outputs for cleanup", exc_info=True)
+            return
+        if not isinstance(outputs, list):
+            return
+
+        for out in outputs:
+            if not out.get("enabled"):
+                continue
+            if out.get("make") or out.get("model"):
+                continue  # real monitor — keep enabled
+            name = out.get("name")
+            if not isinstance(name, str):
+                continue
+            logger.info("Disabling phantom output (no monitor): %s", name)
+            try:
+                subprocess.run(
+                    [wlr_bin, "--output", name, "--off"],
+                    capture_output=True,
+                    timeout=5,
+                    env=self._wlr_env(),
+                )
+            except Exception:
+                logger.warning("Failed to disable phantom output %s", name, exc_info=True)
+
+    def connected_output(self) -> str | None:
+        """Return the Wayland output the frame is actually shown on.
+
+        Resolves the wlr-randr output name (env override → auto-detected
+        real monitor → ``None``).  Used by the frontend to report which
+        HDMI port the display is connected to in the Web UI.
+        """
+        override = self._wlr_override()
+        if override:
+            return override
+        if self._wlr_output:
+            return self._wlr_output
+        detected = self._detect_wlr_output()
+        if detected:
+            self._wlr_output = detected
+        return detected
+
+    def _resolve_wlr_output(self, fallback: bool = True) -> str:
+        """Return the output name to target with wlr-randr.
+
+        Priority:
+        1. ``METIXEL_WLR_OUTPUT`` env override (explicit user choice).
+        2. Auto-detected output — the one with a real monitor (non-null
+           EDID-derived make/model, native preferred mode, highest res).
+        3. ``HDMI-A-1`` as a last resort.
+        """
+        override = self._wlr_override()
+        if override:
+            return override
+        if self._wlr_output:
+            return self._wlr_output
+        detected = self._detect_wlr_output()
+        if detected:
+            self._wlr_output = detected
+            return detected
+        if fallback:
+            return self._resolve_wlr_output(fallback=False)
+        return "HDMI-A-1"
+
+    @staticmethod
+    def _wlr_env() -> dict[str, str]:
+        """Minimal environment for wlr-randr subprocesses.
+
+        Inheriting the full ``os.environ`` can cause conflicts (e.g.
+        ``DISPLAY=:0`` from XWayland may confuse some Wayland clients).
+        """
+        return {
+            "WAYLAND_DISPLAY": "wayland-0",
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", "/home/pi"),
+        }
+
+    def _wlr_randr(self, on: bool) -> bool:
         """Toggle display via wlr-randr (wlroots/Wayland). Returns True on success.
 
-        Passes a minimal environment to the subprocess to avoid any interference
-        from the parent process's display-related environment variables.
+        Targets the auto-detected output (the port with a real monitor).
+        If the cached output becomes invalid (e.g. the monitor is moved to
+        the other HDMI port), re-detects once and retries.
         """
         try:
             wlr_bin = "/usr/bin/wlr-randr"
@@ -862,41 +987,109 @@ class Pi3dBackend(DisplayBackend):
                 logger.debug("wlr-randr not installed at %s", wlr_bin)
                 return False
 
-            # Use a minimal environment — only pass what wlr-randr needs.
-            # Inheriting the full os.environ can cause conflicts (e.g. DISPLAY=:0
-            # from XWayland may confuse some Wayland clients).
-            env = {
-                "WAYLAND_DISPLAY": "wayland-0",
-                "XDG_RUNTIME_DIR": "/run/user/1000",
-                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-                "HOME": os.environ.get("HOME", "/home/pi"),
-            }
-
-            cmd = [
-                wlr_bin,
-                "--output",
-                Pi3dBackend._WLR_OUTPUT,
-                "--on" if on else "--off",
-            ]
+            output = self._resolve_wlr_output()
+            cmd = [wlr_bin, "--output", output, "--on" if on else "--off"]
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 timeout=5,
-                env=env,
+                env=self._wlr_env(),
             )
-            if result.returncode != 0:
-                logger.warning(
-                    "wlr-randr exited %d: %s",
-                    result.returncode,
-                    result.stderr.decode(errors="replace").strip(),
-                )
-            return result.returncode == 0
+            if result.returncode == 0:
+                return True
+
+            stderr = result.stderr.decode(errors="replace").strip()
+            logger.warning("wlr-randr exited %d: %s", result.returncode, stderr)
+
+            # The cached output may be stale (monitor moved to another
+            # port).  Clear the cache, re-detect, and retry once.
+            if self._wlr_output and "unknown output" in stderr:
+                self._wlr_output = None
+                new_output = self._resolve_wlr_output()
+                if new_output != output:
+                    logger.info("Re-detected wlr-randr output: %s", new_output)
+                    retry = subprocess.run(
+                        [wlr_bin, "--output", new_output, "--on" if on else "--off"],
+                        capture_output=True,
+                        timeout=5,
+                        env=self._wlr_env(),
+                    )
+                    return retry.returncode == 0
+            return False
         except FileNotFoundError:
             logger.debug("wlr-randr not installed — cannot control display via Wayland")
             return False
         except Exception:
             logger.warning("wlr-randr failed", exc_info=True)
             return False
+
+    @staticmethod
+    def _detect_wlr_output() -> str | None:
+        """Auto-detect which Wayland output has a real monitor connected.
+
+        Runs ``wlr-randr --json`` and picks the best output:
+        - an output with EDID-derived make/model (real monitor) wins
+        - otherwise the output advertising a native ``preferred`` mode
+        - otherwise the enabled output with the highest resolution
+
+        A Raspberry Pi exposes two HDMI connectors; the empty port has no
+        EDID and only reports low-res fallback modes (e.g. 1024x768).
+        Returns ``None`` if wlr-randr is unavailable or fails.
+        """
+        wlr_bin = "/usr/bin/wlr-randr"
+        if not os.path.exists(wlr_bin):
+            logger.debug("wlr-randr not installed — cannot detect display output")
+            return None
+        try:
+            result = subprocess.run(
+                [wlr_bin, "--json"],
+                capture_output=True,
+                timeout=5,
+                env=Pi3dBackend._wlr_env(),
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "wlr-randr --json failed (%d): %s",
+                    result.returncode,
+                    result.stderr.decode(errors="replace").strip(),
+                )
+                return None
+            outputs = json.loads(result.stdout.decode(errors="replace") or "[]")
+        except Exception:
+            logger.warning("Failed to detect display output via wlr-randr", exc_info=True)
+            return None
+
+        if not isinstance(outputs, list) or not outputs:
+            return None
+
+        enabled = [o for o in outputs if o.get("enabled")]
+        if not enabled:
+            enabled = outputs
+
+        def _score(out: dict) -> float:
+            score = 0.0
+            # Real monitor → EDID-derived make/model is non-null
+            if out.get("make") or out.get("model"):
+                score += 100.0
+            for mode in out.get("modes", []) or []:
+                if mode.get("preferred"):
+                    score += 10.0
+                if mode.get("current"):
+                    score += 1.0
+                    score += (mode.get("width", 0) * mode.get("height", 0)) / 1_000_000.0
+            return score
+
+        best = max(enabled, key=_score)
+        name = best.get("name")
+        if isinstance(name, str):
+            logger.info(
+                "Detected display output: %s (make=%s model=%s)",
+                name,
+                best.get("make"),
+                best.get("model"),
+            )
+            return name
+        return None
 
     @staticmethod
     def _drm_dpms(state: str) -> bool:

@@ -7,7 +7,8 @@
 
 import {
     apiGet,
-    escapeHtml
+    escapeHtml,
+    showToast
 } from "./core.js";
 
     // -- Media --------------------------------------------------------------
@@ -20,6 +21,8 @@ import {
     var _allMediaItems = [];
     /** Set of unique folders extracted from media paths */
     var _mediaFolders = [];
+    /** Guard so upload/drop bindings are attached once */
+    var _mediaUploadBound = false;
 
     async function loadMedia() {
         _mediaOffset = 0;
@@ -58,6 +61,8 @@ import {
         }
 
         await _fetchMediaPage(0);
+
+        _bindUpload();
     }
 
     /** Apply client-side filters and re-render the media grid. */
@@ -276,5 +281,139 @@ import {
             el.appendChild(btn);
         }
     }
+
+// -- Upload -------------------------------------------------------------
+
+function _bindUpload() {
+    if (_mediaUploadBound) return;
+    _mediaUploadBound = true;
+
+    var btn = document.getElementById("btn-upload-media");
+    var input = document.getElementById("file-upload");
+    var list = document.getElementById("media-list");
+
+    if (btn && input) {
+        btn.addEventListener("click", function () {
+            input.click();
+        });
+        input.addEventListener("change", function () {
+            if (input.files && input.files.length) {
+                _uploadFiles(input.files);
+            }
+            input.value = "";
+        });
+    }
+
+    // Drag & drop onto the media list / grid (desktop).
+    if (list) {
+        var depth = 0;
+        list.addEventListener("dragenter", function (e) {
+            e.preventDefault();
+            depth++;
+            list.classList.add("drop-active");
+        });
+        list.addEventListener("dragover", function (e) {
+            e.preventDefault();
+        });
+        list.addEventListener("dragleave", function (e) {
+            e.preventDefault();
+            depth = Math.max(0, depth - 1);
+            if (depth === 0) list.classList.remove("drop-active");
+        });
+        list.addEventListener("drop", function (e) {
+            e.preventDefault();
+            depth = 0;
+            list.classList.remove("drop-active");
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+                _uploadFiles(e.dataTransfer.files);
+            }
+        });
+    }
+}
+
+function _uploadFiles(files) {
+    var list = Array.prototype.slice.call(files);
+    if (!list.length) return;
+
+    var form = new FormData();
+    list.forEach(function (f) {
+        form.append("files", f, f.name);
+    });
+
+    var prog = document.getElementById("upload-progress");
+    if (prog) {
+        prog.style.display = "block";
+        prog.innerHTML = '<div class="upload-row">'
+            + '<span class="material-symbols-outlined upload-spin" style="font-size:1em">sync</span>'
+            + ' <span>Uploading ' + list.length + ' file' + (list.length === 1 ? "" : "s") + '…</span>'
+            + '<div class="progress-track"><div class="progress-fill" id="upload-fill" style="width:0%"></div></div>'
+            + '</div>';
+    }
+
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/media/upload");
+    xhr.upload.onprogress = function (e) {
+        if (e.lengthComputable) {
+            var pct = Math.round((e.loaded / e.total) * 100);
+            var fill = document.getElementById("upload-fill");
+            if (fill) fill.style.width = pct + "%";
+        }
+    };
+    xhr.onload = function () {
+        var resp = null;
+        try {
+            resp = JSON.parse(xhr.responseText || "{}");
+        } catch (err) {
+            /* ignore */
+        }
+        _renderUploadResults(resp);
+    };
+    xhr.onerror = function () {
+        if (prog) prog.style.display = "none";
+        showToast("Upload failed — is the frame reachable?", "error");
+    };
+    xhr.send(form);
+}
+
+function _renderUploadResults(resp) {
+    var prog = document.getElementById("upload-progress");
+    if (!prog) return;
+
+    var saved = (resp && resp.saved) ? resp.saved : [];
+    var errors = (resp && resp.errors) ? resp.errors : [];
+
+    if (saved.length === 0 && errors.length === 0) {
+        prog.style.display = "none";
+        showToast("Upload failed", "error");
+        return;
+    }
+
+    var html = '<div class="upload-results">';
+    if (saved.length) {
+        html += '<div class="upload-result upload-result--ok">'
+            + '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle;color:var(--success)">check_circle</span> '
+            + 'Saved ' + saved.length + ' file' + (saved.length === 1 ? "" : "s")
+            + ' — they\u2019ll appear in the slideshow shortly.</div>';
+    }
+    if (errors.length) {
+        html += '<div class="upload-result upload-result--err">'
+            + '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle;color:var(--danger)">error</span> '
+            + errors.length + ' failed:</div><ul class="upload-errors">';
+        errors.forEach(function (er) {
+            html += '<li>' + escapeHtml(er.name || "file") + ' \u2014 ' + escapeHtml(er.error || "unknown error") + '</li>';
+        });
+        html += '</ul>';
+    }
+    html += '</div>';
+
+    prog.innerHTML = html;
+    prog.style.display = "block";
+
+    if (saved.length) {
+        showToast("Uploaded " + saved.length + " file" + (saved.length === 1 ? "" : "s"), "success");
+        loadMedia();
+        setTimeout(function () { prog.style.display = "none"; }, 8000);
+    }
+}
 
 export { loadMedia };

@@ -30,7 +30,11 @@ ExecStartPre=+/bin/chmod 0700 /run/user/1000
 # cage starts a Wayland session with XWayland, then runs metixel inside it.
 # This gives pi3d the X11 surface it needs on KMS-only systems (Trixie).
 # -d: suppress the compositor's seat cursor entirely (no cursor on screen).
-ExecStart=/usr/bin/cage -d -- python3 -m metixel --mode frontend --config /opt/metixel/etc/config.json
+# The cage_launch.sh wrapper disables phantom HDMI outputs (no EDID) BEFORE
+# the frontend connects to XWayland, so the frame renders at the real
+# monitor's native resolution (fixes aspect-ratio distortion on Pi 5 with
+# an empty second HDMI port).
+ExecStart=/usr/bin/cage -d -- /opt/metixel/scripts/cage_launch.sh
 
 # Restart on failure or exit
 Restart=always

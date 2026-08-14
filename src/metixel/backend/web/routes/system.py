@@ -9,7 +9,7 @@ import subprocess
 import threading
 import time
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from metixel.shared.platform import read_device_tree_model, read_vcgencmd_mem_str
 
@@ -52,6 +52,28 @@ def _schedule_sudo(
 
     thread = threading.Thread(target=_run, daemon=True, name=thread_name)
     thread.start()
+
+
+@system_bp.route("/mqtt-status", methods=["GET"])
+def mqtt_status():
+    """Report the MQTT broker connection state for the dashboard."""
+    daemon = current_app.config.get("METIXEL_DAEMON")
+    client = getattr(daemon, "_mqtt_client", None) if daemon is not None else None
+    if client is not None and hasattr(client, "status"):
+        return jsonify(client.status())
+
+    state = current_app.config.get("METIXEL_STATE")
+    if state is None:
+        return jsonify({"enabled": False, "status": "unknown"})
+    enabled = bool(state.config.mqtt.get("enabled"))
+    return jsonify(
+        {
+            "enabled": enabled,
+            "status": "disabled" if not enabled else "unknown",
+            "broker": state.config.mqtt.get("broker"),
+            "port": state.config.mqtt.get("port"),
+        }
+    )
 
 
 @system_bp.route("/restart", methods=["POST"])

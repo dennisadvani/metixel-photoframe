@@ -65,11 +65,14 @@
     "broker": "localhost",
     "port": 1883,
     "topic_prefix": "metixel",
+    "device_id": "",
     "username": "",
-    "password": ""
+    "password": "",
+    "discovery_enabled": true,
+    "discovery_prefix": "homeassistant"
   },
   "input": {
-    "cec_enabled": true,
+    "cec_enabled": false,
     "ir_enabled": false,
     "ir_device": "/dev/lirc0"
   },

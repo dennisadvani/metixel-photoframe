@@ -7,6 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.9-beta.9]
+
+### Added
+
+- **Home Assistant MQTT Discovery** — when `mqtt.discovery_enabled` (default `true`),
+  the MQTT client publishes retained HA discovery configs so Home Assistant
+  auto-discovers the frame as a `Metixel Photo Frame` device with buttons
+  (next / prev / pause-resume), a screen-power switch,
+  and sensors (current media, playback state, uptime, CPU temperature, memory,
+  swap). Configs publish on connect and re-publish every 30 minutes.
+- **Immediate screen-power state publish** — toggling the screen-power switch
+  (via `metixel/screen/set` or `metixel/cmd` with `power_on`/`power_off`) now
+  publishes the new state to `metixel/screen` immediately, so Home Assistant
+  registers the toggle without waiting for the next periodic (30s) state publish.
+- **Diagnostic HA sensors** — all discovery sensors are registered as HA
+  `entity_category: diagnostic`, and the `current_media` sensor (the raw file
+  name) is `enabled_by_default: false` so it stays hidden unless enabled in HA.
+  Adds a `disk_used` diagnostic sensor (root filesystem used, %), the
+  `uptime` sensor now reports a human-readable value (e.g. `2d 3h 45m`)
+  instead of raw seconds, and `memory_used` / `swap_used` report percentages
+  instead of GB.
+- **Web media upload** — the Media Library page now has an **Upload Media**
+  button (opens the phone gallery on iOS/Android) and drag-and-drop on
+  desktop. `POST /api/media/upload` streams files into `media/my_media/`,
+  converts HEIC/HEIF (iPhone) photos to JPEG, auto-renames on name collision,
+  sanitises filenames, and refuses uploads that would leave less than 5% of
+  the disk free. New dependency: `pillow-heif`.
+- **MQTT status indicator + restart** — the Advanced → MQTT card shows a live
+  broker status pill (`Connected` / `Auth error` / `Connecting` / `Not
+  responding` / `Disabled`, from the new `GET /api/system/mqtt-status`) and a
+  **Restart Services** button next to Save so MQTT settings apply in one click.
+- **MQTT media & screen state** — the client now publishes `metixel/current_media`
+  (JSON with title/media_type/paused/state), `metixel/state` (playing/paused/off),
+  and `metixel/screen` (ON/OFF), and subscribes to `metixel/screen/set` for
+  screen-power control from the new HA switch.
+- **`mqtt.discovery_prefix`** config key (default `"homeassistant"`) to override
+  the HA discovery base topic.
+- **Multi-frame support** — new `mqtt.device_id` config (default: hostname)
+  scopes the HA device identifier, every entity `unique_id`, and the discovery
+  object ID (`metixel_<device_id>_<entity>`), so multiple frames on one broker
+  appear as separate HA devices with no entity collisions.
+- **HDMI output auto-detection** — the display backend now queries
+  `wlr-randr --json` to find the output with a real monitor (non-null
+  EDID-derived make/model, native preferred mode, highest resolution)
+  instead of hardcoding `HDMI-A-1`. The display-power toggle targets the
+  correct port, and the Web UI's Display Settings card shows which port the
+  frame is connected to (e.g. `Detected: 1920 × 1200 · connected via HDMI-A-2`).
+- **Phantom HDMI output cleanup** — on a Pi with two HDMI ports, an empty port
+  is still reported as an enabled output with a low-res fallback mode, widening
+  the logical screen (e.g. 1920 + 1024 → 2944px) and distorting the slideshow
+  aspect ratio. The backend now disables no-EDID outputs at startup
+  (`Pi3dBackend._disable_empty_outputs`), and the new `scripts/cage_launch.sh`
+  wrapper (used by `metixel-cage.service`) disables them *before* the frontend
+  connects to XWayland so pi3d detects the real monitor's native resolution.
+  Override with the `METIXEL_WLR_OUTPUT` env var to control a specific output.
+
 ## [1.1.8-beta.8]
 
 ### Added

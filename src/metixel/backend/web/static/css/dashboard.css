@@ -919,6 +919,165 @@ button:focus-visible {
     gap: 0.5rem;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Media Upload
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.media-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.6rem;
+}
+
+.media-toolbar #btn-upload-media {
+    margin-top: 0;
+    margin-right: 0;
+}
+
+.media-toolbar-hint {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.upload-progress {
+    margin-bottom: 0.85rem;
+}
+
+.upload-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
+.upload-spin {
+    animation: upload-spin 1.1s linear infinite;
+}
+
+@keyframes upload-spin {
+    to { transform: rotate(360deg); }
+}
+
+.progress-track {
+    flex: 1;
+    min-width: 140px;
+    height: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 99px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--primary);
+    border-radius: 99px;
+    transition: width 0.15s ease;
+}
+
+.upload-results {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.upload-result {
+    font-size: 0.82rem;
+    padding: 0.4rem 0.55rem;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.upload-result--ok {
+    background: rgba(5, 150, 105, 0.12);
+    color: var(--text);
+}
+
+.upload-result--err {
+    background: rgba(220, 38, 38, 0.08);
+    color: var(--danger);
+}
+
+.upload-errors {
+    margin: 0 0 0 1.1rem;
+    font-size: 0.78rem;
+    color: var(--danger);
+}
+
+/* Highlight the drop target while dragging files over the grid */
+#media-list.drop-active {
+    outline: 2px dashed var(--primary);
+    outline-offset: 4px;
+    border-radius: var(--radius-sm);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MQTT Status
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.mqtt-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.4rem 0 0.8rem;
+}
+
+.mqtt-status-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.6rem;
+    border-radius: 99px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #fff;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.mqtt-status--ok {
+    background: var(--success);
+}
+
+.mqtt-status--err {
+    background: var(--danger);
+}
+
+.mqtt-status--warn {
+    background: #f0a030;
+    color: #1a1a1a;
+}
+
+.mqtt-status--disabled {
+    background: var(--border);
+    color: var(--text-muted);
+}
+
+.mqtt-status-detail {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+
+.mqtt-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 0.4rem;
+}
+
+.mqtt-actions button {
+    margin-top: 0;
+    margin-right: 0;
+}
+
 .media-item {
     background: var(--bg);
     border: 1px solid var(--border);
