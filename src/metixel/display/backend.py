@@ -244,6 +244,15 @@ class DisplayBackend(ABC):
         """
         pass
 
+    @property
+    def supports_video(self) -> bool:
+        """Whether this backend can render video playback.
+
+        Video playback requires GL texture support (pi3d).  Software
+        renderers (tkinter) cannot play videos — the frontend skips them.
+        """
+        return True
+
     # -- Text Rendering ------------------------------------------------------
 
     @abstractmethod

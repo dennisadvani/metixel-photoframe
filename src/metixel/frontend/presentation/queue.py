@@ -40,6 +40,7 @@ class PlaylistControllerMixin(BaseEngineState):
 
         filtered: list[MediaItem] = []
         skipped_playback: int = 0
+        skipped_backend: int = 0
         skipped_transcode: int = 0
         skipped_duration: int = 0
         skipped_ready: int = 0
@@ -47,6 +48,12 @@ class PlaylistControllerMixin(BaseEngineState):
         for item in self._queue:
             if item.media_type != MediaType.VIDEO:
                 filtered.append(item)
+                continue
+
+            # 0. Backend capability — software renderers (tkinter) can't
+            #    play videos; skip them so they don't error every cycle.
+            if not self._backend.supports_video:
+                skipped_backend += 1
                 continue
 
             # 1. Video playback master switch
@@ -83,6 +90,11 @@ class PlaylistControllerMixin(BaseEngineState):
             logger.info(
                 "Video playback disabled — filtered %d videos",
                 skipped_playback,
+            )
+        if skipped_backend:
+            logger.info(
+                "Display backend does not support video playback — filtered %d videos",
+                skipped_backend,
             )
         if skipped_duration:
             logger.info(
@@ -179,6 +191,9 @@ class PlaylistControllerMixin(BaseEngineState):
         for item in new_items:
             if item.media_type != MediaType.VIDEO:
                 filtered.append(item)
+                continue
+            # Backend capability — software renderers can't play videos
+            if not self._backend.supports_video:
                 continue
             if not playback_enabled:
                 continue

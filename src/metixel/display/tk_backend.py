@@ -65,6 +65,11 @@ class TkBackend(DisplayBackend):
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def supports_video(self) -> bool:
+        """Software renderer — VLC/GL video playback is not supported."""
+        return False
+
     # -- Lifecycle -----------------------------------------------------------
 
     def create(
