@@ -34,6 +34,7 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 - **Image playback** supporting JPEG, PNG, WebP, BMP, and GIF — with EXIF auto-rotation and smooth hardware-accelerated crossfades. iPhone HEIC/HEIF photos are automatically converted to JPEG on upload
 - **Video playback** supporting MP4, MOV, M4V, AVI, MKV, WebM, and MPG/MPEG (H.264/AVC, H.265/HEVC, MPEG-4, VP8/VP9, and more via ffmpeg), with automatic transcoding to Pi-friendly H.264 + AAC and HDR → SDR tone-mapping
 - **Web UI** on port 80/http — configure everything from a browser or phone, no text file editing required
+- **Web media upload** — upload photos and videos from any phone or browser via the Media Library (opens the phone gallery on iOS/Android; drag & drop on desktop)
 - **Smooth crossfade transitions** with hardware OpenGL ES rendering
 - **Native Immich v3 sync** — auto-pull albums and assets
 - **Runs locally** — no cloud dependency, your photos stay on your network
@@ -134,6 +135,7 @@ sudo journalctl -u metixel-backend -f    # Follow logs
 
 | Source | How it works |
 |---|---|
+| **Web upload** | Media Library → **Upload Media** (or drag & drop) — any phone/PC browser on your network |
 | **Local folder** | Via watch paths in the Web UI — new files auto-imported |
 | **Network share** | Mount via SMB/NFS, add to watch paths |
 | **Immich** | Configure server URL + API key — albums auto-sync every N seconds |

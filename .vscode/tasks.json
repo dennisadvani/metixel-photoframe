@@ -127,7 +127,7 @@
         {
             "label": "[Pi] Lint",
             "type": "shell",
-            "command": "cd /opt/metixel && ruff check src/metixel/",
+            "command": "cd /opt/metixel && ruff check src/metixel/ && ruff format --check src/metixel/",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
@@ -401,9 +401,9 @@
         },
         {
             "label": "[Local] Lint",
-            "detail": "Runs ruff check on src/metixel/ on this PC using the .venv interpreter.",
+            "detail": "Runs ruff check + ruff format --check on src/metixel/ on this PC using the .venv interpreter.",
             "type": "shell",
-            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m ruff check src/metixel/",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m ruff check src/metixel/; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; ${workspaceFolder}\\.venv\\Scripts\\python.exe -m ruff format --check src/metixel/",
             "options": {
                 "cwd": "${workspaceFolder}",
                 "shell": {

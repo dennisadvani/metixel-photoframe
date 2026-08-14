@@ -393,9 +393,7 @@ class MQTTClient:
             device_id = socket.gethostname() or "metixel"
         return re.sub(r"[^A-Za-z0-9_-]", "_", device_id)
 
-    def _discovery_configs(
-        self, prefix: str, device: dict[str, Any]
-    ) -> dict[str, dict[str, Any]]:
+    def _discovery_configs(self, prefix: str, device: dict[str, Any]) -> dict[str, dict[str, Any]]:
         """Build ``{component}/metixel_<entity>/config`` → payload for HA discovery.
 
         Every entity shares the retained ``{prefix}/status`` topic for
