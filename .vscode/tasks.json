@@ -127,7 +127,7 @@
         {
             "label": "[Pi] Lint",
             "type": "shell",
-            "command": "cd /opt/metixel && ruff check metixel/",
+            "command": "cd /opt/metixel && ruff check src/metixel/",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
@@ -145,7 +145,7 @@
         {
             "label": "[Pi] Type Check",
             "type": "shell",
-            "command": "cd /opt/metixel && mypy metixel/",
+            "command": "cd /opt/metixel && mypy src/metixel/",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
