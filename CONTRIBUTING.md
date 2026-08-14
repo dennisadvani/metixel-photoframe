@@ -40,14 +40,14 @@ run.
 
 | Task | What it does |
 |---|---|
-| **Sync Code to Pi (scp)** | Mirrors `src/metixel/` to `/opt/metixel/src/metixel/` on the Pi |
-| **Sync + Restart All** / **Backend** | Syncs, then restarts the systemd services |
-| **Run Tests** | Runs `pytest` on the Pi |
-| **Lint (ruff)** / **Type Check (mypy)** | Quality checks on the Pi |
-| **Follow Logs** | Tails both services' journal |
-| **Install Playwright (Web UI tests)** | One-time `npm install` + Chromium for the web tests |
-| **Run Web UI Tests (Playwright)** | Runs the Playwright suite against the Pi you pick |
-| **Restart All / Backend / Frontend** | Quick service restarts without syncing |
+| **[Pi] Sync Code (scp)** | Mirrors `src/metixel/` to `/opt/metixel/src/metixel/` on the Pi |
+| **[Pi] Sync + Restart All (scp)** / **Backend (scp)** | Syncs, then restarts the systemd services |
+| **[Pi] Run Tests** | Runs `pytest` on the Pi |
+| **[Pi] Lint** / **[Pi] Type Check** | Quality checks on the Pi |
+| **[Pi] Follow Logs** | Tails both services' journal |
+| **[Local] Install Playwright (Web UI Test)** | One-time `npm install` + Chromium for the web tests |
+| **[Local] Run Web UI Tests (Web UI Test)** | Runs the Playwright suite against the Pi you pick |
+| **[Pi] Restart All / Backend / Frontend** | Quick service restarts without syncing |
 
 > **Note:** the sync task only mirrors `src/metixel/`. Test files under
 > `tests/` are **not** synced — copy them manually when you change tests:
@@ -120,7 +120,7 @@ npm install
 npx playwright install chromium
 ```
 
-Or use the **Install Playwright (Web UI tests)** VS Code task.
+Or use the **[Local] Install Playwright (Web UI Test)** VS Code task.
 
 **Run the suite:**
 
@@ -130,7 +130,7 @@ $env:METIXEL_URL = "http://192.168.222.122"   # or set in the VS Code task
 npx playwright test
 ```
 
-Or use the **Run Web UI Tests (Playwright)** VS Code task, which reuses the
+Or use the **[Local] Run Web UI Tests (Web UI Test)** VS Code task, which reuses the
 `piHost` picker and sets `METIXEL_URL` to `http://${input:piHost}`.
 
 **What it covers:**
@@ -193,8 +193,8 @@ Full details in [`web-tests/README.md`](web-tests/README.md).
 2. If the change touches web UI behaviour, run the Playwright suite against a
    live frame (`cd web-tests; npx playwright test`) to confirm the dashboard,
    save buttons and controls still work.
-3. Verify on the Pi: **Sync Code to Pi** + **Sync + Restart All**, then
-   **Follow Logs** to confirm the services boot cleanly.
+3. Verify on the Pi: **[Pi] Sync Code (scp)** + **[Pi] Sync + Restart All (scp)**, then
+   **[Pi] Follow Logs** to confirm the services boot cleanly.
 4. Update [`CHANGELOG.md`](CHANGELOG.md) under `## [Unreleased]` — and
    `docs/` if the change affects user-facing behaviour, URLs, or the API.
 5. Open a pull request. Keep changes focused — one concern per PR.
