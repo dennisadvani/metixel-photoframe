@@ -439,7 +439,7 @@ def _convert_heic(source, out_path: Path) -> bool:
     formats, so we normalise to JPEG on arrival.  Returns True on success.
     """
     try:
-        import pillow_heif  # type: ignore[import-untyped]  # no stubs shipped
+        import pillow_heif  # type: ignore[import-not-found, import-untyped]  # optional dep, no stubs
         from PIL import Image, ImageOps
 
         pillow_heif.register_heif_opener()
