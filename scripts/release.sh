@@ -16,9 +16,14 @@
 #   1. Switch to dev, pull latest
 #   2. Bump version via bump_version.py
 #   3. Commit the version bump on dev
-#   4. Merge dev → main (fast-forward)
-#   5. Tag on main
-#   6. Push everything
+#   4. Create a release branch, push it, open a PR to main
+#   5. Wait for CI checks and merge the PR
+#   6. Tag main and push everything
+#
+# Requires the GitHub CLI (gh) installed and authenticated (gh auth login).
+# NOTE: if the "main" branch ruleset requires an approving review, the PR
+# cannot be self-approved — set required_approving_review_count to 0 (solo
+# maintainer) or have a collaborator approve it.
 #
 # After running this, go to GitHub Releases and create a release from the tag.
 
@@ -30,6 +35,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # -- Parse args -------------------------------------------------------------
@@ -99,6 +105,19 @@ if ! git diff-index --quiet HEAD --; then
     exit 1
 fi
 
+# gh is required to open/merge the release PR
+if ! command -v gh >/dev/null 2>&1; then
+    echo -e "${RED}ERROR: GitHub CLI (gh) is not installed.${NC}"
+    echo "  Install: sudo apt install gh   (Windows: winget install --id GitHub.cli)"
+    echo "  Auth:    gh auth login"
+    exit 1
+fi
+if ! gh auth status >/dev/null 2>&1; then
+    echo -e "${RED}ERROR: gh is not authenticated.${NC}"
+    echo "  Run: gh auth login"
+    exit 1
+fi
+
 # -- Bump version -----------------------------------------------------------
 
 echo -e "${GREEN}Bumping version: ${BUMP_TYPE}${NC}"
@@ -117,9 +136,12 @@ if $DRY_RUN; then
     echo ""
     echo -e "${YELLOW}--- DRY RUN (no changes made) ---${NC}"
     echo "Would commit version bump on dev: v$NEW_VERSION"
-    echo "Would merge dev → main (fast-forward)"
-    echo "Would tag: v$NEW_VERSION"
-    echo "Would push: dev + main + tags"
+    echo "Would push dev"
+    echo "Would create + push release branch: release/$NEW_VERSION"
+    echo "Would open PR release/$NEW_VERSION → main"
+    echo "Would wait for CI checks and merge the PR"
+    echo "Would tag main: v$NEW_VERSION"
+    echo "Would push tag: v$NEW_VERSION"
     # Revert the bump
     git checkout -- src/metixel/__init__.py
     exit 0
@@ -132,32 +154,65 @@ git commit -m "Bump version to $NEW_VERSION"
 
 echo -e "${GREEN}Version bump committed on dev.${NC}"
 
-# -- Merge dev → main -------------------------------------------------------
+# -- Push dev --------------------------------------------------------------
 
-echo -e "${GREEN}Switching to main...${NC}"
+echo -e "${GREEN}Pushing dev...${NC}"
+git push origin dev
+
+# -- Create release branch -------------------------------------------------
+
+RELEASE_BRANCH="release/$NEW_VERSION"
+echo -e "${GREEN}Creating release branch ${YELLOW}$RELEASE_BRANCH${GREEN}...${NC}"
+git checkout -b "$RELEASE_BRANCH"
+
+echo -e "${GREEN}Pushing release branch...${NC}"
+git push -u origin "$RELEASE_BRANCH"
+
+# -- Open pull request to main --------------------------------------------
+
+echo -e "${GREEN}Opening pull request to main...${NC}"
+PR_BODY=$(printf 'Release %s\n\nAutomated by scripts/release.sh. Once CI passes, this PR merges into main and the release tag v%s is created.' "$NEW_VERSION" "$NEW_VERSION")
+PR_URL=$(gh pr create --base main --head "$RELEASE_BRANCH" --title "Release $NEW_VERSION" --body "$PR_BODY")
+echo -e "${CYAN}PR opened: $PR_URL${NC}"
+
+# -- Wait for CI checks ----------------------------------------------------
+
+echo -e "${GREEN}Waiting for CI checks to pass...${NC}"
+if ! gh pr checks "$RELEASE_BRANCH" --watch --interval 15; then
+    echo ""
+    echo -e "${RED}ERROR: CI checks failed. Fix the issues on the PR or close it:${NC}"
+    echo "  $PR_URL"
+    exit 1
+fi
+
+# -- Merge the PR ----------------------------------------------------------
+
+echo -e "${GREEN}Merging PR into main...${NC}"
+if ! gh pr merge "$RELEASE_BRANCH" --merge --delete-branch; then
+    echo ""
+    echo -e "${RED}ERROR: Could not merge the PR automatically.${NC}"
+    echo -e "${YELLOW}If the ruleset requires an approving review, have a collaborator"
+    echo "approve it (or set required_approving_review_count to 0), then merge:${NC}"
+    echo "  $PR_URL"
+    exit 1
+fi
+
+# -- Tag on main -----------------------------------------------------------
+
+TAG="v$NEW_VERSION"
+echo -e "${GREEN}Fetching main after merge...${NC}"
 git checkout main
 git pull origin main
 
-echo -e "${GREEN}Merging dev into main...${NC}"
-git merge dev --no-ff -m "Release $NEW_VERSION"
-
-# -- Tag on main ------------------------------------------------------------
-
-TAG="v$NEW_VERSION"
 echo -e "${GREEN}Tagging ${YELLOW}$TAG${GREEN} on main...${NC}"
 git tag -a "$TAG" -m "Release $NEW_VERSION"
-
-# -- Push everything --------------------------------------------------------
-
-echo -e "${GREEN}Pushing dev, main, and tags...${NC}"
-git push origin dev
-git push origin main
 git push origin "$TAG"
 
-# -- Done -------------------------------------------------------------------
+# -- Done ------------------------------------------------------------------
 
 echo -e "${GREEN}Switching back to dev...${NC}"
 git checkout dev
+git branch -D "$RELEASE_BRANCH" 2>/dev/null || true
 
 echo ""
 echo -e "${GREEN}═══ Release $NEW_VERSION ready ═══${NC}"

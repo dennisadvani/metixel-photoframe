@@ -5,7 +5,26 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.10-beta.10]
+
+### Fixed
+
+- **`cage_launch.sh` executable bit** — the cage systemd unit execs
+  `scripts/cage_launch.sh` directly as its Wayland client, but the file was
+  tracked as mode `100644` in git, so every OTA update (`git reset --hard` +
+  checkout) recreated it non-executable. cage then failed with `Failed to
+  spawn client: Permission denied`, crash-looping `metixel-cage` after an
+  upgrade. The file is now `100755` in git.
+
+### Changed
+
+- **PR-based release workflow** — the `main` branch is now protected by a
+  ruleset that requires a pull request before merging, so direct
+  `git push origin main` is rejected. `scripts/release.ps1` and
+  `scripts/release.sh` now push a `release/<version>` branch, open a PR to
+  `main`, wait for CI checks to pass, merge the PR, then tag `main` and push
+  the tag. Both require the GitHub CLI (`gh`) to be installed and
+  authenticated. `docs/RELEASING.md` updated with the new manual steps.
 
 ## [1.1.9-beta.9]
 
