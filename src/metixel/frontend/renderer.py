@@ -267,6 +267,8 @@ class FrontendRenderer:
         Frame timing is handled by the display backend's ``loop_running()``
         (e.g., pygame's ``clock.tick()``), so we don't double-sleep here.
         """
+        if self._backend is None or self._presentation is None:
+            return
         self._fps_last_time = time.monotonic()
 
         # ── Show boot screen immediately ──────────────────────────────

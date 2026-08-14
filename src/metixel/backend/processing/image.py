@@ -286,7 +286,9 @@ class ImageProcessor:
         try:
             with Image.open(cached_path) as img:
                 thumb = img.copy()
-                thumb.thumbnail((self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE), Image.LANCZOS)
+                thumb.thumbnail(
+                    (self.THUMBNAIL_SIZE, self.THUMBNAIL_SIZE), Image.Resampling.LANCZOS
+                )
                 thumb.save(thumb_path, "JPEG", quality=70)
             logger.debug("Thumbnail regenerated: %s", thumb_path.name)
         except Exception:

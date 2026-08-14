@@ -118,12 +118,13 @@ def _process(args: argparse.Namespace) -> dict:
     from PIL import ImageOps, UnidentifiedImageError
 
     try:
-        with PILImage.open(source) as img:
+        with PILImage.open(source) as handle:
             # Auto-rotate based on EXIF orientation
+            img: PILImage.Image = handle
             img = ImageOps.exif_transpose(img)
 
             # Extract EXIF before mode conversion
-            exif: dict[str, str] = {}
+            exif = {}
             try:
                 raw = img.getexif()
                 if raw:
@@ -149,7 +150,7 @@ def _process(args: argparse.Namespace) -> dict:
             # Resize to screen resolution (maintain aspect ratio)
             max_w = int(screen_w * 1.2)
             max_h = int(screen_h * 1.2)
-            img.thumbnail((max_w, max_h), PILImage.LANCZOS)
+            img.thumbnail((max_w, max_h), PILImage.Resampling.LANCZOS)
 
             # Save cached version
             cached.parent.mkdir(parents=True, exist_ok=True)
@@ -159,7 +160,7 @@ def _process(args: argparse.Namespace) -> dict:
             # Generate thumbnail
             thumb.parent.mkdir(parents=True, exist_ok=True)
             t = img.copy()
-            t.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), PILImage.LANCZOS)
+            t.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), PILImage.Resampling.LANCZOS)
             t.save(thumb, "JPEG", quality=70)
 
         return {
@@ -184,7 +185,7 @@ def _regenerate_thumbnail(cached: Path, thumb: Path) -> None:
 
         with PILImage.open(cached) as img:
             t = img.copy()
-            t.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), PILImage.LANCZOS)
+            t.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), PILImage.Resampling.LANCZOS)
             thumb.parent.mkdir(parents=True, exist_ok=True)
             t.save(thumb, "JPEG", quality=70)
     except Exception:

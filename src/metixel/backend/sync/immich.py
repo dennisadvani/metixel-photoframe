@@ -17,6 +17,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -381,9 +382,7 @@ class ImmichSyncer:
         self._write_progress(phase, 0, 0, "")
         return result
 
-    def _sync_one_album(
-        self, album: dict[str, Any], index: int, total: int
-    ) -> AlbumSyncResult:
+    def _sync_one_album(self, album: dict[str, Any], index: int, total: int) -> AlbumSyncResult:
         """Sync a single album into its ``album_<id>`` folder.
 
         Returns an ``AlbumSyncResult``.  A missing/deleted album is
@@ -421,8 +420,13 @@ class ImmichSyncer:
 
         # Fetch all remote assets
         self._write_progress(
-            "fetching_assets", total, index, album_name,
-            album_name=album_name, album_index=index, album_total=total,
+            "fetching_assets",
+            total,
+            index,
+            album_name,
+            album_name=album_name,
+            album_index=index,
+            album_total=total,
         )
         try:
             remote_assets = self._fetch_album_assets(album_id)
@@ -487,8 +491,13 @@ class ImmichSyncer:
 
             asset = remote_map[filename]
             self._write_progress(
-                "downloading", download_total, downloaded, filename,
-                album_name=album_name, album_index=index, album_total=total,
+                "downloading",
+                download_total,
+                downloaded,
+                filename,
+                album_name=album_name,
+                album_index=index,
+                album_total=total,
             )
             try:
                 self._download_asset(asset, filename, album_dir)
@@ -498,8 +507,13 @@ class ImmichSyncer:
                 logger.error("Failed to download %s: %s", filename, e)
                 res.errors.append(f"Download failed for {filename}: {e}")
                 self._write_progress(
-                    "downloading", download_total, downloaded, f"{filename} — FAILED",
-                    album_name=album_name, album_index=index, album_total=total,
+                    "downloading",
+                    download_total,
+                    downloaded,
+                    f"{filename} — FAILED",
+                    album_name=album_name,
+                    album_index=index,
+                    album_total=total,
                 )
 
         res.skipped = (
@@ -646,7 +660,7 @@ class ImmichSyncer:
         name_lower = album_name.strip().lower()
         for album in albums:
             if album.get("albumName", "").strip().lower() == name_lower:
-                return album["id"]
+                return str(album["id"])
 
         logger.warning(
             "Album '%s' not found among %d albums on server",
@@ -841,8 +855,7 @@ class ImmichSyncer:
         """Raise ``OSError`` if the target volume has less than 50 MB free."""
         try:
             target_path.parent.mkdir(parents=True, exist_ok=True)
-            stat = os.statvfs(target_path.parent)
-            free_bytes = stat.f_frsize * stat.f_bavail
+            free_bytes = shutil.disk_usage(target_path.parent).free
             min_free = 50 * 1024 * 1024  # 50 MB
             if free_bytes < min_free:
                 raise OSError(

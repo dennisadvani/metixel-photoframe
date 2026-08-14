@@ -98,13 +98,13 @@ class Pi3dBackend(DisplayBackend):
     @property
     def width(self) -> int:
         if self._display:
-            return self._display.width
+            return int(self._display.width)
         return 0
 
     @property
     def height(self) -> int:
         if self._display:
-            return self._display.height
+            return int(self._display.height)
         return 0
 
     @property

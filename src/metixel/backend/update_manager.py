@@ -19,7 +19,7 @@ import re
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -168,12 +168,12 @@ class UpdateManager:
     @property
     def channel(self) -> str:
         """Current update channel (stable, beta, dev)."""
-        return self._state.config.updates.get("channel", "stable")
+        return str(self._state.config.updates.get("channel", "stable"))
 
     @property
     def repo(self) -> str:
         """GitHub repository in owner/repo format."""
-        return self._state.config.updates.get("github_repo", "dennisadvani/metixel-photoframe")
+        return str(self._state.config.updates.get("github_repo", "dennisadvani/metixel-photoframe"))
 
     @property
     def installed_version(self) -> str:
@@ -288,7 +288,7 @@ class UpdateManager:
                 logger.warning("Failed to fetch dev branch commit", exc_info=True)
 
             # ── Update cache and config ────────────────────────────
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
             with self._lock:
                 self._cache["available"] = available
                 self._cache_time = time.monotonic()
@@ -352,7 +352,7 @@ class UpdateManager:
             self._write_and_launch_update_script(str(self._repo_root), target_ref, target_channel)
 
             # Record the update attempt
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = datetime.now(UTC).isoformat()
             try:
                 self._state.update_config(
                     "update",

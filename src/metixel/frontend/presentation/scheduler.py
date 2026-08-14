@@ -15,6 +15,10 @@ from metixel.shared.models import MediaType
 
 logger = logging.getLogger(__name__)
 
+# SIGSTOP/SIGCONT are Unix-only — Windows builds fall back to no-op.
+_SIGSTOP: int | None = getattr(signal, "SIGSTOP", None)
+_SIGCONT: int | None = getattr(signal, "SIGCONT", None)
+
 
 class SlideshowSchedulerMixin(BaseEngineState):
     """Slideshow scheduling, timing and control (next/prev/pause/resume)."""
@@ -156,7 +160,8 @@ class SlideshowSchedulerMixin(BaseEngineState):
         self._paused = True
         if self._video_state == _VIDEO_PLAYING and self._video_proc is not None:
             try:
-                os.kill(self._video_proc.pid, signal.SIGSTOP)
+                if _SIGSTOP is not None:
+                    os.kill(self._video_proc.pid, _SIGSTOP)
                 self._video_paused = True
                 logger.info("VLC paused via SIGSTOP (pid=%d)", self._video_proc.pid)
             except OSError:
@@ -172,7 +177,8 @@ class SlideshowSchedulerMixin(BaseEngineState):
         self._paused = False
         if self._video_paused and self._video_proc is not None:
             try:
-                os.kill(self._video_proc.pid, signal.SIGCONT)
+                if _SIGCONT is not None:
+                    os.kill(self._video_proc.pid, _SIGCONT)
                 self._video_paused = False
                 logger.info("VLC resumed via SIGCONT (pid=%d)", self._video_proc.pid)
             except OSError:

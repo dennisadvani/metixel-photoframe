@@ -89,7 +89,7 @@ def _find_log_file() -> str | None:
     for handler in root.handlers:
         if isinstance(handler, logging.FileHandler):
             path = getattr(handler, "baseFilename", None)
-            if path and os.path.isfile(path):
+            if isinstance(path, str) and os.path.isfile(path):
                 return path
 
     # Check the metixel logger too
@@ -97,7 +97,7 @@ def _find_log_file() -> str | None:
     for handler in metixel.handlers:
         if isinstance(handler, logging.FileHandler):
             path = getattr(handler, "baseFilename", None)
-            if path and os.path.isfile(path):
+            if isinstance(path, str) and os.path.isfile(path):
                 return path
 
     # Fall back to default path

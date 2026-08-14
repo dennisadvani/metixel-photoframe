@@ -25,8 +25,8 @@ class TransitionEngine:
 
     def __init__(self, config: Config) -> None:
         self._config = config
-        self._style = config.slideshow.get("transition_style", "crossfade")
-        self._duration_ms = config.slideshow.get("transition_duration_ms", 1500)
+        self._style: str = str(config.slideshow.get("transition_style", "crossfade"))
+        self._duration_ms: int = int(config.slideshow.get("transition_duration_ms", 1500))
 
     @property
     def style(self) -> str:

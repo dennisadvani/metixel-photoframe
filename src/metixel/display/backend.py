@@ -204,7 +204,7 @@ class DisplayBackend(ABC):
         """
         # Default: unload old, load new (works everywhere but is slow)
         self.unload_texture(texture)
-        return self.load_texture(data)
+        self.load_texture(data)
 
     def gpu_memory_info(self) -> dict[str, Any] | None:
         """Return GPU memory usage statistics, or ``None`` if unavailable.

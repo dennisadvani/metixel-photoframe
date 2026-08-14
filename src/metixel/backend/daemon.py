@@ -14,10 +14,15 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import IPCClient
 from metixel.shared.ports import Ports
+
+if TYPE_CHECKING:
+    from metixel.backend.network_controller import NetworkController, NetworkState
+    from metixel.backend.update_manager import UpdateManager
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +46,7 @@ class BackendDaemon:
         self._running = False
         self._config = self._state.config
         self._threads: list[threading.Thread] = []
-        self._update_mgr: object | None = None
+        self._update_mgr: UpdateManager | None = None
         # Set by the web API when the frontend signals that the
         # slideshow has started — used to defer network checks.
         self._slideshow_started = threading.Event()
@@ -337,8 +342,8 @@ class BackendDaemon:
 
     def _drain_actions(
         self,
-        controller: NetworkController,  # noqa: F821
-        actions: list[NetworkState],  # noqa: F821
+        controller: NetworkController,
+        actions: list[NetworkState],
     ) -> None:
         """Execute side effects for each pending state transition."""
         from metixel.backend.network_controller import NetworkState

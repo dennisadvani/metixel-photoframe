@@ -188,7 +188,8 @@ class VideoPlayer:
                 break
         if self._process:
             with contextlib.suppress(Exception):
-                self._process.stdout.close()
+                if self._process.stdout is not None:
+                    self._process.stdout.close()
             try:
                 self._process.terminate()
                 self._process.wait(timeout=2)

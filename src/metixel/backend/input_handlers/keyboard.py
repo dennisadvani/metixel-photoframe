@@ -162,7 +162,10 @@ class KeyboardHandler:
         while self._running:
             try:
                 for key, _ in sel.select(timeout=1.0):
-                    kbd = fd_to_kbd.get(key.fileobj)
+                    fileobj = key.fileobj
+                    if not isinstance(fileobj, int):
+                        fileobj = fileobj.fileno()
+                    kbd = fd_to_kbd.get(fileobj)
                     if kbd is None:
                         continue
                     try:

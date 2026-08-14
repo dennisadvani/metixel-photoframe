@@ -46,7 +46,8 @@ class TkBackend(DisplayBackend):
         self._bg_color: str = "black"
         self._fps_limit: int = 30
         self._textures: dict[int, Any] = {}  # id → PIL Image
-        self._photo_cache: dict[int, ImageTk.PhotoImage] = {}  # id → tk PhotoImage
+        # (texture id, alpha) → tk PhotoImage
+        self._photo_cache: dict[tuple[int, float], ImageTk.PhotoImage] = {}
         self._texture_counter: int = 0
         self._frame_delay_ms: int = 33  # ~30 FPS
 
@@ -199,7 +200,7 @@ class TkBackend(DisplayBackend):
 
         # Resize
         try:
-            resized = pil_img.resize((int(w), int(h)), Image.LANCZOS)
+            resized = pil_img.resize((int(w), int(h)), Image.Resampling.LANCZOS)
         except Exception:
             return
 

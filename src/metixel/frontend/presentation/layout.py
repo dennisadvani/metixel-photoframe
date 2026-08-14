@@ -104,7 +104,7 @@ class LayoutEngine:
         """Fill screen, cropping the excess."""
         if image_ratio > self._screen_ratio:
             # Image is wider → crop sides
-            display_h = self._screen_h
+            display_h = float(self._screen_h)
             display_w = self._screen_h * image_ratio
             offset_x = (self._screen_w - display_w) / 2
             return {
@@ -113,7 +113,7 @@ class LayoutEngine:
             }
         else:
             # Image is taller → crop top/bottom
-            display_w = self._screen_w
+            display_w = float(self._screen_w)
             display_h = self._screen_w / image_ratio
             offset_y = (self._screen_h - display_h) / 2
             return {

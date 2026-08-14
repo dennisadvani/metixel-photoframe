@@ -103,7 +103,8 @@ def generate_image_thumbnail(
             with contextlib.suppress(OSError):
                 thumb_path.unlink()
 
-        with Image.open(source_path) as img:
+        with Image.open(source_path) as handle:
+            img: Image.Image = handle
             # Composite transparent images onto black before converting
             # to RGB — otherwise transparent areas render as white.
             if img.mode in ("RGBA", "PA"):
@@ -113,7 +114,7 @@ def generate_image_thumbnail(
             elif img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
             thumb = img.copy()
-            thumb.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), Image.LANCZOS)
+            thumb.thumbnail((THUMBNAIL_SIZE, THUMBNAIL_SIZE), Image.Resampling.LANCZOS)
             thumb.save(thumb_path, "JPEG", quality=70)
 
         logger.debug("Image thumbnail generated: %s → %s", source_path.name, thumb_path.name)

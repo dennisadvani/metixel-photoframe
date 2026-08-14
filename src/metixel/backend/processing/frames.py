@@ -11,8 +11,8 @@ from __future__ import annotations
 import contextlib
 import logging
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from metixel.backend.processing.ffmpeg_cmds import first_frame_cmd, last_frame_cmd, thumbnail_cmd
 from metixel.backend.processing.utils import nice_cmd

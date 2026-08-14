@@ -10,7 +10,15 @@ from __future__ import annotations
 
 import logging
 
-from flask import Flask, current_app, jsonify, render_template, request, send_from_directory
+from flask import (
+    Flask,
+    Response,
+    current_app,
+    jsonify,
+    render_template,
+    request,
+    send_from_directory,
+)
 
 from metixel import __version__
 from metixel.backend.state import StateManager
@@ -144,7 +152,7 @@ def create_app(
         return jsonify({"status": "ok"})
 
     @app.route("/<path:path>")
-    def serve_spa(path: str) -> str:
+    def serve_spa(path: str) -> Response | str:
         # Always serve static files, even when PIN gate is active
         try:
             return send_from_directory(app.static_folder or "static", path)

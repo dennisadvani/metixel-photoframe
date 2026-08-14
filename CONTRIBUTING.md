@@ -56,6 +56,19 @@ run.
 > scp -r tests/ pi@<pi-ip>:/opt/metixel/tests/
 > ```
 
+## Branching model
+
+- **`dev`** is the integration branch — **all pull requests target `dev`**.
+- **`main`** is the release branch — it is only ever updated by the release
+  process (`scripts/release.ps1`), never directly.
+
+When you open a pull request, set the base to **`dev`** (GitHub's default is
+the default branch, so make the switch explicitly). **GitHub Actions CI runs
+automatically on every pull request** — it runs `ruff check`, `ruff format`,
+`mypy`, and `pytest` on Python 3.11 and 3.13. Fix any failing checks before
+requesting review. The maintainer merges the PR into `dev` once the checks are
+green and the review is approved; changes reach `main` only through a release.
+
 ## Testing
 
 There are two layers of tests: **Python unit tests** (run on the workstation

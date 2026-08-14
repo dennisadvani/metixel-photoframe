@@ -16,6 +16,9 @@ from metixel.shared.models import MediaItem, MediaType
 
 logger = logging.getLogger(__name__)
 
+# SIGCONT is Unix-only — Windows builds fall back to no-op.
+_SIGCONT: int | None = getattr(signal, "SIGCONT", None)
+
 
 # ---------------------------------------------------------------------------
 # Video playback state machine
@@ -237,6 +240,11 @@ class VideoStateMachineMixin(BaseEngineState):
             if self._video_last_frame_tex is not None:
                 self._unload_texture(self._video_last_frame_tex)
                 self._video_last_frame_tex = None
+            self._advance()
+            return
+
+        if isinstance(vlc_proc, int):
+            logger.warning("VLC exited early (code %d): %s", vlc_proc, video_path)
             self._advance()
             return
 
@@ -500,9 +508,9 @@ class VideoStateMachineMixin(BaseEngineState):
             pid = self._video_proc.pid
             try:
                 # Resume if paused, then terminate
-                if self._video_paused:
+                if self._video_paused and _SIGCONT is not None:
                     with contextlib.suppress(OSError):
-                        os.kill(pid, signal.SIGCONT)
+                        os.kill(pid, _SIGCONT)
                 self._video_proc.terminate()
                 try:
                     self._video_proc.wait(timeout=2.0)
@@ -538,4 +546,4 @@ class VideoStateMachineMixin(BaseEngineState):
             if max_video > 0 and duration > max_video:
                 duration = float(max_video)
             return duration
-        return self._config.slideshow.get("image_duration_seconds", 30)
+        return float(self._config.slideshow.get("image_duration_seconds", 30))

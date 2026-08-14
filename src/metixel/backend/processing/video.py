@@ -183,7 +183,7 @@ class VideoProcessor:
 
     @property
     def transcoding_enabled(self) -> bool:
-        return self._transcoding_enabled
+        return bool(self._transcoding_enabled)
 
     def _resolve_profile(self) -> dict[str, Any] | None:
         """Resolve the effective transcoding profile from config.

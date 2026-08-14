@@ -110,7 +110,7 @@ class VlcVideoPlayer:
         block: bool = True,
         loop: bool = False,
         fit_mode: str = "contain",
-    ) -> int | None:
+    ) -> int | subprocess.Popen[bytes] | None:
         """Start video playback via SDL2 + VLC.
 
         Args:
@@ -213,7 +213,7 @@ class VlcVideoPlayer:
         # Bind port 0 → OS assigns a free port → close → pass to VLC.
         _tmp = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
         _tmp.bind(("127.0.0.1", 0))
-        self._rc_port: int = _tmp.getsockname()[1]
+        self._rc_port = _tmp.getsockname()[1]
         _tmp.close()
 
         cmd = [
@@ -423,7 +423,7 @@ class VlcVideoPlayer:
                     response += chunk
                     if b"\n" in response:
                         break
-                except _socket.timeout:
+                except TimeoutError:
                     break
         finally:
             sock.close()
@@ -656,6 +656,7 @@ class VlcVideoPlayer:
             while self._playing and self._player is not None:
                 # -- Poll SDL2 events ------------------------------------
                 try:
+                    assert self._event is not None
                     while sdl2.SDL_PollEvent(ctypes.byref(self._event)):
                         if self._event.type == sdl2.SDL_QUIT:
                             self._playing = False
@@ -938,7 +939,7 @@ class VlcVideoPlayer:
         except ImportError:
             return False
 
-        if self._window is None:
+        if self._window is None or self._event is None:
             return False
 
         start = time.time()
@@ -999,6 +1000,8 @@ class VlcVideoPlayer:
         """Embed VLC in X11/KMSDRM window (Linux)."""
         import sdl2  # type: ignore
 
+        if self._player is None:
+            return False
         if wm_info.subsystem in (sdl2.SDL_SYSWM_X11, sdl2.SDL_SYSWM_KMSDRM):
             xid = wm_info.info.x11.window
             self._player.set_xwindow(xid)
@@ -1016,6 +1019,8 @@ class VlcVideoPlayer:
         try:
             from rubicon.objc import ObjCInstance  # type: ignore
 
+            if self._player is None:
+                return False
             nswindow_ptr = wm_info.info.cocoa.window
             nswindow = ObjCInstance(ctypes.c_void_p(nswindow_ptr))
             nsview = nswindow.contentView
@@ -1034,6 +1039,8 @@ class VlcVideoPlayer:
         try:
             import sdl2  # type: ignore
 
+            if self._player is None:
+                return False
             hwnd = sdl2.SDL_GetWindowID(self._window)
             self._player.set_hwnd(hwnd)
             logger.debug("VLC embedded in Windows HWND: %s", hwnd)

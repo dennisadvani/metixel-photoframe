@@ -59,7 +59,7 @@ class StateManager:
     def get_config_value(self, *keys: str, default: Any = None) -> Any:
         """Get a nested config value by key path."""
         with self._lock:
-            data = self._config.to_dict()
+            data: Any = self._config.to_dict()
             for key in keys:
                 if isinstance(data, dict):
                     data = data.get(key)
@@ -250,6 +250,7 @@ class StateManager:
 
     # Cached /proc/stat from previous call for CPU delta calculation.
     _prev_cpu_jiffies: float | None = None
+    _prev_idle_jiffies: float | None = None
 
     @classmethod
     def _get_cpu_percent(cls) -> float:
@@ -274,7 +275,7 @@ class StateManager:
             return 0.0
 
         prev_total = cls._prev_cpu_jiffies
-        prev_idle = getattr(cls, "_prev_idle_jiffies", None)
+        prev_idle = cls._prev_idle_jiffies
         cls._prev_cpu_jiffies = float(jiffies)
         cls._prev_idle_jiffies = float(idle_now)
 

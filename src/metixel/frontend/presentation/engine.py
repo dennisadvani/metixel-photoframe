@@ -145,7 +145,7 @@ class PresentationEngine(
     def _write_current_media(self) -> None:
         try:
             if self._current_idx < 0 or not self._queue:
-                data = {
+                data: dict[str, Any] = {
                     "file": None,
                     "index": -1,
                     "total": 0,
