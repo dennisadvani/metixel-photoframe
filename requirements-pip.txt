@@ -10,4 +10,4 @@ paho-mqtt>=1.6
 requests>=2.31
 pysdl2>=0.9
 python-vlc>=3.0
-cec>=0.2
+cec>=0.2.8
