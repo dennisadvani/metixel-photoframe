@@ -415,20 +415,18 @@ class UpdateManager:
     # -- Internal: Update Script ---------------------------------------------
 
     @staticmethod
-    def _write_and_launch_update_script(repo_root: str, target_ref: str, channel: str) -> None:
-        """Write and detach a shell script that performs the actual update.
+    def _build_update_script(repo_root: str, target_ref: str, channel: str) -> str:
+        """Build the OTA update shell script (pure, testable).
 
         The script:
         1. Waits for the backend to fully stop
         2. Stops cage explicitly
         3. ``git fetch`` + ``git reset --hard``
         4. ``pip install --break-system-packages -e .``
-        5. Restarts both services
-        6. Removes itself
+        5. Installs runtime deps from ``requirements-pip.txt``
+        6. Restarts both services
+        7. Removes itself
         """
-        import stat
-
-        script_path = "/opt/metixel/cache/metixel-update.sh"
         log_path = "/opt/metixel/cache/metixel-update.log"
         # All externally-influenced values are shell-quoted so they can never
         # break out of the embedded bash string literals (defence-in-depth —
@@ -437,7 +435,7 @@ class UpdateManager:
         ref_q = shlex.quote(target_ref)
         channel_q = shlex.quote(channel)
         log_q = shlex.quote(log_path)
-        script = f"""#!/bin/bash
+        return f"""#!/bin/bash
 # Metixel OTA update — launched as a transient systemd service
 # so it survives the backend being stopped (runs in its own cgroup).
 # Uses a trap to guarantee services are restarted even if git/pip fail.
@@ -499,6 +497,17 @@ echo "Reinstalling Python package…"
 pip install --break-system-packages -e "$REPO" \
     || echo "WARNING: pip install failed (continuing)"
 
+# ── Install / update runtime pip dependencies ──
+# `pip install -e .` above only installs the package itself — the runtime
+# deps live in the phase1/phase2 optional extras, not main [project]
+# dependencies — so it never applies new/changed deps (e.g. pillow-heif).
+# Install the canonical requirements-pip.txt so upgrades also update deps.
+if [ -f "$REPO/requirements-pip.txt" ]; then
+    echo "Installing Python dependencies…"
+    pip install --break-system-packages -r "$REPO/requirements-pip.txt" \
+        || echo "WARNING: pip dependency install failed (continuing)"
+fi
+
 echo "Update finished: $(date)"
 echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' \
     2>/dev/null || echo unknown)"
@@ -506,6 +515,15 @@ echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' \
 # ── Clean up script (trap handles restart next) ──
 rm -f "$0"
 """
+
+    @staticmethod
+    def _write_and_launch_update_script(repo_root: str, target_ref: str, channel: str) -> None:
+        """Write and detach the OTA update script (see ``_build_update_script``)."""
+        import stat
+
+        script_path = "/opt/metixel/cache/metixel-update.sh"
+        script = UpdateManager._build_update_script(repo_root, target_ref, channel)
+
         # Write the script
         with open(script_path, "w") as f:
             f.write(script)
