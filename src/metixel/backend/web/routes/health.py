@@ -124,9 +124,7 @@ def processing_status():
         for issue in issues:
             ts = issue.get("updated_at")
             if ts:
-                issue["updated_at"] = (
-                    datetime.fromtimestamp(ts, tz=UTC).isoformat()
-                )
+                issue["updated_at"] = datetime.fromtimestamp(ts, tz=UTC).isoformat()
         data["issues"] = issues
         data["journal_stats"] = journal.stats()
     except Exception:

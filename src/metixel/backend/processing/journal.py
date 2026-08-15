@@ -34,11 +34,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 #: File states as it flows through the pipeline.
-STATE_PENDING = "pending"        # discovered / queued, not yet finished
+STATE_PENDING = "pending"  # discovered / queued, not yet finished
 STATE_PROCESSING = "processing"  # actively being optimised / transcoded
-STATE_READY = "ready"            # in the slideshow playlist (playable)
-STATE_FAILED = "failed"          # processing/transcode failed — not playable
-STATE_SKIPPED = "skipped"        # unreadable/unsupported — excluded
+STATE_READY = "ready"  # in the slideshow playlist (playable)
+STATE_FAILED = "failed"  # processing/transcode failed — not playable
+STATE_SKIPPED = "skipped"  # unreadable/unsupported — excluded
 
 #: Terminal states that are never re-picked-up while the fingerprint is unchanged.
 _TERMINAL_STATES = frozenset({STATE_READY, STATE_FAILED, STATE_SKIPPED})
@@ -74,9 +74,7 @@ class ProcessingJournal:
                     data = json.load(f)
                 raw = data.get("files", {}) if isinstance(data, dict) else {}
                 self._entries = {
-                    str(key): value
-                    for key, value in raw.items()
-                    if isinstance(value, dict)
+                    str(key): value for key, value in raw.items() if isinstance(value, dict)
                 }
                 if self._entries:
                     logger.debug(
@@ -154,8 +152,13 @@ class ProcessingJournal:
     def stats(self) -> dict[str, int]:
         """Return a per-state count (for the web UI / debugging)."""
         with self._lock:
-            counts = {STATE_PENDING: 0, STATE_PROCESSING: 0, STATE_READY: 0,
-                      STATE_FAILED: 0, STATE_SKIPPED: 0}
+            counts = {
+                STATE_PENDING: 0,
+                STATE_PROCESSING: 0,
+                STATE_READY: 0,
+                STATE_FAILED: 0,
+                STATE_SKIPPED: 0,
+            }
             for entry in self._entries.values():
                 state = entry.get("state")
                 if state in counts:
@@ -191,10 +194,7 @@ class ProcessingJournal:
                 return False
             if entry.get("state") not in _TERMINAL_STATES:
                 return False
-            return (
-                entry.get("mtime_ns") == fingerprint[0]
-                and entry.get("size") == fingerprint[1]
-            )
+            return entry.get("mtime_ns") == fingerprint[0] and entry.get("size") == fingerprint[1]
 
     # -- Mutations (all funnel through the controller lock) ----------------
 

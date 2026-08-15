@@ -433,8 +433,7 @@ class VideoProcessor:
             # under-counted them, hiding encodes under "Scanning video").
             profile = self._resolve_profile()
             needs_transcode = bool(
-                profile is not None
-                and VideoProcessor.needs_optimisation(info, profile)
+                profile is not None and VideoProcessor.needs_optimisation(info, profile)
             )
 
             errors: list[str] = []

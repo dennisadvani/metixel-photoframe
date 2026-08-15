@@ -136,9 +136,9 @@ class OptimisationQueue:
         # Cumulative progress counters — track total backlog across
         # batches so progress bars show the full queue, not just the
         # current batch of 6.
-        self._img_processed = 0    # total images processed in current run
-        self._vid_scanned = 0      # total videos scanned (Phase A) in current run
-        self._vid_transcoded = 0   # total videos transcoded (Phase B) in current run
+        self._img_processed = 0  # total images processed in current run
+        self._vid_scanned = 0  # total videos scanned (Phase A) in current run
+        self._vid_transcoded = 0  # total videos transcoded (Phase B) in current run
         # Whether a two-phase video batch is currently being processed —
         # keeps ``is_busy`` true while the queue drains (the video queue is
         # emptied into the batch upfront).
@@ -939,11 +939,7 @@ class OptimisationQueue:
                     cached.is_file() and cached.stat().st_size >= 1024
                 ):
                     self._state.add_playlist_items([result])
-                    status = (
-                        result.transcode_status.value
-                        if result.transcode_status
-                        else None
-                    )
+                    status = result.transcode_status.value if result.transcode_status else None
                     journal.mark_ready(item_path, status)
                     logger.info(
                         "[OPTQ] VID done | %4dx%-4d → cached | %s",
