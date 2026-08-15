@@ -136,6 +136,7 @@ Discovery configs publish to `homeassistant/<component>/metixel_<entity>/config`
 | `sensor` | playback_state | playing/paused/off (diagnostic) |
 | `sensor` | uptime | Human-readable uptime, e.g. `2d 3h 45m` (diagnostic) |
 | `sensor` | cpu_temperature | CPU temperature (°C) (diagnostic) |
+| `sensor` | cpu_usage | CPU utilisation (%) (diagnostic) |
 | `sensor` | memory_used | Used memory (%) (diagnostic) |
 | `sensor` | swap_used | Used swap (%) (diagnostic) |
 | `sensor` | disk_used | Root filesystem used (%) (diagnostic) |

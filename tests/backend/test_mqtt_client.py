@@ -184,6 +184,7 @@ class TestMQTTDiscovery:
             "playback_state",
             "uptime",
             "cpu_temperature",
+            "cpu_usage",
             "memory_used",
             "swap_used",
             "disk_used",
@@ -191,6 +192,12 @@ class TestMQTTDiscovery:
             cfg = configs[f"homeassistant/sensor/metixel_testframe_{entity}/config"]
             assert cfg["state_topic"]
             assert cfg["entity_category"] == "diagnostic"
+
+        # CPU usage reports the health payload's cpu_percent as a percentage.
+        cpu = configs["homeassistant/sensor/metixel_testframe_cpu_usage/config"]
+        assert cpu["value_template"] == "{{ value_json.cpu_percent | default(0) }}"
+        assert cpu["unit_of_measurement"] == "%"
+        assert "device_class" not in cpu
 
         # The current-file-name sensor is disabled unless the user opts in.
         media = configs["homeassistant/sensor/metixel_testframe_current_media/config"]

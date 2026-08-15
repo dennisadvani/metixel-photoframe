@@ -7,23 +7,32 @@
 .DESCRIPTION
     Switches to dev, pulls latest, bumps the version, commits on dev,
     pushes a release branch, opens a pull request to main, waits for CI
-    checks, merges the PR, then tags main and pushes the tag.
+    checks to pass, then STOPS — you review and merge the PR yourself in
+    GitHub.  Afterwards run with -Finalize <version> to tag main and push
+    the tag.
 
     Requires the GitHub CLI (gh) installed and authenticated:
       gh auth login
 
     NOTE: the "main" branch ruleset requires a pull request before merging.
-    If the ruleset also requires an approving review, the PR cannot be
-    self-approved — set required_approving_review_count to 0 (solo
-    maintainer) or have a collaborator approve the PR.
+    This script deliberately does NOT merge the PR — you approve and merge
+    it in the GitHub UI.  If the ruleset also requires an approving review,
+    set required_approving_review_count to 0 (solo maintainer) or have a
+    collaborator approve the PR.
 
 .PARAMETER Type
-    Release type: beta, rc, stable, minor, or major.
+    Release type: minor-beta (bump minor + beta), beta (beta only),
+    rc, stable, minor, or major.
+
+.PARAMETER Finalize
+    Tag main with the given version and push the tag.  Run this AFTER the
+    release PR has been merged in GitHub:  .\scripts\release.ps1 -Finalize <version>
 
 .PARAMETER DryRun
     Preview what would happen without making any changes.
 
 .EXAMPLE
+    .\scripts\release.ps1 minor-beta
     .\scripts\release.ps1 beta
     .\scripts\release.ps1 stable
     .\scripts\release.ps1 minor
@@ -32,8 +41,11 @@
 
 param(
     [Parameter(Mandatory=$false, Position=0)]
-    [ValidateSet("beta", "rc", "stable", "minor", "major")]
+    [ValidateSet("minor-beta", "beta", "rc", "stable", "minor", "major")]
     [string]$Type,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Finalize,
 
     [switch]$DryRun
 )
@@ -44,13 +56,15 @@ $RepoRoot = Resolve-Path "$ScriptDir\.."
 
 # -- Validate ---------------------------------------------------------------
 
-if (-not $Type) {
-    Write-Host "ERROR: No release type specified." -ForegroundColor Red
+if (-not $Type -and -not $Finalize) {
+    Write-Host "ERROR: No release type or -Finalize specified." -ForegroundColor Red
     Write-Host ""
-    Write-Host "Usage: .\scripts\release.ps1 [-DryRun] <beta|rc|stable|minor|major>"
+    Write-Host "Usage: .\scripts\release.ps1 [-DryRun] <minor-beta|beta|rc|stable|minor|major>"
+    Write-Host "       .\scripts\release.ps1 -Finalize <version>   (after the PR is merged)"
     Write-Host ""
     Write-Host "Examples:"
-    Write-Host "  .\scripts\release.ps1 beta       # bump beta number"
+    Write-Host "  .\scripts\release.ps1 minor-beta # bump number + beta (1.1.9-beta.9 → 1.1.10-beta.10)"
+    Write-Host "  .\scripts\release.ps1 beta       # bump beta only (1.1.9-beta.9 → 1.1.9-beta.10)"
     Write-Host "  .\scripts\release.ps1 rc         # bump rc number"
     Write-Host "  .\scripts\release.ps1 stable     # strip pre-release -> stable"
     Write-Host "  .\scripts\release.ps1 minor      # bump minor -> 0.3.0"
@@ -61,11 +75,12 @@ if (-not $Type) {
 
 # Map friendly names to bump_version.py flags
 $BumpFlag = switch ($Type) {
-    "beta"   { "--beta" }
-    "rc"     { "--rc" }
-    "stable" { "--release" }
-    "minor"  { "--minor" }
-    "major"  { "--major" }
+    "minor-beta" { "--beta" }
+    "beta"       { "--beta-only" }
+    "rc"         { "--rc" }
+    "stable"     { "--release" }
+    "minor"      { "--minor" }
+    "major"      { "--major" }
 }
 
 # -- Pre-flight checks ------------------------------------------------------
@@ -107,6 +122,30 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# -- Finalize mode (tag main after the PR has been merged in GitHub) --------
+
+if ($Finalize) {
+    $Tag = "v$Finalize"
+    Write-Host "Finalizing release $Tag (tagging main)..." -ForegroundColor Green
+    git checkout main
+    if ($LASTEXITCODE -ne 0) { throw "Failed to switch to main" }
+    git pull origin main
+    if ($LASTEXITCODE -ne 0) { throw "git pull main failed" }
+    git tag -a $Tag -m "Release $Finalize"
+    if ($LASTEXITCODE -ne 0) { throw "git tag failed" }
+    git push origin $Tag
+    if ($LASTEXITCODE -ne 0) { throw "git push tag failed" }
+    Write-Host "Switching back to dev..." -ForegroundColor Green
+    git checkout dev
+    Write-Host ""
+    Write-Host "=== Release $Tag tagged on main ===" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Next step: create a GitHub Release from the tag:"
+    Write-Host "  gh release create $Tag --prerelease --title `"$Finalize`" --notes `"See CHANGELOG.md`""
+    Write-Host "  (use --prerelease for beta/rc, omit for stable)"
+    exit 0
+}
+
 # -- Bump version -----------------------------------------------------------
 
 Write-Host "Bumping version: $Type" -ForegroundColor Green
@@ -141,9 +180,8 @@ if ($DryRun) {
     Write-Host "Would push dev"
     Write-Host "Would create + push release branch: release/$NewVersion"
     Write-Host "Would open PR release/$NewVersion -> main"
-    Write-Host "Would wait for CI checks and merge the PR"
-    Write-Host "Would tag main: v$NewVersion"
-    Write-Host "Would push tag: v$NewVersion"
+    Write-Host "Would wait for CI checks to pass (you merge the PR yourself in GitHub)"
+    Write-Host "Would then tell you to run: -Finalize $NewVersion"
     # Revert the bump
     git checkout -- src/metixel/__init__.py
     exit 0
@@ -197,44 +235,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "CI checks failed"
 }
 
-# -- Merge the PR ------------------------------------------------------------
-
-Write-Host "Merging PR into main..." -ForegroundColor Green
-gh pr merge $ReleaseBranch --merge --delete-branch
-if ($LASTEXITCODE -ne 0) {
-    Write-Host ""
-    Write-Host "ERROR: Could not merge the PR automatically." -ForegroundColor Red
-    Write-Host "If the ruleset requires an approving review, have a collaborator" -ForegroundColor Yellow
-    Write-Host "approve it (or set required_approving_review_count to 0), then merge:" -ForegroundColor Yellow
-    Write-Host "  $PrUrl"
-    throw "gh pr merge failed"
-}
-
-# -- Tag on main -------------------------------------------------------------
-
-$Tag = "v$NewVersion"
-Write-Host "Fetching main after merge..." -ForegroundColor Green
-git checkout main
-if ($LASTEXITCODE -ne 0) { throw "Failed to switch to main" }
-git pull origin main
-if ($LASTEXITCODE -ne 0) { throw "git pull main failed" }
-
-Write-Host "Tagging " -ForegroundColor Green -NoNewline
-Write-Host $Tag -ForegroundColor Yellow -NoNewline
-Write-Host " on main..." -ForegroundColor Green
-git tag -a $Tag -m "Release $NewVersion"
-git push origin $Tag
-if ($LASTEXITCODE -ne 0) { throw "git push tag failed" }
-
-# -- Done -------------------------------------------------------------------
+# -- Done (you merge in GitHub) ----------------------------------------------
 
 Write-Host "Switching back to dev..." -ForegroundColor Green
 git checkout dev
 git branch -D $ReleaseBranch 2>$null
 
 Write-Host ""
-Write-Host "=== Release $NewVersion ready ===" -ForegroundColor Green
+Write-Host "=== Release $NewVersion PR ready — merge it yourself in GitHub ===" -ForegroundColor Green
+Write-Host "  $PrUrl"
 Write-Host ""
-Write-Host "Next step: create a GitHub Release from the tag:"
-Write-Host "  gh release create $Tag --prerelease --title `"$NewVersion`" --notes `"See CHANGELOG.md`""
+Write-Host "CI checks passed. I have NOT merged the PR — please review and merge it" -ForegroundColor Yellow
+Write-Host "in GitHub yourself." -ForegroundColor Yellow
+Write-Host ""
+Write-Host "After merging, finalise the release (tags main + pushes the tag):" -ForegroundColor Green
+Write-Host "  .\scripts\release.ps1 -Finalize $NewVersion"
+Write-Host ""
+Write-Host "Then create a GitHub Release from the tag:"
+Write-Host "  gh release create v$NewVersion --prerelease --title `"$NewVersion`" --notes `"See CHANGELOG.md`""
 Write-Host "  (use --prerelease for beta/rc, omit for stable)"

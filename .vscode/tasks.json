@@ -178,6 +178,28 @@
             "problemMatcher": []
         },
         {
+            "label": "[Local] Release Finalize (tag main)",
+            "detail": "Tags main with the given version after the release PR has been merged in GitHub.",
+            "type": "shell",
+            "command": ".\\scripts\\release.ps1 -Finalize ${input:releaseVersion}",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "[Pi] Sync Code (scp)",
             "detail": "Copies the metixel folder to the selected Pi. Excludes __pycache__ and cache dirs.",
             "type": "shell",
@@ -458,8 +480,13 @@
             "id": "releaseType",
             "type": "pickString",
             "description": "Release type",
-            "options": ["beta", "rc", "stable", "minor", "major"],
-            "default": "beta"
+            "options": ["minor-beta", "beta", "rc", "stable", "minor", "major"],
+            "default": "minor-beta"
+        },
+        {
+            "id": "releaseVersion",
+            "type": "promptString",
+            "description": "Version to tag on main (after the PR is merged), e.g. 0.2.0-beta.2"
         }
     ]
 }

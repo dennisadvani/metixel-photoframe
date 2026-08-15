@@ -10,6 +10,7 @@ import {
     apiPost,
     apiPut,
     escapeHtml,
+    setButtonBusy,
     setStat,
     showToast,
     updatePowerButton
@@ -363,15 +364,13 @@ import {
             dismissBtn.className = "btn--secondary";
             dismissBtn.style.fontSize = "0.82rem";
             dismissBtn.addEventListener("click", async function () {
-                dismissBtn.disabled = true;
-                dismissBtn.textContent = "Dismissing…";
+                var restore = setButtonBusy(dismissBtn, "Dismissing…");
                 var result = await apiPost("/messages/dismiss", { id: msg.id });
                 if (result && result.status === "ok") {
                     showToast("Message dismissed", "success");
                     _loadPersistentMessages(); // refresh the list
                 } else {
-                    dismissBtn.disabled = false;
-                    dismissBtn.textContent = "Dismiss";
+                    restore();
                     showToast("Failed to dismiss message", "error");
                 }
             });

@@ -61,8 +61,13 @@ class BackendDaemon:
         # Set by the web API when the frontend signals that the
         # slideshow has started — used to defer network checks.
         self._slideshow_started = threading.Event()
-        # Display power state — tracked by scheduler, read by Web UI
-        self._display_on: bool = True
+        # Display power state — read by Web UI / MQTT.  Initialised from the
+        # schedule so HA gets the correct state on boot (MQTT starts before
+        # the scheduler thread).  Falls back to True when schedule disabled.
+        self._display_on: bool = self._display_should_be_on()
+        # The MQTT client (set in _start_mqtt_client) — used by
+        # set_display_power() to push screen-state changes to HA immediately.
+        self._mqtt_client = None
 
     # -- Service lifecycle ---------------------------------------------------
 
@@ -198,6 +203,25 @@ class BackendDaemon:
             t.start()
             self._threads.append(t)
 
+    def set_display_power(self, on: bool, source: str = "") -> None:
+        """Set the display-power state and notify every consumer.
+
+        Single choke-point for ALL display-power changes (Web UI button,
+        display scheduler, keyboard/CEC/IR remotes, MQTT commands).  It
+        updates the daemon's flag, sends the ``screen_on``/``screen_off``
+        IPC command to the frontend, and publishes the new state to MQTT
+        immediately so Home Assistant's switch reflects reality regardless
+        of which input changed it (no waiting for the 30s periodic publish).
+        """
+        self._display_on = bool(on)
+        from metixel.shared.ipc import ControlMessage
+
+        self._ipc.send(ControlMessage(cmd="screen_on" if on else "screen_off"))
+        if self._mqtt_client is not None:
+            self._mqtt_client.publish_screen_now()
+        if source:
+            logger.info("Display power set to %s (%s)", "ON" if on else "OFF", source)
+
     def _start_input_handlers(self) -> None:
         """Start CEC and IR input handlers."""
         config = self._state.config
@@ -205,7 +229,12 @@ class BackendDaemon:
         if config.input.get("cec_enabled", True):
             from metixel.backend.input_handlers.cec import CECHandler
 
-            cec = CECHandler(self._state, self._ipc, cec=self._ports.cec)
+            cec = CECHandler(
+                self._state,
+                self._ipc,
+                cec=self._ports.cec,
+                display_power=self.set_display_power,
+            )
             t = threading.Thread(target=cec.run, name="cec-handler", daemon=True)
             t.start()
             self._threads.append(t)
@@ -213,7 +242,12 @@ class BackendDaemon:
         if config.input.get("ir_enabled", False):
             from metixel.backend.input_handlers.ir import IRHandler
 
-            ir = IRHandler(self._state, self._ipc, ir=self._ports.ir)
+            ir = IRHandler(
+                self._state,
+                self._ipc,
+                ir=self._ports.ir,
+                display_power=self.set_display_power,
+            )
             t = threading.Thread(target=ir.run, name="ir-handler", daemon=True)
             t.start()
             self._threads.append(t)
@@ -224,6 +258,7 @@ class BackendDaemon:
             self._keyboard_handler = KeyboardHandler(
                 config=config.input,
                 ipc=self._ipc,
+                display_power=self.set_display_power,
             )
             t = threading.Thread(
                 target=self._keyboard_handler.run,
@@ -578,14 +613,39 @@ class BackendDaemon:
         self._threads.append(t)
         logger.info("Update manager started")
 
+    def _display_should_be_on(self) -> bool:
+        """Whether the display should be on right now per the schedule.
+
+        Returns ``True`` when the schedule is disabled (display stays on)
+        or the current time falls inside the on-window.
+        """
+        config = self._state.config
+        if not config.display.get("schedule_enabled", False):
+            return True
+        on_str = config.display.get("schedule_on_time", "07:00")
+        off_str = config.display.get("schedule_off_time", "22:00")
+
+        def _parse_time(t: str) -> int:
+            parts = t.strip().split(":")
+            return int(parts[0]) * 60 + int(parts[1])
+
+        now = time.localtime()
+        now_minutes = now.tm_hour * 60 + now.tm_min
+        on_min = _parse_time(on_str)
+        off_min = _parse_time(off_str)
+        return on_min <= now_minutes < off_min
+
     def _start_display_scheduler(self) -> None:
         """Start the display power scheduler in a background thread.
 
         Checks the configured on/off schedule every 30 seconds and sends
         ``screen_on`` / ``screen_off`` IPC commands to the frontend when
         the display should change state.
+
+        The display-power flag is initialised from the schedule in
+        ``__init__`` (before MQTT connects) so Home Assistant receives the
+        correct initial screen state on boot.
         """
-        from metixel.shared.ipc import ControlMessage
 
         def _scheduler_loop() -> None:
             logger.info("Display scheduler started")
@@ -593,44 +653,17 @@ class BackendDaemon:
 
             while self._running:
                 try:
-                    config = self._state.config
-                    enabled = config.display.get("schedule_enabled", False)
-                    if not enabled:
+                    if not self._state.config.display.get("schedule_enabled", False):
                         time.sleep(30)
                         continue
 
-                    on_str = config.display.get("schedule_on_time", "07:00")
-                    off_str = config.display.get("schedule_off_time", "22:00")
-
-                    now = time.localtime()
-                    now_minutes = now.tm_hour * 60 + now.tm_min
-
-                    def _parse_time(t: str) -> int:
-                        parts = t.strip().split(":")
-                        return int(parts[0]) * 60 + int(parts[1])
-
-                    on_min = _parse_time(on_str)
-                    off_min = _parse_time(off_str)
-
-                    should_be_on = on_min <= now_minutes < off_min
-
+                    should_be_on = self._display_should_be_on()
                     if should_be_on != last_state:
                         last_state = should_be_on
-                        self._display_on = should_be_on  # Expose for Web UI
-                        if should_be_on:
-                            logger.info(
-                                "Display scheduler: turning ON (scheduled %s–%s)",
-                                on_str,
-                                off_str,
-                            )
-                            self._ipc.send(ControlMessage(cmd="screen_on"))
-                        else:
-                            logger.info(
-                                "Display scheduler: turning OFF (scheduled %s–%s)",
-                                on_str,
-                                off_str,
-                            )
-                            self._ipc.send(ControlMessage(cmd="screen_off"))
+                        # Route through the single choke-point so the flag,
+                        # the frontend IPC, and the immediate MQTT publish all
+                        # stay in sync with every other display-power source.
+                        self.set_display_power(should_be_on, source="schedule")
                 except Exception:
                     logger.debug("Display scheduler error", exc_info=True)
 

@@ -10,6 +10,7 @@ import {
     apiPost,
     apiPut,
     escapeHtml,
+    setButtonBusy,
     setChecked,
     setValue,
     showToast
@@ -22,6 +23,7 @@ import { loadMedia } from "./media-page.js";
     var _syncBound = false;
     var _syncPollTimer = null;
     var _syncWasActive = false;
+    var _syncRestoreBtn = null;  // setButtonBusy restore fn for the Sync Now button
     var _albumData = null;  // Cached album list from GET /api/immich/albums
 
     function startSyncPolling() {
@@ -258,8 +260,7 @@ import { loadMedia } from "./media-page.js";
 
             // -- Sync Now --
             document.getElementById("btn-sync-now")?.addEventListener("click", async () => {
-                var btn = document.getElementById("btn-sync-now");
-                if (btn) { btn.disabled = true; btn.textContent = "Syncing…"; }
+                _syncRestoreBtn = setButtonBusy(document.getElementById("btn-sync-now"), "Syncing…");
 
                 var result = await apiPost("/immich/sync", {});
                 if (result && result.status === "started") {
@@ -268,7 +269,7 @@ import { loadMedia } from "./media-page.js";
                     startSyncPolling();
                 } else {
                     showToast("Failed to start sync", "error");
-                    if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
+                    if (_syncRestoreBtn) { _syncRestoreBtn(); _syncRestoreBtn = null; }
                 }
             });
 
@@ -345,8 +346,7 @@ import { loadMedia } from "./media-page.js";
             if (_syncWasActive) {
                 _syncWasActive = false;
                 stopSyncPolling();
-                var btn = document.getElementById("btn-sync-now");
-                if (btn) { btn.disabled = false; btn.textContent = "Sync Now"; }
+                if (_syncRestoreBtn) { _syncRestoreBtn(); _syncRestoreBtn = null; }
             }
         }
 

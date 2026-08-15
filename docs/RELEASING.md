@@ -115,6 +115,7 @@ python scripts/bump_version.py --major      # major  (0.1.3 → 1.0.0)
 ```bash
 python scripts/bump_version.py --beta       # add/inc beta  (0.1.3 → 0.1.3-beta.1)
 python scripts/bump_version.py --beta 3     # explicit beta number
+python scripts/bump_version.py --beta-only  # inc beta only (0.1.3-beta.1 → 0.1.3-beta.2)
 python scripts/bump_version.py --rc         # add/inc rc
 python scripts/bump_version.py --alpha      # add/inc alpha
 python scripts/bump_version.py --release    # strip pre-release suffix
@@ -149,6 +150,8 @@ python scripts/bump_version.py --minor --beta 1 --dry-run
 | `--beta` with no number, already `-beta.N` | **Auto-incremented** — `0.1.3-beta.1` → `0.1.4-beta.2` |
 | `--beta` with no number, not yet beta | **Starts at 1** — `0.1.3` → `0.1.4-beta.1` |
 | `--beta 3` (explicit number) | **Exact** — sets `-beta.3` regardless of current |
+| `--beta-only`, already `-beta.N` | **Beta number only** — `0.1.3-beta.1` → `0.1.3-beta.2` (numeric part untouched) |
+| `--beta-only`, not yet beta | **Starts at 1** — `0.1.3` → `0.1.3-beta.1` (numeric part untouched) |
 | `--rc` switching from `-beta.N` | **Resets to 1** — `0.2.0-beta.3` → `0.2.1-rc.1` |
 
 ---
@@ -160,16 +163,33 @@ python scripts/bump_version.py --minor --beta 1 --dry-run
 A beta is a **pre-release** — it appears on the **beta** channel in the
 Updates card.  Use this for wider testing before a stable release.
 
-The fastest path is the release script, which handles everything:
+The fastest path is the release script, which handles everything up to the
+PR:
 
 ```bash
-# Bump, commit on dev, open a PR to main, wait for CI, merge, tag, push
-scripts/release.sh beta      # or: scripts/release.ps1 beta   (Windows)
+# Bump, commit on dev, push a release branch, open a PR to main, wait for CI
+scripts/release.sh minor-beta      # bump minor + beta (or: scripts/release.ps1)
+scripts/release.sh beta            # bump beta only
+
+# …review and merge the PR yourself in GitHub…
+
+# Then tag main and push the tag:
+scripts/release.sh --finalize 0.2.0-beta.1     # or: scripts/release.ps1 -Finalize
 ```
+
+Two beta options are available:
+
+| Script arg | Meaning | Example |
+|---|---|---|
+| `minor-beta` | Bump the numeric version **and** the beta number | `1.1.9-beta.9` → `1.1.10-beta.10` |
+| `beta` | Bump **only** the beta number | `1.1.9-beta.9` → `1.1.9-beta.10` |
 
 > **Note:** the `main` branch is protected by a ruleset that **requires a
 > pull request** — direct `git push origin main` is rejected. The release
-> scripts push a `release/<version>` branch and open a PR instead.
+> scripts push a `release/<version>` branch and open a PR, then **stop**.
+> They do NOT merge the PR — you review and merge it yourself in the GitHub
+> UI. Afterwards, run `--finalize <version>` (sh) / `-Finalize <version>`
+> (ps1) to tag `main` and push the tag.
 >
 > If the ruleset also requires an approving review, set
 > `required_approving_review_count` to `0` (solo maintainer) or have a
@@ -199,12 +219,14 @@ git commit -m "chore: bump version to 0.2.0-beta.1"
 git push origin dev:release/0.2.0-beta.1
 gh pr create --base main --head release/0.2.0-beta.1 --title "Release 0.2.0-beta.1"
 
-# 5. After CI passes and the PR merges, tag on main
+# 5. Merge the PR in the GitHub UI (NOT via the script)
+
+# 6. After the PR merges, tag on main
 git checkout main && git pull origin main
 git tag -a v0.2.0-beta.1 -m "Beta 1: short summary of what's new"
 git push origin v0.2.0-beta.1
 
-# 6. Create the GitHub Release at:
+# 7. Create the GitHub Release at:
 #    https://github.com/dennisadvani/metixel-photoframe/releases/new
 #
 #    • Tag:        v0.2.0-beta.1

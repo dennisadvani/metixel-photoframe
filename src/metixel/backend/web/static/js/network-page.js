@@ -10,6 +10,7 @@ import {
     apiPost,
     apiPut,
     escapeHtml,
+    setButtonBusy,
     setChecked,
     showToast
 } from "./core.js";
@@ -23,12 +24,12 @@ import {
             _networkBound = true;
 
             document.getElementById("btn-network-scan")?.addEventListener("click", async function () {
-                var btn = this;
-                btn.disabled = true;
-                btn.textContent = "Scanning…";
-                await _refreshNetworkScan();
-                btn.disabled = false;
-                btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">wifi_find</span> Scan for Networks';
+                var restore = setButtonBusy(this, "Scanning…");
+                try {
+                    await _refreshNetworkScan();
+                } finally {
+                    restore();
+                }
             });
 
             document.getElementById("btn-network-ap-toggle")?.addEventListener("click", async function () {
@@ -197,16 +198,14 @@ import {
                 if (forgetBtn) {
                     forgetBtn.addEventListener("click", async function () {
                         if (!confirm("Forget the '" + escapeHtml(status.ssid) + "' network and disconnect? The AP will reactivate if no other network is available.")) return;
-                        forgetBtn.disabled = true;
-                        forgetBtn.textContent = "…";
+                        var restore = setButtonBusy(forgetBtn, "…");
                         var result = await apiPost("/network/forget", { ssid: status.ssid });
                         if (result && result.status === "ok") {
                             showToast("Network forgotten", "info");
                             _refreshNetworkStatus();
                         } else {
+                            restore();
                             showToast("Failed to forget network", "error");
-                            forgetBtn.disabled = false;
-                            forgetBtn.textContent = "Forget";
                         }
                     });
                 }

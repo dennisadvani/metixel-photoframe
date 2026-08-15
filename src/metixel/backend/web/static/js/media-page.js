@@ -8,6 +8,7 @@
 import {
     apiGet,
     escapeHtml,
+    setButtonBusy,
     showToast
 } from "./core.js";
 
@@ -274,8 +275,7 @@ import {
             btn.className = "btn--secondary";
             btn.style.marginTop = "1rem";
             btn.addEventListener("click", function () {
-                btn.textContent = "Loading\u2026";
-                btn.disabled = true;
+                setButtonBusy(btn, "Loading\u2026");
                 _fetchMediaPage(_mediaOffset);
             });
             el.appendChild(btn);

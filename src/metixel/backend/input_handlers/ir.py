@@ -9,6 +9,7 @@ commands.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import ControlMessage, IPCClient
@@ -43,9 +44,11 @@ class IRHandler:
         state: StateManager,
         ipc: IPCClient,
         ir: IrSocket | None = None,
+        display_power: Callable[[bool], None] | None = None,
     ) -> None:
         self._state = state
         self._ipc = ipc
+        self._display_power = display_power
         self._running = False
         self._ir = ir  # injected IrSocket port (None → real adapter in run())
         self._device: str = state.config.input.get("ir_device", "/dev/lirc0")
@@ -114,4 +117,9 @@ class IRHandler:
         cmd = self.DEFAULT_BUTTON_MAP.get(button)
         if cmd:
             logger.debug("IR button: %s → %s", button, cmd)
-            self._ipc.send(ControlMessage(cmd=cmd))
+            # Screen power goes through the daemon choke-point so the flag
+            # and MQTT state stay in sync with every other source.
+            if cmd in ("screen_on", "screen_off") and self._display_power is not None:
+                self._display_power(cmd == "screen_on")
+            else:
+                self._ipc.send(ControlMessage(cmd=cmd))

@@ -7,6 +7,7 @@ Usage:
     python scripts/bump_version.py --major        # bump major (0.1.0 → 1.0.0)
     python scripts/bump_version.py --beta         # set pre-release beta (0.1.3 → 0.1.3-beta.1)
     python scripts/bump_version.py --beta 3       # set specific beta number
+    python scripts/bump_version.py --beta-only    # inc beta only (0.1.3-beta.1 → 0.1.3-beta.2)
     python scripts/bump_version.py --rc           # set pre-release rc (0.1.3 → 0.1.3-rc.1)
     python scripts/bump_version.py --alpha        # set pre-release alpha
     python scripts/bump_version.py --release      # strip pre-release (0.1.3-beta.1 → 0.1.3)
@@ -86,6 +87,7 @@ def main() -> None:
         "  bump_version.py --major           # 0.1.3 → 1.0.0\n"
         "  bump_version.py --beta            # 0.1.3 → 0.1.3-beta.1\n"
         "  bump_version.py --beta 3          # 0.1.3 → 0.1.3-beta.3\n"
+        "  bump_version.py --beta-only       # 0.1.3-beta.1 → 0.1.3-beta.2\n"
         "  bump_version.py --rc              # 0.1.3 → 0.1.3-rc.1\n"
         "  bump_version.py --release         # 0.1.3-beta.1 → 0.1.3\n"
         "  bump_version.py --set 0.2.0-beta.1\n"
@@ -110,6 +112,14 @@ def main() -> None:
         metavar="N",
         help=(
             "Set pre-release to beta.N (auto-increments if already beta; defaults to 1 if omitted)"
+        ),
+    )
+    pre_group.add_argument(
+        "--beta-only",
+        action="store_true",
+        help=(
+            "Increment only the beta number, leave major.minor.patch unchanged "
+            "(e.g. 0.1.3-beta.1 → 0.1.3-beta.2)"
         ),
     )
     pre_group.add_argument(
@@ -192,7 +202,11 @@ def main() -> None:
     ver = read_version()
 
     # -- Apply bump -----------------------------------------------------
-    if args.major:
+    if args.beta_only:
+        # beta-only: leave the numeric version untouched, just move the
+        # pre-release number below.
+        pass
+    elif args.major:
         ver["major"] += 1
         ver["minor"] = 0
         ver["patch"] = 0
@@ -215,7 +229,14 @@ def main() -> None:
     elif args.pre is not None:
         pre_flag, pre_value = "pre", args.pre
 
-    if args.release:
+    if args.beta_only:
+        # Increment ONLY the beta number (no segment bump).
+        if ver["pre_label"] == "beta":
+            ver["pre_num"] += 1
+        else:
+            ver["pre_label"] = "beta"
+            ver["pre_num"] = 1
+    elif args.release:
         # Strip pre-release entirely
         ver["pre_label"] = None
         ver["pre_num"] = 0
