@@ -10,6 +10,23 @@ a single OTA can also resolve the missing runtime dependencies — the
 "one-step upgrade" guarantee, even for devices upgrading from code that
 predates the OTA install-script hand-off.
 
+Ownership / sudo design
+-----------------------
+The backend service runs as the unprivileged ``pi`` user under a hardened
+systemd unit: ``ProtectHome=yes`` (``/home`` read-only) and
+``ProtectSystem=full`` (``/usr`` read-only). So the self-heal cannot install
+into the user site-packages (``~/.local``) nor into system packages from within
+the service — and plain ``sudo`` would not help because it inherits the
+service's hardened mount namespace.
+
+Instead, this mirrors the OTA itself: it runs ``pip install`` as **root** via
+``sudo -n systemd-run`` (a transient unit in a fresh, non-hardened namespace)
+so packages are installed into the **system** dist-packages — the same location
+the OTA installs to. This avoids a split-brain where some deps live under
+``~/.local`` and others under ``/usr``, and it works regardless of the
+service's ``Protect*`` hardening. Requires the ``pi`` user to have NOPASSWD
+sudo (already the default for this project).
+
 Graceful by design: failures are logged and never raised, and the backend
 always continues to start.
 """
@@ -26,20 +43,25 @@ from metixel.shared.subprocess import run_cmd
 
 logger = logging.getLogger(__name__)
 
-# The pip invocation used to install missing deps. Kept explicit so tests can
-# inject a fake; runs as the current user (which works for the Pi ``pi`` user,
-# and needs no sudo because pip installs into the user site-packages).
-#
-# ``--no-cache-dir`` avoids pip failing when an OTA (which runs pip as root via
-# systemd-run) leaves a root-owned cache that the backend user cannot write —
-# the self-heal must install deps regardless of cache state.
+# The privileged pip invocation used to install missing deps. Kept explicit so
+# tests can inject a fake. ``sudo -n systemd-run`` runs the install as root in
+# a transient, non-hardened unit — the same mechanism the OTA uses — so it can
+# write to the system dist-packages even though the backend service itself is
+# hardened (ProtectHome / ProtectSystem). ``--wait`` blocks until the install
+# finishes so the media pipeline only starts once deps are available.
 _DEFAULT_PIP = (
+    "sudo",
+    "-n",
+    "systemd-run",
+    "--wait",
+    "--collect",
+    "--unit=metixel-deps",
+    "--description=Metixel dependency self-heal",
     "python3",
     "-m",
     "pip",
     "install",
     "--break-system-packages",
-    "--no-cache-dir",
 )
 
 

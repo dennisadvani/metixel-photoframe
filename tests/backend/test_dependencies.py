@@ -75,6 +75,29 @@ class TestEnsureRuntimeDependencies:
         assert calls[0][: len(_DEFAULT_PIP)] == list(_DEFAULT_PIP)
         assert calls[0][-2:] == ["-r", str(req)]
 
+    def test_installs_as_root_system_wide(self, tmp_path: Path) -> None:
+        """The install must run as root via systemd-run (fresh, non-hardened
+        namespace) into the SYSTEM dist-packages — never as the service user
+        into user site-packages (which ProtectHome/ProtectSystem forbid)."""
+        req = tmp_path / "requirements-pip.txt"
+        req.write_text(f"{_MISSING}>=1.0\n", encoding="utf-8")
+        calls: list[list[str]] = []
+
+        def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            calls.append(cmd)
+            return _fake_run(0)
+
+        ensure_runtime_dependencies(tmp_path, run=fake_run)  # type: ignore[arg-type]
+        cmd = calls[0]
+
+        # Privileged, in a clean namespace.
+        assert cmd[0] == "sudo"
+        assert "systemd-run" in cmd
+        assert "--wait" in cmd
+        # System-wide install, not --user.
+        assert "--break-system-packages" in cmd
+        assert "--user" not in cmd
+
     def test_install_failure_is_logged_not_raised(self, tmp_path: Path) -> None:
         req = tmp_path / "requirements-pip.txt"
         req.write_text(f"{_MISSING}>=1.0\n", encoding="utf-8")
