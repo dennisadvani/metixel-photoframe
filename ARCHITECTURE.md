@@ -774,7 +774,7 @@ from `updates.channel`. Auto-checking is governed by `updates.auto_check` and
 #### Apply flow
 
 The apply step cannot run inside the backend process — stopping the service
-kills the process. `UpdateManager` therefore writes a self-contained shell
+kills the process. `UpdateManager` therefore writes a **thin bootstrap** shell
 script to `/opt/metixel/cache/metixel-update.sh` and launches it with
 `systemd-run` as a **transient unit** (`metixel-update`, `--collect`), so it
 runs in its own cgroup and survives the backend being stopped:
@@ -783,11 +783,44 @@ runs in its own cgroup and survives the backend being stopped:
 2. `git config --system --add safe.directory /opt/metixel`
 3. `git fetch --tags --force origin`
 4. `git reset --hard <target ref>` (stable/beta tag or dev HEAD)
-5. Install missing system packages listed in `requirements-system.txt` (idempotent)
-6. `pip install --break-system-packages -e /opt/metixel` (pick up dependency changes)
-7. A `trap` on EXIT guarantees `systemctl restart metixel-backend metixel-cage`
+5. **Hand off** to the install steps in the freshly checked-out repo:
+   `bash "$REPO/scripts/ota_install.sh" "$REPO"` — which installs missing
+   system packages from `requirements-system.txt` (idempotent), then
+   `pip install --break-system-packages -e "$REPO"`, then installs/updates the
+   runtime pip dependencies from `requirements-pip.txt`.
+6. A `trap` on EXIT guarantees `systemctl restart metixel-backend metixel-cage`
    runs whether the update succeeded or failed — the frame is never left black
-8. The script deletes itself; the transient unit is collected on exit
+7. The script deletes itself; the transient unit is collected on exit
+
+The bootstrap is deliberately **thin**: it only stops services, checks out the
+target, and delegates to `scripts/ota_install.sh`. Because that script lives
+*in the repo*, the running code (which generates the bootstrap at click-time)
+is never relied on to know the current install steps — so a device upgrading
+from an older release applies the **new** version's install logic, including
+newly-required system and pip dependencies.
+
+#### Startup dependency self-heal (single-step OTA dep resolution)
+
+An OTA that comes from *old* running code cannot install deps its bootstrap
+didn't know about. To guarantee a device on an older release resolves newly
+required runtime deps (e.g. `pillow-heif` for HEIC/HEIF media) in that **same
+single upgrade**, the backend runs a dependency self-heal on startup
+(`backend/dependencies.py`, wired into `BackendDaemon.run()`):
+
+1. Read `requirements-pip.txt` and, using `importlib.metadata`, detect any
+   missing runtime dependency (fast no-op on normal boots).
+2. If any are missing, install them as **root** via
+   `sudo -n systemd-run --wait --collect --unit=metixel-deps python3 -m pip
+   install --break-system-packages -r requirements-pip.txt`.
+
+The install is run through `systemd-run` (a fresh, non-hardened transient
+unit) because the backend service is hardened (`ProtectHome=yes` →
+`/home` read-only; `ProtectSystem=full` → `/usr` read-only), so it can neither
+write to `~/.local` nor to the system dist-packages — and plain `sudo` would
+inherit the hardened mount namespace. Running as root into the **system**
+dist-packages also keeps deps in the same location the OTA installs to,
+avoiding a split-brain of deps spread across `~/.local` and `/usr`.
+Failures are logged and never raised; the backend always continues to start.
 
 ---
 
