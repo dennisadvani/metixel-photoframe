@@ -9,6 +9,8 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
+from metixel.shared.paths import install_root
+
 logger = logging.getLogger(__name__)
 
 browse_bp = Blueprint("browse", __name__)
@@ -19,18 +21,22 @@ def browse_folder():
     """Browse the filesystem for folder selection in the web UI.
 
     Query params:
-        path (str): The directory to browse.  Defaults to the metixel
-            install root (``/opt/metixel/``).  Relative paths are
-            resolved against ``/opt/metixel/``.
+        path (str): The directory to browse.  Defaults to the media folder
+            (``<install root>/media``) so the folder browser opens where the
+            user's photos/videos live.  Relative paths are resolved against
+            the install root.
 
     Returns:
         JSON with ``current_path``, ``parent_path``, and ``entries`` —
         a list of subdirectory names (no files, no hidden dirs).
     """
 
-    requested = request.args.get("path", "/opt/metixel/")
+    base = install_root()
+    # Default the browser to the media folder so users start where their
+    # photos/videos live, not at the install root.
+    default_path = str(base / "media")
+    requested = request.args.get("path") or default_path
     requested_path = Path(requested)
-    base = Path("/opt/metixel")
 
     if not requested_path.is_absolute():
         requested_path = base / requested_path
