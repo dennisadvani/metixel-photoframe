@@ -21,6 +21,7 @@ from metixel.shared.ipc import IPCClient
 from metixel.shared.ports import Ports
 
 if TYPE_CHECKING:
+    from metixel.backend.mqtt_client import MQTTClient
     from metixel.backend.network_controller import NetworkController, NetworkState
     from metixel.backend.update_manager import UpdateManager
 
@@ -67,7 +68,7 @@ class BackendDaemon:
         self._display_on: bool = self._display_should_be_on()
         # The MQTT client (set in _start_mqtt_client) — used by
         # set_display_power() to push screen-state changes to HA immediately.
-        self._mqtt_client = None
+        self._mqtt_client: MQTTClient | None = None
 
     # -- Service lifecycle ---------------------------------------------------
 
