@@ -100,6 +100,34 @@ class TestDaemonSetDisplayPower:
         assert daemon._display_on is False
         assert daemon._ipc.sent[-1].cmd == "screen_off"
 
+    def test_quiet_reassert_resends_ipc_but_does_not_publish_when_unchanged(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """The scheduler's quiet retry re-sends the IPC (self-heal a lost
+        message) but does not spam MQTT/logs when the state is unchanged."""
+        daemon = _make_daemon(tmp_path, monkeypatch)
+        daemon._display_on = False  # already off
+        sent_before = len(daemon._ipc.sent)
+
+        daemon.set_display_power(False, source="schedule", quiet=True)
+
+        # IPC re-sent so a lost screen_off self-heals…
+        assert len(daemon._ipc.sent) == sent_before + 1
+        assert daemon._ipc.sent[-1].cmd == "screen_off"
+        # …but MQTT is not re-published for an unchanged state.
+        assert daemon._mqtt_client.publish_count == 0
+
+    def test_quiet_still_publishes_when_state_changes(self, tmp_path: Path, monkeypatch) -> None:
+        """Even in quiet mode, a real state change publishes to MQTT."""
+        daemon = _make_daemon(tmp_path, monkeypatch)
+        daemon._display_on = True  # was on
+
+        daemon.set_display_power(False, source="schedule", quiet=True)
+
+        assert daemon._display_on is False
+        assert daemon._ipc.sent[-1].cmd == "screen_off"
+        assert daemon._mqtt_client.publish_count == 1
+
 
 class TestBootDisplayState:
     """On boot, _display_on must follow the schedule (MQTT starts before the
@@ -134,6 +162,44 @@ class TestBootDisplayState:
         )
         _freeze_time(monkeypatch, 23)  # 23:00 → off window
         assert daemon._display_should_be_on() is False
+
+    def test_wrapped_window_on_overnight(self, tmp_path: Path, monkeypatch) -> None:
+        """on > off → the window wraps across midnight (on overnight)."""
+        daemon = _make_daemon(tmp_path, monkeypatch)
+        daemon._state.update_config(
+            "display",
+            {
+                "schedule_enabled": True,
+                "schedule_on_time": "22:00",
+                "schedule_off_time": "07:00",
+            },
+        )
+        _freeze_time(monkeypatch, 23)  # 23:00 → on (after 22:00)
+        assert daemon._display_should_be_on() is True
+        _freeze_time(monkeypatch, 3)  # 03:00 → on (before 07:00)
+        assert daemon._display_should_be_on() is True
+        _freeze_time(monkeypatch, 12)  # 12:00 → off (outside wrapped window)
+        assert daemon._display_should_be_on() is False
+
+    def test_wrapped_brief_off_window(self, tmp_path: Path, monkeypatch) -> None:
+        """on=08:50 / off=08:45 → off only during 08:45–08:50 (on otherwise)."""
+        daemon = _make_daemon(tmp_path, monkeypatch)
+        daemon._state.update_config(
+            "display",
+            {
+                "schedule_enabled": True,
+                "schedule_on_time": "08:50",
+                "schedule_off_time": "08:45",
+            },
+        )
+        _freeze_time(monkeypatch, 8, 44)  # 08:44 → on (before the off window)
+        assert daemon._display_should_be_on() is True
+        _freeze_time(monkeypatch, 8, 46)  # 08:46 → off (inside the off window)
+        assert daemon._display_should_be_on() is False
+        _freeze_time(monkeypatch, 8, 50)  # 08:50 → on (wrapped window resumes)
+        assert daemon._display_should_be_on() is True
+        _freeze_time(monkeypatch, 12)  # 12:00 → on
+        assert daemon._display_should_be_on() is True
 
     def test_boot_state_tracks_schedule_when_off_window(self, tmp_path: Path, monkeypatch) -> None:
         """The daemon initialises _display_on from the schedule at __init__."""

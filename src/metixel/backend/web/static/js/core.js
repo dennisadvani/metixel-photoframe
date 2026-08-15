@@ -186,7 +186,10 @@ export function setStat(id, value) {
 export function updatePowerButton(on) {
     var btn = document.getElementById("btn-display-power");
     if (!btn) return;
-    btn.innerHTML = on ? "⏻ Turn Display Off" : "⏻ Turn Display On";
+    // Use the Material Symbol (not the ⏻ Unicode power character) so the
+    // icon renders consistently on every platform/mobile.
+    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> '
+        + (on ? "Turn Display Off" : "Turn Display On");
     btn.classList.toggle("btn--danger", !on);
 }
 

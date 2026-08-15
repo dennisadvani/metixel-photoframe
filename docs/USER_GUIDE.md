@@ -506,6 +506,8 @@ Give Home Assistant a few minutes (or restart it) after enabling MQTT on the
 frame. If discovery doesn't pick it up, check the broker is reachable and that
 the frame shows **Connected**.
 
+![Screenshot: Metixel in Home Assistant MQTT](images\home-assistant-device.png)
+
 > **Manual setup (advanced):** if you prefer not to use discovery, create MQTT
 > entities in Home Assistant pointing at the topics in the table above using the
 > payloads listed.

@@ -209,7 +209,7 @@ class BackendDaemon:
             t.start()
             self._threads.append(t)
 
-    def set_display_power(self, on: bool, source: str = "") -> None:
+    def set_display_power(self, on: bool, source: str = "", quiet: bool = False) -> None:
         """Set the display-power state and notify every consumer.
 
         Single choke-point for ALL display-power changes (Web UI button,
@@ -218,15 +218,21 @@ class BackendDaemon:
         IPC command to the frontend, and publishes the new state to MQTT
         immediately so Home Assistant's switch reflects reality regardless
         of which input changed it (no waiting for the 30s periodic publish).
+
+        ``quiet=True`` (used by the scheduler's retry re-assert) still
+        re-sends the IPC so a lost fire-and-forget message self-heals, but
+        skips the MQTT publish and INFO log when the state is unchanged.
         """
+        changed = self._display_on != bool(on)
         self._display_on = bool(on)
         from metixel.shared.ipc import ControlMessage
 
         self._ipc.send(ControlMessage(cmd="screen_on" if on else "screen_off"))
-        if self._mqtt_client is not None:
-            self._mqtt_client.publish_screen_now()
-        if source:
-            logger.info("Display power set to %s (%s)", "ON" if on else "OFF", source)
+        if not (quiet and not changed):
+            if self._mqtt_client is not None:
+                self._mqtt_client.publish_screen_now()
+            if source:
+                logger.info("Display power set to %s (%s)", "ON" if on else "OFF", source)
 
     def _start_input_handlers(self) -> None:
         """Start CEC and IR input handlers."""
@@ -624,6 +630,12 @@ class BackendDaemon:
 
         Returns ``True`` when the schedule is disabled (display stays on)
         or the current time falls inside the on-window.
+
+        The on-window is ``[on_time, off_time)`` and supports wrap-around:
+        when ``on_time < off_time`` the display is on during that same-day
+        span (e.g. 07:00–22:00); when ``on_time > off_time`` the window
+        wraps across midnight (e.g. on at 22:00 / off at 07:00 → on
+        overnight, or on at 08:50 / off at 08:45 → on except 08:45–08:50).
         """
         config = self._state.config
         if not config.display.get("schedule_enabled", False):
@@ -639,7 +651,13 @@ class BackendDaemon:
         now_minutes = now.tm_hour * 60 + now.tm_min
         on_min = _parse_time(on_str)
         off_min = _parse_time(off_str)
-        return on_min <= now_minutes < off_min
+
+        if on_min < off_min:
+            # Same-day on-window.
+            return on_min <= now_minutes < off_min
+        # Wrapped (overnight) on-window: on from on_min through midnight
+        # until off_min.  (on_min == off_min → always on.)
+        return now_minutes >= on_min or now_minutes < off_min
 
     def _start_display_scheduler(self) -> None:
         """Start the display power scheduler in a background thread.
@@ -656,6 +674,10 @@ class BackendDaemon:
         def _scheduler_loop() -> None:
             logger.info("Display scheduler started")
             last_state: bool | None = None  # None on first iteration
+            # After a transition, keep re-asserting the state so a
+            # fire-and-forget IPC lost while the frontend is still starting
+            # (e.g. at boot) self-heals.  10 ticks × 30s = ~5 minutes.
+            retries_left = 0
 
             while self._running:
                 try:
@@ -666,10 +688,16 @@ class BackendDaemon:
                     should_be_on = self._display_should_be_on()
                     if should_be_on != last_state:
                         last_state = should_be_on
+                        retries_left = 10
                         # Route through the single choke-point so the flag,
                         # the frontend IPC, and the immediate MQTT publish all
                         # stay in sync with every other display-power source.
                         self.set_display_power(should_be_on, source="schedule")
+                    elif retries_left > 0:
+                        retries_left -= 1
+                        # Quiet re-assert — the flag is unchanged, so MQTT and
+                        # logs are not spammed; only the IPC is re-sent.
+                        self.set_display_power(should_be_on, source="schedule", quiet=True)
                 except Exception:
                     logger.debug("Display scheduler error", exc_info=True)
 

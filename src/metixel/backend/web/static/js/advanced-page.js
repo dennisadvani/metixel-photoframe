@@ -377,14 +377,25 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                     width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
                     height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
-                    schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
-                    schedule_on_time: document.getElementById("cfg-schedule-on").value,
-                    schedule_off_time: document.getElementById("cfg-schedule-off").value,
                 });
                 if (result) {
                     showToast("Display settings saved!", "success");
                 } else {
                     showToast("Failed to save display settings", "error");
+                }
+            });
+
+            // Display Power Save Schedule — saves only the schedule keys.
+            document.getElementById("btn-save-schedule")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/display", {
+                    schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
+                    schedule_on_time: document.getElementById("cfg-schedule-on").value,
+                    schedule_off_time: document.getElementById("cfg-schedule-off").value,
+                });
+                if (result) {
+                    showToast("Display power schedule saved!", "success");
+                } else {
+                    showToast("Failed to save display power schedule", "error");
                 }
             });
 
