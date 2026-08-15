@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.10-beta.11]
+
+### Added
+
+- **Video cache-miss logging** — `VideoProcessor.process()` now logs
+  `No cached video found for <name> — transcoding` when no cached `.mp4`
+  exists for a content hash.  Combined with the existing corrupt-file
+  (WARNING) and exceeds-profile (INFO) messages, every re-transcode is now
+  attributable to exactly one cause instead of being a silent path.
+  Covered by new `TestProcessCacheMissLogging` unit tests (no real ffmpeg).
+- **CPU usage HA sensor** — the MQTT discovery payload adds a `cpu_usage`
+  sensor (`value_template: {{ value_json.cpu_percent | default(0) }}`,
+  unit `%`, mdi `cpu-64-bit`, diagnostic), populated from the existing
+  periodic status publish.
+- **Immediate display-power state sync** — a new `set_display_power(on,
+  source)` choke-point in the backend daemon now funnels *every*
+  display-power change (Web UI button, display scheduler, keyboard/CEC/IR
+  remotes, and MQTT `power_on`/`power_off` commands) through one place that
+  updates the daemon's flag, sends the `screen_on`/`screen_off` IPC command
+  to the frontend, and publishes the new state to `metixel/screen`
+  immediately — Home Assistant's switch now reflects reality regardless of
+  which input changed it, with no waiting for the 30s periodic publish.
+
+### Changed
+
+- **Dual-beta release options** — `scripts/bump_version.py` adds
+  `--beta-only` (increments only the beta number, leaving
+  major.minor.patch untouched: `1.1.10-beta.10` → `1.1.10-beta.11`).
+  `scripts/release.ps1` / `scripts/release.sh` expose two beta choices:
+  `minor-beta` (the previous behaviour — bumps minor + beta together) and
+  `beta` (beta number only).  A new `-Finalize <version>` (ps1) /
+  `--finalize <version>` (sh) mode checks out `main`, tags `v<version>`,
+  and pushes the tag.
+- **Release PRs are no longer auto-merged** — the release scripts push a
+  `release/<version>` branch, open the PR, wait for CI to pass, then stop
+  and ask the maintainer to merge in GitHub.  Tagging happens afterwards
+  via `-Finalize`.  `docs/RELEASING.md` updated with the manual steps.
+
+### Fixed
+
+- **Web UI button label corruption** — an action button whose icon is a
+  Material Symbol (`<span class="material-symbols-outlined">…</span>`)
+  would briefly show the raw HTML element name as text (e.g. "span") while
+  busy on mobile, because the busy state replaced `innerHTML` with a
+  `textContent`-style label.  A new `setButtonBusy()` helper in `core.js`
+  captures the original markup (icon included), disables the button, swaps
+  in the busy label, and restores everything on completion.  Applied
+  consistently across the dashboard, network, sync, media, updates, and
+  advanced pages.
+- **MQTT screen switch out of sync** — display power was changed by
+  multiple sources without notifying MQTT, so the HA switch could disagree
+  with the real screen state until the next periodic publish.  All sources
+  now route through the daemon's `set_display_power()` choke-point (see
+  Added), which publishes immediately.
+
 ## [1.1.10-beta.10]
 
 ### Fixed
