@@ -105,9 +105,7 @@ class TestBootDisplayState:
     """On boot, _display_on must follow the schedule (MQTT starts before the
     scheduler thread), defaulting to on when the schedule is disabled."""
 
-    def test_boot_state_on_when_schedule_disabled(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_boot_state_on_when_schedule_disabled(self, tmp_path: Path, monkeypatch) -> None:
         daemon = _make_daemon(tmp_path, monkeypatch)
         assert daemon._display_on is True  # schedule disabled → on
 
@@ -124,9 +122,7 @@ class TestBootDisplayState:
         _freeze_time(monkeypatch, 12)  # 12:00 → on window
         assert daemon._display_should_be_on() is True
 
-    def test_display_should_be_off_outside_window(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_display_should_be_off_outside_window(self, tmp_path: Path, monkeypatch) -> None:
         daemon = _make_daemon(tmp_path, monkeypatch)
         daemon._state.update_config(
             "display",
@@ -139,9 +135,7 @@ class TestBootDisplayState:
         _freeze_time(monkeypatch, 23)  # 23:00 → off window
         assert daemon._display_should_be_on() is False
 
-    def test_boot_state_tracks_schedule_when_off_window(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_boot_state_tracks_schedule_when_off_window(self, tmp_path: Path, monkeypatch) -> None:
         """The daemon initialises _display_on from the schedule at __init__."""
         import metixel.backend.daemon as daemon_mod
         from metixel.shared.config import Config
@@ -168,7 +162,7 @@ class TestBootDisplayState:
 
 
 class TestMQTTPublishScreenNow:
-    """publish_screen_now() must emit metixel/screen from the daemon flag."""
+    """publish_screen_now() must emit metixel/<device_id>/screen from the daemon flag."""
 
     @staticmethod
     def _make_client(tmp_path: Path, daemon_on: bool):
@@ -182,18 +176,20 @@ class TestMQTTPublishScreenNow:
         config_path = tmp_path / "config.json"
         Config().save(config_path)
         state = StateManager(config_path, tmp_path / "run")
+        # Deterministic device id so the scoped topic is stable in tests.
+        state.update_config("mqtt", {"device_id": "testframe"})
         mqtt = _FakeGateway()
         return MQTTClient(state, FakeIPC(), mqtt=mqtt, daemon=_Daemon()), mqtt
 
     def test_publishes_on_when_daemon_on(self, tmp_path: Path) -> None:
         client, mqtt = self._make_client(tmp_path, daemon_on=True)
         client.publish_screen_now()
-        assert mqtt.published[-1] == ("metixel/screen", "ON", False)
+        assert mqtt.published[-1] == ("metixel/testframe/screen", "ON", False)
 
     def test_publishes_off_when_daemon_off(self, tmp_path: Path) -> None:
         client, mqtt = self._make_client(tmp_path, daemon_on=False)
         client.publish_screen_now()
-        assert mqtt.published[-1] == ("metixel/screen", "OFF", False)
+        assert mqtt.published[-1] == ("metixel/testframe/screen", "OFF", False)
 
 
 class _FakeGateway:
@@ -279,9 +275,7 @@ class TestInputHandlerScreenRouting:
             calls.append(on)
 
         ipc = FakeIPC()
-        handler = KeyboardHandler(
-            config={"keyboard_map": {}}, ipc=ipc, display_power=display_power
-        )
+        handler = KeyboardHandler(config={"keyboard_map": {}}, ipc=ipc, display_power=display_power)
         handler._dispatch("next")
         assert calls == []
         assert ipc.sent[-1].cmd == "next"

@@ -22,6 +22,7 @@ from metixel.shared.platform import (
     read_device_tree_model,
     read_vcgencmd_mem,
     read_vcgencmd_mem_str,
+    resolve_unique_id,
 )
 
 
@@ -132,3 +133,37 @@ class TestVcgencmdMem:
         fake = mock.MagicMock(side_effect=OSError("nope"))
         monkeypatch.setattr("metixel.shared.platform.subprocess.run", fake)
         assert read_vcgencmd_mem_str("gpu", fallback="unavailable") == "unavailable"
+
+
+class TestResolveUniqueId:
+    """resolve_unique_id() — hardware-unique id with a robust fallback chain."""
+
+    def test_pi_serial_wins(self, monkeypatch):
+        contents = {"/proc/device-tree/serial-number": "10000000abc12345\x00\n"}
+        monkeypatch.setattr("builtins.open", _FakeOpen(contents))
+        assert resolve_unique_id() == "10000000abc12345"
+
+    def test_mac_fallback_when_serial_missing(self, monkeypatch):
+        contents = {"/sys/class/net/eth0/address": "dc:a6:32:11:22:33\n"}
+        monkeypatch.setattr("builtins.open", _FakeOpen(contents))
+        monkeypatch.setattr("glob.glob", lambda pat: ["/sys/class/net/eth0/address"])
+        assert resolve_unique_id() == "dca632112233"
+
+    def test_machine_id_fallback(self, monkeypatch):
+        contents = {"/etc/machine-id": "0123456789abcdef\n"}
+        monkeypatch.setattr("builtins.open", _FakeOpen(contents))
+        monkeypatch.setattr("glob.glob", lambda pat: [])
+        assert resolve_unique_id() == "0123456789abcdef"
+
+    def test_hostname_last_resort(self, monkeypatch):
+        monkeypatch.setattr("builtins.open", _FakeOpen({}))
+        monkeypatch.setattr("glob.glob", lambda pat: [])
+        monkeypatch.setattr("metixel.shared.platform.socket.gethostname", lambda: "myframe")
+        assert resolve_unique_id() == "myframe"
+
+    def test_sanitises_mac_colons(self, monkeypatch):
+        """Colons are stripped so the id is safe in MQTT topics / HA ids."""
+        contents = {"/sys/class/net/eth0/address": "DE:AD:BE:EF:00:01\n"}
+        monkeypatch.setattr("builtins.open", _FakeOpen(contents))
+        monkeypatch.setattr("glob.glob", lambda pat: ["/sys/class/net/eth0/address"])
+        assert resolve_unique_id() == "deadbeef0001"

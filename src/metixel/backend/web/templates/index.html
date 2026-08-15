@@ -782,9 +782,9 @@
                     <div id="mqtt-fields" style="margin-top:0.6rem">
                         <div class="form-group">
                             <span class="form-label">Device ID</span>
-                            <input type="text" id="cfg-mqtt-device-id" placeholder="(hostname)">
+                            <input type="text" id="cfg-mqtt-device-id" placeholder="(auto: hardware id)">
                         </div>
-                        <p class="hint">Unique per frame (defaults to the hostname) so Home Assistant treats each frame as a separate device. When running multiple frames on one broker, also give each a different <strong>Topic Prefix</strong>.</p>
+                        <p class="hint">Unique per frame. Leave empty to auto-derive from the hardware (Pi serial → MAC → machine-id), so Home Assistant treats each frame as a separate device and every frame's MQTT topics are isolated automatically.</p>
                         <div class="form-group">
                             <span class="form-label">Broker</span>
                             <input type="text" id="cfg-mqtt-broker" placeholder="localhost">
@@ -792,10 +792,6 @@
                         <div class="form-group">
                             <span class="form-label">Port</span>
                             <input type="number" id="cfg-mqtt-port" min="1" max="65535" value="1883">
-                        </div>
-                        <div class="form-group">
-                            <span class="form-label">Topic Prefix</span>
-                            <input type="text" id="cfg-mqtt-prefix" placeholder="metixel">
                         </div>
                         <div class="form-group">
                             <span class="form-label">Username</span>

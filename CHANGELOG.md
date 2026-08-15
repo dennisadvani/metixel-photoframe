@@ -32,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Unique MQTT topics per frame — `topic_prefix` removed** — every frame's
+  MQTT topics and Home Assistant device identity are now scoped by
+  `mqtt.device_id` (raw topics become `metixel/<device_id>/…`).  When
+  `device_id` is left empty (the default), it is auto-derived from a
+  hardware-unique identifier (`resolve_unique_id()` in `shared/platform.py`):
+  Raspberry Pi serial number → first non-loopback MAC → systemd machine-id →
+  hostname.  Because the Pi serial is factory-burned per physical board, two
+  frames on one broker are fully isolated with **zero configuration** — even
+  with a cloned SD card.  The user-configurable `mqtt.topic_prefix` key is
+  removed (config, web UI, example, docs), and existing frames need a
+  one-time cleanup of the old HA device after upgrade (new entities are
+  discovered with the same `unique_id` base + new device id).
 - **Dual-beta release options** — `scripts/bump_version.py` adds
   `--beta-only` (increments only the beta number, leaving
   major.minor.patch untouched: `1.1.10-beta.10` → `1.1.10-beta.11`).

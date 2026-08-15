@@ -89,8 +89,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": False,
         "broker": "localhost",
         "port": 1883,
-        "topic_prefix": "metixel",
-        "device_id": "",  # unique per frame; "" = hostname (HA device identity)
+        # Unique per frame; "" = hardware-unique id (Pi serial → MAC →
+        # machine-id → hostname).  Scopes both the MQTT topics and the HA
+        # device identity so multiple frames on one broker never collide.
+        "device_id": "",
         "username": "",
         "password": "",
         "discovery_enabled": True,  # Home Assistant MQTT Discovery
