@@ -3,7 +3,6 @@
 """Tests for the FolderWatcher media sync engine."""
 
 import time
-import tempfile
 from pathlib import Path
 from unittest import mock
 
@@ -11,10 +10,10 @@ import pytest
 from PIL import Image
 
 from metixel.backend.sync.folder_watcher import (
-    FolderWatcher,
     IMAGE_EXTENSIONS,
-    VIDEO_EXTENSIONS,
     MEDIA_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    FolderWatcher,
 )
 
 
@@ -288,9 +287,12 @@ class TestFolderWatcherStateIntegration:
         # Create a real StateManager-like add_playlist_items
         existing = [
             MediaItem(
-                id="abc123", original_path=Path("/tmp/a.jpg"),
-                cached_path=Path("/tmp/a.jpg"), media_type=MediaType.IMAGE,
-                width=100, height=100,
+                id="abc123",
+                original_path=Path("/tmp/a.jpg"),
+                cached_path=Path("/tmp/a.jpg"),
+                media_type=MediaType.IMAGE,
+                width=100,
+                height=100,
             ),
         ]
         mock_state._playlist = list(existing)
@@ -307,14 +309,20 @@ class TestFolderWatcherStateIntegration:
         # Try to add the same item again
         new_items = [
             MediaItem(
-                id="abc123", original_path=Path("/tmp/a.jpg"),
-                cached_path=Path("/tmp/a.jpg"), media_type=MediaType.IMAGE,
-                width=100, height=100,
+                id="abc123",
+                original_path=Path("/tmp/a.jpg"),
+                cached_path=Path("/tmp/a.jpg"),
+                media_type=MediaType.IMAGE,
+                width=100,
+                height=100,
             ),
             MediaItem(
-                id="xyz789", original_path=Path("/tmp/b.jpg"),
-                cached_path=Path("/tmp/b.jpg"), media_type=MediaType.IMAGE,
-                width=200, height=200,
+                id="xyz789",
+                original_path=Path("/tmp/b.jpg"),
+                cached_path=Path("/tmp/b.jpg"),
+                media_type=MediaType.IMAGE,
+                width=200,
+                height=200,
             ),
         ]
         mock_state.add_playlist_items(new_items)
@@ -327,12 +335,30 @@ class TestFolderWatcherStateIntegration:
         from metixel.shared.models import MediaItem, MediaType
 
         mock_state._playlist = [
-            MediaItem(id="a", original_path=Path("/t/a.jpg"), cached_path=Path("/t/a.jpg"),
-                      media_type=MediaType.IMAGE, width=100, height=100),
-            MediaItem(id="b", original_path=Path("/t/b.jpg"), cached_path=Path("/t/b.jpg"),
-                      media_type=MediaType.IMAGE, width=100, height=100),
-            MediaItem(id="c", original_path=Path("/t/c.jpg"), cached_path=Path("/t/c.jpg"),
-                      media_type=MediaType.IMAGE, width=100, height=100),
+            MediaItem(
+                id="a",
+                original_path=Path("/t/a.jpg"),
+                cached_path=Path("/t/a.jpg"),
+                media_type=MediaType.IMAGE,
+                width=100,
+                height=100,
+            ),
+            MediaItem(
+                id="b",
+                original_path=Path("/t/b.jpg"),
+                cached_path=Path("/t/b.jpg"),
+                media_type=MediaType.IMAGE,
+                width=100,
+                height=100,
+            ),
+            MediaItem(
+                id="c",
+                original_path=Path("/t/c.jpg"),
+                cached_path=Path("/t/c.jpg"),
+                media_type=MediaType.IMAGE,
+                width=100,
+                height=100,
+            ),
         ]
 
         def fake_remove(ids):
@@ -352,7 +378,6 @@ class TestFolderWatcherHeif:
     """HEIC/HEIF originals are readable and always converted to JPEG."""
 
     def _watcher(self, mock_state, tmp_path) -> FolderWatcher:
-        from metixel.backend.processing.journal import ProcessingJournal
 
         mock_state.config.sync["local"]["watch_paths"] = [str(tmp_path)]
         watcher = FolderWatcher(mock_state)

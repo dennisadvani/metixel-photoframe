@@ -16,12 +16,11 @@ from unittest import mock
 
 import pytest
 
+from metixel.backend.processing.journal import STATE_FAILED, STATE_READY
 from metixel.backend.processing.optimisation_queue import OptimisationQueue
 from metixel.backend.processing.video import VideoScan
 from metixel.backend.state import StateManager
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
-
-from metixel.backend.processing.journal import STATE_FAILED, STATE_READY
 
 
 @pytest.fixture
@@ -70,11 +69,7 @@ def _item(path: Path, file_hash: str) -> MediaItem:
 
 def _build_media(scan: VideoScan) -> MediaItem:
     """Mock processor.transcode(): build the item a real transcode() would."""
-    status = (
-        TranscodeStatus.TRANSCODED
-        if scan.needs_transcode
-        else TranscodeStatus.NOT_TRANSCODED
-    )
+    status = TranscodeStatus.TRANSCODED if scan.needs_transcode else TranscodeStatus.NOT_TRANSCODED
     return MediaItem(
         id=scan.file_hash,
         original_path=scan.source_path,
@@ -111,14 +106,12 @@ class TestTwoPhaseVideoPipeline:
 
         ids = {m.id for m in queue._state.get_playlist()}
         assert "hash-play" in ids  # streamed in during scanning
-        assert "hash-enc" in ids   # added after Phase B
+        assert "hash-enc" in ids  # added after Phase B
 
         # The transcode step ran only for the video that needs it
         transcode_calls = queue._video_processor.transcode.call_args_list
         assert len(transcode_calls) == 2  # 1 build-NOT_TRANSCODED + 1 encode
-        encoded_hashes = [
-            c.args[0].file_hash for c in transcode_calls if c.args[0].needs_transcode
-        ]
+        encoded_hashes = [c.args[0].file_hash for c in transcode_calls if c.args[0].needs_transcode]
         assert encoded_hashes == ["hash-enc"]
 
         # Journal: both end up ready

@@ -3,7 +3,6 @@
 """Media management API endpoints."""
 
 import contextlib
-import hashlib
 import io
 import logging
 import os
@@ -16,13 +15,17 @@ from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
 
+from metixel.shared.media import (
+    HEIC_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    content_hash,
+)
+from metixel.shared.paths import resolve_install_path
+
 logger = logging.getLogger(__name__)
 
 media_bp = Blueprint("media", __name__)
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
-HEIC_EXTENSIONS = {".heic", ".heif"}
 
 # Upload target subfolder under media_dir (an enabled watch path).
 UPLOAD_SUBDIR = "my_media"
@@ -40,31 +43,11 @@ _file_list_cache: dict[str, tuple[float, list[Path], int, int]] = {}
 # key = str(media_folder) → (timestamp, paths, img_count, vid_count)
 
 
-def _hash_file(path: Path) -> str:
-    """Compute a short content hash for a file (first 1MB + last 1KB).
-
-    Mirrors ``ImageProcessor._hash_file()`` so we can check for
-    cached thumbnails without importing the processing module.
-    Handles files smaller than 1KB gracefully.
-    """
-    sha = hashlib.sha256()
-    with open(path, "rb") as f:
-        chunk = f.read(1024 * 1024)
-        sha.update(chunk)
-        # Only hash the tail if the file is large enough
-        if len(chunk) >= 1024:
-            f.seek(-1024, 2)
-            sha.update(f.read(1024))
-    return sha.hexdigest()[:16]
-
-
 def _resolve_cache_dir(state) -> Path:
     """Resolve the cache directory from config."""
     config = state.config
     cache_dir = Path(config.system.get("cache_dir", "cache/"))
-    if not cache_dir.is_absolute():
-        cache_dir = Path("/opt/metixel") / cache_dir
-    return cache_dir
+    return resolve_install_path(cache_dir)
 
 
 @media_bp.route("/thumbnail/<path:filename>")
@@ -103,7 +86,7 @@ def serve_thumbnail(filename: str):
 
     config = state.config
     watch_paths = resolve_watch_paths(config)
-    media_folder = watch_paths[0] if watch_paths else Path("/opt/metixel/media/")
+    media_folder = watch_paths[0] if watch_paths else resolve_install_path("media/")
 
     if media_folder.exists():
         for candidate in media_folder.rglob(safe_name):
@@ -257,7 +240,7 @@ def list_media():
 
             # Attach transcode queue status for videos
             if is_video and video_status:
-                file_hash = _hash_file(entry)
+                file_hash = content_hash(entry)
                 status = video_status.get(file_hash)
                 if status:
                     item_data["transcode_status"] = status
@@ -340,7 +323,7 @@ def _probe_video(path: Path) -> tuple[int, int]:
 def _lookup_thumbnail(path: Path, thumb_dir: Path) -> str | None:
     """Check if a cached thumbnail exists and return its URL."""
     try:
-        file_hash = _hash_file(path)
+        file_hash = content_hash(path)
         thumb_path = thumb_dir / f"{file_hash}.jpg"
         if thumb_path.exists():
             return f"/api/media/thumbnail/{file_hash}.jpg"
@@ -387,8 +370,7 @@ def _resolve_upload_dir(state) -> Path:
     """
     config = state.config
     media_dir = Path(config.system.get("media_dir", "media/"))
-    if not media_dir.is_absolute():
-        media_dir = Path("/opt/metixel") / media_dir
+    media_dir = resolve_install_path(media_dir)
     upload_dir = media_dir / UPLOAD_SUBDIR
     upload_dir.mkdir(parents=True, exist_ok=True)
     return upload_dir
@@ -546,9 +528,7 @@ def clear_image_cache():
     """
     state = current_app.config["METIXEL_STATE"]
     config = state.config
-    cache_dir = Path(config.system.get("cache_dir", "cache/"))
-    if not cache_dir.is_absolute():
-        cache_dir = Path("/opt/metixel") / cache_dir
+    cache_dir = resolve_install_path(Path(config.system.get("cache_dir", "cache/")))
 
     cache_subdirs = ["images", "thumbnails", "videos"]
 

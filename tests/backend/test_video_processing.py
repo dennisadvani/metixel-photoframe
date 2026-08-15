@@ -744,9 +744,7 @@ class TestVideoScanTranscode:
         p._hash_file = mock.Mock(return_value="feedface12345678")
         p._probe = mock.Mock(return_value=dict(self.H264_SOURCE))
         p._extract_thumbnail = mock.Mock()
-        p._extract_video_frames = mock.Mock(
-            return_value=(Path("/tmp/f1.jpg"), Path("/tmp/f2.jpg"))
-        )
+        p._extract_video_frames = mock.Mock(return_value=(Path("/tmp/f1.jpg"), Path("/tmp/f2.jpg")))
         p._resolve_profile = mock.Mock(return_value=profile)
         return p
 
@@ -793,7 +791,6 @@ class TestVideoScanTranscode:
         assert scan.errors, "expected a frame-extraction error to be recorded"
 
     def test_scan_returns_none_when_unreadable(self, tmp_path) -> None:
-        from metixel.backend.processing.video import VideoProcessor
 
         p = self._make_proc(tmp_path, None)
         p._probe = mock.Mock(side_effect=RuntimeError("boom"))
@@ -889,5 +886,3 @@ class TestVideoScanTranscode:
         p._validate_cached_video = mock.Mock(return_value=True)
         p._probe = mock.Mock(side_effect=fake_probe)
         assert p.requires_encode(scan) is False
-
-

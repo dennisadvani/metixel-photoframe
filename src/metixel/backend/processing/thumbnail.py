@@ -15,7 +15,6 @@ whether to resize or transcode.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import subprocess
 from pathlib import Path
@@ -23,6 +22,7 @@ from pathlib import Path
 from PIL import Image, UnidentifiedImageError
 
 from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
+from metixel.shared.media import content_hash
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +33,6 @@ ensure_heif_support()
 THUMBNAIL_SIZE = 320
 
 # ── helpers ───────────────────────────────────────────────────────────
-
-
-def _hash_file(path: Path) -> str:
-    """Compute a short content hash (first 1 MB + last 1 KB)."""
-    sha = hashlib.sha256()
-    with open(path, "rb") as f:
-        sha.update(f.read(1024 * 1024))
-        f.seek(-1024, 2)
-        sha.update(f.read(1024))
-    return sha.hexdigest()[:16]
 
 
 def _validate_thumbnail(path: Path) -> bool:
@@ -94,7 +84,7 @@ def generate_image_thumbnail(
         Skips generation when a valid thumbnail already exists.
     """
     try:
-        file_hash = _hash_file(source_path)
+        file_hash = content_hash(source_path)
         thumb_dir = _resolve_thumb_dir(cache_dir)
         thumb_path = thumb_dir / f"{file_hash}.jpg"
 
@@ -159,7 +149,7 @@ def generate_video_thumbnail(
         Skips generation when a valid thumbnail already exists.
     """
     try:
-        file_hash = _hash_file(source_path)
+        file_hash = content_hash(source_path)
         thumb_dir = _resolve_thumb_dir(cache_dir)
         thumb_path = thumb_dir / f"{file_hash}.jpg"
 

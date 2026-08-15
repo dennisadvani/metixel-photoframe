@@ -9,7 +9,6 @@ renderer of changes via inotify or a flag file.
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import os
 import threading
@@ -17,7 +16,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from metixel.shared.config import Config
+from metixel.shared.io import atomic_write_json
 from metixel.shared.models import MediaItem
+from metixel.shared.paths import install_root
 from metixel.shared.system_stats import read_meminfo
 
 if TYPE_CHECKING:
@@ -70,8 +71,7 @@ class StateManager:
         """Resolve the journal file path inside the configured cache dir."""
         cache_dir = Path(self._config.system.get("cache_dir", "cache/"))
         if not cache_dir.is_absolute():
-            base = Path("/opt/metixel") if os.name == "posix" else Path.cwd()
-            cache_dir = base / cache_dir
+            cache_dir = install_root() / cache_dir
         return cache_dir / "processing_state.json"
 
     def flush_journal(self) -> None:
@@ -507,10 +507,7 @@ class StateManager:
                 }
                 for item in self._playlist
             ]
-            tmp_path = playlist_path.with_suffix(".tmp")
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_path, playlist_path)
+            atomic_write_json(playlist_path, data, indent=2)
         except OSError:
             logger.warning("Could not write playlist file — is %s writable?", self._run_dir)
 

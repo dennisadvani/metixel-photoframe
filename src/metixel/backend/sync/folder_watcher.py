@@ -14,10 +14,7 @@ and Phase 3 (queue to slideshow playlist).
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import json
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -36,6 +33,13 @@ from metixel.backend.processing.thumbnail import (
 from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
 from metixel.backend.state import StateManager
 from metixel.shared.config import resolve_watch_paths
+from metixel.shared.io import atomic_write_json, read_json
+from metixel.shared.media import (
+    IMAGE_EXTENSIONS,
+    MEDIA_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    content_hash,
+)
 from metixel.shared.models import MediaItem, MediaType
 
 if TYPE_CHECKING:
@@ -46,11 +50,6 @@ logger = logging.getLogger(__name__)
 # Register the optional HEIF decoder so HEIC originals (often mislabelled
 # .jpg via Immich sync) can be probed for dimensions.
 ensure_heif_support()
-
-# Accepted media file extensions
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
-MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
 
 # Progress file written during initial scan — read by the frontend
 # so it can show a progress bar before the slideshow starts.
@@ -64,16 +63,10 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     separate progress bars that persist across phase switches.
     """
     try:
-        os.makedirs(os.path.dirname(PROCESSING_STATUS_PATH), exist_ok=True)
-
         existing: dict[str, dict] = {}
-        try:
-            if os.path.exists(PROCESSING_STATUS_PATH):
-                with open(PROCESSING_STATUS_PATH, encoding="utf-8") as f:
-                    prev = json.load(f)
-                existing = prev.get("phases", {})
-        except (json.JSONDecodeError, OSError):
-            pass
+        prev = read_json(PROCESSING_STATUS_PATH)
+        if isinstance(prev, dict):
+            existing = prev.get("phases", {}) or {}
 
         existing[phase] = {
             "total": total,
@@ -82,10 +75,7 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
         }
 
         data = {"active": phase, "phases": existing}
-        tmp = PROCESSING_STATUS_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, PROCESSING_STATUS_PATH)
+        atomic_write_json(PROCESSING_STATUS_PATH, data)
     except OSError:
         logger.debug("Could not write processing status — /run/metixel not available?")
 
@@ -720,16 +710,13 @@ class FolderWatcher:
     @staticmethod
     def _hash_path(path: Path) -> str:
         """Compute a short content hash for a file (first 1MB + last 1KB)."""
-        sha = hashlib.sha256()
         try:
-            with open(path, "rb") as f:
-                sha.update(f.read(1024 * 1024))
-                f.seek(-1024, 2)
-                sha.update(f.read(1024))
+            return content_hash(path)
         except OSError:
             # Fall back to path-based hash if file can't be read
-            sha.update(str(path).encode())
-        return sha.hexdigest()[:16]
+            import hashlib
+
+            return hashlib.sha256(str(path).encode()).hexdigest()[:16]
 
     def _lookup_ids_by_path(self, paths: set[Path]) -> set[str]:
         """Find playlist item IDs matching a set of original file paths.

@@ -12,10 +12,10 @@ import pytest
 
 from metixel.shared.ipc import DEFAULT_SOCKET_PATH, ControlMessage, IPCServer
 
-
 # ---------------------------------------------------------------------------
 # ControlMessage serialization
 # ---------------------------------------------------------------------------
+
 
 class TestControlMessage:
     """Tests for ControlMessage JSON serialization."""
@@ -38,9 +38,7 @@ class TestControlMessage:
         assert msg.args == {}
 
     def test_from_json_with_args(self) -> None:
-        msg = ControlMessage.from_json(
-            '{"cmd": "switch_album", "args": {"album_id": "xyz"}}'
-        )
+        msg = ControlMessage.from_json('{"cmd": "switch_album", "args": {"album_id": "xyz"}}')
         assert msg.cmd == "switch_album"
         assert msg.args == {"album_id": "xyz"}
 
@@ -50,10 +48,19 @@ class TestControlMessage:
         assert restored.cmd == original.cmd
         assert restored.args == original.args
 
-    @pytest.mark.parametrize("cmd", [
-        "next", "prev", "pause", "resume", "toggle_pause",
-        "switch_album", "screen_off", "screen_on",
-    ])
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            "next",
+            "prev",
+            "pause",
+            "resume",
+            "toggle_pause",
+            "switch_album",
+            "screen_off",
+            "screen_on",
+        ],
+    )
     def test_all_known_commands_roundtrip(self, cmd: str) -> None:
         msg = ControlMessage(cmd=cmd, args={"key": "val"})
         restored = ControlMessage.from_json(msg.to_json())
@@ -64,6 +71,7 @@ class TestControlMessage:
 # ---------------------------------------------------------------------------
 # IPCServer (Windows-safe — AF_UNIX not available)
 # ---------------------------------------------------------------------------
+
 
 class TestIPCServer:
     """Tests for IPCServer behaviour on all platforms."""
@@ -108,6 +116,7 @@ class TestIPCServer:
     def test_start_stop_lifecycle(self) -> None:
         """Full lifecycle on a temp socket (Unix only)."""
         import socket as sock_mod
+
         if not hasattr(sock_mod, "AF_UNIX"):
             pytest.skip("AF_UNIX not available on this platform")
 

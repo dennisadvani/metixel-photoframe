@@ -6,12 +6,11 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import threading
-import time
 
 from flask import Blueprint, current_app, jsonify, request
 
 from metixel.shared.platform import read_device_tree_model, read_vcgencmd_mem_str
+from metixel.shared.subprocess import schedule_sudo
 
 logger = logging.getLogger(__name__)
 
@@ -33,25 +32,13 @@ def _schedule_sudo(
     the command.  Failures are logged (never raised) so the endpoint
     returns immediately and errors surface in the journal.
     """
-
-    def _run() -> None:
-        time.sleep(delay)
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-            if result.returncode != 0:
-                tail = (result.stderr or result.stdout or "").strip()[-300:]
-                logger.error("%s failed (rc=%d): %s", fail_message, result.returncode, tail)
-            else:
-                logger.info("%s", ok_message)
-        except subprocess.TimeoutExpired:
-            logger.error("%s timed out after 15s", fail_message)
-        except FileNotFoundError:
-            logger.error("%s: command not found", fail_message)
-        except Exception as exc:
-            logger.error("%s failed: %s", fail_message, exc)
-
-    thread = threading.Thread(target=_run, daemon=True, name=thread_name)
-    thread.start()
+    schedule_sudo(
+        cmd,
+        ok_message=ok_message,
+        fail_message=fail_message,
+        thread_name=thread_name,
+        delay=delay,
+    )
 
 
 @system_bp.route("/mqtt-status", methods=["GET"])
@@ -86,7 +73,7 @@ def restart_services():
     stale cached-file references are dropped.
     """
     _schedule_sudo(
-        ["sudo", "-n", "systemctl", "restart", "metixel-backend", "metixel-cage"],
+        ["systemctl", "restart", "metixel-backend", "metixel-cage"],
         ok_message="Services restarted via sudo systemctl",
         fail_message="sudo systemctl restart",
         thread_name="svc-restart",
@@ -104,7 +91,7 @@ def reboot_system():
     for reboot.
     """
     _schedule_sudo(
-        ["sudo", "-n", "reboot", "now"],
+        ["reboot", "now"],
         ok_message="System reboot initiated via sudo reboot now",
         fail_message="sudo reboot now",
         thread_name="sys-reboot",
@@ -122,7 +109,7 @@ def shutdown_system():
     for shutdown.
     """
     _schedule_sudo(
-        ["sudo", "-n", "shutdown", "now"],
+        ["shutdown", "now"],
         ok_message="System shutdown initiated via sudo shutdown now",
         fail_message="sudo shutdown now",
         thread_name="sys-shutdown",

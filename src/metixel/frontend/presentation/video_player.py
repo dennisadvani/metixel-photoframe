@@ -7,8 +7,6 @@ External importers keep using this path.
 """
 
 from metixel.frontend.presentation.vlc_player import VlcVideoPlayer
-
-# Accepted video file extensions
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
+from metixel.shared.media import VIDEO_EXTENSIONS
 
 __all__ = ["VlcVideoPlayer", "VIDEO_EXTENSIONS"]

@@ -8,6 +8,7 @@ import pytest
 def test_backend_abc_imports():
     """Verify the DisplayBackend ABC can be imported."""
     from metixel.display.backend import DisplayBackend
+
     assert DisplayBackend is not None
 
 
@@ -15,6 +16,7 @@ def test_tk_backend_imports():
     """Verify the TkBackend can be imported."""
     pytest.importorskip("tkinter", reason="tkinter not installed (headless Pi)")
     from metixel.display.tk_backend import TkBackend
+
     assert TkBackend is not None
 
 
@@ -30,6 +32,7 @@ def test_detect_backend_returns_tk():
     # Check if we're on a Pi with pi3d available
     try:
         import pi3d  # noqa: F401
+
         on_pi = True
     except ImportError:
         on_pi = False
@@ -37,6 +40,7 @@ def test_detect_backend_returns_tk():
     backend = detect_backend()
     if on_pi:
         from metixel.display.dispmanx_backend import Pi3dBackend
+
         assert isinstance(backend, Pi3dBackend), (
             f"On Pi with pi3d, expected Pi3dBackend, got {type(backend).__name__}"
         )

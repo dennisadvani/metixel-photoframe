@@ -196,7 +196,8 @@ class TestImmichSyncer:
         http = FakeHttpGateway()
         self._route_assets(http, [{"id": "a1", "originalPath": "/x/1.jpg"}])
         http.route(
-            "GET", "/api/assets/a1/original",
+            "GET",
+            "/api/assets/a1/original",
             FakeResponse(status_code=200, iter_chunks=(b"DATA",)),
         )
         syncer = self._make_syncer(
@@ -219,7 +220,8 @@ class TestImmichSyncer:
         self._route_assets(http, [{"id": "a1", "originalPath": "/x/1.jpg"}])
         for asset_id in ("a1", "b1"):
             http.route(
-                "GET", f"/api/assets/{asset_id}/original",
+                "GET",
+                f"/api/assets/{asset_id}/original",
                 FakeResponse(status_code=200, iter_chunks=(b"X",)),
             )
         syncer = self._make_syncer(
@@ -267,7 +269,8 @@ class TestImmichSyncer:
         http = FakeHttpGateway()
         self._route_assets(http, [{"id": "a1", "originalPath": "/x/1.jpg"}])
         http.route(
-            "GET", "/api/assets/a1/original",
+            "GET",
+            "/api/assets/a1/original",
             FakeResponse(status_code=200, iter_chunks=(b"NEW",)),
         )
         syncer = self._make_syncer(
@@ -286,7 +289,7 @@ class TestImmichSyncer:
 
         assert result.success
         assert not (album_dir / "immich_stale.jpg").exists()  # deleted by strict
-        assert (tmp_path / "root_stray.jpg").exists()          # root untouched
+        assert (tmp_path / "root_stray.jpg").exists()  # root untouched
         assert (album_dir / "immich_a1.jpg").exists()
 
     # -- Legacy single-album migration --------------------------------------
@@ -295,12 +298,14 @@ class TestImmichSyncer:
         """Old flat files move into album_<id> and config is rewritten."""
         http = FakeHttpGateway()
         http.route(
-            "GET", "/api/albums",
+            "GET",
+            "/api/albums",
             FakeResponse(json_data=[{"id": "abc", "albumName": "Holiday"}]),
         )
         self._route_assets(http, [{"id": "a1", "originalPath": "/x/1.jpg"}])
         http.route(
-            "GET", "/api/assets/a1/original",
+            "GET",
+            "/api/assets/a1/original",
             FakeResponse(status_code=200, iter_chunks=(b"NEW",)),
         )
         syncer = self._make_syncer(tmp_path, http, immich={"album_name": "Holiday"})

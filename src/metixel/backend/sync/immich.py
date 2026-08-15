@@ -28,6 +28,7 @@ import requests
 
 from metixel.backend.state import StateManager
 from metixel.shared.adapters import RequestsHttpGateway
+from metixel.shared.paths import resolve_install_path
 from metixel.shared.ports import HttpGateway
 
 logger = logging.getLogger(__name__)
@@ -256,9 +257,7 @@ class ImmichSyncer:
         self._poll_interval: int = immich_cfg.get("poll_interval_seconds", 3600)
 
         sync_dir = immich_cfg.get("sync_dir", "media/sync/immich/")
-        self._sync_dir: Path = Path(sync_dir)
-        if not self._sync_dir.is_absolute():
-            self._sync_dir = Path("/opt/metixel") / self._sync_dir
+        self._sync_dir = resolve_install_path(Path(sync_dir))
 
     # -- Sync logic -----------------------------------------------------------
 

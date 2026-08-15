@@ -7,8 +7,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from metixel.shared.models import MediaItem, MediaType
 
 
@@ -237,10 +235,14 @@ class TestStateManagerConfigEdgeCases:
         from metixel.backend.state import StateManager
 
         config_path = tmp_path / "existing.json"
-        config_path.write_text(json.dumps({
-            "display": {"width": 800, "height": 600},
-            "slideshow": {"image_duration_seconds": 10},
-        }))
+        config_path.write_text(
+            json.dumps(
+                {
+                    "display": {"width": 800, "height": 600},
+                    "slideshow": {"image_duration_seconds": 10},
+                }
+            )
+        )
 
         sm = StateManager(config_path, run_dir=tmp_path / "run")
         assert sm.config.display["width"] == 800

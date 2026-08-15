@@ -9,7 +9,6 @@ Critical for memory-constrained Phase 1 hardware (Pi Zero 2 W: 512MB).
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import os
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Any
 from PIL import Image
 
 from metixel.backend.processing.utils import ensure_heif_support
+from metixel.shared.media import content_hash
 from metixel.shared.models import MediaItem, MediaType
 
 # Register the optional HEIF decoder so HEIC originals (often mislabelled
@@ -351,13 +351,7 @@ class ImageProcessor:
     @staticmethod
     def _hash_file(path: Path) -> str:
         """Compute SHA-256 hash of a file (first 1MB for speed)."""
-        sha = hashlib.sha256()
-        with open(path, "rb") as f:
-            # Hash first 1MB + last 1KB for a fast-but-reliable fingerprint
-            sha.update(f.read(1024 * 1024))
-            f.seek(-1024, 2)  # Last 1KB
-            sha.update(f.read(1024))
-        return sha.hexdigest()[:16]
+        return content_hash(path)
 
     @staticmethod
     def _safe_delete(path: Path) -> None:

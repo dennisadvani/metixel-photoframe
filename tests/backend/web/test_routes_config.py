@@ -18,6 +18,7 @@ from unittest import mock
 # GET /api/config — full config
 # ---------------------------------------------------------------------------
 
+
 class TestGetFullConfig:
     """Tests for GET /api/config."""
 
@@ -43,6 +44,7 @@ class TestGetFullConfig:
 # ---------------------------------------------------------------------------
 # GET /api/config/<section> — section access
 # ---------------------------------------------------------------------------
+
 
 class TestGetConfigSection:
     """Tests for GET /api/config/<section>."""
@@ -145,6 +147,7 @@ class TestGetConfigSection:
 # GET /api/config/video/profiles
 # ---------------------------------------------------------------------------
 
+
 class TestVideoProfiles:
     """Tests for GET /api/config/video/profiles."""
 
@@ -224,9 +227,7 @@ class TestSystemCommands:
     def test_set_timezone_failure(self, client, monkeypatch):
         import metixel.backend.web.routes.time as time_mod
 
-        fake = mock.MagicMock(
-            return_value=SimpleNamespace(returncode=1, stderr="boom", stdout="")
-        )
+        fake = mock.MagicMock(return_value=SimpleNamespace(returncode=1, stderr="boom", stdout=""))
         monkeypatch.setattr(time_mod.subprocess, "run", fake)
         resp = client.post("/api/time/timezone", json={"timezone": "UTC"})
         assert resp.status_code == 500
@@ -236,9 +237,7 @@ class TestSystemCommands:
 
         fake = mock.MagicMock(return_value=self._ok_result())
         monkeypatch.setattr(time_mod.subprocess, "run", fake)
-        resp = client.post(
-            "/api/time/ntp", json={"enabled": True, "servers": ["0.pool.ntp.org"]}
-        )
+        resp = client.post("/api/time/ntp", json={"enabled": True, "servers": ["0.pool.ntp.org"]})
         assert resp.status_code == 200
         assert json.loads(resp.data)["ntp"] == "enabled"
 

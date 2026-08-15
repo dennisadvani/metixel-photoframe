@@ -24,9 +24,7 @@ Priority order (per user specification):
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import threading
 import time
 from pathlib import Path
@@ -36,14 +34,11 @@ from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.processing.video import VideoProcessor, VideoScan
 from metixel.backend.state import StateManager
+from metixel.shared.io import atomic_write_json, read_json
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.system_stats import read_meminfo, read_system_stats
 
 logger = logging.getLogger(__name__)
-
-# Accepted media file extensions (mirrors folder_watcher.py)
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
 
 # Progress file written during optimisation — read by the frontend
 # so it can show a progress bar during initial processing.
@@ -59,17 +54,11 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     instead of flickering between them.
     """
     try:
-        os.makedirs(os.path.dirname(PROCESSING_STATUS_PATH), exist_ok=True)
-
         # Preserve existing phase data so bars don't reset to zero
         existing: dict[str, dict] = {}
-        try:
-            if os.path.exists(PROCESSING_STATUS_PATH):
-                with open(PROCESSING_STATUS_PATH, encoding="utf-8") as f:
-                    prev = json.load(f)
-                existing = prev.get("phases", {})
-        except (json.JSONDecodeError, OSError):
-            pass
+        prev = read_json(PROCESSING_STATUS_PATH)
+        if isinstance(prev, dict):
+            existing = prev.get("phases", {}) or {}
 
         existing[phase] = {
             "total": total,
@@ -78,10 +67,7 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
         }
 
         data = {"active": phase, "phases": existing}
-        tmp = PROCESSING_STATUS_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, PROCESSING_STATUS_PATH)
+        atomic_write_json(PROCESSING_STATUS_PATH, data)
     except OSError:
         logger.debug("Could not write processing status — /run/metixel not available?")
 

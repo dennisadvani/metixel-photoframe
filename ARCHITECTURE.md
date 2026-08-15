@@ -287,7 +287,12 @@ metixel-photoframe/                           # Repository root
 │           ├── ports.py                # Clean Architecture Protocol ports
 │           ├── adapters.py             # Concrete adapters (requests, paho, libcec…)
 │           ├── system_stats.py         # /proc system stats + GPU log formatting
-│           └── platform.py             # Pi detection + vcgencmd helpers
+│           ├── platform.py             # Pi detection + vcgencmd helpers
+│           ├── io.py                   # Atomic write + safe JSON read helpers
+│           ├── paths.py                # Install-root / run-dir path resolution
+│           ├── subprocess.py           # run_cmd / run_sudo / schedule_sudo
+│           ├── media.py                # Media extension sets + content hash + fingerprint
+│           └── retry.py                # Retry with exponential backoff
 │
 ├── etc/                               # Configuration files
 │   ├── config.json                    # Main runtime configuration

@@ -105,14 +105,19 @@ def test_layout_centering_cover_taller():
 
 def test_layout_centering_fill():
     """Fill mode should always fill the screen exactly."""
+    from pathlib import Path
+
     from metixel.frontend.presentation.layout import LayoutEngine
     from metixel.shared.models import MediaItem, MediaType
-    from pathlib import Path
 
     engine = LayoutEngine(screen_w=1920, screen_h=1080)
     item = MediaItem(
-        id="test", original_path=Path("test.jpg"), cached_path=Path("test.jpg"),
-        media_type=MediaType.IMAGE, width=3000, height=1500,
+        id="test",
+        original_path=Path("test.jpg"),
+        cached_path=Path("test.jpg"),
+        media_type=MediaType.IMAGE,
+        width=3000,
+        height=1500,
     )
     layout = engine.compute(item, fit_mode="fill")
 
@@ -122,14 +127,19 @@ def test_layout_centering_fill():
 
 def test_layout_fit_mode_passthrough():
     """Verify that fit_mode parameter is respected via compute()."""
-    from metixel.shared.models import MediaItem, MediaType
-    from metixel.frontend.presentation.layout import LayoutEngine
     from pathlib import Path
+
+    from metixel.frontend.presentation.layout import LayoutEngine
+    from metixel.shared.models import MediaItem, MediaType
 
     engine = LayoutEngine(screen_w=1920, screen_h=1080)
     item = MediaItem(
-        id="test", original_path=Path("test.jpg"), cached_path=Path("test.jpg"),
-        media_type=MediaType.IMAGE, width=3000, height=2000,  # 3:2 image
+        id="test",
+        original_path=Path("test.jpg"),
+        cached_path=Path("test.jpg"),
+        media_type=MediaType.IMAGE,
+        width=3000,
+        height=2000,  # 3:2 image
     )
 
     # contain: should have matte bars (image is taller than 16:9)

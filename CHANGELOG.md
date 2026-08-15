@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Shared infrastructure modules** (`metixel/shared/`) — new reusable
+  primitives that centralise previously hand-rolled (and drifting)
+  patterns across the codebase:
+  - `io.py` — `atomic_write_json` / `atomic_write_text` (temp-file +
+    `os.replace` with unified `fsync`) and `read_json` (safe-default
+    JSON read).
+  - `paths.py` — `install_root()` / `resolve_install_path()` and
+    `run_dir()` / `run_path()` for the `/opt/metixel` and `/run/metixel`
+    path resolution that was inlined across ~17 files.
+  - `subprocess.py` — `run_cmd` / `run_sudo` / `schedule_sudo` unifying
+    the three divergent sudo + delayed-restart forms.
+  - `media.py` — accepted-file-extension sets, the "first 1 MB + last
+    1 KB" `content_hash`, and the `(mtime_ns, size)` `fingerprint`,
+    folding the 8× hash and 5× extension-set copies.
+  - `retry.py` — `retry` with exponential `backoff_delays`.
+
+### Changed
+
+- **Deduped content hashing and extension sets** — `ImageProcessor`,
+  `VideoProcessor`, the thumbnail/worker helpers, folder watcher, web
+  media route, and presentation engine now share `shared/media`.
+- **Centralised atomic writes and path resolution** — config, state
+  manager, folder watcher, optimisation queue, renderer, engine, MQTT
+  client, immich sync and the web routes now use `shared/io` and
+  `shared/paths` instead of inlining temp-file/`os.replace` and
+  `/opt/metixel` / `/run/metixel` literals.
+- **Unified sudo scheduling** — the web system route's delayed-restart
+  logic now delegates to `shared/subprocess.schedule_sudo`.
+
 ### Removed
 
 - **ffmpeg-frame frontend video player** (`ffmpeg_player.py`) — removed the

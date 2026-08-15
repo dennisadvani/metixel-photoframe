@@ -10,10 +10,10 @@ import pytest
 
 from metixel.shared.models import Album, MediaItem, MediaType, TranscodeStatus
 
-
 # ---------------------------------------------------------------------------
 # MediaItem.aspect_ratio
 # ---------------------------------------------------------------------------
+
 
 class TestMediaItemAspectRatio:
     """Tests for MediaItem.aspect_ratio computed property."""
@@ -67,6 +67,7 @@ class TestMediaItemAspectRatio:
 # ---------------------------------------------------------------------------
 # MediaItem.is_ready_to_play
 # ---------------------------------------------------------------------------
+
 
 class TestMediaItemIsReadyToPlay:
     """Tests for MediaItem.is_ready_to_play — all transcode state combos."""
@@ -227,12 +228,15 @@ class TestMediaItemIsReadyToPlay:
 # MediaItem defaults
 # ---------------------------------------------------------------------------
 
+
 class TestMediaItemDefaults:
     """Verify dataclass field defaults."""
 
     def test_default_width_height(self) -> None:
         item = MediaItem(
-            id="t", original_path=Path("/t"), cached_path=Path("/t"),
+            id="t",
+            original_path=Path("/t"),
+            cached_path=Path("/t"),
             media_type=MediaType.IMAGE,
         )
         assert item.width == 0
@@ -240,35 +244,45 @@ class TestMediaItemDefaults:
 
     def test_default_duration(self) -> None:
         item = MediaItem(
-            id="t", original_path=Path("/t"), cached_path=Path("/t"),
+            id="t",
+            original_path=Path("/t"),
+            cached_path=Path("/t"),
             media_type=MediaType.IMAGE,
         )
         assert item.duration_seconds == 0.0
 
     def test_default_source(self) -> None:
         item = MediaItem(
-            id="t", original_path=Path("/t"), cached_path=Path("/t"),
+            id="t",
+            original_path=Path("/t"),
+            cached_path=Path("/t"),
             media_type=MediaType.IMAGE,
         )
         assert item.source == "local"
 
     def test_default_exif_data_empty_dict(self) -> None:
         item = MediaItem(
-            id="t", original_path=Path("/t"), cached_path=Path("/t"),
+            id="t",
+            original_path=Path("/t"),
+            cached_path=Path("/t"),
             media_type=MediaType.IMAGE,
         )
         assert item.exif_data == {}
 
     def test_default_thumbnail_path_none(self) -> None:
         item = MediaItem(
-            id="t", original_path=Path("/t"), cached_path=Path("/t"),
+            id="t",
+            original_path=Path("/t"),
+            cached_path=Path("/t"),
             media_type=MediaType.IMAGE,
         )
         assert item.thumbnail_path is None
 
     def test_default_frame_paths_none(self) -> None:
         item = MediaItem(
-            id="t", original_path=Path("/t"), cached_path=Path("/t"),
+            id="t",
+            original_path=Path("/t"),
+            cached_path=Path("/t"),
             media_type=MediaType.IMAGE,
         )
         assert item.first_frame_path is None
@@ -276,7 +290,9 @@ class TestMediaItemDefaults:
 
     def test_default_transcode_status_none(self) -> None:
         item = MediaItem(
-            id="t", original_path=Path("/t"), cached_path=Path("/t"),
+            id="t",
+            original_path=Path("/t"),
+            cached_path=Path("/t"),
             media_type=MediaType.IMAGE,
         )
         assert item.transcode_status is None
@@ -285,6 +301,7 @@ class TestMediaItemDefaults:
 # ---------------------------------------------------------------------------
 # Album defaults
 # ---------------------------------------------------------------------------
+
 
 class TestAlbumDefaults:
     """Verify Album dataclass field defaults."""

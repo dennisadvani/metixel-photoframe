@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import IPCClient
+from metixel.shared.paths import run_dir as default_run_dir
 from metixel.shared.ports import Ports
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ class BackendDaemon:
         # systemd default on the Pi.
         self._state = StateManager(
             self._config_path,
-            run_dir=run_dir or Path(os.environ.get("METIXEL_RUN_DIR", "/run/metixel")),
+            run_dir=run_dir or default_run_dir(),
         )
         self._ipc = IPCClient()
         self._running = False

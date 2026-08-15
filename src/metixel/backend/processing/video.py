@@ -14,7 +14,6 @@ process orchestration, delegating the mechanics to those modules.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import logging
 import subprocess
 from dataclasses import dataclass, field
@@ -40,6 +39,7 @@ from metixel.backend.processing.probe import (
 from metixel.backend.processing.probe import (
     detect_pi_model as _detect_pi_model,
 )
+from metixel.shared.media import content_hash
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 logger = logging.getLogger(__name__)
@@ -590,12 +590,7 @@ class VideoProcessor:
 
     @staticmethod
     def _hash_file(path: Path) -> str:
-        sha = hashlib.sha256()
-        with open(path, "rb") as f:
-            sha.update(f.read(1024 * 1024))
-            f.seek(-1024, 2)
-            sha.update(f.read(1024))
-        return sha.hexdigest()[:16]
+        return content_hash(path)
 
     def _build_item(
         self,

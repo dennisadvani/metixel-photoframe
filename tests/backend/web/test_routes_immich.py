@@ -21,14 +21,13 @@ def patch_syncer(monkeypatch, fake_syncer):
     """Redirect the route's syncer factory to the fake."""
     import metixel.backend.web.routes.immich as immich_routes
 
-    monkeypatch.setattr(
-        immich_routes, "_get_or_create_syncer", lambda state: fake_syncer
-    )
+    monkeypatch.setattr(immich_routes, "_get_or_create_syncer", lambda state: fake_syncer)
 
 
 # ---------------------------------------------------------------------------
 # GET /api/immich/albums
 # ---------------------------------------------------------------------------
+
 
 class TestListAlbums:
     def test_returns_sorted_simplified_list(self, client, fake_syncer) -> None:
@@ -61,6 +60,7 @@ class TestListAlbums:
 # POST /api/immich/albums/add
 # ---------------------------------------------------------------------------
 
+
 class TestAddAlbum:
     def test_adds_to_config(self, client, mock_state) -> None:
         resp = client.post("/api/immich/albums/add", json={"id": "abc", "name": "Family"})
@@ -83,6 +83,7 @@ class TestAddAlbum:
 # ---------------------------------------------------------------------------
 # POST /api/immich/albums/remove
 # ---------------------------------------------------------------------------
+
 
 class TestRemoveAlbum:
     def test_removes_from_config_and_deletes_folder(self, client, mock_state, tmp_path) -> None:
@@ -117,6 +118,7 @@ class TestRemoveAlbum:
 # ---------------------------------------------------------------------------
 # POST /api/immich/sync  +  GET /api/immich/status  +  POST /api/immich/cancel
 # ---------------------------------------------------------------------------
+
 
 class TestSyncTrigger:
     def test_sync_starts_in_background(self, client, fake_syncer) -> None:
