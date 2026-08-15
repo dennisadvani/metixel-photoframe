@@ -34,7 +34,7 @@ from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.processing.video import VideoProcessor, VideoScan
 from metixel.backend.state import StateManager
-from metixel.shared.io import atomic_write_json, read_json
+from metixel.shared.io import merge_json
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.system_stats import read_meminfo, read_system_stats
 
@@ -51,23 +51,26 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     Each phase (``scanning``, ``optimising_images``, ``transcoding``)
     tracks its own ``total`` / ``processed`` independently so the web
     UI can show separate progress bars that persist across phase switches
-    instead of flickering between them.
+    instead of flickering between them.  Uses the shared locked
+    :func:`merge_json` so the folder watcher's ``scanning`` updates are
+    never lost to a stale snapshot from this queue's writes.
     """
     try:
-        # Preserve existing phase data so bars don't reset to zero
-        existing: dict[str, dict] = {}
-        prev = read_json(PROCESSING_STATUS_PATH)
-        if isinstance(prev, dict):
-            existing = prev.get("phases", {}) or {}
-
-        existing[phase] = {
-            "total": total,
-            "processed": processed,
-            "current_file": current_file,
-        }
-
-        data = {"active": phase, "phases": existing}
-        atomic_write_json(PROCESSING_STATUS_PATH, data)
+        merge_json(
+            PROCESSING_STATUS_PATH,
+            lambda data: {
+                "active": phase,
+                "phases": {
+                    **data.get("phases", {}),
+                    phase: {
+                        "total": total,
+                        "processed": processed,
+                        "current_file": current_file,
+                    },
+                },
+            },
+            default={},
+        )
     except OSError:
         logger.debug("Could not write processing status — /run/metixel not available?")
 

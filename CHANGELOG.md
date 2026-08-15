@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Unified sudo scheduling** — the web system route's delayed-restart
   logic now delegates to `shared/subprocess.schedule_sudo`.
 
+### Fixed
+
+- **Progress-bar race on `processing_status.json`** — the folder watcher's
+  `scanning` counter could stall (e.g. show "7/8") because the optimisation
+  queue's concurrent, lock-free read-modify-write clobbered the watcher's
+  update with a stale snapshot.  Both writers now go through a shared,
+  lock-protected `merge_json()` in `shared/io.py`, so each phase update is
+  merged atomically instead of being overwritten.
+
 ### Removed
 
 - **ffmpeg-frame frontend video player** (`ffmpeg_player.py`) — removed the

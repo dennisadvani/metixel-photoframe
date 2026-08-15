@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from metixel.shared.io import atomic_write_json, read_json
+from metixel.shared.io import atomic_write_json, merge_json, read_json
 from metixel.shared.media import (
     HEIC_EXTENSIONS,
     IMAGE_EXTENSIONS,
@@ -60,6 +60,29 @@ class TestReadJson:
         path = tmp_path / "bad.json"
         path.write_text("{not valid json")
         assert read_json(path, default=None) is None
+
+
+class TestMergeJson:
+    def test_updates_and_preserves_other_keys(self, tmp_path):
+        """merge_json should patch one key and preserve the rest."""
+        path = tmp_path / "f.json"
+        atomic_write_json(path, {"phases": {"a": {"total": 1}}})
+
+        def add_phase(data):
+            data["phases"]["b"] = {"total": 2}
+            return data
+
+        result = merge_json(path, add_phase)
+        assert result["phases"]["a"] == {"total": 1}
+        assert result["phases"]["b"] == {"total": 2}
+        # Persisted on disk too
+        assert json.loads(path.read_text())["phases"]["b"] == {"total": 2}
+
+    def test_missing_file_uses_default(self, tmp_path):
+        """merge_json should start from the default when the file is absent."""
+        path = tmp_path / "new.json"
+        result = merge_json(path, lambda d: d, default={"phases": {}})
+        assert result == {"phases": {}}
 
 
 # ---------------------------------------------------------------------------

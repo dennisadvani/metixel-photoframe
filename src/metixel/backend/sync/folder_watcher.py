@@ -33,7 +33,7 @@ from metixel.backend.processing.thumbnail import (
 from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
 from metixel.backend.state import StateManager
 from metixel.shared.config import resolve_watch_paths
-from metixel.shared.io import atomic_write_json, read_json
+from metixel.shared.io import merge_json
 from metixel.shared.media import (
     IMAGE_EXTENSIONS,
     MEDIA_EXTENSIONS,
@@ -60,22 +60,27 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     """Atomically write per-phase processing progress.
 
     Each phase tracks its own total/processed so the web UI can show
-    separate progress bars that persist across phase switches.
+    separate progress bars that persist across phase switches.  Uses the
+    shared locked :func:`merge_json` so the optimisation queue's own
+    progress writes never clobber the ``scanning`` counter with a stale
+    snapshot.
     """
     try:
-        existing: dict[str, dict] = {}
-        prev = read_json(PROCESSING_STATUS_PATH)
-        if isinstance(prev, dict):
-            existing = prev.get("phases", {}) or {}
-
-        existing[phase] = {
-            "total": total,
-            "processed": processed,
-            "current_file": current_file,
-        }
-
-        data = {"active": phase, "phases": existing}
-        atomic_write_json(PROCESSING_STATUS_PATH, data)
+        merge_json(
+            PROCESSING_STATUS_PATH,
+            lambda data: {
+                "active": phase,
+                "phases": {
+                    **data.get("phases", {}),
+                    phase: {
+                        "total": total,
+                        "processed": processed,
+                        "current_file": current_file,
+                    },
+                },
+            },
+            default={},
+        )
     except OSError:
         logger.debug("Could not write processing status — /run/metixel not available?")
 

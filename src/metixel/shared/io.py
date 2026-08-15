@@ -21,10 +21,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Serialises concurrent read-modify-write cycles on JSON state files so two
+# writers (e.g. the folder watcher's `scanning` phase and the optimisation
+# queue's `optimising_images` phase, both patching processing_status.json)
+# never clobber each other's updates with a stale snapshot.
+_JSON_MERGE_LOCK = threading.Lock()
 
 
 def atomic_write_json(
@@ -79,3 +87,30 @@ def read_json(path: Path | str, default: Any = None) -> Any:
             return json.load(f)
     except (OSError, ValueError):
         return default
+
+
+def merge_json(
+    path: Path | str,
+    update: Callable[[dict[str, Any]], dict[str, Any]],
+    *,
+    default: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Atomically read-modify-write a JSON state file under a shared lock.
+
+    Holds a process-wide lock while it reads *path*, applies *update* to
+    the loaded dict, and writes the result back atomically.  This prevents
+    the lost-update race where two threads both ``read_json``, each patch
+    a different key, and the second ``atomic_write_json`` clobbers the
+    first thread's change.
+
+    ``update`` receives the current dict (or *default* if the file is
+    missing/malformed) and must return the dict to persist.  Returns the
+    merged result.
+    """
+    with _JSON_MERGE_LOCK:
+        data = read_json(path, default)
+        if not isinstance(data, dict):
+            data = dict(default or {})
+        result = update(data)
+        atomic_write_json(path, result)
+        return result
