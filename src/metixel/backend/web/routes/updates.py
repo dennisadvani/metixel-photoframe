@@ -52,8 +52,6 @@ def trigger_update_check():
     The check runs in a background thread so the HTTP response returns
     immediately.  Poll ``GET /api/updates/status`` to see results.
     """
-    import threading
-
     try:
         mgr = _get_update_manager()
     except RuntimeError as exc:
@@ -61,14 +59,9 @@ def trigger_update_check():
 
     force = request.args.get("force", "false").lower() in ("true", "1", "yes")
 
-    # Run the check in a background thread so the HTTP request doesn't block
-    thread = threading.Thread(
-        target=mgr.check_for_updates,
-        kwargs={"force": force},
-        name="update-check-on-demand",
-        daemon=True,
-    )
-    thread.start()
+    # Bounded background check — the manager coalesces rapid triggers so we
+    # never spawn an unbounded number of check threads.
+    mgr.check_for_updates_async(force=force)
 
     return jsonify(
         {

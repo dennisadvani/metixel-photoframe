@@ -74,6 +74,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Each extracted service thread-locks its mutable state (TTL caches, the
   CPU-jiffies delta, and the web file-list pagination cache).
 
+### Security
+
+- **Sanitised OTA update script inputs** — `UpdateManager._write_and_launch_update_script`
+  now shell-quotes every externally-influenced value (`repo_root`,
+  `target_ref`, `channel`, `log_path`) with `shlex.quote` before embedding
+  them in the generated bash script, so a crafted git ref / channel /
+  version can never break out of the embedded string literals and inject
+  shell commands.
+- **Wi-Fi passphrases no longer appear in process argv** — `network_manager`
+  writes the WPA passphrase to a 0600 temp file and passes it to `nmcli`
+  via `--passwd-file` instead of appending `password <value>` (or
+  `wifi-sec.psk <value>`) to the command line, where it was world-readable
+  via `/proc/<pid>/cmdline` / `ps`.  The temp file is deleted on every
+  exit path.
+- **Bounded update-check threads** — repeated update checks (manual button,
+  channel switches) now go through `UpdateManager.check_for_updates_async`,
+  which coalesces rapid triggers so at most one on-demand check thread is
+  alive at any time instead of spawning an unbounded number.
+- **Immich cancel race fixed** — `ImmichSyncer.cancel()` now sets the
+  cancellation flag under `_sync_lock` (matching the locked reset at the
+  start of each cycle), and all flag reads use a lock-protected
+  `_is_cancel_requested()`, so a cancel arriving while a new cycle is
+  starting can no longer be silently lost.
+- **`dispmanx_backend` texture cap aligned with the ≤3 rule** — the
+  GPU-resident texture ceiling is now `_max_textures = 3` (matching the
+  documented current/next/blend limit and the GPU-log format) instead of
+  the previous `8`.
+- **Single upload-size source of truth** — the 2 GiB upload cap is now
+  defined once as `media_service.MAX_UPLOAD_BYTES` and reused for Flask's
+  `MAX_CONTENT_LENGTH` in `server.py`, removing the duplicated literal.
+
 ### Fixed
 
 - **Progress-bar race on `processing_status.json`** — the folder watcher's

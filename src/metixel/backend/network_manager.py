@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import subprocess
+import tempfile
 import time
 from typing import Any
 
@@ -266,6 +268,41 @@ def _parse_scan_results() -> list[dict[str, Any]]:
     return networks
 
 
+def _nmcli_with_password(
+    args: list[str], password: str, timeout: float
+) -> subprocess.CompletedProcess[str]:
+    """Run ``sudo nmcli <args>`` passing a Wi-Fi passphrase via a passwd-file.
+
+    The passphrase is written to a 0600 temp file and handed to nmcli via
+    ``--passwd-file`` instead of being placed in the process argv (argv is
+    world-readable via ``/proc/<pid>/cmdline`` / ``ps``, leaking the secret
+    to any local process).  The temp file is deleted on every exit path.
+    """
+    if not password:
+        return subprocess.run(
+            ["sudo", "nmcli", *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    fd, path = tempfile.mkstemp(prefix="metixel-wifi-", suffix=".secret")
+    try:
+        with os.fdopen(fd, "w") as f:
+            # nmcli passwd-file format: ``<setting>.<property>:<value>``
+            f.write(f"802-11-wireless-security.psk:{password}\n")
+        os.chmod(path, 0o600)
+        return subprocess.run(
+            ["sudo", "nmcli", "--passwd-file", path, *args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    finally:
+        with contextlib.suppress(OSError):
+            os.unlink(path)
+
+
 def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
     """Connect to a Wi-Fi network.
 
@@ -297,11 +334,11 @@ def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
         time.sleep(3.0)  # Wait for scan results to populate
 
     try:
-        cmd = ["sudo", "nmcli", "-w", str(CONNECT_TIMEOUT), "device", "wifi", "connect", ssid]
-        if password:
-            cmd += ["password", password]
-
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=CONNECT_TIMEOUT + 10)
+        result = _nmcli_with_password(
+            ["-w", str(CONNECT_TIMEOUT), "device", "wifi", "connect", ssid],
+            password,
+            CONNECT_TIMEOUT + 10,
+        )
         if result.returncode == 0:
             logger.info("Connected to Wi-Fi network: %s", ssid)
             return True, f"Connected to {ssid}"
@@ -715,10 +752,8 @@ def _connect_with_profile(ssid: str, password: str) -> tuple[bool, str]:
         )
 
     try:
-        subprocess.run(
+        _nmcli_with_password(
             [
-                "sudo",
-                "nmcli",
                 "connection",
                 "add",
                 "type",
@@ -731,18 +766,14 @@ def _connect_with_profile(ssid: str, password: str) -> tuple[bool, str]:
                 ssid,
                 "wifi-sec.key-mgmt",
                 "wpa-psk",
-                "wifi-sec.psk",
-                password,
             ],
-            capture_output=True,
-            text=True,
-            timeout=15,
+            password,
+            15,
         )
-        result = subprocess.run(
-            ["sudo", "nmcli", "connection", "up", con_name],
-            capture_output=True,
-            text=True,
-            timeout=CONNECT_TIMEOUT + 10,
+        result = _nmcli_with_password(
+            ["connection", "up", con_name],
+            password,
+            CONNECT_TIMEOUT + 10,
         )
         if result.returncode == 0:
             logger.info("Connected to %s via explicit profile", ssid)

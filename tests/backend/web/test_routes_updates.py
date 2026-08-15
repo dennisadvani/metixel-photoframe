@@ -5,14 +5,6 @@
 from __future__ import annotations
 
 import json
-import time
-
-
-def _wait_for_call(callable_mock, timeout: float = 2.0) -> None:
-    """Busy-wait until the background thread has invoked the mock."""
-    deadline = time.time() + timeout
-    while time.time() < deadline and callable_mock.call_count == 0:
-        time.sleep(0.01)
 
 
 class TestUpdateStatus:
@@ -43,5 +35,4 @@ class TestUpdateCheck:
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data["status"] == "ok"
-        _wait_for_call(mock_update_manager.check_for_updates)
-        mock_update_manager.check_for_updates.assert_called_once_with(force=True)
+        mock_update_manager.check_for_updates_async.assert_called_once_with(force=True)
