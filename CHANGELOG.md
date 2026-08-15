@@ -5,7 +5,7 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.10-beta.13]
 
 ### Added
 
@@ -73,6 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     `backend/system_metrics.py`.
   Each extracted service thread-locks its mutable state (TTL caches, the
   CPU-jiffies delta, and the web file-list pagination cache).
+- **End-user documentation** — rewrote `docs/USER_GUIDE.md` as a complete
+  setup + feature guide (overview, installation, Wi-Fi setup, dashboard,
+  Immich & MQTT deep-dives, keyboard mapping, OTA updates, troubleshooting)
+  with screenshot placeholders in `docs/images/`; added a new `docs/FAQ.md`;
+  folded the standalone Wi-Fi setup guide into the user guide; and documented
+  the default SSH/Samba logins (`pi` / `raspberry`) with a change-them security
+  tip, plus the required Immich API-key scopes (`asset.read`,
+  `asset.download`, `album.read`, `album.download`).
 
 ### Security
 

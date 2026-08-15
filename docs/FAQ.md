@@ -170,6 +170,19 @@ section 6.
 
 ## General
 
+### What are the default SSH / Samba logins?
+
+Both SSH and the Samba (network share) use the same default account:
+
+| Access | Username | Password |
+|--------|----------|----------|
+| SSH | `pi` | `raspberry` |
+| Samba (`metixel-media`) | `pi` | `raspberry` |
+
+> **Security tip:** change these from the defaults once your frame is set up,
+> especially if it can be reached beyond your home network. (The dashboard
+> itself has no password — it's only reachable on your local network.)
+
 ### How do I update the software?
 
 Open **Advanced → Updates**, click **Check for Updates**, then **Install

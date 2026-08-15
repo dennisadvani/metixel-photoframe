@@ -213,6 +213,10 @@ them up.
 - **Windows:** in File Explorer, type `\\metixel` (or `\\<ip-address>`) in the address bar, open the `metixel-media` folder, and log in with `pi` / `raspberry`.
 - **Mac:** in Finder press **Cmd+K**, enter `smb://<ip-address>/metixel-media`, and connect as `pi` with password `raspberry`.
 
+> **Default login:** SSH and the Samba share both use the account `pi` with the
+> default password `raspberry`. Change it once your frame is set up, especially
+> if it's reachable beyond your home network.
+
 ### Option C — Immich sync
 
 If you use [Immich](https://immich.app) to organise your photo library, Metixel
