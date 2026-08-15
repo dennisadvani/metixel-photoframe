@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     1 KB" `content_hash`, and the `(mtime_ns, size)` `fingerprint`,
     folding the 8× hash and 5× extension-set copies.
   - `retry.py` — `retry` with exponential `backoff_delays`.
+- **Hardware introspection adapters** (`display/hardware.py`) — extracted
+  from `dispmanx_backend.py`: `GpuInfo` (GPU memory + DRM driver, with a
+  lock-guarded TTL cache), `WlrOutput` (wlr-randr output detection +
+  power, with a lock-guarded cache) and `DisplayPower` (display on/off via
+  wlr-randr or DRM DPMS).  The display backend now delegates to these
+  instead of inlining subprocess/vcgencmd logic.
+- **Media service** (`backend/web/media_service.py`) — extracted the
+  Flask-free filesystem logic out of `routes/media.py` (cache/path
+  resolution, image/video probing, thumbnail lookup, upload
+  sanitisation/dedup, resized-frame serving, cache clearing).  The route
+  module stays thin and the logic is independently testable.
+- **System metrics service** (`backend/system_metrics.py`) — extracted the
+  health-metric subsystem out of `StateManager` (`get_system_health` and
+  all CPU/memory/swap/disk/cache sizing).  `StateManager` now delegates to
+  an injected `SystemMetrics`; the CPU-jiffies delta cache is lock-guarded
+  so concurrent web + MQTT polls are safe.
 
 ### Changed
 
@@ -47,6 +63,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Flask 400/404/405/500 handlers so unhandled exceptions and malformed
   requests return the unified error shape instead of Flask's default
   HTML/JSON.
+- **Split up god-classes** — the three biggest god-classes were broken up:
+  - `dispmanx_backend.py` (~1150 lines) delegates GPU introspection,
+    wlr-randr output detection and display power to `display/hardware.py`.
+  - `routes/media.py` delegates all filesystem logic to
+    `backend/web/media_service.py` (the route keeps thin aliases for the
+    existing test/monkeypatch contract).
+  - `StateManager` delegates its health-metric subsystem to
+    `backend/system_metrics.py`.
+  Each extracted service thread-locks its mutable state (TTL caches, the
+  CPU-jiffies delta, and the web file-list pagination cache).
 
 ### Fixed
 

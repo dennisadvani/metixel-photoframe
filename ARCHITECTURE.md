@@ -39,6 +39,7 @@ src/metixel/
 ├── display/
 │   ├── __init__.py          # Factory: auto-detect hardware, return correct backend
 │   ├── backend.py           # Abstract base class: DisplayBackend
+│   ├── hardware.py          # GpuInfo / WlrOutput / DisplayPower adapters (extracted from dispmanx_backend)
 │   ├── dispmanx_backend.py  # Phase 1: wraps pi3d, uses Mesa EGL via cage/XWayland
 │   ├── wayland_backend.py   # Phase 2: PyOpenGL + EGL on Wayland/DRM (future)
 │   └── tk_backend.py        # Desktop dev: tkinter-based software renderer
@@ -225,8 +226,7 @@ metixel-photoframe/                           # Repository root
 │       │   │   │   ├── immich.py       # Immich sync status/config
 │       │   │   │   ├── messages.py     # On-screen message endpoints
 │       │   │   │   ├── network.py      # Wi-Fi/network configuration
-│       │   │   │   └── updates.py      # OTA update endpoints
-│       │   │   ├── static/
+│       │   │   │   └── updates.py      # OTA update endpoints│       │   │   ├── media_service.py    # Flask-free media filesystem logic (extracted from media.py)│       │   │   ├── static/
 │       │   │   │   ├── css/
 │       │   │   │   │   └── dashboard.css
 │       │   │   │   └── js/
@@ -247,6 +247,7 @@ metixel-photoframe/                           # Repository root
 │       │   │   ├── cec.py              # HDMI-CEC via libcec
 │       │   │   └── ir.py               # LIRC-based IR remote
 │       │   ├── mqtt_client.py          # Home Assistant MQTT integration
+│       │   ├── system_metrics.py       # SystemMetrics — CPU/mem/swap/disk sizing service
 │       │   └── state.py                # StateManager
 │       │
 │       ├── frontend/                   # Display renderer
@@ -275,6 +276,7 @@ metixel-photoframe/                           # Repository root
 │       ├── display/                    # Display backend abstraction
 │       │   ├── __init__.py             # detect_backend() → returns correct Backend
 │       │   ├── backend.py              # DisplayBackend ABC
+│       │   ├── hardware.py             # GpuInfo / WlrOutput / DisplayPower adapters
 │       │   ├── dispmanx_backend.py     # Phase 1: pi3d wrapper
 │       │   ├── wayland_backend.py      # Phase 2: PyOpenGL on DRM/Wayland (future)
 │       │   └── tk_backend.py           # Desktop dev: tkinter-based
@@ -411,6 +413,8 @@ Next frame reflects change
 
 #### Step 1.2: Display Backend (pi3d via cage/XWayland)
 - `dispmanx_backend.py` wrapping pi3d — pi3d auto-detects Mesa EGL on Trixie
+- Hardware introspection (GPU memory, wlr-randr output, display power)
+  lives in `display/hardware.py` (`GpuInfo` / `WlrOutput` / `DisplayPower`)
 - Memory: `Texture(free_after_load=True)`, `GL_RGB565` format, max 3 GPU textures
 - Verify 30 FPS on Pi 3 and Pi 5
 - Launch via `cage --` for Wayland + XWayland surface
@@ -424,6 +428,8 @@ Next frame reflects change
 
 #### Step 1.4: Backend Daemon
 - StateManager with atomic JSON writes
+- System metrics (CPU/memory/swap/disk/cache sizing) live in
+  `backend/system_metrics.py` (`SystemMetrics`), injected into StateManager
 - Immich API client (auth, albums, assets, download)
 - Folder watcher (inotify + polling fallback)
 - MediaProcessor (resize, EXIF, transcode, cache)

@@ -17,10 +17,8 @@ from __future__ import annotations
 
 import contextlib
 import gc
-import json
 import logging
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -28,7 +26,8 @@ from typing import Any
 import numpy as np
 
 from metixel.display.backend import DisplayBackend
-from metixel.shared.platform import is_raspberry_pi, read_vcgencmd_mem, read_vcgencmd_mem_str
+from metixel.display.hardware import DisplayPower, GpuInfo, WlrOutput
+from metixel.shared.platform import is_raspberry_pi
 
 logger = logging.getLogger(__name__)
 
@@ -94,11 +93,11 @@ class Pi3dBackend(DisplayBackend):
         # Text cache — avoids recreating FixedString every frame
         self._text_cache: dict[tuple, Any] = {}
 
-        # Detected wlr-randr output name — cached after first detection.
-        # A Raspberry Pi exposes two HDMI connectors; only one usually has
-        # a real monitor.  We auto-detect the correct one (see
-        # ``_detect_wlr_output``) instead of hardcoding ``HDMI-A-1``.
-        self._wlr_output: str | None = None
+        # Platform hardware adapters (GPU introspection, wlr-randr output
+        # detection, display power) — see ``hardware.py``.
+        self._gpu_info = GpuInfo()
+        self._wlr_output_mgr = WlrOutput()
+        self._display_power = DisplayPower(self._wlr_output_mgr)
 
     # -- Properties ----------------------------------------------------------
 
@@ -617,89 +616,20 @@ class Pi3dBackend(DisplayBackend):
 
     # -- GPU memory introspection -------------------------------------------
 
-    # Cache the last GPU memory read to avoid spawning vcgencmd every frame.
-    _gpu_mem_cache: dict[str, Any] | None = None
-    _gpu_mem_cache_time: float = 0.0
-    _GPU_MEM_CACHE_TTL: float = 5.0  # seconds
+    # -- GPU memory introspection -------------------------------------------
 
     def gpu_memory_info(self) -> dict[str, Any] | None:
         """Read GPU memory usage from ``vcgencmd`` and DRM debugfs.
 
-        Results are cached for ``_GPU_MEM_CACHE_TTL`` seconds because
-        ``vcgencmd`` is a subprocess call and debugfs reads are sysfs I/O
-        — neither should be done at frame rate.
-
-        Returns:
-            Dict with ``gpu_total_mb``, ``reloc_used_mb``,
-            ``malloc_used_mb``, ``v3d_bo_count``, ``v3d_bo_kb``,
-            ``texture_count``, or ``None`` if the tools are unavailable.
+        Results are cached for a few seconds (see ``hardware.GpuInfo``)
+        because ``vcgencmd`` is a subprocess call and debugfs reads are
+        sysfs I/O — neither should be done at frame rate.
         """
-        now = time.monotonic()
-        if (
-            Pi3dBackend._gpu_mem_cache is not None
-            and (now - Pi3dBackend._gpu_mem_cache_time) < Pi3dBackend._GPU_MEM_CACHE_TTL
-        ):
-            return Pi3dBackend._gpu_mem_cache
-
-        info: dict[str, Any] = {
-            "texture_count": self._texture_count,
-            "max_textures": self._max_textures,
-        }
-
-        # ── vcgencmd get_mem gpu / reloc / malloc ─────────────────────
-        gpu_total_mb = read_vcgencmd_mem("gpu")
-        if gpu_total_mb is not None:
-            info["gpu_total_mb"] = gpu_total_mb
-        reloc_mb = read_vcgencmd_mem("reloc")
-        if reloc_mb is not None:
-            info["reloc_used_mb"] = reloc_mb
-        malloc_mb = read_vcgencmd_mem("malloc")
-        if malloc_mb is not None:
-            info["malloc_used_mb"] = malloc_mb
-
-        try:
-            # ── /sys/kernel/debug/dri/0/bo_stats ──────────────────────
-            with open("/sys/kernel/debug/dri/0/bo_stats") as f:
-                for line in f:
-                    # Line format (leading spaces): "V3D:  107292kb BOs (34)"
-                    stripped = line.strip()
-                    if stripped.startswith("V3D:") and "kb BOs" in stripped:
-                        parts = stripped.split()
-                        if len(parts) >= 4:
-                            kb_str = parts[1].rstrip("kb")
-                            count_str = parts[3].lstrip("(").rstrip(")")
-                            info["v3d_bo_kb"] = int(kb_str)
-                            info["v3d_bo_count"] = int(count_str)
-                        break
-        except (OSError, ValueError, IndexError):
-            pass
-
-        Pi3dBackend._gpu_mem_cache = info
-        Pi3dBackend._gpu_mem_cache_time = now
-        return info
+        return self._gpu_info.snapshot(self._texture_count, self._max_textures)
 
     def flush_gpu(self) -> None:
-        """Block until the GPU command queue drains.
-
-        On VideoCore IV (Pi 2/3), pi3d's ``free_after_load=True`` can
-        release the CPU-side numpy array before the DMA upload to GPU
-        completes, resulting in black textures.  ``glFinish()`` forces
-        the GPU to finish all pending work before the CPU proceeds.
-
-        Uses ctypes to call ``glFinish`` from the system's GLESv2
-        library — no PyOpenGL dependency required.
-        """
-        try:
-            from ctypes import cdll, util
-
-            lib_name = util.find_library("GLESv2")
-            if lib_name is None:
-                logger.debug("flush_gpu: GLESv2 library not found — skipping")
-                return
-            gl = cdll.LoadLibrary(lib_name)
-            gl.glFinish()
-        except Exception:
-            pass  # Non-Pi or GL not available
+        """Block until the GPU command queue drains (``glFinish``)."""
+        self._gpu_info.flush()
 
     def update_texture(self, texture: Any, data: np.ndarray) -> None:
         """Update an existing pi3d Texture with new pixel data in-place.
@@ -826,100 +756,17 @@ class Pi3dBackend(DisplayBackend):
     def display_power(self, on: bool) -> None:
         """Control HDMI display power.
 
-        Tries, in order:
-        1. ``wlr-randr`` — works with cage/wlroots (no root needed)
-        2. DRM DPMS sysfs — KMS/Direct Render Manager
-        3. ``vcgencmd`` — legacy Broadcom firmware (Bullseye)
+        Tries, in order: wlr-randr → DRM DPMS sysfs → vcgencmd
+        (see ``hardware.DisplayPower``).
         """
-        state = "on" if on else "off"
-        on_off_flag = on  # True → --on, False → --off
-
-        # 1. wlr-randr (Wayland/wlroots — primary for cage on Trixie)
-        if self._wlr_randr(on_off_flag):
-            logger.info("Display power (wlr-randr): %s", state.upper())
-            return
-
-        # 2. DRM DPMS sysfs (KMS fallback)
-        if self._drm_dpms(state):
-            logger.info("Display power (DRM DPMS): %s", state.upper())
-            return
-
-        # 3. vcgencmd (legacy Broadcom firmware / Bullseye)
-        if not self._is_pi():
-            logger.warning("display_power: not on a Raspberry Pi — no-op")
-            return
-
-        cmd = ["vcgencmd", "display_power", "1" if on else "0"]
-        try:
-            subprocess.run(cmd, check=True, capture_output=True, timeout=5)
-            logger.info("Display power (vcgencmd): %s", state.upper())
-        except subprocess.CalledProcessError as e:
-            logger.error("Failed to set display power: %s", e)
-        except FileNotFoundError:
-            logger.warning("vcgencmd not found — display power control unavailable")
-
-    @staticmethod
-    def _wlr_override() -> str:
-        """Explicit output override from ``METIXEL_WLR_OUTPUT`` (empty if unset).
-
-        Read live at call time so it works regardless of import order.
-        """
-        return os.environ.get("METIXEL_WLR_OUTPUT", "").strip()
+        self._display_power.set(on)
 
     def _disable_empty_outputs(self) -> None:
-        """Disable Wayland outputs that have no real monitor (no EDID).
+        """Disable Wayland outputs with no real monitor (no EDID).
 
-        A Raspberry Pi exposes two HDMI connectors.  An unplugged port is
-        still reported by the compositor as an ``enabled`` output using a
-        low-resolution fallback mode (e.g. 1024x768).  Leaving it enabled
-        widens the logical screen (1920 + 1024 -> 2944px), so pi3d renders
-        a 2944-wide canvas that is scaled back down to the 1920-wide
-        monitor — distorting the slideshow aspect ratio.
-
-        This disables such phantom outputs so the frame renders at the
-        real monitor's native resolution.  Skipped entirely when
-        ``METIXEL_WLR_OUTPUT`` explicitly selects an output to control.
+        See ``hardware.WlrOutput.disable_empty_outputs``.
         """
-        if self._wlr_override():
-            return
-        wlr_bin = "/usr/bin/wlr-randr"
-        if not os.path.exists(wlr_bin):
-            logger.debug("wlr-randr not installed — cannot clean up outputs")
-            return
-        try:
-            result = subprocess.run(
-                [wlr_bin, "--json"],
-                capture_output=True,
-                timeout=5,
-                env=self._wlr_env(),
-            )
-            if result.returncode != 0:
-                return
-            outputs = json.loads(result.stdout.decode(errors="replace") or "[]")
-        except Exception:
-            logger.warning("Failed to enumerate outputs for cleanup", exc_info=True)
-            return
-        if not isinstance(outputs, list):
-            return
-
-        for out in outputs:
-            if not out.get("enabled"):
-                continue
-            if out.get("make") or out.get("model"):
-                continue  # real monitor — keep enabled
-            name = out.get("name")
-            if not isinstance(name, str):
-                continue
-            logger.info("Disabling phantom output (no monitor): %s", name)
-            try:
-                subprocess.run(
-                    [wlr_bin, "--output", name, "--off"],
-                    capture_output=True,
-                    timeout=5,
-                    env=self._wlr_env(),
-                )
-            except Exception:
-                logger.warning("Failed to disable phantom output %s", name, exc_info=True)
+        self._wlr_output_mgr.disable_empty_outputs()
 
     def connected_output(self) -> str | None:
         """Return the Wayland output the frame is actually shown on.
@@ -928,209 +775,32 @@ class Pi3dBackend(DisplayBackend):
         real monitor → ``None``).  Used by the frontend to report which
         HDMI port the display is connected to in the Web UI.
         """
-        override = self._wlr_override()
+        override = WlrOutput.override()
         if override:
             return override
-        if self._wlr_output:
-            return self._wlr_output
-        detected = self._detect_wlr_output()
-        if detected:
-            self._wlr_output = detected
-        return detected
+        detected = self._wlr_output_mgr.resolve(fallback=False)
+        return None if detected == "HDMI-A-1" else detected
 
     def _resolve_wlr_output(self, fallback: bool = True) -> str:
         """Return the output name to target with wlr-randr.
 
-        Priority:
-        1. ``METIXEL_WLR_OUTPUT`` env override (explicit user choice).
-        2. Auto-detected output — the one with a real monitor (non-null
-           EDID-derived make/model, native preferred mode, highest res).
-        3. ``HDMI-A-1`` as a last resort.
+        Priority: env override → auto-detected real monitor → ``HDMI-A-1``.
         """
-        override = self._wlr_override()
-        if override:
-            return override
-        if self._wlr_output:
-            return self._wlr_output
-        detected = self._detect_wlr_output()
-        if detected:
-            self._wlr_output = detected
-            return detected
-        if fallback:
-            return self._resolve_wlr_output(fallback=False)
-        return "HDMI-A-1"
-
-    @staticmethod
-    def _wlr_env() -> dict[str, str]:
-        """Minimal environment for wlr-randr subprocesses.
-
-        Inheriting the full ``os.environ`` can cause conflicts (e.g.
-        ``DISPLAY=:0`` from XWayland may confuse some Wayland clients).
-        """
-        return {
-            "WAYLAND_DISPLAY": "wayland-0",
-            "XDG_RUNTIME_DIR": "/run/user/1000",
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": os.environ.get("HOME", "/home/pi"),
-        }
+        return self._wlr_output_mgr.resolve(fallback=fallback)
 
     def _wlr_randr(self, on: bool) -> bool:
-        """Toggle display via wlr-randr (wlroots/Wayland). Returns True on success.
-
-        Targets the auto-detected output (the port with a real monitor).
-        If the cached output becomes invalid (e.g. the monitor is moved to
-        the other HDMI port), re-detects once and retries.
-        """
-        try:
-            wlr_bin = "/usr/bin/wlr-randr"
-            if not os.path.exists(wlr_bin):
-                logger.debug("wlr-randr not installed at %s", wlr_bin)
-                return False
-
-            output = self._resolve_wlr_output()
-            cmd = [wlr_bin, "--output", output, "--on" if on else "--off"]
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=5,
-                env=self._wlr_env(),
-            )
-            if result.returncode == 0:
-                return True
-
-            stderr = result.stderr.decode(errors="replace").strip()
-            logger.warning("wlr-randr exited %d: %s", result.returncode, stderr)
-
-            # The cached output may be stale (monitor moved to another
-            # port).  Clear the cache, re-detect, and retry once.
-            if self._wlr_output and "unknown output" in stderr:
-                self._wlr_output = None
-                new_output = self._resolve_wlr_output()
-                if new_output != output:
-                    logger.info("Re-detected wlr-randr output: %s", new_output)
-                    retry = subprocess.run(
-                        [wlr_bin, "--output", new_output, "--on" if on else "--off"],
-                        capture_output=True,
-                        timeout=5,
-                        env=self._wlr_env(),
-                    )
-                    return retry.returncode == 0
-            return False
-        except FileNotFoundError:
-            logger.debug("wlr-randr not installed — cannot control display via Wayland")
-            return False
-        except Exception:
-            logger.warning("wlr-randr failed", exc_info=True)
-            return False
+        """Toggle display via wlr-randr (wlroots/Wayland). Returns True on success."""
+        return self._wlr_output_mgr.set_power(on)
 
     @staticmethod
     def _detect_wlr_output() -> str | None:
-        """Auto-detect which Wayland output has a real monitor connected.
-
-        Runs ``wlr-randr --json`` and picks the best output:
-        - an output with EDID-derived make/model (real monitor) wins
-        - otherwise the output advertising a native ``preferred`` mode
-        - otherwise the enabled output with the highest resolution
-
-        A Raspberry Pi exposes two HDMI connectors; the empty port has no
-        EDID and only reports low-res fallback modes (e.g. 1024x768).
-        Returns ``None`` if wlr-randr is unavailable or fails.
-        """
-        wlr_bin = "/usr/bin/wlr-randr"
-        if not os.path.exists(wlr_bin):
-            logger.debug("wlr-randr not installed — cannot detect display output")
-            return None
-        try:
-            result = subprocess.run(
-                [wlr_bin, "--json"],
-                capture_output=True,
-                timeout=5,
-                env=Pi3dBackend._wlr_env(),
-            )
-            if result.returncode != 0:
-                logger.warning(
-                    "wlr-randr --json failed (%d): %s",
-                    result.returncode,
-                    result.stderr.decode(errors="replace").strip(),
-                )
-                return None
-            outputs = json.loads(result.stdout.decode(errors="replace") or "[]")
-        except Exception:
-            logger.warning("Failed to detect display output via wlr-randr", exc_info=True)
-            return None
-
-        if not isinstance(outputs, list) or not outputs:
-            return None
-
-        enabled = [o for o in outputs if o.get("enabled")]
-        if not enabled:
-            enabled = outputs
-
-        def _score(out: dict) -> float:
-            score = 0.0
-            # Real monitor → EDID-derived make/model is non-null
-            if out.get("make") or out.get("model"):
-                score += 100.0
-            for mode in out.get("modes", []) or []:
-                if mode.get("preferred"):
-                    score += 10.0
-                if mode.get("current"):
-                    score += 1.0
-                    score += (mode.get("width", 0) * mode.get("height", 0)) / 1_000_000.0
-            return score
-
-        best = max(enabled, key=_score)
-        name = best.get("name")
-        if isinstance(name, str):
-            logger.info(
-                "Detected display output: %s (make=%s model=%s)",
-                name,
-                best.get("make"),
-                best.get("model"),
-            )
-            return name
-        return None
+        """Auto-detect which Wayland output has a real monitor connected."""
+        return WlrOutput.detect()
 
     @staticmethod
     def _drm_dpms(state: str) -> bool:
-        """Set display DPMS state via KMS sysfs. Returns True on success.
-
-        Tries writing to ``/sys/class/drm/card*-*/dpms``.  On modern kernels
-        these nodes may be read-only; falls back to ``sudo tee`` to
-        ``.../status`` (picframe mode 3).
-        """
-        import glob
-
-        # Try dpms node first (may be read-only on newer kernels)
-        try:
-            for card in glob.glob("/sys/class/drm/card*-*"):
-                dpms_path = os.path.join(card, "dpms")
-                if os.path.exists(dpms_path):
-                    with open(dpms_path, "w") as f:
-                        f.write(state)
-                    return True
-        except OSError:
-            pass
-
-        # Fallback: write to .../status via sudo tee (picframe mode 3)
-        try:
-            for card in glob.glob("/sys/class/drm/card*-*"):
-                status_path = os.path.join(card, "status")
-                if os.path.exists(status_path):
-                    on_off = "on" if state == "on" else "off"
-                    result = subprocess.run(
-                        ["sudo", "tee", status_path],
-                        input=on_off,
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    if result.returncode == 0:
-                        return True
-        except Exception:
-            pass
-
-        return False
+        """Set display DPMS state via KMS sysfs. Returns True on success."""
+        return DisplayPower._drm_dpms(state)
 
     # -- Helpers -------------------------------------------------------------
 
@@ -1142,17 +812,9 @@ class Pi3dBackend(DisplayBackend):
     @staticmethod
     def _get_gpu_mem() -> str:
         """Get GPU memory allocation from vcgencmd."""
-        return read_vcgencmd_mem_str("gpu", fallback="unknown")
+        return GpuInfo.gpu_mem_str()
 
     @staticmethod
     def _get_drm_driver() -> str:
         """Detect the active DRM/KMS driver (vc4, vc4-fkms-v3d, etc.)."""
-        try:
-            for entry in os.listdir("/sys/class/drm"):
-                if entry.startswith("card"):
-                    card_path = f"/sys/class/drm/{entry}/device/driver"
-                    if os.path.islink(card_path):
-                        return os.path.basename(os.readlink(card_path))
-            return "none"
-        except Exception:
-            return "unknown"
+        return GpuInfo.drm_driver()

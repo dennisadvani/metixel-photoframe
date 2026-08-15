@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
-"""Media management API endpoints."""
+"""Media management API endpoints.
 
-import contextlib
-import io
+Thin Flask handlers — the filesystem logic lives in
+:mod:`metixel.backend.web.media_service`.  Underscore aliases are kept so
+existing tests that monkeypatch ``media_mod._resolve_cache_dir`` /
+``media_mod._convert_heic`` keep working.
+"""
+
 import logging
 import os
-import re
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -15,6 +17,22 @@ from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
 
+from metixel.backend.web.media_service import (
+    clear_cache,
+    convert_heic,
+    has_free_space,
+    lookup_thumbnail,
+    probe_image,
+    probe_video,
+    relative_to_any,
+    resolve_cache_dir,
+    resolve_upload_dir,
+    sanitize_filename,
+    serve_resized_frame_bytes,
+    stream_size,
+    unique_path,
+    watch_folder_name,
+)
 from metixel.shared.media import (
     HEIC_EXTENSIONS,
     IMAGE_EXTENSIONS,
@@ -27,27 +45,28 @@ logger = logging.getLogger(__name__)
 
 media_bp = Blueprint("media", __name__)
 
-# Upload target subfolder under media_dir (an enabled watch path).
+# Backwards-compatible aliases (logic lives in media_service.py).
 UPLOAD_SUBDIR = "my_media"
-# Reject uploads that would leave less than this fraction of disk free.
 FREE_SPACE_BUFFER_FRACTION = 0.05
-# Hard safety cap — multipart data is spooled before the view runs, so a
-# pathological request must not be allowed to fill tmpfs (RAM) unbounded.
-MAX_UPLOAD_BYTES = 2 * 1024**3  # 2 GiB
-
-# ── Lightweight file-list cache ──────────────────────────────────────
-# Avoids re-scanning the filesystem on every paginated request.
-# Invalidated after _CACHE_TTL seconds or by clear_image_cache().
 _CACHE_TTL = 60.0
-_file_list_cache: dict[str, tuple[float, list[Path], int, int]] = {}
-# key = str(media_folder) → (timestamp, paths, img_count, vid_count)
-
-
-def _resolve_cache_dir(state) -> Path:
-    """Resolve the cache directory from config."""
-    config = state.config
-    cache_dir = Path(config.system.get("cache_dir", "cache/"))
-    return resolve_install_path(cache_dir)
+_file_list_cache = __import__(
+    "metixel.backend.web.media_service", fromlist=["file_list_cache"]
+).file_list_cache
+_file_list_lock = __import__(
+    "metixel.backend.web.media_service", fromlist=["_file_list_lock"]
+)._file_list_lock
+_resolve_cache_dir = resolve_cache_dir
+_probe_image = probe_image
+_probe_video = probe_video
+_lookup_thumbnail = lookup_thumbnail
+_relative_to_any = relative_to_any
+_watch_folder_name = watch_folder_name
+_resolve_upload_dir = resolve_upload_dir
+_sanitize_filename = sanitize_filename
+_unique_path = unique_path
+_has_free_space = has_free_space
+_stream_size = stream_size
+_convert_heic = convert_heic
 
 
 @media_bp.route("/thumbnail/<path:filename>")
@@ -106,26 +125,11 @@ def serve_thumbnail(filename: str):
 
 def _serve_resized_frame(path: Path) -> Response:
     """Resize a full-resolution video frame to thumbnail size and serve it."""
-    THUMB = 320  # noqa: N806
-    try:
-        from PIL import Image
-
-        img: Image.Image = Image.open(path)
-        if img.mode not in ("RGB", "RGBA", "L"):
-            img = img.convert("RGB")
-        img.thumbnail((THUMB, THUMB), Image.Resampling.LANCZOS)
-        buf = io.BytesIO()
-        img.save(buf, "JPEG", quality=70)
-        buf.seek(0)
-        return Response(buf.read(), mimetype="image/jpeg")
-    except Exception:
-        logger.warning("Failed to resize frame: %s", path, exc_info=True)
-        # Fall back to serving the original
-        return send_from_directory(
-            str(path.parent),
-            path.name,
-            mimetype="image/jpeg",
-        )
+    data = serve_resized_frame_bytes(path)
+    if data is not None:
+        return Response(data, mimetype="image/jpeg")
+    # Fall back to serving the original
+    return send_from_directory(str(path.parent), path.name, mimetype="image/jpeg")
 
 
 @media_bp.route("/list", methods=["GET"])
@@ -168,29 +172,31 @@ def list_media():
     # Cache key is the sorted tuple of resolved paths — invalidates if
     # the watch_paths config changes.
     cache_key = str(tuple(sorted(str(p) for p in watch_paths)))
-    cached = _file_list_cache.get(cache_key)
     now = time.monotonic()
 
-    if cached is not None and (now - cached[0]) < _CACHE_TTL:
-        all_paths, img_count, vid_count = cached[1], cached[2], cached[3]
-    else:
-        all_paths: list[Path] = []
-        img_count = 0
-        vid_count = 0
-        for media_folder in watch_paths:
-            if not media_folder.exists():
-                continue
-            for entry in sorted(media_folder.rglob("*")):
-                if not entry.is_file():
+    with _file_list_lock:
+        cached = _file_list_cache.get(cache_key)
+
+        if cached is not None and (now - cached[0]) < _CACHE_TTL:
+            all_paths, img_count, vid_count = cached[1], cached[2], cached[3]
+        else:
+            all_paths: list[Path] = []
+            img_count = 0
+            vid_count = 0
+            for media_folder in watch_paths:
+                if not media_folder.exists():
                     continue
-                suffix = entry.suffix.lower()
-                if suffix in IMAGE_EXTENSIONS:
-                    all_paths.append(entry)
-                    img_count += 1
-                elif suffix in VIDEO_EXTENSIONS:
-                    all_paths.append(entry)
-                    vid_count += 1
-        _file_list_cache[cache_key] = (now, all_paths, img_count, vid_count)
+                for entry in sorted(media_folder.rglob("*")):
+                    if not entry.is_file():
+                        continue
+                    suffix = entry.suffix.lower()
+                    if suffix in IMAGE_EXTENSIONS:
+                        all_paths.append(entry)
+                        img_count += 1
+                    elif suffix in VIDEO_EXTENSIONS:
+                        all_paths.append(entry)
+                        vid_count += 1
+            _file_list_cache[cache_key] = (now, all_paths, img_count, vid_count)
 
     total = len(all_paths)
 
@@ -273,168 +279,6 @@ def list_media():
             "videos": vid_count,
         }
     )
-
-
-def _probe_image(path: Path) -> tuple[int, int]:
-    """Get image dimensions without a full decode."""
-    try:
-        from PIL import Image
-
-        with Image.open(path) as img:
-            return img.size
-    except Exception:
-        return (0, 0)
-
-
-def _probe_video(path: Path) -> tuple[int, int]:
-    """Get video dimensions via ffprobe (JSON format — field-order safe)."""
-    try:
-        import json
-        import subprocess
-
-        result = subprocess.run(
-            [
-                "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=width,height",
-                "-of",
-                "json",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            probe = json.loads(result.stdout)
-            streams = probe.get("streams", [])
-            if streams:
-                s = streams[0]
-                return (s.get("width", 0) or 0, s.get("height", 0) or 0)
-    except Exception:
-        pass
-    return (0, 0)
-
-
-def _lookup_thumbnail(path: Path, thumb_dir: Path) -> str | None:
-    """Check if a cached thumbnail exists and return its URL."""
-    try:
-        file_hash = content_hash(path)
-        thumb_path = thumb_dir / f"{file_hash}.jpg"
-        if thumb_path.exists():
-            return f"/api/media/thumbnail/{file_hash}.jpg"
-    except OSError:
-        pass
-    return None
-
-
-def _relative_to_any(file_path: Path, roots: list[Path]) -> str:
-    """Return ``file_path`` relative to the first matching root, or its name."""
-    for root in roots:
-        try:
-            return str(file_path.relative_to(root))
-        except ValueError:
-            continue
-    return file_path.name
-
-
-def _watch_folder_name(file_path: Path, roots: list[Path]) -> str:
-    """Return the name of the watch folder that contains ``file_path``.
-
-    Falls back to the parent directory name if no watch root matches.
-    """
-    resolved = file_path.resolve()
-    for root in roots:
-        try:
-            resolved.relative_to(root.resolve())
-            return root.name
-        except ValueError:
-            continue
-    # Not inside any watch root — use immediate parent directory name
-    return file_path.parent.name
-
-
-# -- Upload ---------------------------------------------------------------
-
-
-def _resolve_upload_dir(state) -> Path:
-    """Return the user-upload folder (``media/my_media``), creating it if needed.
-
-    ``my_media`` is an enabled watch path in the default config, so files
-    written here are picked up by the FolderWatcher and flow through the
-    optimisation pipeline into the slideshow.
-    """
-    config = state.config
-    media_dir = Path(config.system.get("media_dir", "media/"))
-    media_dir = resolve_install_path(media_dir)
-    upload_dir = media_dir / UPLOAD_SUBDIR
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    return upload_dir
-
-
-def _sanitize_filename(name: str) -> str:
-    """Strip path components and characters that are unsafe in a filesystem."""
-    name = Path(name or "").name
-    name = re.sub(r"[^A-Za-z0-9._ -]", "_", name).strip(" .")
-    return name or "upload"
-
-
-def _unique_path(directory: Path, name: str) -> Path:
-    """Return a non-colliding path, appending ``-1``, ``-2``, … on collision."""
-    candidate = directory / name
-    if not candidate.exists():
-        return candidate
-    stem, suffix = os.path.splitext(name)
-    i = 1
-    while (directory / f"{stem}-{i}{suffix}").exists():
-        i += 1
-    return directory / f"{stem}-{i}{suffix}"
-
-
-def _has_free_space(path: Path, size_bytes: int) -> bool:
-    """True if writing ``size_bytes`` keeps at least 5% of the disk free."""
-    try:
-        usage = shutil.disk_usage(path)
-    except OSError:
-        return False
-    return (usage.free - size_bytes) >= usage.total * FREE_SPACE_BUFFER_FRACTION
-
-
-def _stream_size(stream) -> int:
-    """Return the byte length of a seekable stream, restoring its position."""
-    try:
-        stream.seek(0, os.SEEK_END)
-        size = int(stream.tell())
-        stream.seek(0)
-        return size
-    except (OSError, AttributeError, ValueError):
-        return 0
-
-
-def _convert_heic(source, out_path: Path) -> bool:
-    """Convert a HEIC/HEIF image to JPEG, preserving EXIF orientation.
-
-    iPhones default to HEIC; the media pipeline only handles the classic
-    formats, so we normalise to JPEG on arrival.  Returns True on success.
-    """
-    try:
-        import pillow_heif  # type: ignore[import-not-found, import-untyped]  # optional dep, no stubs
-        from PIL import Image, ImageOps
-
-        pillow_heif.register_heif_opener()
-        with Image.open(source) as opened:
-            img: Image.Image = ImageOps.exif_transpose(opened)
-            if img.mode not in ("RGB", "RGBA", "L"):
-                img = img.convert("RGB")
-            img.save(out_path, "JPEG", quality=90)
-        return True
-    except Exception:  # noqa: BLE001
-        logger.warning("HEIC conversion failed for %s", out_path.name, exc_info=True)
-        return False
 
 
 @media_bp.route("/upload", methods=["POST"])
@@ -527,48 +371,10 @@ def clear_image_cache():
         JSON: ``{"status": "ok", "deleted_files": N, "freed_bytes": B}``
     """
     state = current_app.config["METIXEL_STATE"]
-    config = state.config
-    cache_dir = resolve_install_path(Path(config.system.get("cache_dir", "cache/")))
 
-    cache_subdirs = ["images", "thumbnails", "videos"]
-
-    deleted_files = 0
-    freed_bytes = 0
-
-    for subdir in cache_subdirs:
-        cache_path = cache_dir / subdir
-        if cache_path.exists() and cache_path.is_dir():
-            try:
-                for entry in cache_path.iterdir():
-                    if entry.is_file():
-                        try:
-                            file_size = entry.stat().st_size
-                            entry.unlink()
-                            deleted_files += 1
-                            freed_bytes += file_size
-                        except OSError:
-                            logger.warning("Failed to delete cache file: %s", entry)
-            except OSError:
-                logger.warning("Failed to iterate cache dir: %s", cache_path)
-
-    logger.info(
-        "All caches cleared: %d files deleted, %d bytes freed (%s, %s, %s)",
-        deleted_files,
-        freed_bytes,
-        *cache_subdirs,
-    )
-
-    # ── Reset processing journal ──────────────────────────────────────
-    # Every cached file is gone, so all journal outcomes are stale.  Wipe
-    # the journal so the next folder scan re-discovers and re-processes
-    # everything (failed entries get a clean retry too).
-    with contextlib.suppress(Exception):
-        state.journal.clear()
-
-    # ── Reset backend playlist ──────────────────────────────────────
-    # All MediaItems point to now-deleted cached files.  Clear the
-    # playlist so stale entries don't reach the frontend.
-    state.clear_playlist()
+    # Delete cache files, reset journal/playlist, and invalidate the
+    # file-list cache (all handled by the media service).
+    deleted_files, freed_bytes = clear_cache(state)
 
     # ── Signal frontend to reset its queue ──────────────────────────
     # The frontend watches playlist.json — an empty file triggers a
@@ -582,10 +388,6 @@ def clear_image_cache():
         logger.debug(
             "Sent pause via IPC before cache clear — frontend will reset on empty playlist"
         )
-
-    # Also invalidate the file-list cache so the next list_media()
-    # call re-scans the filesystem.
-    _file_list_cache.clear()
 
     # ── Schedule services restart ────────────────────────────────────
     # Restart both services after a short delay so the HTTP response

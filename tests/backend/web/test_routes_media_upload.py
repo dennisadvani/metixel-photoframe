@@ -91,7 +91,7 @@ def test_upload_rejects_when_disk_almost_full(app, client, mock_state, tmp_path)
     # 42 MB free (< 50 MB), so it must be refused.
     fake_usage = mock.Mock(total=1000 * 1024**2, free=52 * 1024**2, used=0)
     with mock.patch(
-        "metixel.backend.web.routes.media.shutil.disk_usage",
+        "metixel.backend.web.media_service.shutil.disk_usage",
         return_value=fake_usage,
     ):
         resp = _upload(client, [("big.mp4", b"\x00" * (10 * 1024**2))])
