@@ -169,9 +169,10 @@ class TestMediaItemIsReadyToPlay:
         )
         assert item.is_ready_to_play is True
 
-    # -- Video: FAILED + both frames → READY (play original) --
+    # -- Video: FAILED + both frames → NOT READY (never play native-res) --
 
     def test_video_failed_with_frames_ready(self) -> None:
+        """A video whose transcode failed must never play the original."""
         item = MediaItem(
             id="test",
             original_path=Path("/tmp/v.mp4"),
@@ -181,7 +182,7 @@ class TestMediaItemIsReadyToPlay:
             first_frame_path=Path("/tmp/v.1.frame.jpg"),
             last_frame_path=Path("/tmp/v.2.frame.jpg"),
         )
-        assert item.is_ready_to_play is True
+        assert item.is_ready_to_play is False
 
     def test_video_failed_missing_frames_not_ready(self) -> None:
         item = MediaItem(

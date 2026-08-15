@@ -290,7 +290,6 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         setValue("cfg-mqtt-device-id", m.device_id || "");
         setValue("cfg-mqtt-broker", m.broker || "localhost");
         setValue("cfg-mqtt-port", m.port || 1883);
-        setValue("cfg-mqtt-prefix", m.topic_prefix || "metixel");
         setValue("cfg-mqtt-username", m.username || "");
         setValue("cfg-mqtt-password", m.password || "");
         setChecked("cfg-mqtt-discovery", m.discovery_enabled !== false);
@@ -415,7 +414,6 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                     device_id: document.getElementById("cfg-mqtt-device-id").value.trim(),
                     broker: document.getElementById("cfg-mqtt-broker").value.trim(),
                     port: sanitizeInt(document.getElementById("cfg-mqtt-port").value, 1883),
-                    topic_prefix: document.getElementById("cfg-mqtt-prefix").value.trim() || "metixel",
                     username: document.getElementById("cfg-mqtt-username").value,
                     password: document.getElementById("cfg-mqtt-password").value,
                     discovery_enabled: document.getElementById("cfg-mqtt-discovery").checked,

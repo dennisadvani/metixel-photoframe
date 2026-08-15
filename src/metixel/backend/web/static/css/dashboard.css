@@ -1141,6 +1141,51 @@ button:focus-visible {
     50% { opacity: 0.55; }
 }
 
+/* Processing issues status area (dashboard, below progress bars) */
+.issue-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.78rem;
+}
+
+.issue-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    min-width: 0;
+}
+
+.issue-text {
+    min-width: 0;
+}
+
+.issue-title {
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+}
+
+.issue-reason {
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 260px;
+}
+
+.issue-retry {
+    flex-shrink: 0;
+}
+
 /* Folder path under media name */
 .media-folder {
     font-size: 0.65rem;

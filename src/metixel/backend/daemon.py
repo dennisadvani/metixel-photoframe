@@ -105,6 +105,10 @@ class BackendDaemon:
         if self._update_mgr is not None:
             with contextlib.suppress(Exception):
                 self._update_mgr.shutdown()
+        # Persist any pending journal writes so the next boot resumes from
+        # where we left off (no re-probe of unchanged, already-processed files).
+        with contextlib.suppress(Exception):
+            self._state.flush_journal()
 
     def reset_pipeline(self) -> None:
         """Clear all queues and restart the media pipeline from scratch.

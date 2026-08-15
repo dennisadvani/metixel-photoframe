@@ -64,7 +64,6 @@
     "enabled": false,
     "broker": "localhost",
     "port": 1883,
-    "topic_prefix": "metixel",
     "device_id": "",
     "username": "",
     "password": "",

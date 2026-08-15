@@ -25,13 +25,27 @@ def _make_valid_jpeg(path: Path, size: tuple[int, int] = (64, 48)) -> None:
 
 
 @pytest.fixture
-def mock_state():
-    """Create a mock StateManager."""
+def mock_state(tmp_path):
+    """Create a mock StateManager with a real ProcessingJournal."""
+    from metixel.backend.processing.journal import ProcessingJournal
+
     state = mock.MagicMock()
     state.config.display = {"width": 1920, "height": 1080}
     state.config.system = {"cache_dir": "/tmp/metixel_cache"}
+    state.config.image = {
+        "optimisation_enabled": True,
+        "optimise_max_width": 0,
+        "optimise_max_height": 0,
+    }
+    state.config.video = {
+        "transcoding_enabled": True,
+        "transcode_max_width": 0,
+        "transcode_max_height": 0,
+    }
     state.config.sync = {"local": {"watch_paths": ["/tmp"], "poll_interval_seconds": 1}}
     state.config_path = Path("/opt/metixel/etc/config.json")
+    # The watcher reads/writes per-file state through this journal.
+    state.journal = ProcessingJournal(tmp_path / "processing_state.json")
     return state
 
 
@@ -194,6 +208,71 @@ class TestFolderWatcherExtensions:
         assert ".jpg" in MEDIA_EXTENSIONS
         assert ".mp4" in MEDIA_EXTENSIONS
         assert ".txt" not in MEDIA_EXTENSIONS
+
+
+class TestFolderWatcherJournal:
+    """Journal-driven re-pickup prevention."""
+
+    def test_failed_file_not_repicked(self, mock_state, tmp_path):
+        """A permanently-failed file is never re-gathered (until it changes)."""
+        from metixel.backend.processing.journal import STATE_FAILED
+
+        mock_state.config.sync["local"]["watch_paths"] = [str(tmp_path)]
+        img = tmp_path / "poison.jpg"
+        _make_valid_jpeg(img)
+
+        # Simulate a previously-failed file (survives restart via the journal).
+        # In production the watcher marks pending (with the fingerprint) before
+        # enqueue, and the queue marks failed when processing fails.
+        fp = (int(img.stat().st_mtime_ns), int(img.stat().st_size))
+        mock_state.journal.mark_pending(img.resolve(), fp, media_type="image")
+        mock_state.journal.mark_failed(img.resolve(), "previous failure")
+
+        watcher = FolderWatcher(mock_state)
+        watcher._scan()
+
+        assert mock_state.journal.get(img.resolve())["state"] == STATE_FAILED
+        mock_state.add_playlist_items.assert_not_called()
+        mock_state.remove_playlist_items.assert_not_called()
+
+    def test_ready_file_skipped_on_incremental_scan(self, mock_state, tmp_path):
+        """An unchanged ready file is not re-gathered on later scans."""
+        mock_state.config.sync["local"]["watch_paths"] = [str(tmp_path)]
+        img = tmp_path / "done.jpg"
+        _make_valid_jpeg(img)
+        fp = (int(img.stat().st_mtime_ns), int(img.stat().st_size))
+        mock_state.journal.mark_pending(img.resolve(), fp, media_type="image")
+        mock_state.journal.mark_ready(img.resolve(), None)
+
+        watcher = FolderWatcher(mock_state)
+        watcher._scan()  # initial scan — rebuilds playlist (re-gathers ready)
+
+        # Simulate the real pipeline re-marking it ready after processing.
+        mock_state.journal.mark_ready(img.resolve(), None)
+        mock_state.add_playlist_items.reset_mock()
+
+        watcher._scan()  # incremental — ready + unchanged → skip
+        mock_state.add_playlist_items.assert_not_called()
+
+    def test_failed_file_repicked_after_change(self, mock_state, tmp_path):
+        """Modifying a failed file resets it so it is re-gathered."""
+        import time
+
+        mock_state.config.sync["local"]["watch_paths"] = [str(tmp_path)]
+        img = tmp_path / "poison.jpg"
+        _make_valid_jpeg(img)
+        fp = (int(img.stat().st_mtime_ns), int(img.stat().st_size))
+        mock_state.journal.mark_pending(img.resolve(), fp, media_type="image")
+        mock_state.journal.mark_failed(img.resolve(), "previous failure")
+
+        # Change the file so the fingerprint differs
+        time.sleep(0.01)
+        _make_valid_jpeg(img, size=(128, 96))
+
+        watcher = FolderWatcher(mock_state)
+        watcher._scan()
+        # Modified → re-gathered → image goes to the playlist
+        mock_state.add_playlist_items.assert_called()
 
 
 class TestFolderWatcherStateIntegration:

@@ -34,7 +34,7 @@ from typing import Any
 
 from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.utils import nice_cmd
-from metixel.backend.processing.video import VideoProcessor
+from metixel.backend.processing.video import VideoProcessor, VideoScan
 from metixel.backend.state import StateManager
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.system_stats import read_meminfo, read_system_stats
@@ -137,7 +137,12 @@ class OptimisationQueue:
         # batches so progress bars show the full queue, not just the
         # current batch of 6.
         self._img_processed = 0  # total images processed in current run
-        self._vid_processed = 0  # total videos processed in current run
+        self._vid_scanned = 0  # total videos scanned (Phase A) in current run
+        self._vid_transcoded = 0  # total videos transcoded (Phase B) in current run
+        # Whether a two-phase video batch is currently being processed —
+        # keeps ``is_busy`` true while the queue drains (the video queue is
+        # emptied into the batch upfront).
+        self._video_processing = False
 
     # -- Public API ----------------------------------------------------------
 
@@ -211,20 +216,31 @@ class OptimisationQueue:
             self._image_queue.clear()
             self._video_queue.clear()
         self._img_processed = 0
-        self._vid_processed = 0
+        self._vid_scanned = 0
+        self._vid_transcoded = 0
+        self._video_processing = False
         logger.debug("OptimisationQueue paused — all queues drained")
 
     def enqueue(self, items: list[MediaItem]) -> None:
         """Accept metadata-only items from the FolderWatcher.
 
-        Thread-safe — can be called from any thread.
+        Thread-safe — can be called from any thread.  Deduplicates by
+        original path so the same file is never queued twice, even if a
+        racing scan re-discovers it.
         """
         if not items:
             return
         with self._incoming_lock:
-            self._incoming.extend(items)
+            seen = {item.original_path for item in self._incoming}
+            fresh = [item for item in items if item.original_path not in seen]
+            if len(fresh) != len(items):
+                logger.debug(
+                    "OptimisationQueue: dropped %d duplicate(s) already queued",
+                    len(items) - len(fresh),
+                )
+            self._incoming.extend(fresh)
         self._wake.set()
-        logger.debug("OptimisationQueue: received %d item(s)", len(items))
+        logger.debug("OptimisationQueue: received %d item(s)", len(fresh))
 
     @property
     def is_busy(self) -> bool:
@@ -236,6 +252,8 @@ class OptimisationQueue:
         """
         with self._queue_lock:
             pending = len(self._image_queue) + len(self._video_queue)
+            if self._video_processing:
+                pending += 1
         with self._incoming_lock:
             pending += len(self._incoming)
         return pending > 0
@@ -533,6 +551,13 @@ class OptimisationQueue:
         # Queue items that need optimisation.
         if img_opt or vid_opt:
             with self._queue_lock:
+                # Dedup against items already waiting, so a racing scan (or
+                # an overlapping watch path) can never enqueue the same file
+                # twice for processing.
+                img_seen = {item.original_path for item in self._image_queue}
+                vid_seen = {item.original_path for item in self._video_queue}
+                img_opt = [i for i in img_opt if i.original_path not in img_seen]
+                vid_opt = [i for i in vid_opt if i.original_path not in vid_seen]
                 old_img = len(self._image_queue)
                 old_vid = len(self._video_queue)
                 self._image_queue.extend(img_opt)
@@ -668,15 +693,24 @@ class OptimisationQueue:
                         item.original_path.name,
                     )
                 else:
-                    logger.debug(
-                        "[OPTQ] IMG skip | already cached | %5.1fs | %s",
-                        _img_elapsed,
+                    # ImageProcessor returns None only on failure (corrupt /
+                    # worker error / timeout) — cache hits return a MediaItem.
+                    logger.warning(
+                        "[OPTQ] IMG failed | %s — excluded from playlist",
                         item.original_path.name,
+                    )
+                    self._state.journal.mark_failed(
+                        item.original_path,
+                        "Image optimisation failed",
                     )
             except Exception:
                 logger.exception(
                     "Failed to optimise image: %s",
                     item.original_path,
+                )
+                self._state.journal.mark_failed(
+                    item.original_path,
+                    "Image optimisation error",
                 )
             # Yield between items so the frontend gets CPU time.
             # Sleep duration scales with system load to prevent the
@@ -742,10 +776,17 @@ class OptimisationQueue:
         return total - avail if total > 0 else 0
 
     def _process_video_queue(self) -> None:
-        """Process items in the video optimisation queue.
+        """Process videos in two phases: scan all, then transcode the subset.
 
         Only runs when the image queue is empty (per priority order).
-        Processes one at a time since video transcoding is expensive.
+
+        * **Phase A (Scanning video)** — every queued video is probed,
+          thumbnailed, and frame-extracted, and a full-profile decision is
+          made on whether it needs transcoding.  Videos that don't need
+          transcoding are added to the playlist as soon as they finish
+          scanning (streaming).  Scan failures are recorded in the journal.
+        * **Phase B (Transcoding)** — once all scanning is done, the videos
+          that need transcoding are encoded and added to the playlist.
         """
         # Do NOT process videos if there are images waiting
         with self._queue_lock:
@@ -753,34 +794,58 @@ class OptimisationQueue:
                 return
             if not self._video_queue:
                 return
-            item = self._video_queue.pop(0)
+            batch = self._video_queue
+            self._video_queue = []
+            self._video_processing = True
 
-        self._process_single_video(item)
+        try:
+            # ── Phase A: scan every video ─────────────────────────────
+            scan_total = self._vid_scanned + len(batch)
+            pending_transcode: list[VideoScan] = []
+            for item in batch:
+                self._scan_video(item, pending_transcode, scan_total)
 
-    def _process_single_video(self, item: MediaItem) -> None:
-        """Transcode a single video and add it to the playlist."""
+            # ── Phase B: transcode the subset ─────────────────────────
+            transcode_total = self._vid_transcoded + len(pending_transcode)
+            for scan in pending_transcode:
+                self._transcode_video(scan, transcode_total)
+        finally:
+            with self._queue_lock:
+                self._video_processing = False
+
+    def _scan_video(
+        self,
+        item: MediaItem,
+        pending_transcode: list[VideoScan],
+        scan_total: int,
+    ) -> None:
+        """Scan a single video (Phase A): probe + thumbnail + frames + decide.
+
+        Records the outcome in the processing journal:
+
+        * Scan OK + frames present + no transcode needed → added to the
+          playlist immediately (streaming).
+        * Scan OK + transcode needed → appended to ``pending_transcode``
+          for Phase B.
+        * Scan failure / missing frames → marked failed (excluded, shown in
+          the status area with a Retry action).
+        """
         if self._video_processor is None:
             self._init_processors()
         processor = self._video_processor
         if processor is None:
             return
 
-        # Guardrail: skip if already transcoding this file
-        file_hash = item.id
-        if processor.is_transcoding(file_hash):
-            logger.debug(
-                "[OPTQ] VID defer | already transcoding | %s",
-                item.original_path.name,
-            )
-            with self._queue_lock:
-                self._video_queue.append(item)
-            return
+        journal = self._state.journal
+        journal.mark_processing(item.original_path)
 
-        # Count remaining videos for progress reporting (cumulative)
-        with self._queue_lock:
-            queue_remaining = len(self._video_queue)
-        _total = self._vid_processed + 1 + queue_remaining
-        _current = self._vid_processed + 1
+        current = self._vid_scanned + 1
+        _write_progress(
+            "inspecting_videos",
+            scan_total,
+            current - 1,
+            item.original_path.name,
+        )
 
         logger.info(
             "[OPTQ] VID opt  | %4dx%-4d | %-6s | %5.1fs | mem=%dMB | %s",
@@ -792,14 +857,80 @@ class OptimisationQueue:
             item.original_path.name,
         )
         try:
-            _write_progress(
-                "transcoding",
-                _total,
-                _current - 1,
-                item.original_path.name,
+            scan = processor.scan(item.original_path, source=item.source)
+            if scan is None:
+                journal.mark_failed(item.original_path, "Could not read video metadata")
+                return
+            if scan.errors or not scan.has_frames:
+                reason = "; ".join(scan.errors) if scan.errors else "Frame extraction failed"
+                logger.warning(
+                    "[OPTQ] VID scan failed | %s — excluded (%s)",
+                    item.original_path.name,
+                    reason,
+                )
+                journal.mark_failed(item.original_path, reason)
+                return
+            if scan.needs_transcode:
+                pending_transcode.append(scan)
+            else:
+                # No transcode needed — build the NOT_TRANSCODED item and
+                # stream it into the playlist right away.
+                result = processor.transcode(scan)
+                if result is not None:
+                    self._state.add_playlist_items([result])
+                    logger.info(
+                        "[OPTQ] VID done | %4dx%-4d → original | %s",
+                        result.width,
+                        result.height,
+                        item.original_path.name,
+                    )
+        except Exception:
+            logger.exception("Failed to scan video: %s", item.original_path)
+            journal.mark_failed(item.original_path, "Video scan error")
+        finally:
+            self._vid_scanned += 1
+            _write_progress("inspecting_videos", scan_total, self._vid_scanned, "")
+
+    def _transcode_video(self, scan: VideoScan, transcode_total: int) -> None:
+        """Transcode a scanned video (Phase B) and add it to the playlist."""
+        processor = self._video_processor
+        if processor is None:
+            return
+        journal = self._state.journal
+        item_path = scan.source_path
+
+        # Guardrail: skip if already transcoding this file
+        if processor.is_transcoding(scan.file_hash):
+            logger.debug(
+                "[OPTQ] VID defer | already transcoding | %s",
+                item_path.name,
             )
-            result = processor.process(item.original_path, source=item.source)
-            if result is not None:
+            return
+
+        current = self._vid_transcoded + 1
+        _write_progress(
+            "transcoding",
+            transcode_total,
+            current - 1,
+            item_path.name,
+        )
+
+        try:
+            result = processor.transcode(scan)
+            if result is None:
+                journal.mark_failed(item_path, "Video processing error")
+            elif result.transcode_status == TranscodeStatus.FAILED:
+                # A failed transcode must NEVER play at native resolution.
+                logger.warning(
+                    "[OPTQ] VID failed | %s — excluded from playlist (%s)",
+                    item_path.name,
+                    result.failure_reason or "transcode failed",
+                )
+                journal.mark_failed(
+                    item_path,
+                    result.failure_reason or "Transcode failed",
+                )
+            else:
                 # Guard: only add to playlist if the cached file is real.
                 # This prevents empty/corrupt stub files (from failed or
                 # partial transcodes) from entering the slideshow.
@@ -808,11 +939,13 @@ class OptimisationQueue:
                     cached.is_file() and cached.stat().st_size >= 1024
                 ):
                     self._state.add_playlist_items([result])
+                    status = result.transcode_status.value if result.transcode_status else None
+                    journal.mark_ready(item_path, status)
                     logger.info(
                         "[OPTQ] VID done | %4dx%-4d → cached | %s",
                         result.width,
                         result.height,
-                        item.original_path.name,
+                        item_path.name,
                     )
                 else:
                     logger.warning(
@@ -821,13 +954,19 @@ class OptimisationQueue:
                         cached.name,
                         cached.stat().st_size if cached.is_file() else 0,
                     )
-            self._vid_processed += 1
-            _write_progress("transcoding", _total, _current, "")
+                    journal.mark_failed(
+                        item_path,
+                        "Cached file missing or too small after processing",
+                    )
         except Exception:
             logger.exception(
                 "Failed to optimise video: %s",
-                item.original_path,
+                item_path,
             )
+            journal.mark_failed(item_path, "Video processing error")
+        finally:
+            self._vid_transcoded += 1
+            _write_progress("transcoding", transcode_total, self._vid_transcoded, "")
 
     # -- Internal: helpers ---------------------------------------------------
 

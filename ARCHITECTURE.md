@@ -547,6 +547,40 @@ is written to ``cache/thumbnails/``.  Heavy PIL work runs in a subprocess worker
 down the backend daemon.  Videos land in ``cache/videos/`` with their first/last
 frames (``.1.frame`` / ``.2.frame``) alongside.
 
+### Processing Journal (Phase 1/2 state)
+
+`processing/journal.py` is a **single-writer, persisted** per-file state store
+at ``<cache_dir>/processing_state.json``.  It records each file's lifecycle and
+outcome — ``pending`` / ``processing`` / ``ready`` / ``failed`` / ``skipped`` —
+alongside its ``(mtime_ns, size)`` fingerprint and a ``failure_reason``.
+
+* **Owner model** — the ``FolderWatcher`` owns appear/disappear/modify (it
+  marks ``pending`` and removes deleted files); the ``OptimisationQueue`` owns
+  the processing outcome (``processing`` → ``ready`` / ``failed``).  Every
+  mutation goes through the journal's single lock + debounced atomic write
+  (temp file + ``os.replace``), so the concurrent threads can never interleave
+  writes.
+* **Never-picked-up-twice** — the watcher skips any file whose fingerprint is
+  unchanged and whose state is terminal (``ready`` / ``failed`` / ``skipped``).
+  Ready files are re-gathered once on startup so the tmpfs playlist is rebuilt
+  from cache; failed/skipped files are **not** re-attempted while unchanged.
+* **Failed videos never play** — ``TranscodeStatus.FAILED`` is excluded from
+  ``MediaItem.is_ready_to_play`` and the queue refuses to add failed videos to
+  the playlist (no native-resolution fallback).  A file change or the
+  dashboard's Retry action (``POST /api/processing/retry``) re-attempts them.
+* **Two-phase video pipeline** — videos are processed in two passes.  Phase A
+  (*scanning*) runs ``VideoProcessor.scan()`` (probe + thumbnail + first/last
+  frames) for **every** queued video, streaming non-transcode videos into the
+  playlist immediately and recording scan errors in the journal.  Once all
+  scanning is done, Phase B (*transcoding*) runs ``VideoProcessor.transcode()``
+  on only the videos the full-profile check flagged, then adds them to the
+  playlist.  The scan result (probe info + frame/thumbnail paths) is carried
+  into the transcode so the encode never re-probes.
+* **Progress phases** — the dashboard renders four bars: ``scanning``,
+  ``optimising_images``, ``inspecting_videos`` (probe + thumbnail + frame
+  extraction for all videos) and ``transcoding`` (actual ffmpeg encode of the
+  flagged subset, which starts only after all scanning completes).
+
 ### Image Render Path (Frontend)
 
 Images reach the screen through a double-buffered texture-slot swap, so the

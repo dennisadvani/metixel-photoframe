@@ -107,6 +107,7 @@ def create_app(
     from metixel.backend.web.routes.media import media_bp
     from metixel.backend.web.routes.messages import messages_bp
     from metixel.backend.web.routes.network import network_bp
+    from metixel.backend.web.routes.processing import processing_bp
     from metixel.backend.web.routes.system import system_bp
     from metixel.backend.web.routes.time import time_bp
     from metixel.backend.web.routes.updates import updates_bp
@@ -126,6 +127,7 @@ def create_app(
     app.register_blueprint(messages_bp, url_prefix="/api")
     app.register_blueprint(network_bp, url_prefix="/api")
     app.register_blueprint(updates_bp, url_prefix="/api/updates")
+    app.register_blueprint(processing_bp, url_prefix="/api/processing")
 
     # Serve the SPA — inject version into the root template.
     # When AP mode is active, serve the captive portal instead of the

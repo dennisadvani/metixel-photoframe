@@ -14,11 +14,14 @@ import logging
 import os
 import threading
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from metixel.shared.config import Config
 from metixel.shared.models import MediaItem
 from metixel.shared.system_stats import read_meminfo
+
+if TYPE_CHECKING:
+    from metixel.backend.processing.journal import ProcessingJournal
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +43,44 @@ class StateManager:
         self._playlist: list[MediaItem] = []
         self._playlist_lock = threading.Lock()
 
+        # Processing journal — lazily created single-writer store of per-file
+        # pipeline state (see ProcessingJournal).  Lives in the cache dir so
+        # "Clear cache" wipes it too.
+        self._journal: ProcessingJournal | None = None
+
         # Ensure run directory exists
         run_dir.mkdir(parents=True, exist_ok=True)
+
+    # -- Processing journal -------------------------------------------------
+
+    @property
+    def journal(self) -> ProcessingJournal:
+        """The shared single-writer processing journal (lazily created).
+
+        All pipeline participants (folder watcher, optimisation queue, web
+        API) read/write through this controller — never the file directly.
+        """
+        if self._journal is None:
+            from metixel.backend.processing.journal import ProcessingJournal
+
+            self._journal = ProcessingJournal(self._journal_path())
+        return self._journal
+
+    def _journal_path(self) -> Path:
+        """Resolve the journal file path inside the configured cache dir."""
+        cache_dir = Path(self._config.system.get("cache_dir", "cache/"))
+        if not cache_dir.is_absolute():
+            base = Path("/opt/metixel") if os.name == "posix" else Path.cwd()
+            cache_dir = base / cache_dir
+        return cache_dir / "processing_state.json"
+
+    def flush_journal(self) -> None:
+        """Persist any pending journal writes (call during shutdown).
+
+        No-op if the journal was never created during this run.
+        """
+        if self._journal is not None:
+            self._journal.flush()
 
     # -- Config Access -------------------------------------------------------
 
@@ -398,6 +437,18 @@ class StateManager:
                     len(items),
                 )
 
+        # Record successful pipeline completion in the journal (single writer).
+        # Any item that reaches the playlist is "ready" — this covers images
+        # added directly at watch/classify time AND processed images/videos.
+        # Guarded so pure in-memory playlist manipulation (dev/tests) does not
+        # force-create the journal; in production the watcher always creates
+        # it before any item reaches this point.
+        if self._journal is not None:
+            with contextlib.suppress(Exception):
+                for item in new_items:
+                    status = item.transcode_status.value if item.transcode_status else None
+                    self.journal.mark_ready(item.original_path, status)
+
     def remove_playlist_items(self, item_ids: set[str]) -> int:
         """Remove items from the playlist by id. Returns count removed."""
         with self._playlist_lock:
@@ -452,6 +503,7 @@ class StateManager:
                     "transcode_status": item.transcode_status.value
                     if item.transcode_status
                     else None,
+                    "failure_reason": item.failure_reason,
                 }
                 for item in self._playlist
             ]

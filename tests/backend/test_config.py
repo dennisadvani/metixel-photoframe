@@ -177,13 +177,16 @@ def test_video_section_save_load(tmp_path):
     config = Config()
     config_path = tmp_path / "config.json"
 
-    config.update("video", {
-        "playback_enabled": False,
-        "max_duration_seconds": 300,
-        "transcoding_enabled": False,
-        "transcode_quality": 18,
-        "cpu_throttle_percent": 30,
-    })
+    config.update(
+        "video",
+        {
+            "playback_enabled": False,
+            "max_duration_seconds": 300,
+            "transcoding_enabled": False,
+            "transcode_quality": 18,
+            "cpu_throttle_percent": 30,
+        },
+    )
     config.save(config_path)
 
     loaded = Config.load(config_path)
@@ -200,6 +203,7 @@ def test_video_section_legacy_fallback():
     import copy
 
     from metixel.shared.config import DEFAULT_CONFIG, Config
+
     old_data = copy.deepcopy(DEFAULT_CONFIG)
     old_data["slideshow"]["video_playback_enabled"] = False
     old_data["slideshow"]["video_max_duration_seconds"] = 60
@@ -278,7 +282,6 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("mqtt.enabled", False),
     ("mqtt.broker", "localhost"),
     ("mqtt.port", 1883),
-    ("mqtt.topic_prefix", "metixel"),
     ("mqtt.username", ""),
     ("mqtt.password", ""),
     # input
@@ -351,6 +354,7 @@ def test_all_config_defaults(dotted_key: str, expected: object) -> None:
 
 
 # ── Config.timeout() tests ─────────────────────────────────────────────
+
 
 class TestConfigTimeout:
     """Tests for the Config.timeout() helper."""
@@ -433,6 +437,7 @@ class TestConfigTimeout:
 
 # ── resolve_watch_paths tests ──────────────────────────────────────────
 
+
 class TestResolveWatchPaths:
     """Tests for resolve_watch_paths() utility."""
 
@@ -440,13 +445,16 @@ class TestResolveWatchPaths:
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
-        cfg.update("sync", {
-            "local": {
-                "watch_paths": [
-                    {"path": "/test/path", "enabled": True},
-                ],
+        cfg.update(
+            "sync",
+            {
+                "local": {
+                    "watch_paths": [
+                        {"path": "/test/path", "enabled": True},
+                    ],
+                },
             },
-        })
+        )
         paths = resolve_watch_paths(cfg, base_dir="/opt/metixel")
         assert len(paths) == 1
         assert paths[0] == Path("/test/path")
@@ -455,13 +463,16 @@ class TestResolveWatchPaths:
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
-        cfg.update("sync", {
-            "local": {
-                "watch_paths": [
-                    {"path": "/test/path", "enabled": False},
-                ],
+        cfg.update(
+            "sync",
+            {
+                "local": {
+                    "watch_paths": [
+                        {"path": "/test/path", "enabled": False},
+                    ],
+                },
             },
-        })
+        )
         paths = resolve_watch_paths(cfg, base_dir="/opt/metixel")
         assert len(paths) == 0
 
@@ -469,13 +480,16 @@ class TestResolveWatchPaths:
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
-        cfg.update("sync", {
-            "local": {
-                "watch_paths": [
-                    {"path": "media/photos/", "enabled": True},
-                ],
+        cfg.update(
+            "sync",
+            {
+                "local": {
+                    "watch_paths": [
+                        {"path": "media/photos/", "enabled": True},
+                    ],
+                },
             },
-        })
+        )
         paths = resolve_watch_paths(cfg, base_dir="/opt/metixel")
         assert paths[0] == Path("/opt/metixel/media/photos/")
 
@@ -483,11 +497,14 @@ class TestResolveWatchPaths:
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
-        cfg.update("sync", {
-            "local": {
-                "watch_paths": ["/legacy/path/"],
+        cfg.update(
+            "sync",
+            {
+                "local": {
+                    "watch_paths": ["/legacy/path/"],
+                },
             },
-        })
+        )
         paths = resolve_watch_paths(cfg, base_dir="/opt/metixel")
         assert len(paths) == 1
         assert paths[0] == Path("/legacy/path/")
@@ -496,11 +513,14 @@ class TestResolveWatchPaths:
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
-        cfg.update("sync", {
-            "local": {
-                "watch_paths": ["legacy/relative/"],
+        cfg.update(
+            "sync",
+            {
+                "local": {
+                    "watch_paths": ["legacy/relative/"],
+                },
             },
-        })
+        )
         paths = resolve_watch_paths(cfg, base_dir="/home/pi")
         assert paths[0] == Path("/home/pi/legacy/relative/")
 
@@ -508,15 +528,18 @@ class TestResolveWatchPaths:
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
-        cfg.update("sync", {
-            "local": {
-                "watch_paths": [
-                    {"path": "/enabled/path", "enabled": True},
-                    {"path": "/disabled/path", "enabled": False},
-                    "/legacy/path/",
-                ],
+        cfg.update(
+            "sync",
+            {
+                "local": {
+                    "watch_paths": [
+                        {"path": "/enabled/path", "enabled": True},
+                        {"path": "/disabled/path", "enabled": False},
+                        "/legacy/path/",
+                    ],
+                },
             },
-        })
+        )
         paths = resolve_watch_paths(cfg, base_dir="/opt/metixel")
         assert len(paths) == 2
         assert Path("/enabled/path") in paths

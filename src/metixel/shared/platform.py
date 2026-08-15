@@ -11,6 +11,7 @@ non-Linux / non-Pi machines.
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 
 
@@ -62,6 +63,66 @@ def detect_pi_model() -> str | None:
     if "raspberry pi zero 2" in model_lower:
         return "pi3"
     return None
+
+
+def resolve_unique_id() -> str:
+    """Return a stable, hardware-unique identifier for this device.
+
+    Resolution order (first hit wins):
+
+    1. **Raspberry Pi serial number** (``/proc/device-tree/serial-number``)
+       — factory-burned per physical board, so it survives SD-card cloning
+       and is unique across every Pi ever produced.
+    2. **First non-loopback MAC address** (``/sys/class/net/*/address``) —
+       used on non-Pi SBCs (Phase 2) and where the serial isn't exposed.
+    3. **systemd machine-id** (``/etc/machine-id``) — a stable per-OS-install
+       id on systems without a readable hardware serial/MAC.
+    4. **Hostname** — last resort (not guaranteed unique, but better than
+       nothing).
+
+    Used to scope the MQTT topics and Home Assistant device identity so two
+    frames on one broker never collide, even when both run the default config
+    and leave ``mqtt.device_id`` empty.
+    """
+    # 1. Raspberry Pi serial number — the canonical per-board id.
+    for path in (
+        "/proc/device-tree/serial-number",
+        "/sys/firmware/devicetree/base/serial-number",
+    ):
+        try:
+            with open(path) as f:
+                serial = f.read().strip("\x00\n\t ")
+            if serial:
+                return serial
+        except (OSError, FileNotFoundError):
+            continue
+
+    # 2. First non-loopback MAC address.
+    try:
+        import glob
+
+        for path in sorted(glob.glob("/sys/class/net/*/address")):
+            try:
+                with open(path) as f:
+                    mac = f.read().strip()
+            except OSError:
+                continue
+            if mac and mac != "00:00:00:00:00:00":
+                return mac.replace(":", "").lower()
+    except OSError:
+        pass
+
+    # 3. systemd machine-id.
+    try:
+        with open("/etc/machine-id") as f:
+            machine_id = f.read().strip()
+        if machine_id:
+            return machine_id
+    except (OSError, FileNotFoundError):
+        pass
+
+    # 4. Hostname.
+    return socket.gethostname() or "metixel"
 
 
 def read_vcgencmd_mem(unit: str) -> int | None:

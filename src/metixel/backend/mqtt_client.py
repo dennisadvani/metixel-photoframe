@@ -23,6 +23,7 @@ from typing import Any
 from metixel import __version__
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.platform import resolve_unique_id
 from metixel.shared.ports import MqttGateway
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,11 @@ _CURRENT_MEDIA_FILE = "/run/metixel/current_media.json"
 
 class MQTTClient:
     """MQTT client bridge between Home Assistant and Metixel Photoframe.
+
+    All topics are scoped by a per-frame identifier so multiple frames on one
+    broker never collide: ``metixel/<device_id>/...`` where ``<device_id>``
+    comes from ``mqtt.device_id`` (default: a hardware-unique id derived from
+    the Pi serial / MAC / machine-id).  ``prefix`` below = ``metixel/<device_id>``.
 
     Raw topics (always published when MQTT is enabled):
     - ``{prefix}/status`` — online/offline (retained)
@@ -75,6 +81,17 @@ class MQTTClient:
         self._last_error: str | None = None
         self._connecting_since: float | None = None
 
+    def _topic_prefix(self) -> str:
+        """Full MQTT topic prefix for this frame: ``metixel/<device_id>``.
+
+        The topic namespace is ALWAYS scoped by the per-frame device id so
+        two frames on one broker never share topics (sensors, commands, or
+        screen state).  The legacy ``mqtt.topic_prefix`` config key is no
+        longer read — every frame uses the same ``metixel`` base plus its
+        unique id.
+        """
+        return f"metixel/{self._resolve_device_id()}"
+
     def run(self) -> None:
         """Connect to MQTT broker and start the event loop."""
         gw = self._mqtt
@@ -89,7 +106,7 @@ class MQTTClient:
                 return
 
         config = self._state.config.mqtt
-        prefix = config["topic_prefix"]
+        prefix = self._topic_prefix()
         self._broker_host = config["broker"]
         self._broker_port = config["port"]
 
@@ -122,20 +139,38 @@ class MQTTClient:
         )
         gw.loop_start()
         self._last_discovery_publish = time.monotonic()
+        self._last_health_publish = time.monotonic()
+        self._last_media_sig = self._current_media_sig()
 
-        # Publish health / media / screen periodically and re-publish
-        # discovery so HA re-adopts entities if they were removed.  All
-        # publishing is gated on _connected (the broker accepted us).
+        # Publish health / screen periodically, re-publish discovery so HA
+        # re-adopts entities if they were removed, and republish the media /
+        # playback state IMMEDIATELY when the frontend rewrites its state file.
+        # All publishing is gated on _connected (the broker accepted us).
         while self._running:
             if self._connected:
-                self._publish_health(prefix)
-                self._publish_media(prefix)
-                self._publish_screen(prefix)
                 now = time.monotonic()
+
+                # Playback state: the frontend writes current_media.json on
+                # every pause/resume/next/prev/advance.  Watching the file's
+                # signature lets us push the new state to HA without waiting
+                # for the periodic tick — from ANY invocation source (MQTT
+                # command, Web UI, keyboard/CEC/IR, or the slideshow timer).
+                media_sig = self._current_media_sig()
+                if media_sig != self._last_media_sig:
+                    self.publish_media_now()
+                    self._last_media_sig = media_sig
+
+                # Health + screen every 30s (screen also has publish_screen_now).
+                if now - self._last_health_publish >= 30.0:
+                    self._publish_health(prefix)
+                    self._publish_screen(prefix)
+                    self._last_health_publish = now
+
+                # Discovery every 30 minutes.
                 if now - self._last_discovery_publish >= _DISCOVERY_REPUBLISH_SECONDS:
                     self._publish_discovery(prefix)
                     self._last_discovery_publish = now
-            time.sleep(30)
+            time.sleep(1)
 
         gw.loop_stop()
         gw.disconnect()
@@ -188,7 +223,7 @@ class MQTTClient:
         (bad credentials, broker full, …) must NOT publish anything — the
         broker is refusing us, and the client is in a reconnect-retry loop.
         """
-        prefix = self._state.config.mqtt["topic_prefix"]
+        prefix = self._topic_prefix()
         gw = self._mqtt
         if gw is None:
             return
@@ -310,8 +345,19 @@ class MQTTClient:
         Assistant's switch reflects reality without waiting for the periodic
         (30s) state publish.
         """
-        prefix = self._state.config.mqtt["topic_prefix"]
-        self._publish_screen(prefix)
+        self._publish_screen(self._topic_prefix())
+
+    def publish_media_now(self) -> None:
+        """Publish the current media + playback state immediately.
+
+        Mirrors ``publish_screen_now()`` for the playback side.  Called
+        whenever the frontend rewrites its current-media state file (pause /
+        resume / next / prev / advance), so Home Assistant's playback sensor
+        reflects the change without waiting for the periodic (30s) state
+        publish — regardless of which source triggered the state change (MQTT
+        command, Web UI, keyboard/CEC/IR, or the slideshow timer).
+        """
+        self._publish_media(self._topic_prefix())
 
     def _publish_screen(self, prefix: str) -> None:
         """Publish the screen-power switch state (ON/OFF)."""
@@ -330,6 +376,21 @@ class MQTTClient:
         """Update the daemon's screen-power state flag."""
         if self._daemon is not None:
             self._daemon._display_on = value  # noqa: SLF001
+
+    @staticmethod
+    def _current_media_sig() -> tuple[int, int] | None:
+        """Cheap signature of the frontend's current-media state file.
+
+        Returns ``(st_mtime_ns, st_size)`` (sub-second writes toggling the
+        ``paused`` flag are still detected) or ``None`` when the file is
+        absent.  Used by the client loop to republish playback state as soon
+        as the frontend changes it.
+        """
+        try:
+            st = os.stat(_CURRENT_MEDIA_FILE)
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
 
     def _current_media_data(self) -> dict[str, Any]:
         """Read the frontend's current-media state file into a safe dict."""
@@ -400,15 +461,18 @@ class MQTTClient:
         }
 
     def _resolve_device_id(self) -> str:
-        """Resolve the per-frame HA device id (config value or hostname).
+        """Resolve the per-frame HA device id (config value or hardware id).
 
-        Sanitised to ``[A-Za-z0-9_-]`` so it is safe to use inside MQTT
-        topics and HA object IDs.
+        When ``mqtt.device_id`` is empty (the default), falls back to a
+        stable hardware-unique identifier (Pi serial → MAC → machine-id →
+        hostname) so two frames on one broker never collide even with a
+        cloned SD card or default config.  Sanitised to ``[A-Za-z0-9_-]`` so
+        it is safe to use inside MQTT topics and HA object IDs.
         """
         config = self._state.config.mqtt
         device_id = (config.get("device_id") or "").strip()
         if not device_id:
-            device_id = socket.gethostname() or "metixel"
+            device_id = resolve_unique_id()
         return re.sub(r"[^A-Za-z0-9_-]", "_", device_id)
 
     def _discovery_configs(self, prefix: str, device: dict[str, Any]) -> dict[str, dict[str, Any]]:

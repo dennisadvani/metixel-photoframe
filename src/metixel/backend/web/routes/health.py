@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import UTC, datetime
 
 from flask import Blueprint, current_app, jsonify
 
@@ -103,14 +104,34 @@ def _read_display_info() -> dict | None:
 
 @health_bp.route("/processing-status", methods=["GET"])
 def processing_status():
-    """Return per-phase processing progress for the dashboard.
+    """Return per-phase processing progress + journal issues for the dashboard.
 
-    Each phase (``scanning``, ``optimising_images``, ``transcoding``)
-    tracks its own ``total``/``processed`` independently.  The web UI
-    renders a separate progress bar for each phase so the user can see
-    all queue states at once, without flickering between them.
+    Each phase (``scanning``, ``optimising_images``, ``inspecting_videos``,
+    ``transcoding``) tracks its own ``total``/``processed`` independently.
+    ``issues`` lists failed/skipped media from the processing journal so the
+    UI can show why items are missing from the slideshow.
     """
     data = _read_json("/run/metixel/processing_status.json")
     if data is None:
-        return jsonify({"active": None, "phases": {}})
+        data = {}
+
+    state = current_app.config["METIXEL_STATE"]
+    try:
+        journal = state.journal
+        issues = journal.issues()
+        # Convert epoch seconds → ISO 8601 so the dashboard's timeAgo()
+        # (Date.parse) can render a relative timestamp.
+        for issue in issues:
+            ts = issue.get("updated_at")
+            if ts:
+                issue["updated_at"] = datetime.fromtimestamp(ts, tz=UTC).isoformat()
+        data["issues"] = issues
+        data["journal_stats"] = journal.stats()
+    except Exception:
+        logger.debug("Could not read processing journal issues", exc_info=True)
+        data["issues"] = []
+        data["journal_stats"] = {}
+
+    data.setdefault("active", None)
+    data.setdefault("phases", {})
     return jsonify(data)

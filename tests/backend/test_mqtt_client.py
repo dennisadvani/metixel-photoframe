@@ -97,12 +97,12 @@ class TestMQTTClient:
 
     def test_on_message_cmd_topic(self, tmp_path: Path) -> None:
         client, ipc, _ = self._make(tmp_path)
-        client._on_message(None, None, FakeMsg("metixel/cmd", b"pause"))
+        client._on_message(None, None, FakeMsg("metixel/testframe/cmd", b"pause"))
         assert ipc.sent[-1].cmd == "pause"
 
     def test_on_message_album_set_topic(self, tmp_path: Path) -> None:
         client, ipc, _ = self._make(tmp_path)
-        client._on_message(None, None, FakeMsg("metixel/album/set", b"album-1"))
+        client._on_message(None, None, FakeMsg("metixel/testframe/album/set", b"album-1"))
         assert ipc.sent[-1].cmd == "switch_album"
         assert ipc.sent[-1].args == {"album_id": "album-1"}
 
@@ -134,7 +134,7 @@ class TestMQTTDiscovery:
 
     @staticmethod
     def _discovery_payloads(client, mqtt) -> dict[str, dict]:
-        client._publish_discovery("metixel")
+        client._publish_discovery(client._topic_prefix())
         return {
             topic: __import__("json").loads(payload)
             for topic, payload, _retain in mqtt.published
@@ -144,7 +144,7 @@ class TestMQTTDiscovery:
     def test_publish_discovery_retained_and_valid(self, tmp_path: Path) -> None:
         client, _ipc, mqtt = self._make(tmp_path)
 
-        client._publish_discovery("metixel")
+        client._publish_discovery(client._topic_prefix())
 
         # All discovery topics must be retained.
         discovery = [p for p in mqtt.published if p[0].startswith("homeassistant/")]
@@ -154,7 +154,7 @@ class TestMQTTDiscovery:
         payload = json.loads(discovery[0][1])
         # Valid HA schema: stable unique_id, shared device + availability.
         assert payload["unique_id"].startswith("metixel_testframe_")
-        assert payload["availability_topic"] == "metixel/status"
+        assert payload["availability_topic"] == "metixel/testframe/status"
         assert payload["payload_available"] == "online"
         assert payload["payload_not_available"] == "offline"
         assert payload["device"]["identifiers"][0] == "metixel_testframe"
@@ -168,13 +168,13 @@ class TestMQTTDiscovery:
         # Buttons need a command topic + press payload.
         for entity in ("next", "prev", "pause_toggle"):
             cfg = configs[f"homeassistant/button/metixel_testframe_{entity}/config"]
-            assert cfg["command_topic"] == "metixel/cmd"
+            assert cfg["command_topic"] == "metixel/testframe/cmd"
             assert cfg["payload_press"]
 
         # Screen power switch: command + state topics + payloads.
         switch = configs["homeassistant/switch/metixel_testframe_screen_power/config"]
-        assert switch["command_topic"] == "metixel/screen/set"
-        assert switch["state_topic"] == "metixel/screen"
+        assert switch["command_topic"] == "metixel/testframe/screen/set"
+        assert switch["state_topic"] == "metixel/testframe/screen"
         assert switch["payload_on"] == "ON"
         assert switch["payload_off"] == "OFF"
 
@@ -230,7 +230,7 @@ class TestMQTTDiscovery:
         client, _ipc, mqtt = self._make(tmp_path)
         client._state.update_config("mqtt", {"discovery_enabled": False})
 
-        client._publish_discovery("metixel")
+        client._publish_discovery(client._topic_prefix())
 
         assert not any(t.startswith("homeassistant/") for t, _p, _r in mqtt.published)
 
@@ -241,8 +241,8 @@ class TestMQTTDiscovery:
         client_b, _ipc_b, mqtt_b = self._make(tmp_path)
         client_b._state.update_config("mqtt", {"device_id": "frame_b"})
 
-        client_a._publish_discovery("metixel")
-        client_b._publish_discovery("metixel")
+        client_a._publish_discovery(client_a._topic_prefix())
+        client_b._publish_discovery(client_b._topic_prefix())
 
         ids_a = {
             json.loads(p)["unique_id"]
@@ -273,9 +273,9 @@ class TestMQTTDiscovery:
 
         assert client._connected is True
         assert any(t.startswith("homeassistant/") for t, _p, _r in mqtt.published)
-        assert any(t == "metixel/screen" for t, _p, _r in mqtt.published)
-        assert any(t == "metixel/state" for t, _p, _r in mqtt.published)
-        assert any(t == "metixel/current_media" for t, _p, _r in mqtt.published)
+        assert any(t == "metixel/testframe/screen" for t, _p, _r in mqtt.published)
+        assert any(t == "metixel/testframe/state" for t, _p, _r in mqtt.published)
+        assert any(t == "metixel/testframe/current_media" for t, _p, _r in mqtt.published)
 
     def test_on_connect_rejection_publishes_nothing(self, tmp_path: Path) -> None:
         """A rejected CONNACK (reason_code != 0) must not publish anything."""
@@ -290,10 +290,10 @@ class TestMQTTDiscovery:
     def test_screen_set_topic_routes_power_commands(self, tmp_path: Path) -> None:
         client, ipc, _ = self._make(tmp_path)
 
-        client._on_message(None, None, FakeMsg("metixel/screen/set", b"OFF"))
+        client._on_message(None, None, FakeMsg("metixel/testframe/screen/set", b"OFF"))
         assert ipc.sent[-1].cmd == "screen_off"
 
-        client._on_message(None, None, FakeMsg("metixel/screen/set", b"ON"))
+        client._on_message(None, None, FakeMsg("metixel/testframe/screen/set", b"ON"))
         assert ipc.sent[-1].cmd == "screen_on"
 
     def test_screen_command_updates_daemon_state_and_publishes(self, tmp_path: Path) -> None:
@@ -305,20 +305,18 @@ class TestMQTTDiscovery:
         assert client._display_on() is False
         assert daemon._display_on is False
         # New state published immediately so HA's switch updates fast.
-        assert mqtt.published[-1] == ("metixel/screen", "OFF", False)
+        assert mqtt.published[-1] == ("metixel/testframe/screen", "OFF", False)
 
         client._handle_cmd("power_on")
         assert client._display_on() is True
-        assert mqtt.published[-1] == ("metixel/screen", "ON", False)
+        assert mqtt.published[-1] == ("metixel/testframe/screen", "ON", False)
 
     def test_handle_cmd_toggle_pause(self, tmp_path: Path) -> None:
         client, ipc, _ = self._make(tmp_path)
         client._handle_cmd("toggle_pause")
         assert ipc.sent[-1].cmd == "toggle_pause"
 
-    def test_current_media_data_derives_title_and_state(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_current_media_data_derives_title_and_state(self, tmp_path: Path, monkeypatch) -> None:
         import metixel.backend.mqtt_client as mqtt_mod
 
         state_file = tmp_path / "current_media.json"
@@ -331,17 +329,58 @@ class TestMQTTDiscovery:
         assert data["title"] == "photo.jpg"
         assert data["state"] == "playing"
 
-    def test_publish_media_publishes_state_and_media(
-        self, tmp_path: Path, monkeypatch
-    ) -> None:
+    def test_publish_media_publishes_state_and_media(self, tmp_path: Path, monkeypatch) -> None:
         import metixel.backend.mqtt_client as mqtt_mod
 
         # Point at a non-existent state file so state is deterministically "off".
         monkeypatch.setattr(mqtt_mod, "_CURRENT_MEDIA_FILE", str(tmp_path / "missing.json"))
         client, _ipc, mqtt = self._make(tmp_path)
 
-        client._publish_media("metixel")
+        client._publish_media("metixel/testframe")
 
         published = {t: p for t, p, _r in mqtt.published}
-        assert "metixel/current_media" in published
-        assert published["metixel/state"] == "off"  # no media file → off
+        assert "metixel/testframe/current_media" in published
+        assert published["metixel/testframe/state"] == "off"  # no media file → off
+
+    def test_publish_media_now_emits_immediate_playback_state(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """publish_media_now() republishes current_media + state right away."""
+        import metixel.backend.mqtt_client as mqtt_mod
+
+        state_file = tmp_path / "current_media.json"
+        monkeypatch.setattr(mqtt_mod, "_CURRENT_MEDIA_FILE", str(state_file))
+        client, _ipc, mqtt = self._make(tmp_path)
+
+        # Paused → playing: playback state should publish immediately.
+        state_file.write_text(json.dumps({"file": "/tmp/clip.mp4", "paused": True}))
+        client.publish_media_now()
+        published = {t: p for t, p, _r in mqtt.published}
+        assert published["metixel/testframe/current_media"]  # JSON payload present
+        assert published["metixel/testframe/state"] == "paused"
+
+        state_file.write_text(json.dumps({"file": "/tmp/clip.mp4", "paused": False}))
+        client.publish_media_now()
+        published = {t: p for t, p, _r in mqtt.published}
+        assert published["metixel/testframe/state"] == "playing"
+
+    def test_current_media_sig_detects_rewrite(self, tmp_path: Path, monkeypatch) -> None:
+        """The loop signature changes when the frontend rewrites the file."""
+        import metixel.backend.mqtt_client as mqtt_mod
+
+        state_file = tmp_path / "current_media.json"
+        monkeypatch.setattr(mqtt_mod, "_CURRENT_MEDIA_FILE", str(state_file))
+        client, _ipc, _ = self._make(tmp_path)
+
+        # No file → None
+        assert client._current_media_sig() is None
+
+        # After a write → a (mtime_ns, size) tuple.
+        state_file.write_text(json.dumps({"file": "/tmp/a.mp4", "paused": False}))
+        sig_a = client._current_media_sig()
+        assert isinstance(sig_a, tuple) and len(sig_a) == 2
+        assert all(isinstance(v, int) for v in sig_a)
+
+        # Paused flag toggles → signature must differ so the loop republishes.
+        state_file.write_text(json.dumps({"file": "/tmp/a.mp4", "paused": True}))
+        assert client._current_media_sig() != sig_a
