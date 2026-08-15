@@ -16,8 +16,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from metixel.backend.dependencies import ensure_runtime_dependencies
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import IPCClient
+from metixel.shared.paths import install_root
 from metixel.shared.paths import run_dir as default_run_dir
 from metixel.shared.ports import Ports
 
@@ -82,6 +84,8 @@ class BackendDaemon:
             time.strftime("%Y-%m-%d %H:%M:%S"),
         )
 
+        self._ensure_runtime_dependencies()
+
         self._start_optimisation_queue()
         self._start_sync_engine()
         self._start_mqtt_client()
@@ -135,6 +139,20 @@ class BackendDaemon:
         if watcher is not None:
             watcher.reset_snapshot()
             logger.info("Folder watcher snapshot reset — will re-scan")
+
+    def _ensure_runtime_dependencies(self) -> None:
+        """Install any missing runtime Python dependencies on startup.
+
+        A no-op on normal boots (everything is already installed). After an
+        OTA from an older release this installs newly-required deps (e.g.
+        pillow-heif) so a single upgrade resolves them — see
+        ``metixel.backend.dependencies``. Failures are logged, never raised.
+        """
+        try:
+            ensure_runtime_dependencies(install_root())
+        except Exception:  # noqa: BLE001 — dependency self-heal must never
+            # block startup or crash the daemon.
+            logger.exception("Runtime dependency self-heal failed (continuing)")
 
     # -- Service starters ----------------------------------------------------
 
