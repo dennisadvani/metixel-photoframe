@@ -5,27 +5,31 @@
 # release.sh — Cut a new Metixel release from the dev branch.
 #
 # Usage:
-#   ./scripts/release.sh beta          # bump beta number (0.2.0-beta.1 → 0.2.0-beta.2)
-#   ./scripts/release.sh rc            # bump rc number or create first rc
-#   ./scripts/release.sh stable        # strip pre-release → stable (0.2.7-beta.8 → 0.2.7)
-#   ./scripts/release.sh minor         # bump minor → stable (0.2.7 → 0.3.0)
-#   ./scripts/release.sh major         # bump major → stable (0.2.7 → 1.0.0)
-#   ./scripts/release.sh --dry-run beta  # show what would happen, don't do it
+#   ./scripts/release.sh minor-beta   # bump number + beta (0.2.0-beta.1 → 0.2.1-beta.2)
+#   ./scripts/release.sh beta         # bump beta only (0.2.0-beta.1 → 0.2.0-beta.2)
+#   ./scripts/release.sh rc           # bump rc number or create first rc
+#   ./scripts/release.sh stable       # strip pre-release → stable (0.2.7-beta.8 → 0.2.7)
+#   ./scripts/release.sh minor        # bump minor → stable (0.2.7 → 0.3.0)
+#   ./scripts/release.sh major        # bump major → stable (0.2.7 → 1.0.0)
+#   ./scripts/release.sh --finalize <version>  # tag main AFTER the PR is merged in GitHub
+#   ./scripts/release.sh --dry-run minor-beta  # show what would happen, don't do it
 #
 # Flow:
 #   1. Switch to dev, pull latest
 #   2. Bump version via bump_version.py
 #   3. Commit the version bump on dev
 #   4. Create a release branch, push it, open a PR to main
-#   5. Wait for CI checks and merge the PR
-#   6. Tag main and push everything
+#   5. Wait for CI checks to pass, then STOP
+#   6. You merge the PR yourself in GitHub
+#   7. Run --finalize <version> to tag main and push the tag
 #
 # Requires the GitHub CLI (gh) installed and authenticated (gh auth login).
-# NOTE: if the "main" branch ruleset requires an approving review, the PR
-# cannot be self-approved — set required_approving_review_count to 0 (solo
+# NOTE: this script deliberately does NOT merge the PR — you approve and
+# merge it in the GitHub UI.  If the "main" ruleset also requires an
+# approving review, set required_approving_review_count to 0 (solo
 # maintainer) or have a collaborator approve it.
 #
-# After running this, go to GitHub Releases and create a release from the tag.
+# After finalizing, go to GitHub Releases and create a release from the tag.
 
 set -euo pipefail
 
@@ -41,6 +45,7 @@ NC='\033[0m' # No Color
 # -- Parse args -------------------------------------------------------------
 
 DRY_RUN=false
+FINALIZE=""
 BUMP_ARGS=()
 
 for arg in "$@"; do
@@ -48,38 +53,71 @@ for arg in "$@"; do
         --dry-run)
             DRY_RUN=true
             ;;
+        --finalize)
+            FINALIZE="next"
+            ;;
         *)
             BUMP_ARGS+=("$arg")
             ;;
     esac
 done
 
+# -- Finalize mode (tag main after the PR has been merged in GitHub) ---------
+
+if [ "$FINALIZE" = "next" ]; then
+    if [ ${#BUMP_ARGS[@]} -ne 1 ]; then
+        echo -e "${RED}ERROR: --finalize requires a version.${NC}"
+        echo "Usage: $0 --finalize <version>   (e.g. $0 --finalize 0.2.0-beta.2)"
+        exit 1
+    fi
+    NEW_VERSION="${BUMP_ARGS[0]}"
+    TAG="v$NEW_VERSION"
+    cd "$REPO_ROOT"
+    echo -e "${GREEN}Finalizing release $TAG (tagging main)...${NC}"
+    git checkout main
+    git pull origin main
+    git tag -a "$TAG" -m "Release $NEW_VERSION"
+    git push origin "$TAG"
+    echo -e "${GREEN}Switching back to dev...${NC}"
+    git checkout dev
+    echo ""
+    echo -e "${GREEN}═══ Release $TAG tagged on main ═══${NC}"
+    echo ""
+    echo "Next step: create a GitHub Release from the tag:"
+    echo "  gh release create $TAG --prerelease --title \"$NEW_VERSION\" --notes \"See CHANGELOG.md\""
+    echo "  (use --prerelease for beta/rc, omit for stable)"
+    exit 0
+fi
+
 if [ ${#BUMP_ARGS[@]} -eq 0 ]; then
     echo -e "${RED}ERROR: No release type specified.${NC}"
     echo ""
-    echo "Usage: $0 [--dry-run] <beta|rc|stable|minor|major>"
+    echo "Usage: $0 [--dry-run] <minor-beta|beta|rc|stable|minor|major>"
     echo ""
     echo "Examples:"
-    echo "  $0 beta              # 0.2.0 → 0.2.0-beta.1 (or bump existing beta)"
+    echo "  $0 minor-beta        # bump number + beta (0.2.0-beta.1 → 0.2.1-beta.2)"
+    echo "  $0 beta              # bump beta only (0.2.0-beta.1 → 0.2.0-beta.2)"
     echo "  $0 rc                # 0.2.0-beta.1 → 0.2.0-rc.1"
     echo "  $0 stable            # 0.2.7-beta.8 → 0.2.7 (strip pre-release)"
     echo "  $0 minor             # bump minor → 0.3.0"
     echo "  $0 major             # bump major → 1.0.0"
-    echo "  $0 --dry-run beta    # preview only"
+    echo "  $0 --finalize 0.2.0-beta.2  # tag main after PR merge"
+    echo "  $0 --dry-run minor-beta  # preview only"
     exit 1
 fi
 
 # Map friendly names to bump_version.py flags
 BUMP_TYPE="${BUMP_ARGS[0]}"
 case "$BUMP_TYPE" in
-    beta)   BUMP_FLAG="--beta" ;;
-    rc)     BUMP_FLAG="--rc" ;;
-    stable) BUMP_FLAG="--release" ;;
-    minor)  BUMP_FLAG="--minor" ;;
-    major)  BUMP_FLAG="--major" ;;
+    minor-beta) BUMP_FLAG="--beta" ;;
+    beta)       BUMP_FLAG="--beta-only" ;;
+    rc)         BUMP_FLAG="--rc" ;;
+    stable)     BUMP_FLAG="--release" ;;
+    minor)      BUMP_FLAG="--minor" ;;
+    major)      BUMP_FLAG="--major" ;;
     *)
         echo -e "${RED}ERROR: Unknown release type '$BUMP_TYPE'.${NC}"
-        echo "Valid: beta, rc, stable, minor, major"
+        echo "Valid: minor-beta, beta, rc, stable, minor, major"
         exit 1
         ;;
 esac
@@ -139,9 +177,8 @@ if $DRY_RUN; then
     echo "Would push dev"
     echo "Would create + push release branch: release/$NEW_VERSION"
     echo "Would open PR release/$NEW_VERSION → main"
-    echo "Would wait for CI checks and merge the PR"
-    echo "Would tag main: v$NEW_VERSION"
-    echo "Would push tag: v$NEW_VERSION"
+    echo "Would wait for CI checks to pass (you merge the PR yourself in GitHub)"
+    echo "Would then tell you to run: --finalize $NEW_VERSION"
     # Revert the bump
     git checkout -- src/metixel/__init__.py
     exit 0
@@ -185,38 +222,22 @@ if ! gh pr checks "$RELEASE_BRANCH" --watch --interval 15; then
     exit 1
 fi
 
-# -- Merge the PR ----------------------------------------------------------
-
-echo -e "${GREEN}Merging PR into main...${NC}"
-if ! gh pr merge "$RELEASE_BRANCH" --merge --delete-branch; then
-    echo ""
-    echo -e "${RED}ERROR: Could not merge the PR automatically.${NC}"
-    echo -e "${YELLOW}If the ruleset requires an approving review, have a collaborator"
-    echo "approve it (or set required_approving_review_count to 0), then merge:${NC}"
-    echo "  $PR_URL"
-    exit 1
-fi
-
-# -- Tag on main -----------------------------------------------------------
-
-TAG="v$NEW_VERSION"
-echo -e "${GREEN}Fetching main after merge...${NC}"
-git checkout main
-git pull origin main
-
-echo -e "${GREEN}Tagging ${YELLOW}$TAG${GREEN} on main...${NC}"
-git tag -a "$TAG" -m "Release $NEW_VERSION"
-git push origin "$TAG"
-
-# -- Done ------------------------------------------------------------------
+# -- Done (you merge in GitHub) ---------------------------------------------
 
 echo -e "${GREEN}Switching back to dev...${NC}"
 git checkout dev
 git branch -D "$RELEASE_BRANCH" 2>/dev/null || true
 
 echo ""
-echo -e "${GREEN}═══ Release $NEW_VERSION ready ═══${NC}"
+echo -e "${GREEN}═══ Release $NEW_VERSION PR ready — merge it yourself in GitHub ═══${NC}"
+echo "  $PR_URL"
 echo ""
-echo "Next step: create a GitHub Release from the tag:"
-echo "  gh release create $TAG --prerelease --title \"$NEW_VERSION\" --notes \"See CHANGELOG.md\""
+echo -e "${YELLOW}CI checks passed. I have NOT merged the PR — please review and merge it"
+echo "in GitHub yourself.${NC}"
+echo ""
+echo -e "${GREEN}After merging, finalise the release (tags main + pushes the tag):${NC}"
+echo "  $0 --finalize $NEW_VERSION"
+echo ""
+echo "Then create a GitHub Release from the tag:"
+echo "  gh release create v$NEW_VERSION --prerelease --title \"$NEW_VERSION\" --notes \"See CHANGELOG.md\""
 echo "  (use --prerelease for beta/rc, omit for stable)"

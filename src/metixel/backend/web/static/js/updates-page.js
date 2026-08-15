@@ -10,6 +10,7 @@ import {
     apiPost,
     apiPut,
     escapeHtml,
+    setButtonBusy,
     setChecked,
     setValue,
     showToast,
@@ -164,8 +165,7 @@ import {
         // ── Check for Updates button ──────────────────────────────
         var checkBtn = document.getElementById("btn-check-updates");
         checkBtn?.addEventListener("click", async function () {
-            checkBtn.disabled = true;
-            checkBtn.textContent = "Checking\u2026";
+            var restore = setButtonBusy(checkBtn, "Checking\u2026");
             var statusEl = document.getElementById("update-status");
             if (statusEl) statusEl.innerHTML =
                 '<span class="update-status-checking">Checking for updates\u2026</span>';
@@ -180,14 +180,12 @@ import {
                     var status = await apiGet("/updates/status");
                     if (!status || !status.check_in_progress || attempts >= maxAttempts) {
                         clearInterval(pollInterval);
-                        checkBtn.disabled = false;
-                        checkBtn.textContent = "Check for Updates";
+                        restore();
                         loadUpdateStatus();
                     }
                 }, 500);
             } else {
-                checkBtn.disabled = false;
-                checkBtn.textContent = "Check for Updates";
+                restore();
                 loadUpdateStatus();
             }
         });
@@ -200,8 +198,7 @@ import {
                 return;
             }
 
-            installBtn.disabled = true;
-            installBtn.textContent = "Installing\u2026";
+            var restoreInstall = setButtonBusy(installBtn, "Installing\u2026");
 
             // Show progress bar
             var progressDiv = document.getElementById("update-progress");
@@ -241,8 +238,7 @@ import {
                 } else {
                     if (progressDiv) progressDiv.style.display = "none";
                     showToast((result && result.message) || "Update failed", "error", 5000);
-                    installBtn.disabled = false;
-                    installBtn.textContent = "Install Update";
+                    restoreInstall();
                 }
             } catch (_) {
                 clearInterval(progressTimer);

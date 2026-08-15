@@ -258,14 +258,20 @@ class MQTTClient:
         if not cmd:
             logger.warning("Unknown MQTT command: %s", command)
             return
-        self._ipc.send(ControlMessage(cmd=cmd))
-        # Keep the daemon's display-state flag in sync so the screen-power
-        # switch state (and the Web UI button) reflect the command, and
-        # publish the new state immediately so Home Assistant's switch
-        # updates without waiting for the next periodic (30s) state publish.
         if cmd in ("screen_off", "screen_on"):
-            self._set_display_on(cmd == "screen_on")
-            self._publish_screen(self._state.config.mqtt["topic_prefix"])
+            # Route through the daemon choke-point so the flag, the frontend
+            # IPC, and the immediate MQTT publish stay in sync with every
+            # other source (Web UI, scheduler, keyboard/CEC/IR).  Fall back
+            # to a direct IPC send + flag update + publish when there is no
+            # daemon (e.g. unit tests).
+            if self._daemon is not None and hasattr(self._daemon, "set_display_power"):
+                self._daemon.set_display_power(cmd == "screen_on", source="mqtt")
+            else:
+                self._ipc.send(ControlMessage(cmd=cmd))
+                self._set_display_on(cmd == "screen_on")
+                self.publish_screen_now()
+            return
+        self._ipc.send(ControlMessage(cmd=cmd))
 
     def _handle_screen_cmd(self, payload: str) -> None:
         """Handle the screen-power switch input (ON/OFF)."""
@@ -294,6 +300,18 @@ class MQTTClient:
         data = self._current_media_data()
         gw.publish(f"{prefix}/current_media", json.dumps(data))
         gw.publish(f"{prefix}/state", data.get("state", "off"))
+
+    def publish_screen_now(self) -> None:
+        """Publish the current screen-power state immediately.
+
+        Called by the daemon's ``set_display_power`` choke-point whenever the
+        display power changes from ANY source (Web UI button, display
+        scheduler, keyboard/CEC/IR remotes, MQTT commands) so Home
+        Assistant's switch reflects reality without waiting for the periodic
+        (30s) state publish.
+        """
+        prefix = self._state.config.mqtt["topic_prefix"]
+        self._publish_screen(prefix)
 
     def _publish_screen(self, prefix: str) -> None:
         """Publish the screen-power switch state (ON/OFF)."""
@@ -526,6 +544,18 @@ class MQTTClient:
                 "unit_of_measurement": "°C",
                 "entity_category": "diagnostic",
                 "icon": "mdi:thermometer",
+            },
+        )
+        add(
+            "sensor",
+            "cpu_usage",
+            "Metixel CPU Usage",
+            {
+                "state_topic": f"{prefix}/health",
+                "value_template": "{{ value_json.cpu_percent | default(0) }}",
+                "unit_of_measurement": "%",
+                "entity_category": "diagnostic",
+                "icon": "mdi:cpu-64-bit",
             },
         )
         add(

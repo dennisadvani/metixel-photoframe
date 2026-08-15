@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -597,3 +598,111 @@ class TestNeedsOptimisation:
         assert h1 == h2
         assert len(h1) == 16
         assert all(c in "0123456789abcdef" for c in h1)
+
+
+# ---------------------------------------------------------------------------
+# video.py — process() cache-miss logging (no real ffmpeg is run)
+# ---------------------------------------------------------------------------
+
+
+class TestProcessCacheMissLogging:
+    """Exercise the explicit cache-miss log line in ``VideoProcessor.process()``.
+
+    The processor's seams are mocked so no ffmpeg/ffprobe runs.  The source
+    is HEVC (so ``needs_optimisation`` is True and the transcode path is
+    reached), and the cached file either exists or not to toggle the branch.
+    """
+
+    FILE_HASH = "abcdef1234567890"
+
+    HEVC_SOURCE = {
+        "width": 1920,
+        "height": 1080,
+        "codec_name": "hevc",
+        "fps": 25.0,
+        "bitrate": 5,
+        "color_depth": 8,
+        "duration": 10.0,
+    }
+    # A cached file that is within the H.264 profile limits.
+    H264_CACHED = {
+        "width": 1920,
+        "height": 1080,
+        "codec_name": "h264",
+        "fps": 25.0,
+        "bitrate": 5,
+        "color_depth": 8,
+        "h264_level": "4.0",
+        "color_trc": "bt709",
+    }
+
+    def _make_processor(self, tmp_path) -> VideoProcessor:
+        return VideoProcessor(
+            cache_dir=tmp_path / "cache",
+            screen_width=1920,
+            screen_height=1080,
+            video_config={
+                "transcoding_enabled": True,
+                "transcoding_profile": "pi3",
+            },
+        )
+
+    def _mock_seams(self, proc: VideoProcessor, tmp_path, cached: Path | None) -> None:
+        """Wire up mocks so ``process()`` can run without external tools."""
+        proc._hash_file = mock.Mock(return_value=self.FILE_HASH)
+
+        def fake_probe(path):
+            # The cached file probes as already-optimal H.264; the source is HEVC.
+            if cached is not None and str(path) == str(cached):
+                return dict(self.H264_CACHED)
+            return dict(self.HEVC_SOURCE)
+
+        proc._probe = mock.Mock(side_effect=fake_probe)
+        proc._extract_thumbnail = mock.Mock(return_value=None)
+        proc._extract_video_frames = mock.Mock(
+            return_value=(tmp_path / "f1.jpg", tmp_path / "f2.jpg")
+        )
+        proc._resolve_profile = mock.Mock(
+            return_value={
+                "codec": "h264",
+                "max_width": 1920,
+                "max_height": 1080,
+                "max_fps": 30,
+                "max_bitrate": 7,
+                "color_depth": 8,
+                "hdr_support": False,
+                "h264_level": "4.0",
+            }
+        )
+        proc._validate_cached_video = mock.Mock(return_value=True)
+        proc._transcode = mock.Mock()
+        proc._build_item = mock.Mock(return_value="built-item")
+
+    def test_cache_miss_logs_no_cached_video(self, tmp_path, caplog):
+        source = tmp_path / "clip.mp4"
+        source.write_bytes(b"x" * 1024)
+        proc = self._make_processor(tmp_path)
+        self._mock_seams(proc, tmp_path, cached=None)
+
+        with caplog.at_level(logging.INFO, logger="metixel.backend.processing.video"):
+            result = proc.process(source, source="local")
+
+        assert result == "built-item"
+        assert "No cached video found for clip.mp4 — transcoding" in caplog.text
+        proc._transcode.assert_called_once()
+
+    def test_cache_hit_does_not_log_miss(self, tmp_path, caplog):
+        source = tmp_path / "clip.mp4"
+        source.write_bytes(b"x" * 1024)
+        proc = self._make_processor(tmp_path)
+        cached = proc._video_cache / f"{self.FILE_HASH}.mp4"
+        cached.write_bytes(b"x" * 2048)
+        self._mock_seams(proc, tmp_path, cached=cached)
+
+        with caplog.at_level(logging.INFO, logger="metixel.backend.processing.video"):
+            result = proc.process(source, source="local")
+
+        assert result == "built-item"
+        assert "No cached video found" not in caplog.text
+        proc._transcode.assert_not_called()
+        proc._build_item.assert_called_once()

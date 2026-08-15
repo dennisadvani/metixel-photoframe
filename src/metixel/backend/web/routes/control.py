@@ -41,6 +41,21 @@ def send_control():
     if cmd not in valid_cmds:
         return jsonify({"error": f"Unknown command: {cmd}. Valid: {sorted(valid_cmds)}"}), 400
 
+    if cmd in ("screen_on", "screen_off"):
+        # Screen-power goes through the daemon choke-point so the flag, the
+        # frontend IPC, and the immediate MQTT publish all stay in sync with
+        # every other source (scheduler, keyboard/CEC/IR, MQTT commands).
+        daemon = current_app.config.get("METIXEL_DAEMON")
+        if daemon is not None and hasattr(daemon, "set_display_power"):
+            daemon.set_display_power(cmd == "screen_on", source="web")
+        elif ipc is not None:
+            from metixel.shared.ipc import ControlMessage
+
+            ipc.send(ControlMessage(cmd=cmd, args=data.get("args", {})))
+        else:
+            logger.warning("IPC not available — control command '%s' ignored", cmd)
+        return jsonify({"status": "ok", "cmd": cmd})
+
     if ipc is not None:
         from metixel.shared.ipc import ControlMessage
 
@@ -48,11 +63,5 @@ def send_control():
         logger.info("Control command '%s' sent via IPC", cmd)
     else:
         logger.warning("IPC not available — control command '%s' ignored", cmd)
-
-    # Update daemon's display state so the Web UI button reflects reality
-    if cmd in ("screen_on", "screen_off"):
-        daemon = current_app.config.get("METIXEL_DAEMON")
-        if daemon is not None:
-            daemon._display_on = cmd == "screen_on"
 
     return jsonify({"status": "ok", "cmd": cmd})

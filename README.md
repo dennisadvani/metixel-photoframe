@@ -42,6 +42,7 @@ Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated di
 - **Over the Air Updates** — update via the web UI
 - **EXIF Auto Rotation** — automatically rotate photos based on EXIF metadata
 - **Video Transcoding** — convert videos to a format that older Pi's can play
+- **Home Assistant MQTT Integration** — auto-discover the frame in Home Assistant with control buttons, a screen-power switch, and diagnostic sensors (playback state, current media, CPU, memory, disk, temperature); control it from HA or any MQTT client
 - **Keyboard and Remote Support** — assign keys to remote controls via the web UI
 - **Network Management** — Wi-Fi scanning + connection, AP fallback with captive portal + PIN gate, auto-deactivation, connectivity check
 
@@ -110,7 +111,7 @@ Two ways to install — both work on Raspberry Pi 3, 4, and 5.
 
 | | Pre-built image | Manual install |
 |---|---|---|
-| **Time** | ~10 minutes | ~1 hour |
+| **Time** | ~10 minutes | ~10 minutes to an hour depending on your Pi |
 | **Method** | Download .img.zip → flash with Pi Imager → boot | Flash Trixie Lite → run setup script → reboot |
 | **Guide** | [Getting Started](docs/GETTING_STARTED.md) | [Installation Guide](docs/INSTALLATION.md) |
 

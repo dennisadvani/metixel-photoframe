@@ -10,8 +10,8 @@
  * Exposes:
  *   - API layer:       apiGet, apiPut, apiPost (+ private connection tracking)
  *   - UI shell:        showToast, openDrawer, closeDrawer, navigateTo, registerPage
- *   - DOM/string utils: setStat, updatePowerButton, sanitizeInt, setChecked,
- *                       setValue, escapeHtml, timeAgo
+ *   - DOM/string utils: setStat, updatePowerButton, setButtonBusy,
+ *                       sanitizeInt, setChecked, setValue, escapeHtml, timeAgo
  */
 
 // -- Toast Notifications ---------------------------------------------------
@@ -130,6 +130,27 @@ export function updatePowerButton(on) {
     if (!btn) return;
     btn.innerHTML = on ? "⏻ Turn Display Off" : "⏻ Turn Display On";
     btn.classList.toggle("btn--danger", !on);
+}
+
+/**
+ * Temporarily put a button into a "busy" state: disable it and swap its
+ * label while an async action runs.  The original content is preserved
+ * (including any Material Symbol icon <span>) and restored afterwards, so
+ * the button never shows raw icon ligature text.
+ *
+ * @param {HTMLElement} btn - Button element.
+ * @param {string} busyLabel - Label to show while busy (plain text).
+ * @returns {function(): void} Restore function (re-enables + restores label).
+ */
+export function setButtonBusy(btn, busyLabel) {
+    if (!btn) return function () {};
+    var original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = busyLabel;
+    return function restore() {
+        btn.innerHTML = original;
+        btn.disabled = false;
+    };
 }
 
 /**

@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from typing import Any
 
 from metixel.shared.ipc import ControlMessage, IPCClient
@@ -58,9 +59,11 @@ class KeyboardHandler:
         self,
         config: dict[str, Any] | None = None,
         ipc: IPCClient | None = None,
+        display_power: Callable[[bool], None] | None = None,
     ) -> None:
         self._ipc = ipc
         self._config = config or {}
+        self._display_power = display_power
         self._running = False
         self._thread: threading.Thread | None = None
 
@@ -195,9 +198,9 @@ class KeyboardHandler:
 
                         # ── Normal mode ─────────────────────────
                         cmd = self._key_map.get(event.code)
-                        if cmd and self._ipc:
+                        if cmd:
                             logger.debug("Key %s (%s) → %s", event.code, key_name, cmd)
-                            self._ipc.send(ControlMessage(cmd=cmd))
+                            self._dispatch(cmd)
 
             except Exception:
                 time.sleep(0.1)
@@ -205,6 +208,20 @@ class KeyboardHandler:
     def stop(self) -> None:
         """Signal the handler thread to stop."""
         self._running = False
+
+    def _dispatch(self, cmd: str) -> None:
+        """Dispatch a command.
+
+        ``screen_on`` / ``screen_off`` are routed through the daemon's
+        ``set_display_power`` choke-point (when provided) so the display
+        flag and MQTT state stay in sync with the Web UI, scheduler, and
+        other input handlers.  All other commands go straight to the
+        frontend via IPC.
+        """
+        if cmd in ("screen_on", "screen_off") and self._display_power is not None:
+            self._display_power(cmd == "screen_on")
+        elif self._ipc is not None:
+            self._ipc.send(ControlMessage(cmd=cmd))
 
     # -- Helpers -------------------------------------------------------------
 

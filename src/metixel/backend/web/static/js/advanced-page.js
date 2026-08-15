@@ -10,6 +10,7 @@ import {
     apiPost,
     apiPut,
     sanitizeInt,
+    setButtonBusy,
     setChecked,
     setStat,
     setValue,
@@ -428,16 +429,14 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             });
 
             document.getElementById("btn-restart-mqtt")?.addEventListener("click", async () => {
-                var btn = document.getElementById("btn-restart-mqtt");
-                var original = btn ? btn.textContent : "Restart Services";
-                if (btn) { btn.textContent = "Restarting…"; btn.disabled = true; }
+                var restore = setButtonBusy(document.getElementById("btn-restart-mqtt"), "Restarting…");
                 try {
                     var r = await apiPost("/system/restart");
                     showToast(r && r.message ? r.message : "Restarting services…", "info", 4000);
                     // The backend restarts in ~2s; show a hopeful status meanwhile.
                     setTimeout(_refreshMqttStatus, 3000);
                 } finally {
-                    if (btn) { btn.textContent = original; btn.disabled = false; }
+                    restore();
                 }
             });
 
@@ -454,19 +453,11 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 // idempotent script is applied.  Show "Applying…" on the
                 // save button while the script runs (may take a few seconds).
                 var qbResult = null;
-                var btnSave = document.getElementById("btn-save-system");
-                var originalLabel = btnSave ? btnSave.textContent : "Save System Settings";
-                if (btnSave) {
-                    btnSave.textContent = "Applying…";
-                    btnSave.disabled = true;
-                }
+                var restoreSave = setButtonBusy(document.getElementById("btn-save-system"), "Applying…");
                 try {
                     qbResult = await apiPost("/system/quiet-boot", { enabled: quietBoot });
                 } finally {
-                    if (btnSave) {
-                        btnSave.textContent = originalLabel;
-                        btnSave.disabled = false;
-                    }
+                    restoreSave();
                 }
                 if (sysResult && logResult && logResult.status === "ok") {
                     var msg = "System settings saved! File log level: " + logLevel;
@@ -534,8 +525,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                            + "Playback will be interrupted for ~10 seconds.")) {
                     return;
                 }
-                clearCacheBtn.disabled = true;
-                clearCacheBtn.textContent = "Clearing…";
+                var restoreCache = setButtonBusy(clearCacheBtn, "Clearing…");
                 var result = await apiPost("/media/cache/clear");
                 if (result && result.status === "ok") {
                     showToast(
@@ -549,8 +539,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                         // Expected — the backend is restarting, so the request may fail
                     }
                 } else {
-                    clearCacheBtn.disabled = false;
-                    clearCacheBtn.textContent = "Clear Image Cache";
+                    restoreCache();
                     showToast("Failed to clear image cache", "error");
                 }
             });
@@ -561,8 +550,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 if (!confirm("Restart all Metixel services? Playback will be interrupted for ~10 seconds.")) {
                     return;
                 }
-                restartBtn.disabled = true;
-                restartBtn.textContent = "Restarting…";
+                setButtonBusy(restartBtn, "Restarting…");
                 showToast("Restarting services…", "info", 5000);
                 try {
                     await apiPost("/system/restart");
@@ -578,8 +566,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 if (!confirm("Reboot the entire system? The photo frame will be unavailable for ~60 seconds.")) {
                     return;
                 }
-                rebootBtn.disabled = true;
-                rebootBtn.textContent = "Rebooting…";
+                setButtonBusy(rebootBtn, "Rebooting…");
                 showToast("Rebooting system…", "info", 5000);
                 try {
                     await apiPost("/system/reboot");
@@ -594,8 +581,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 if (!confirm("Shut down the entire system? You will need to physically power-cycle the Pi to turn it back on.")) {
                     return;
                 }
-                shutdownBtn.disabled = true;
-                shutdownBtn.textContent = "Shutting down…";
+                setButtonBusy(shutdownBtn, "Shutting down…");
                 showToast("Shutting down system…", "info", 5000);
                 try {
                     await apiPost("/system/shutdown");

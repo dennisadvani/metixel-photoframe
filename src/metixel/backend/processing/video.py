@@ -464,6 +464,15 @@ class VideoProcessor:
                         cached_path.name,
                     )
                     self._cleanup_cached_video(cached_path, thumb_path, file_hash)
+            else:
+                # No cached file exists for this content hash.  This is the
+                # silent path — previously indistinguishable from a corrupt
+                # or profile-mismatched cache.  Log it explicitly so every
+                # re-transcode is attributable to exactly one cause.
+                logger.info(
+                    "No cached video found for %s — transcoding",
+                    source_path.name,
+                )
 
             # Mark as transcoding, then transcode
             self._transcoding.add(file_hash)
