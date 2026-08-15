@@ -21,8 +21,10 @@ from metixel.display.backend import DisplayBackend
 from metixel.frontend.overlay import MessageLayer, OverlayManager
 from metixel.frontend.presentation.engine import PresentationEngine
 from metixel.shared.config import Config
+from metixel.shared.io import atomic_write_json
 from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
+from metixel.shared.paths import run_dir, run_path
 from metixel.shared.system_stats import format_gpu_stats, read_system_stats
 
 logger = logging.getLogger(__name__)
@@ -61,7 +63,7 @@ class FrontendRenderer:
         self._last_config_check: float = 0.0
         self._config_mtime: float = 0.0
         # Playlist hot-reload tracking
-        self._playlist_path: Path = Path("/run/metixel/playlist.json")
+        self._playlist_path: Path = run_path("playlist.json")
         self._playlist_mtime: float = 0.0
         self._last_playlist_check: float = 0.0
         # FPS tracking
@@ -86,7 +88,7 @@ class FrontendRenderer:
         Returns an empty list if the playlist file doesn't exist yet
         (backend hasn't started) or is empty.
         """
-        playlist_path = Path("/run/metixel/playlist.json")
+        playlist_path = run_path("playlist.json")
         try:
             if not playlist_path.exists():
                 logger.debug("Backend playlist not yet available: %s", playlist_path)
@@ -189,9 +191,8 @@ class FrontendRenderer:
         # Write detected resolution to a status file so the web UI
         # can display it in the Display Settings card.
         try:
-            run_dir = Path(os.environ.get("METIXEL_RUN_DIR", "/run/metixel"))
-            run_dir.mkdir(parents=True, exist_ok=True)
-            info_path = run_dir / "display_info.json"
+            run_dir().mkdir(parents=True, exist_ok=True)
+            info_path = run_path("display_info.json")
             info = {
                 "width": int(self._backend.width),
                 "height": int(self._backend.height),
@@ -200,10 +201,7 @@ class FrontendRenderer:
                 # Web UI can show which HDMI port the monitor is on.
                 "output": getattr(self._backend, "connected_output", lambda: None)(),
             }
-            tmp_path = info_path.with_suffix(".tmp")
-            with open(tmp_path, "w") as f:
-                json.dump(info, f)
-            os.replace(tmp_path, info_path)
+            atomic_write_json(info_path, info)
             logger.debug("Display info written to %s", info_path)
         except Exception:
             logger.warning("Could not write display info file", exc_info=True)

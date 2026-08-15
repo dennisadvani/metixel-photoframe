@@ -28,6 +28,7 @@ import requests
 
 from metixel.backend.state import StateManager
 from metixel.shared.adapters import RequestsHttpGateway
+from metixel.shared.paths import resolve_install_path
 from metixel.shared.ports import HttpGateway
 
 logger = logging.getLogger(__name__)
@@ -191,13 +192,22 @@ class ImmichSyncer:
         """Signal the sync loop to stop."""
         self._running = False
 
+    def _is_cancel_requested(self) -> bool:
+        """Thread-safe read of the cancellation flag."""
+        with self._sync_lock:
+            return self._cancel_requested
+
     def cancel(self) -> None:
         """Request cancellation of the currently running sync cycle.
 
         The running sync will finish the current file, then abort gracefully.
         Safe to call from any thread.
         """
-        self._cancel_requested = True
+        # Guard with the sync lock so the flag can't be reset by a
+        # concurrently-starting _sync() (which clears it under the lock) —
+        # otherwise a cancel arriving mid-transition could be silently lost.
+        with self._sync_lock:
+            self._cancel_requested = True
         # Also touch the cancel file for external processes
         with contextlib.suppress(OSError):
             Path(_SYNC_CANCEL_FILE).write_text("1")
@@ -256,9 +266,7 @@ class ImmichSyncer:
         self._poll_interval: int = immich_cfg.get("poll_interval_seconds", 3600)
 
         sync_dir = immich_cfg.get("sync_dir", "media/sync/immich/")
-        self._sync_dir: Path = Path(sync_dir)
-        if not self._sync_dir.is_absolute():
-            self._sync_dir = Path("/opt/metixel") / self._sync_dir
+        self._sync_dir = resolve_install_path(Path(sync_dir))
 
     # -- Sync logic -----------------------------------------------------------
 
@@ -337,7 +345,7 @@ class ImmichSyncer:
 
         # 3. Sync each album
         for index, album in enumerate(albums):
-            if self._cancel_requested:
+            if self._is_cancel_requested():
                 result.errors.append("Cancelled by user")
                 break
 
@@ -414,7 +422,7 @@ class ImmichSyncer:
             res.success = False
             return res
 
-        if self._cancel_requested:
+        if self._is_cancel_requested():
             res.errors.append("Cancelled by user")
             return res
 
@@ -439,7 +447,7 @@ class ImmichSyncer:
         res.total_remote = len(remote_assets)
         logger.info("Album '%s' (%s) has %d assets", album_name, album_id, res.total_remote)
 
-        if self._cancel_requested:
+        if self._is_cancel_requested():
             res.errors.append("Cancelled by user")
             return res
 
@@ -479,7 +487,7 @@ class ImmichSyncer:
         # Download new assets
         downloaded = 0
         for filename in sorted(to_download):
-            if self._cancel_requested:
+            if self._is_cancel_requested():
                 res.errors.append("Cancelled by user")
                 logger.info(
                     "Album '%s' sync cancelled — %d/%d downloaded",
@@ -522,11 +530,11 @@ class ImmichSyncer:
             - len([e for e in res.errors if e.startswith("Download failed")])
         )
 
-        if self._cancel_requested and "Cancelled" not in " ".join(res.errors):
+        if self._is_cancel_requested() and "Cancelled" not in " ".join(res.errors):
             res.errors.append("Cancelled by user")
 
         # Strict sync: delete local files in THIS album folder only.
-        if self._strict_sync and not self._cancel_requested:
+        if self._strict_sync and not self._is_cancel_requested():
             to_delete = local_files - set(remote_map.keys())
             if to_delete:
                 logger.info(
@@ -536,7 +544,7 @@ class ImmichSyncer:
                 )
             deleted = 0
             for filename in sorted(to_delete):
-                if self._cancel_requested:
+                if self._is_cancel_requested():
                     break
                 try:
                     (album_dir / filename).unlink()

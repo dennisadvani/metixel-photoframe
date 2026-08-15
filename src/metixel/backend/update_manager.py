@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 import subprocess
 import threading
 import time
@@ -112,6 +113,12 @@ class UpdateManager:
         self._lock = threading.Lock()
         self._running = False
         self._thread: threading.Thread | None = None
+
+        # Bounded background-check worker — guards against unbounded thread
+        # spawn when a user rapidly triggers checks (manual button, channel
+        # switch).  At most one on-demand check thread runs at a time; extra
+        # triggers are coalesced into a no-op.
+        self._check_spawned = False
 
         # Cached GitHub API results
         self._cache: dict[str, Any] = {}
@@ -313,6 +320,31 @@ class UpdateManager:
                 self._last_error = "Check failed: check logs for details"
             logger.exception("Update check failed")
 
+    def check_for_updates_async(self, force: bool = False) -> None:
+        """Trigger an update check on a single bounded worker thread.
+
+        Unlike a raw ``threading.Thread`` per call, this coalesces rapid
+        triggers (manual button mashing, repeated channel switches) so at
+        most one background check thread is alive at any time.  A trigger
+        while a check is already running is dropped — the in-flight check
+        already covers it.  ``check_for_updates`` remains callable directly
+        (the background loop uses it synchronously).
+        """
+        with self._lock:
+            if self._check_spawned:
+                logger.debug("Update check already running — coalescing trigger")
+                return
+            self._check_spawned = True
+
+        def _run() -> None:
+            try:
+                self.check_for_updates(force=force)
+            finally:
+                with self._lock:
+                    self._check_spawned = False
+
+        threading.Thread(target=_run, name="update-check-on-demand", daemon=True).start()
+
     # -- Apply Update --------------------------------------------------------
 
     def apply_update(
@@ -398,16 +430,23 @@ class UpdateManager:
 
         script_path = "/opt/metixel/cache/metixel-update.sh"
         log_path = "/opt/metixel/cache/metixel-update.log"
+        # All externally-influenced values are shell-quoted so they can never
+        # break out of the embedded bash string literals (defence-in-depth —
+        # target_ref/channel come from GitHub API data / user config).
+        repo_q = shlex.quote(repo_root)
+        ref_q = shlex.quote(target_ref)
+        channel_q = shlex.quote(channel)
+        log_q = shlex.quote(log_path)
         script = f"""#!/bin/bash
 # Metixel OTA update — launched as a transient systemd service
 # so it survives the backend being stopped (runs in its own cgroup).
 # Uses a trap to guarantee services are restarted even if git/pip fail.
 set -uo pipefail
 
-REPO="{repo_root}"
-REF="{target_ref}"
-CHANNEL="{channel}"
-LOG="{log_path}"
+REPO={repo_q}
+REF={ref_q}
+CHANNEL={channel_q}
+LOG={log_q}
 
 exec > >(tee -a "$LOG") 2>&1
 echo "=== Metixel OTA Update ==="
@@ -508,12 +547,9 @@ rm -f "$0"
         self._state.update_config("update", {"channel": channel})
         logger.info("Update channel switched to '%s'", channel)
 
-        # Trigger an immediate check on the new channel
-        threading.Thread(
-            target=self.check_for_updates,
-            name="update-check-after-channel-switch",
-            daemon=True,
-        ).start()
+        # Trigger an immediate check on the new channel (bounded — coalesces
+        # rapid switches so we never accumulate unbounded check threads).
+        self.check_for_updates_async()
 
         return {"status": "ok", "channel": channel}
 

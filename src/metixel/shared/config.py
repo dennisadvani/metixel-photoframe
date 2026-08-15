@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
+
+from metixel.shared.io import atomic_write_json
+from metixel.shared.paths import install_root
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "video": {
         "playback_enabled": True,
-        "player_backend": "auto",  # auto, vlc, ffmpeg
+        "player_backend": "auto",  # auto, vlc
         "max_duration_seconds": 0,  # 0 = unlimited
         "transcoding_enabled": True,
         "transcoding_profile": "",  # pi2, pi3, pi4, pi5, custom — empty = auto-detect
@@ -373,23 +375,12 @@ class Config:
     def save(self, path: Path) -> None:
         """Atomically write configuration to disk.
 
-        Writes to a temp file first, then uses ``os.replace()`` for
-        atomicity — the frontend's inotify watcher will only see complete
-        writes. Creates parent directories if needed.
+        Uses :func:`metixel.shared.io.atomic_write_json` (temp file +
+        ``os.replace``) so the frontend's inotify watcher only sees
+        complete writes. Creates parent directories if needed.
         """
-        # Ensure parent directory exists
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        tmp_path = path.with_suffix(path.suffix + ".tmp")
-        logger.debug("Saving config: tmp=%s, dst=%s", tmp_path, path)
-
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, indent=2, sort_keys=False)
-            f.flush()
-            os.fsync(f.fileno())
-
-        file_size = tmp_path.stat().st_size
-        os.replace(tmp_path, path)
+        atomic_write_json(path, self._data, indent=2)
+        file_size = Path(path).stat().st_size
         logger.info("Config saved atomically to %s (%d bytes)", path, file_size)
 
     @classmethod
@@ -438,10 +429,7 @@ def resolve_watch_paths(
         base_dir: Directory that relative paths are resolved against.
                   Defaults to ``/opt/metixel`` on Linux, ``Path.cwd()`` otherwise.
     """
-    if base_dir is None:
-        base_dir = Path("/opt/metixel") if os.name == "posix" else Path.cwd()
-    else:
-        base_dir = Path(base_dir)
+    base_dir = install_root() if base_dir is None else Path(base_dir)
 
     raw = config.sync.get("local", {}).get("watch_paths", [])
     paths: list[Path] = []

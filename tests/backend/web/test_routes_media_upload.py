@@ -20,9 +20,7 @@ def _upload(client, files: list[tuple[str, bytes]]):
 
 def test_upload_saves_into_my_media(app, client, mock_state, tmp_path):
     """A valid image is saved under media/my_media and reported as saved."""
-    mock_state.update_config(
-        "system", {"media_dir": str(tmp_path / "media")}
-    )
+    mock_state.update_config("system", {"media_dir": str(tmp_path / "media")})
     upload_dir = tmp_path / "media" / "my_media"
 
     resp = _upload(client, [("photo.jpg", b"\xff\xd8\xff\xe0fakejpeg")])
@@ -93,7 +91,7 @@ def test_upload_rejects_when_disk_almost_full(app, client, mock_state, tmp_path)
     # 42 MB free (< 50 MB), so it must be refused.
     fake_usage = mock.Mock(total=1000 * 1024**2, free=52 * 1024**2, used=0)
     with mock.patch(
-        "metixel.backend.web.routes.media.shutil.disk_usage",
+        "metixel.backend.web.media_service.shutil.disk_usage",
         return_value=fake_usage,
     ):
         resp = _upload(client, [("big.mp4", b"\x00" * (10 * 1024**2))])

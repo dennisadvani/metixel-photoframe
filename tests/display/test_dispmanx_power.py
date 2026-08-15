@@ -91,10 +91,10 @@ def wlr_available(monkeypatch):
         return _result(_fake_outputs())
 
     monkeypatch.setattr(
-        "metixel.display.dispmanx_backend.os.path.exists",
+        "metixel.display.hardware.os.path.exists",
         lambda p: p == "/usr/bin/wlr-randr",
     )
-    monkeypatch.setattr("metixel.display.dispmanx_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("metixel.display.hardware.subprocess.run", fake_run)
     return calls
 
 
@@ -128,11 +128,11 @@ def test_detect_falls_back_to_preferred_mode(monkeypatch):
         },
     ]
     monkeypatch.setattr(
-        "metixel.display.dispmanx_backend.os.path.exists",
+        "metixel.display.hardware.os.path.exists",
         lambda p: p == "/usr/bin/wlr-randr",
     )
     monkeypatch.setattr(
-        "metixel.display.dispmanx_backend.subprocess.run",
+        "metixel.display.hardware.subprocess.run",
         lambda cmd, *a, **k: _result(json.dumps(outputs)),
     )
     assert Pi3dBackend()._detect_wlr_output() == "HDMI-A-1"
@@ -176,13 +176,13 @@ def test_wlr_randr_redetects_after_unknown_output(monkeypatch):
         return next(results)
 
     monkeypatch.setattr(
-        "metixel.display.dispmanx_backend.os.path.exists",
+        "metixel.display.hardware.os.path.exists",
         lambda p: p == "/usr/bin/wlr-randr",
     )
-    monkeypatch.setattr("metixel.display.dispmanx_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("metixel.display.hardware.subprocess.run", fake_run)
 
     backend = Pi3dBackend()
-    backend._wlr_output = "HDMI-A-1"  # stale cached output
+    backend._wlr_output_mgr._set_cached("HDMI-A-1")  # stale cached output
     assert backend._wlr_randr(True) is True
     # First toggle failed on HDMI-A-1, then re-detected and retried HDMI-A-2
     assert calls[-1] == ["/usr/bin/wlr-randr", "--output", "HDMI-A-2", "--on"]
@@ -191,7 +191,7 @@ def test_wlr_randr_redetects_after_unknown_output(monkeypatch):
 def test_wlr_randr_missing_binary(monkeypatch):
     """Gracefully returns False when wlr-randr is not installed."""
     monkeypatch.setattr(
-        "metixel.display.dispmanx_backend.os.path.exists",
+        "metixel.display.hardware.os.path.exists",
         lambda p: False,
     )
     backend = Pi3dBackend()
@@ -219,10 +219,10 @@ def test_disable_empty_outputs(monkeypatch):
         return _result("")
 
     monkeypatch.setattr(
-        "metixel.display.dispmanx_backend.os.path.exists",
+        "metixel.display.hardware.os.path.exists",
         lambda p: p == "/usr/bin/wlr-randr",
     )
-    monkeypatch.setattr("metixel.display.dispmanx_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("metixel.display.hardware.subprocess.run", fake_run)
 
     Pi3dBackend()._disable_empty_outputs()
     assert calls[-1] == ["/usr/bin/wlr-randr", "--output", "HDMI-A-1", "--off"]
@@ -249,10 +249,10 @@ def test_disable_empty_outputs_keeps_real_monitor(monkeypatch):
         return _result("")
 
     monkeypatch.setattr(
-        "metixel.display.dispmanx_backend.os.path.exists",
+        "metixel.display.hardware.os.path.exists",
         lambda p: p == "/usr/bin/wlr-randr",
     )
-    monkeypatch.setattr("metixel.display.dispmanx_backend.subprocess.run", fake_run)
+    monkeypatch.setattr("metixel.display.hardware.subprocess.run", fake_run)
 
     Pi3dBackend()._disable_empty_outputs()
     # Never issues an --off for the real monitor
@@ -266,8 +266,8 @@ def test_disable_empty_outputs_skipped_with_override(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("should not touch wlr-randr when overridden")
 
-    monkeypatch.setattr("metixel.display.dispmanx_backend.os.path.exists", boom)
-    monkeypatch.setattr("metixel.display.dispmanx_backend.subprocess.run", boom)
+    monkeypatch.setattr("metixel.display.hardware.os.path.exists", boom)
+    monkeypatch.setattr("metixel.display.hardware.subprocess.run", boom)
 
     Pi3dBackend()._disable_empty_outputs()  # must return early
     monkeypatch.delenv("METIXEL_WLR_OUTPUT")

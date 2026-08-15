@@ -47,19 +47,11 @@ class VideoStateMachineMixin(BaseEngineState):
         on top.  The state machine in :meth:`_video_tick` handles the
         last-frame under-swap and post-playback transition.
 
-        Player backend selection (``video.player_backend`` config):
-        - ``"auto"`` (default): tries VLC subprocess first, falls back to ffmpeg.
-        - ``"vlc"``: uses VLC as a subprocess (borderless window overlay).
-          Recommended for Pi — zero Python heap memory during playback.
-        - ``"ffmpeg"``: uses ffmpeg to decode frames into GPU textures.
-          Currently experimental — falls back to VLC on Pi targets.
+        Playback uses the VLC subprocess (borderless window overlay) —
+        recommended for Pi, zero Python heap memory during playback.
         """
-        # ── Resolve player backend ────────────────────────────────────
+        # ── Resolve video-playback-enabled config ─────────────────────
         video_cfg = self._config.video if hasattr(self._config, "video") else {}
-        player_backend = video_cfg.get("player_backend", "auto")
-        # Fallback to legacy slideshow key if video section not present
-        if not video_cfg:
-            player_backend = self._config.slideshow.get("video_player_backend", "auto")
 
         if not self._config.slideshow.get("video_playback_enabled", True):
             # Also check new video section
@@ -110,27 +102,17 @@ class VideoStateMachineMixin(BaseEngineState):
         # --- Compute layout (needed for both the pre-VLC draw and VLC) ---
         resolved_fit = self._resolve_fit_mode(item)
 
-        # ── Select and launch player backend ───────────────────────────
-        if player_backend == "ffmpeg":
-            # ffmpeg GPU-texture pipeline (experimental — Phase 2)
-            logger.warning(
-                "ffmpeg player backend selected but not yet integrated — "
-                "falling back to VLC for %s",
-                video_path,
-            )
-            player_backend = "vlc"  # Fall through to VLC path below
-
-        if player_backend in ("auto", "vlc"):
-            self._video_launch_vlc(
-                item,
-                video_path,
-                vw,
-                vh,
-                duration,
-                screen_w,
-                screen_h,
-                resolved_fit,
-            )
+        # ── Launch player backend ──────────────────────────────────────
+        self._video_launch_vlc(
+            item,
+            video_path,
+            vw,
+            vh,
+            duration,
+            screen_w,
+            screen_h,
+            resolved_fit,
+        )
 
     def _video_launch_vlc(
         self,

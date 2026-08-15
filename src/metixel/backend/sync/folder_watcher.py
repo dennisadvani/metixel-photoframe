@@ -14,10 +14,7 @@ and Phase 3 (queue to slideshow playlist).
 from __future__ import annotations
 
 import contextlib
-import hashlib
-import json
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path
@@ -33,9 +30,16 @@ from metixel.backend.processing.thumbnail import (
     generate_image_thumbnail,
     generate_video_thumbnail,
 )
-from metixel.backend.processing.utils import nice_cmd
+from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
 from metixel.backend.state import StateManager
 from metixel.shared.config import resolve_watch_paths
+from metixel.shared.io import merge_json
+from metixel.shared.media import (
+    IMAGE_EXTENSIONS,
+    MEDIA_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    content_hash,
+)
 from metixel.shared.models import MediaItem, MediaType
 
 if TYPE_CHECKING:
@@ -43,10 +47,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Accepted media file extensions
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
-MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS
+# Register the optional HEIF decoder so HEIC originals (often mislabelled
+# .jpg via Immich sync) can be probed for dimensions.
+ensure_heif_support()
 
 # Progress file written during initial scan — read by the frontend
 # so it can show a progress bar before the slideshow starts.
@@ -57,31 +60,27 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     """Atomically write per-phase processing progress.
 
     Each phase tracks its own total/processed so the web UI can show
-    separate progress bars that persist across phase switches.
+    separate progress bars that persist across phase switches.  Uses the
+    shared locked :func:`merge_json` so the optimisation queue's own
+    progress writes never clobber the ``scanning`` counter with a stale
+    snapshot.
     """
     try:
-        os.makedirs(os.path.dirname(PROCESSING_STATUS_PATH), exist_ok=True)
-
-        existing: dict[str, dict] = {}
-        try:
-            if os.path.exists(PROCESSING_STATUS_PATH):
-                with open(PROCESSING_STATUS_PATH, encoding="utf-8") as f:
-                    prev = json.load(f)
-                existing = prev.get("phases", {})
-        except (json.JSONDecodeError, OSError):
-            pass
-
-        existing[phase] = {
-            "total": total,
-            "processed": processed,
-            "current_file": current_file,
-        }
-
-        data = {"active": phase, "phases": existing}
-        tmp = PROCESSING_STATUS_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, PROCESSING_STATUS_PATH)
+        merge_json(
+            PROCESSING_STATUS_PATH,
+            lambda data: {
+                "active": phase,
+                "phases": {
+                    **data.get("phases", {}),
+                    phase: {
+                        "total": total,
+                        "processed": processed,
+                        "current_file": current_file,
+                    },
+                },
+            },
+            default={},
+        )
     except OSError:
         logger.debug("Could not write processing status — /run/metixel not available?")
 
@@ -535,6 +534,7 @@ class FolderWatcher:
 
             with Image.open(path) as img:
                 w, h = img.size
+                fmt = img.format or ""
 
             file_hash = FolderWatcher._hash_path(path)
 
@@ -542,9 +542,10 @@ class FolderWatcher:
             thumb_path = generate_image_thumbnail(path, cache_dir)
 
             logger.debug(
-                "[WATCHFOLDER] image  | %4dx%-4d | %s",
+                "[WATCHFOLDER] image  | %4dx%-4d | %-6s | %s",
                 w,
                 h,
+                fmt or "?",
                 path.name,
             )
             return MediaItem(
@@ -555,6 +556,7 @@ class FolderWatcher:
                 width=w,
                 height=h,
                 thumbnail_path=thumb_path,
+                exif_data={"format": fmt},
                 source="local",
             )
         except Exception:
@@ -670,7 +672,10 @@ class FolderWatcher:
             opt_enabled = img_cfg.get("optimisation_enabled", True)
             max_w = img_cfg.get("optimise_max_width", 0) or screen_w
             max_h = img_cfg.get("optimise_max_height", 0) or screen_h
-            if opt_enabled and (item.width > max_w or item.height > max_h):
+            # HEIC/HEIF originals are always converted to JPEG: PIL can read
+            # them, but the frontend cannot display HEIC — force PLAY_CACHED.
+            is_heif = (item.exif_data.get("format") or "").upper() in ("HEIF", "HEIC")
+            if opt_enabled and (is_heif or item.width > max_w or item.height > max_h):
                 # PLAY_CACHED — will be optimised
                 return cache_dir / "images" / f"{item.id}.jpg"
             # PLAY_ORIGINAL
@@ -710,16 +715,13 @@ class FolderWatcher:
     @staticmethod
     def _hash_path(path: Path) -> str:
         """Compute a short content hash for a file (first 1MB + last 1KB)."""
-        sha = hashlib.sha256()
         try:
-            with open(path, "rb") as f:
-                sha.update(f.read(1024 * 1024))
-                f.seek(-1024, 2)
-                sha.update(f.read(1024))
+            return content_hash(path)
         except OSError:
             # Fall back to path-based hash if file can't be read
-            sha.update(str(path).encode())
-        return sha.hexdigest()[:16]
+            import hashlib
+
+            return hashlib.sha256(str(path).encode()).hexdigest()[:16]
 
     def _lookup_ids_by_path(self, paths: set[Path]) -> set[str]:
         """Find playlist item IDs matching a set of original file paths.

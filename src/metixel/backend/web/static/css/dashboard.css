@@ -1159,31 +1159,46 @@ button:focus-visible {
     align-items: flex-start;
     gap: 0.4rem;
     min-width: 0;
+    flex: 1;
 }
 
 .issue-text {
     min-width: 0;
+    flex: 1;
 }
 
+/* Full paths are shown and wrap instead of being truncated (desktop + mobile) */
 .issue-title {
     font-weight: 600;
     color: var(--text);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 260px;
+    word-break: break-all;
 }
 
 .issue-reason {
     color: var(--text-muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 260px;
+    word-break: break-word;
+}
+
+.issue-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-shrink: 0;
+    margin-left: 0.5rem;
 }
 
 .issue-retry {
     flex-shrink: 0;
+}
+
+.issue-delete.btn--sm {
+    border-color: rgba(220, 38, 38, 0.35);
+    color: var(--danger);
+}
+
+.issue-delete.btn--sm:not(:disabled):hover {
+    background: rgba(220, 38, 38, 0.08);
+    color: var(--danger);
 }
 
 /* Folder path under media name */
@@ -1388,8 +1403,9 @@ footer {
         width: 100%;
     }
 
+    /* Single column on phones — 2 narrow columns make long filenames wrap awkwardly */
     .media-grid {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr;
     }
 
     .controls-row button {

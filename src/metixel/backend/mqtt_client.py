@@ -23,6 +23,7 @@ from typing import Any
 from metixel import __version__
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.paths import run_path
 from metixel.shared.platform import resolve_unique_id
 from metixel.shared.ports import MqttGateway
 
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 # entities if they were removed (e.g. after a broker restart).
 _DISCOVERY_REPUBLISH_SECONDS = 30 * 60
 # The frontend writes its current-media state here (see PresentationEngine).
-_CURRENT_MEDIA_FILE = "/run/metixel/current_media.json"
+_CURRENT_MEDIA_FILE = run_path("current_media.json")
 
 
 class MQTTClient:

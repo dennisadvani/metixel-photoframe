@@ -35,6 +35,60 @@ class TestProcessingRetry:
         assert resp.status_code == 405
 
 
+class TestProcessingDelete:
+    def test_delete_removes_file_and_journal(self, client, mock_state, tmp_path) -> None:
+        # Make the temp dir a watch path so the file is deletable
+        mock_state.update_config(
+            "sync",
+            {"local": {"watch_paths": [{"path": str(tmp_path), "enabled": True}]}},
+        )
+        media = tmp_path / "broken.jpg"
+        media.write_bytes(b"x" * 128)
+        mock_state.journal.mark_skipped(media.resolve(), "Could not read media metadata")
+        assert mock_state.journal.get(media.resolve()) is not None
+
+        resp = client.post("/api/processing/delete", json={"path": str(media)})
+        assert resp.status_code == 200
+        assert resp.get_json()["deleted"] is True
+        assert not media.exists()
+        assert mock_state.journal.get(media.resolve()) is None
+
+    def test_delete_removes_playlist_item(self, client, mock_state, tmp_path) -> None:
+        from metixel.shared.models import MediaItem, MediaType
+
+        mock_state.update_config(
+            "sync",
+            {"local": {"watch_paths": [{"path": str(tmp_path), "enabled": True}]}},
+        )
+        media = tmp_path / "broken.jpg"
+        media.write_bytes(b"x" * 128)
+        item = MediaItem(
+            id="broken",
+            original_path=media.resolve(),
+            cached_path=media.resolve(),
+            media_type=MediaType.IMAGE,
+            width=10,
+            height=10,
+        )
+        mock_state.add_playlist_items([item])
+        mock_state.journal.mark_skipped(media.resolve(), "Could not read media metadata")
+
+        resp = client.post("/api/processing/delete", json={"path": str(media)})
+        assert resp.status_code == 200
+        assert all(i.id != "broken" for i in mock_state.get_playlist())
+
+    def test_delete_refuses_outside_watch_path(self, client, tmp_path) -> None:
+        outside = tmp_path / "outside.jpg"
+        outside.write_bytes(b"x" * 128)
+        resp = client.post("/api/processing/delete", json={"path": str(outside)})
+        assert resp.status_code == 400
+        assert outside.exists()
+
+    def test_delete_requires_path(self, client) -> None:
+        resp = client.post("/api/processing/delete", json={})
+        assert resp.status_code == 400
+
+
 class TestHealthProcessingStatus:
     def test_processing_status_includes_issues(self, client, mock_state) -> None:
         mock_state.journal.mark_failed(_sample_path(), "transcode failed")

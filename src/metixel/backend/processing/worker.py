@@ -36,23 +36,19 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
 
+from metixel.backend.processing.utils import ensure_heif_support
+from metixel.shared.media import content_hash
+
+# Register the optional HEIF decoder so HEIC originals (often mislabelled
+# .jpg via Immich sync) can be decoded by this worker subprocess.
+ensure_heif_support()
+
 JPEG_QUALITY = 85
 THUMBNAIL_SIZE = 320
-
-
-def _hash_file(path: Path) -> str:
-    """Compute SHA-256 hash of a file (first 1 MB for speed)."""
-    sha = hashlib.sha256()
-    with open(path, "rb") as f:
-        sha.update(f.read(1024 * 1024))
-        f.seek(-1024, 2)
-        sha.update(f.read(1024))
-    return sha.hexdigest()[:16]
 
 
 def _validate_cached(path: Path) -> bool:
@@ -92,7 +88,7 @@ def _process(args: argparse.Namespace) -> dict:
     screen_w, screen_h = args.screen
 
     # ── Compute content hash ───────────────────────────────────────
-    file_hash = _hash_file(source)
+    file_hash = content_hash(source)
 
     # ── Cache hit ───────────────────────────────────────────────────
     if cached.exists():

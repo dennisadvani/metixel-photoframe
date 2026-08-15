@@ -16,12 +16,11 @@ from unittest import mock
 
 import pytest
 
+from metixel.backend.processing.journal import STATE_FAILED, STATE_READY
 from metixel.backend.processing.optimisation_queue import OptimisationQueue
 from metixel.backend.processing.video import VideoScan
 from metixel.backend.state import StateManager
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
-
-from metixel.backend.processing.journal import STATE_FAILED, STATE_READY
 
 
 @pytest.fixture
@@ -70,11 +69,7 @@ def _item(path: Path, file_hash: str) -> MediaItem:
 
 def _build_media(scan: VideoScan) -> MediaItem:
     """Mock processor.transcode(): build the item a real transcode() would."""
-    status = (
-        TranscodeStatus.TRANSCODED
-        if scan.needs_transcode
-        else TranscodeStatus.NOT_TRANSCODED
-    )
+    status = TranscodeStatus.TRANSCODED if scan.needs_transcode else TranscodeStatus.NOT_TRANSCODED
     return MediaItem(
         id=scan.file_hash,
         original_path=scan.source_path,
@@ -101,20 +96,22 @@ class TestTwoPhaseVideoPipeline:
             ]
         )
         queue._video_processor.transcode = mock.Mock(side_effect=_build_media)
+        # the encode video has no valid cache → real encode needed
+        queue._video_processor.requires_encode = mock.Mock(
+            side_effect=lambda s: s.file_hash == "hash-enc"
+        )
         queue._video_queue = [_item(v_play, "hash-play"), _item(v_enc, "hash-enc")]
 
         queue._process_video_queue()
 
         ids = {m.id for m in queue._state.get_playlist()}
         assert "hash-play" in ids  # streamed in during scanning
-        assert "hash-enc" in ids   # added after Phase B
+        assert "hash-enc" in ids  # added after Phase B
 
         # The transcode step ran only for the video that needs it
         transcode_calls = queue._video_processor.transcode.call_args_list
         assert len(transcode_calls) == 2  # 1 build-NOT_TRANSCODED + 1 encode
-        encoded_hashes = [
-            c.args[0].file_hash for c in transcode_calls if c.args[0].needs_transcode
-        ]
+        encoded_hashes = [c.args[0].file_hash for c in transcode_calls if c.args[0].needs_transcode]
         assert encoded_hashes == ["hash-enc"]
 
         # Journal: both end up ready
@@ -123,6 +120,24 @@ class TestTwoPhaseVideoPipeline:
         assert queue._vid_scanned == 2
         assert queue._vid_transcoded == 1
         assert queue._video_processing is False
+
+    def test_cache_reuse_skips_transcode_bar(self, queue, tmp_path) -> None:
+        """A video needing transcode but with a valid cache is reused, not counted."""
+        v = tmp_path / "cached.mp4"
+        v.write_bytes(b"x" * 1024)
+        scan = _scan(v, "hash-cached", needs_transcode=True)
+        queue._video_processor.scan = mock.Mock(return_value=scan)
+        queue._video_processor.transcode = mock.Mock(side_effect=_build_media)
+        queue._video_processor.requires_encode = mock.Mock(return_value=False)
+        queue._video_queue = [_item(v, "hash-cached")]
+
+        queue._process_video_queue()
+
+        assert {m.id for m in queue._state.get_playlist()} == {"hash-cached"}
+        assert queue._vid_scanned == 1
+        assert queue._vid_transcoded == 0  # cache reuse is NOT counted in the bar
+        # transcode was called once (to finalise/reuse), not to encode
+        assert queue._video_processor.transcode.call_count == 1
 
     def test_scan_failure_marks_failed_and_excludes(self, queue, tmp_path) -> None:
         v = tmp_path / "bad.mp4"
@@ -168,6 +183,7 @@ class TestTwoPhaseVideoPipeline:
 
         queue._video_processor.scan = mock.Mock(return_value=scan)
         queue._video_processor.transcode = mock.Mock(side_effect=_failed)
+        queue._video_processor.requires_encode = mock.Mock(return_value=True)
         queue._video_queue = [_item(v, "hash-fail")]
 
         queue._process_video_queue()

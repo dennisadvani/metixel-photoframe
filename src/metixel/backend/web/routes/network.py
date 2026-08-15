@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
 
 from metixel.backend.network_manager import (
     connect_to_network,
@@ -21,6 +21,7 @@ from metixel.backend.network_manager import (
     is_connected,
     scan_networks,
 )
+from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +30,7 @@ network_bp = Blueprint("network", __name__)
 
 def _get_controller() -> object | None:
     """Return the NetworkController from the daemon, or None if unavailable."""
-    daemon = current_app.config.get("METIXEL_DAEMON")
-    if daemon is not None:
-        return getattr(daemon, "_network_controller", None)
-    return None
+    return get_daemon_component("_network_controller")  # type: ignore[no-any-return]
 
 
 @network_bp.route("/network/status", methods=["GET"])
@@ -74,12 +72,12 @@ def network_connect():
     thread — the phone will lose its AP connection when hostapd stops,
     but by then it has already received the HTTP response.
     """
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     ssid = data.get("ssid", "").strip()
     password = data.get("password", "")
 
     if not ssid:
-        return jsonify({"error": "SSID is required"}), 400
+        return jsonify_error("SSID is required", 400)
 
     # Tell the controller a connection is in progress so the monitor
     # thread doesn't panic when it sees the AP go down.
@@ -172,11 +170,11 @@ def network_forget():
 
     Accepts JSON: ``{"ssid": "MyWiFi"}``.
     """
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     ssid = data.get("ssid", "").strip()
 
     if not ssid:
-        return jsonify({"error": "SSID is required"}), 400
+        return jsonify_error("SSID is required", 400)
 
     ok = forget_network(ssid)
     if ok:
@@ -234,7 +232,7 @@ def validate_pin():
     remaining attempts on failure.  After 3 wrong attempts the PIN
     is locked for 10 minutes.
     """
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     candidate = data.get("pin", "").strip()
 
     if not candidate or len(candidate) != 4 or not candidate.isdigit():

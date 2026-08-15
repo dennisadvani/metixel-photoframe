@@ -173,17 +173,24 @@ class TestEngineVideoIntegration:
         engine = PresentationEngine(config, mock_backend)
 
         item1 = MediaItem(
-            id="v1", original_path=Path("/t/v.mp4"),
-            cached_path=Path("/t/v.mp4"), media_type=MediaType.VIDEO,
-            width=1920, height=1080, duration_seconds=5.0,
+            id="v1",
+            original_path=Path("/t/v.mp4"),
+            cached_path=Path("/t/v.mp4"),
+            media_type=MediaType.VIDEO,
+            width=1920,
+            height=1080,
+            duration_seconds=5.0,
             transcode_status=TranscodeStatus.NOT_TRANSCODED,
             first_frame_path=Path("/t/v.1.frame.jpg"),
             last_frame_path=Path("/t/v.2.frame.jpg"),
         )
         item2 = MediaItem(
-            id="img1", original_path=Path("/t/1.jpg"),
-            cached_path=Path("/t/1.jpg"), media_type=MediaType.IMAGE,
-            width=1920, height=1080,
+            id="img1",
+            original_path=Path("/t/1.jpg"),
+            cached_path=Path("/t/1.jpg"),
+            media_type=MediaType.IMAGE,
+            width=1920,
+            height=1080,
         )
         engine.set_queue([item1, item2])
         # Should not crash — just advance the index
@@ -198,17 +205,24 @@ class TestEngineVideoIntegration:
 
         items = [
             MediaItem(
-                id="v1", original_path=Path("/t/v.mp4"),
-                cached_path=Path("/t/v.mp4"), media_type=MediaType.VIDEO,
-                width=1920, height=1080, duration_seconds=5.0,
+                id="v1",
+                original_path=Path("/t/v.mp4"),
+                cached_path=Path("/t/v.mp4"),
+                media_type=MediaType.VIDEO,
+                width=1920,
+                height=1080,
+                duration_seconds=5.0,
                 transcode_status=TranscodeStatus.NOT_TRANSCODED,
                 first_frame_path=Path("/t/v.1.frame.jpg"),
                 last_frame_path=Path("/t/v.2.frame.jpg"),
             ),
             MediaItem(
-                id="img1", original_path=Path("/t/1.jpg"),
-                cached_path=Path("/t/1.jpg"), media_type=MediaType.IMAGE,
-                width=1920, height=1080,
+                id="img1",
+                original_path=Path("/t/1.jpg"),
+                cached_path=Path("/t/1.jpg"),
+                media_type=MediaType.IMAGE,
+                width=1920,
+                height=1080,
             ),
         ]
         engine.set_queue(items)
@@ -230,19 +244,25 @@ class TestEngineVlcIntegration:
     def config_vlc(self):
         """Config with video playback enabled."""
         from metixel.shared.config import Config
+
         cfg = Config()
-        cfg.update("slideshow", {
-            "video_playback_enabled": True,
-        })
+        cfg.update(
+            "slideshow",
+            {
+                "video_playback_enabled": True,
+            },
+        )
         return cfg
 
     @pytest.mark.skip(
         reason="TODO: rewrite for non-blocking video state machine "
-               "(_video_launch + _video_tick + _video_finish). "
-               "The old _start_video_vlc method was replaced."
+        "(_video_launch + _video_tick + _video_finish). "
+        "The old _start_video_vlc method was replaced."
     )
     def test_start_video_vlc_sets_post_playback_state(
-        self, mock_backend, config_vlc,
+        self,
+        mock_backend,
+        config_vlc,
     ):
         """After VLC finishes, _video_playing is cleared, _item_start_time
         is set so that elapsed ≈ video duration (placing the render loop
@@ -254,14 +274,21 @@ class TestEngineVlcIntegration:
 
         engine = PresentationEngine(config_vlc, mock_backend)
         item = MediaItem(
-            id="v1", original_path=Path("/t/v.mp4"),
-            cached_path=Path("/t/v.mp4"), media_type=MediaType.VIDEO,
-            width=1920, height=1080, duration_seconds=5.0,
+            id="v1",
+            original_path=Path("/t/v.mp4"),
+            cached_path=Path("/t/v.mp4"),
+            media_type=MediaType.VIDEO,
+            width=1920,
+            height=1080,
+            duration_seconds=5.0,
         )
         img_item = MediaItem(
-            id="i1", original_path=Path("/t/1.jpg"),
-            cached_path=Path("/t/1.jpg"), media_type=MediaType.IMAGE,
-            width=1920, height=1080,
+            id="i1",
+            original_path=Path("/t/1.jpg"),
+            cached_path=Path("/t/1.jpg"),
+            media_type=MediaType.IMAGE,
+            width=1920,
+            height=1080,
         )
         engine.set_queue([item, img_item])
         original_idx = engine._current_idx
@@ -272,25 +299,30 @@ class TestEngineVlcIntegration:
         ffprobe_result = mock.MagicMock()
         ffprobe_result.returncode = 0
         ffprobe_result.stdout = "1920,1080,5.0"
-        with mock.patch(
-            "metixel.frontend.presentation.engine._get_or_create_video_frame",
-            return_value=None,
-        ), mock.patch(
-            "metixel.frontend.presentation.engine.subprocess.run",
-            return_value=ffprobe_result,
-        ), mock.patch.object(
-            VlcVideoPlayer, "play", return_value=mock_proc,
+        with (
+            mock.patch(
+                "metixel.frontend.presentation.engine._get_or_create_video_frame",
+                return_value=None,
+            ),
+            mock.patch(
+                "metixel.frontend.presentation.engine.subprocess.run",
+                return_value=ffprobe_result,
+            ),
+            mock.patch.object(
+                VlcVideoPlayer,
+                "play",
+                return_value=mock_proc,
+            ),
         ):
             engine._start_video_vlc(item, "/t/v.mp4")
 
         # After VLC: _video_playing cleared.
-        assert engine._video_playing is False, (
-            "_video_playing should be False after VLC exits"
-        )
+        assert engine._video_playing is False, "_video_playing should be False after VLC exits"
         # _item_start_time is set so elapsed ≈ video duration.
         # On the next render() call this places the loop at the
         # start of the transition phase (crossfade from last frame).
         import time
+
         now = time.monotonic()
         item_duration = engine._get_item_duration(item)
         expected_start = now - item_duration

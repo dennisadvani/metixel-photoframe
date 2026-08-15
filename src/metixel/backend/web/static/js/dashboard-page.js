@@ -276,15 +276,32 @@ import {
                 }
             });
 
-            // Retry a failed/skipped item from the processing-issues area.
-            // Delegated so buttons rendered on each poll keep working.
+            // Retry / Delete a failed/skipped item from the processing-issues
+            // area.  Delegated so buttons rendered on each poll keep working.
             var issuesList = document.getElementById("processing-issues-list");
             issuesList?.addEventListener("click", async function (ev) {
-                var btn = ev.target.closest(".issue-retry");
-                if (!btn) return;
-                var path = btn.getAttribute("data-path");
+                var retryBtn = ev.target.closest(".issue-retry");
+                var delBtn = ev.target.closest(".issue-delete");
+                if (!retryBtn && !delBtn) return;
+                var path = (retryBtn || delBtn).getAttribute("data-path");
                 if (!path) return;
-                var restore = setButtonBusy(btn, "Retrying…");
+
+                // Delete — destructive, so confirm first.
+                if (delBtn) {
+                    if (!window.confirm("Delete this media file?\n" + path)) return;
+                    var drestore = setButtonBusy(delBtn, "Deleting…");
+                    var dresult = await apiPost("/processing/delete", { path: path });
+                    if (dresult && dresult.status === "ok") {
+                        showToast("Media deleted", "success");
+                        await refreshProcessing();
+                    } else {
+                        drestore();
+                        showToast("Failed to delete media", "error");
+                    }
+                    return;
+                }
+
+                var restore = setButtonBusy(retryBtn, "Retrying…");
                 var result = await apiPost("/processing/retry", { path: path });
                 if (result && result.status === "ok") {
                     showToast("Retry scheduled — will re-scan shortly", "info");
@@ -514,7 +531,10 @@ import {
                 + '<div class="issue-reason">' + escapeHtml(label + (reason ? " — " + reason : "")) + when + '</div>'
                 + '</div>'
                 + '</div>'
-                + '<button class="btn--sm issue-retry" data-path="' + path + '">Retry</button>';
+                + '<div class="issue-actions">'
+                + '<button class="btn--sm issue-retry" data-path="' + path + '">Retry</button>'
+                + '<button class="btn--sm issue-delete" data-path="' + path + '">Delete</button>'
+                + '</div>';
             listEl.appendChild(row);
         });
     }

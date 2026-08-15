@@ -10,9 +10,7 @@ public API plus the shared state (declared in ``base.BaseEngineState``).
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import os
 import subprocess
 import threading
 from pathlib import Path
@@ -29,25 +27,12 @@ from metixel.frontend.presentation.scheduler import SlideshowSchedulerMixin
 from metixel.frontend.presentation.transitions import TransitionEngine
 from metixel.frontend.presentation.video_state import _VIDEO_IDLE, VideoStateMachineMixin
 from metixel.shared.config import Config
+from metixel.shared.io import atomic_write_json
+from metixel.shared.media import IMAGE_EXTENSIONS, content_hash
 from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.paths import resolve_install_path, run_path
 
 logger = logging.getLogger(__name__)
-
-
-def _hash_image_file(path: Path) -> str:
-    """Compute a short content hash for an image file.
-
-    Uses first 1MB + last 1KB, matching ``ImageProcessor._hash_file()``.
-    Handles files smaller than 1KB gracefully.
-    """
-    sha = hashlib.sha256()
-    with open(path, "rb") as f:
-        chunk = f.read(1024 * 1024)
-        sha.update(chunk)
-        if len(chunk) >= 1024:
-            f.seek(-1024, 2)
-            sha.update(f.read(1024))
-    return sha.hexdigest()[:16]
 
 
 class PresentationEngine(
@@ -63,8 +48,6 @@ class PresentationEngine(
     on screen while the *inactive* slot is preloaded with the next image
     or video frame. Transitions crossfade between the two slots.
     """
-
-    IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
 
     def __init__(self, config: Config, backend: DisplayBackend) -> None:
         self._config = config
@@ -171,8 +154,8 @@ class PresentationEngine(
                     # cache file whose content differs from the original,
                     # producing a different hash that won't match any thumbnail.
                     try:
-                        file_hash = _hash_image_file(item.original_path)
-                        hash_thumb = Path("/opt/metixel/cache/thumbnails") / f"{file_hash}.jpg"
+                        file_hash = content_hash(item.original_path)
+                        hash_thumb = resolve_install_path("cache/thumbnails") / f"{file_hash}.jpg"
                         if hash_thumb.exists():
                             thumb = str(hash_thumb)
                     except OSError:
@@ -193,13 +176,7 @@ class PresentationEngine(
                     "media_type": item.media_type.value,
                     "thumbnail_path": thumb,
                 }
-            run_dir = os.environ.get("METIXEL_RUN_DIR", "/run/metixel")
-            os.makedirs(run_dir, exist_ok=True)
-            tmp = os.path.join(run_dir, ".current_media.tmp")
-            dst = os.path.join(run_dir, "current_media.json")
-            with open(tmp, "w") as f:
-                json.dump(data, f)
-            os.replace(tmp, dst)
+            atomic_write_json(run_path("current_media.json"), data)
         except OSError:
             pass
 
@@ -227,7 +204,7 @@ class PresentationEngine(
             if not entry.is_file():
                 continue
             suffix = entry.suffix.lower()
-            if suffix not in self.IMAGE_EXTENSIONS:
+            if suffix not in IMAGE_EXTENSIONS:
                 continue
             try:
                 # Fast identity: use file path hash (NOT content hash).

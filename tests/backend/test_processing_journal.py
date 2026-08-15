@@ -31,8 +31,11 @@ class TestProcessingJournalBasics:
         assert journal.paths() == []
         assert journal.snapshot() == {}
         assert journal.stats() == {
-            STATE_PENDING: 0, STATE_PROCESSING: 0, STATE_READY: 0,
-            STATE_FAILED: 0, STATE_SKIPPED: 0,
+            STATE_PENDING: 0,
+            STATE_PROCESSING: 0,
+            STATE_READY: 0,
+            STATE_FAILED: 0,
+            STATE_SKIPPED: 0,
         }
 
     def test_mark_pending_creates_entry(self, journal: ProcessingJournal) -> None:
@@ -70,9 +73,7 @@ class TestProcessingJournalStates:
         journal.mark_skipped(p3, "unreadable")
         assert journal.is_handled(p3, _fp()) is True
 
-    def test_is_handled_false_when_fingerprint_changes(
-        self, journal: ProcessingJournal
-    ) -> None:
+    def test_is_handled_false_when_fingerprint_changes(self, journal: ProcessingJournal) -> None:
         p = Path("/opt/metixel/media/v.mp4")
         journal.mark_pending(p, _fp(), media_type="video")
         journal.mark_ready(p, "transcoded")
@@ -81,9 +82,7 @@ class TestProcessingJournalStates:
         # Different mtime/size → file modified → must be re-picked-up
         assert journal.is_handled(p, _fp(mtime=9999, size=9999)) is False
 
-    def test_is_handled_false_for_non_terminal_states(
-        self, journal: ProcessingJournal
-    ) -> None:
+    def test_is_handled_false_for_non_terminal_states(self, journal: ProcessingJournal) -> None:
         p = Path("/opt/metixel/media/v.mp4")
         journal.mark_pending(p, _fp(), media_type="video")
         assert journal.is_handled(p, _fp()) is False
@@ -155,9 +154,7 @@ class TestProcessingJournalPersistence:
     def test_persist_and_reload(self, tmp_path: Path) -> None:
         path = tmp_path / "cache" / "processing_state.json"
         j1 = ProcessingJournal(path, save_after=0.0)
-        j1.mark_pending(
-            Path("/opt/metixel/media/a.jpg"), _fp(), media_type="image", name="a.jpg"
-        )
+        j1.mark_pending(Path("/opt/metixel/media/a.jpg"), _fp(), media_type="image", name="a.jpg")
         j1.mark_failed(Path("/opt/metixel/media/b.mp4"), "encoder failed")
         j1.flush()
 
@@ -205,7 +202,7 @@ class TestStateManagerJournalIntegration:
         sm = self._make_state(tmp_path)
         # The watcher creates the journal on its first scan before any item
         # reaches the playlist — simulate that here.
-        sm.journal
+        _ = sm.journal
         item = MediaItem(
             id="abc123",
             original_path=Path("/opt/metixel/media/a.jpg"),
@@ -224,7 +221,7 @@ class TestStateManagerJournalIntegration:
         from metixel.shared.models import MediaItem, MediaType
 
         sm = self._make_state(tmp_path)
-        sm.journal
+        _ = sm.journal
         item = MediaItem(
             id="abc123",
             original_path=Path("/opt/metixel/media/a.jpg"),
@@ -241,4 +238,3 @@ class TestStateManagerJournalIntegration:
     def test_flush_journal_noop_when_unused(self, tmp_path: Path) -> None:
         sm = self._make_state(tmp_path)
         sm.flush_journal()  # should not raise
-

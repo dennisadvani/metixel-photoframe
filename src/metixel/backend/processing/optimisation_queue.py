@@ -24,9 +24,7 @@ Priority order (per user specification):
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 import threading
 import time
 from pathlib import Path
@@ -36,14 +34,11 @@ from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.processing.video import VideoProcessor, VideoScan
 from metixel.backend.state import StateManager
+from metixel.shared.io import merge_json
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.system_stats import read_meminfo, read_system_stats
 
 logger = logging.getLogger(__name__)
-
-# Accepted media file extensions (mirrors folder_watcher.py)
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg"}
 
 # Progress file written during optimisation — read by the frontend
 # so it can show a progress bar during initial processing.
@@ -56,32 +51,26 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     Each phase (``scanning``, ``optimising_images``, ``transcoding``)
     tracks its own ``total`` / ``processed`` independently so the web
     UI can show separate progress bars that persist across phase switches
-    instead of flickering between them.
+    instead of flickering between them.  Uses the shared locked
+    :func:`merge_json` so the folder watcher's ``scanning`` updates are
+    never lost to a stale snapshot from this queue's writes.
     """
     try:
-        os.makedirs(os.path.dirname(PROCESSING_STATUS_PATH), exist_ok=True)
-
-        # Preserve existing phase data so bars don't reset to zero
-        existing: dict[str, dict] = {}
-        try:
-            if os.path.exists(PROCESSING_STATUS_PATH):
-                with open(PROCESSING_STATUS_PATH, encoding="utf-8") as f:
-                    prev = json.load(f)
-                existing = prev.get("phases", {})
-        except (json.JSONDecodeError, OSError):
-            pass
-
-        existing[phase] = {
-            "total": total,
-            "processed": processed,
-            "current_file": current_file,
-        }
-
-        data = {"active": phase, "phases": existing}
-        tmp = PROCESSING_STATUS_PATH + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-        os.replace(tmp, PROCESSING_STATUS_PATH)
+        merge_json(
+            PROCESSING_STATUS_PATH,
+            lambda data: {
+                "active": phase,
+                "phases": {
+                    **data.get("phases", {}),
+                    phase: {
+                        "total": total,
+                        "processed": processed,
+                        "current_file": current_file,
+                    },
+                },
+            },
+            default={},
+        )
     except OSError:
         logger.debug("Could not write processing status — /run/metixel not available?")
 
@@ -801,13 +790,13 @@ class OptimisationQueue:
         try:
             # ── Phase A: scan every video ─────────────────────────────
             scan_total = self._vid_scanned + len(batch)
-            pending_transcode: list[VideoScan] = []
+            pending_encode: list[VideoScan] = []
             for item in batch:
-                self._scan_video(item, pending_transcode, scan_total)
+                self._scan_video(item, pending_encode, scan_total)
 
-            # ── Phase B: transcode the subset ─────────────────────────
-            transcode_total = self._vid_transcoded + len(pending_transcode)
-            for scan in pending_transcode:
+            # ── Phase B: encode only the videos that actually need it ──
+            transcode_total = self._vid_transcoded + len(pending_encode)
+            for scan in pending_encode:
                 self._transcode_video(scan, transcode_total)
         finally:
             with self._queue_lock:
@@ -816,7 +805,7 @@ class OptimisationQueue:
     def _scan_video(
         self,
         item: MediaItem,
-        pending_transcode: list[VideoScan],
+        pending_encode: list[VideoScan],
         scan_total: int,
     ) -> None:
         """Scan a single video (Phase A): probe + thumbnail + frames + decide.
@@ -825,8 +814,11 @@ class OptimisationQueue:
 
         * Scan OK + frames present + no transcode needed → added to the
           playlist immediately (streaming).
-        * Scan OK + transcode needed → appended to ``pending_transcode``
-          for Phase B.
+        * Scan OK + transcode needed + cache missing/invalid → appended to
+          ``pending_encode`` so Phase B actually encodes it (counts in the
+          "Transcoding" bar).
+        * Scan OK + transcode needed + valid cache already present → the
+          cache is reused immediately (NOT counted in the transcode bar).
         * Scan failure / missing frames → marked failed (excluded, shown in
           the status area with a Retry action).
         """
@@ -871,7 +863,22 @@ class OptimisationQueue:
                 journal.mark_failed(item.original_path, reason)
                 return
             if scan.needs_transcode:
-                pending_transcode.append(scan)
+                if processor.requires_encode(scan):
+                    # Real encode needed — queue for Phase B (counts in the
+                    # "Transcoding" bar).
+                    pending_encode.append(scan)
+                else:
+                    # Valid cache already exists — finalize (reuse) without
+                    # encoding, so it does NOT appear in the transcode bar.
+                    result = processor.transcode(scan)
+                    if result is not None:
+                        self._state.add_playlist_items([result])
+                        logger.info(
+                            "[OPTQ] VID done (cache) | %4dx%-4d | %s",
+                            result.width,
+                            result.height,
+                            item.original_path.name,
+                        )
             else:
                 # No transcode needed — build the NOT_TRANSCODED item and
                 # stream it into the playlist right away.

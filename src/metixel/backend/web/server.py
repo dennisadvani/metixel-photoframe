@@ -22,6 +22,7 @@ from flask import (
 
 from metixel import __version__
 from metixel.backend.state import StateManager
+from metixel.backend.web.media_service import MAX_UPLOAD_BYTES
 from metixel.shared.ipc import IPCClient
 
 logger = logging.getLogger(__name__)
@@ -90,8 +91,9 @@ def create_app(
 
     # Hard cap on the request body size.  Media uploads are streamed to disk,
     # but a pathological request must not be allowed to fill tmpfs (RAM) with
-    # unbounded multipart data on a small Pi.
-    app.config["MAX_CONTENT_LENGTH"] = 2 * 1024**3  # 2 GiB
+    # unbounded multipart data on a small Pi.  Single source of truth shared
+    # with media_service (also used for the per-file upload cap).
+    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
     # Silence Flask's HTTP access logs (they flood the log output)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
@@ -179,6 +181,13 @@ def create_app(
             response.headers["Pragma"] = "no-cache"
             response.headers["Expires"] = "0"
         return response
+
+    # Install global 400/404/405/500 handlers returning the unified error
+    # shape so unhandled exceptions and malformed requests don't fall
+    # through to Flask's default HTML/JSON responses.
+    from metixel.backend.web.helpers import register_error_handlers
+
+    register_error_handlers(app)
 
     logger.info("Flask application created")
     return app

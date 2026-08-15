@@ -5,6 +5,130 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.10-beta.13]
+
+### Added
+
+- **Shared infrastructure modules** (`metixel/shared/`) — new reusable
+  primitives that centralise previously hand-rolled (and drifting)
+  patterns across the codebase:
+  - `io.py` — `atomic_write_json` / `atomic_write_text` (temp-file +
+    `os.replace` with unified `fsync`) and `read_json` (safe-default
+    JSON read).
+  - `paths.py` — `install_root()` / `resolve_install_path()` and
+    `run_dir()` / `run_path()` for the `/opt/metixel` and `/run/metixel`
+    path resolution that was inlined across ~17 files.
+  - `subprocess.py` — `run_cmd` / `run_sudo` / `schedule_sudo` unifying
+    the three divergent sudo + delayed-restart forms.
+  - `media.py` — accepted-file-extension sets, the "first 1 MB + last
+    1 KB" `content_hash`, and the `(mtime_ns, size)` `fingerprint`,
+    folding the 8× hash and 5× extension-set copies.
+  - `retry.py` — `retry` with exponential `backoff_delays`.
+- **Hardware introspection adapters** (`display/hardware.py`) — extracted
+  from `dispmanx_backend.py`: `GpuInfo` (GPU memory + DRM driver, with a
+  lock-guarded TTL cache), `WlrOutput` (wlr-randr output detection +
+  power, with a lock-guarded cache) and `DisplayPower` (display on/off via
+  wlr-randr or DRM DPMS).  The display backend now delegates to these
+  instead of inlining subprocess/vcgencmd logic.
+- **Media service** (`backend/web/media_service.py`) — extracted the
+  Flask-free filesystem logic out of `routes/media.py` (cache/path
+  resolution, image/video probing, thumbnail lookup, upload
+  sanitisation/dedup, resized-frame serving, cache clearing).  The route
+  module stays thin and the logic is independently testable.
+- **System metrics service** (`backend/system_metrics.py`) — extracted the
+  health-metric subsystem out of `StateManager` (`get_system_health` and
+  all CPU/memory/swap/disk/cache sizing).  `StateManager` now delegates to
+  an injected `SystemMetrics`; the CPU-jiffies delta cache is lock-guarded
+  so concurrent web + MQTT polls are safe.
+
+### Changed
+
+- **Deduped content hashing and extension sets** — `ImageProcessor`,
+  `VideoProcessor`, the thumbnail/worker helpers, folder watcher, web
+  media route, and presentation engine now share `shared/media`.
+- **Centralised atomic writes and path resolution** — config, state
+  manager, folder watcher, optimisation queue, renderer, engine, MQTT
+  client, immich sync and the web routes now use `shared/io` and
+  `shared/paths` instead of inlining temp-file/`os.replace` and
+  `/opt/metixel` / `/run/metixel` literals.
+- **Unified sudo scheduling** — the web system route's delayed-restart
+  logic now delegates to `shared/subprocess.schedule_sudo`.
+- **Centralised web layer** (`backend/web/helpers.py`) — new shared
+  `jsonify_error` (single `{status, error, message}` error shape),
+  `get_body` / `require_fields` (JSON body parsing + validation), and
+  `get_daemon_component` (safe daemon-attribute access).  Route modules
+  now use these instead of repeating `request.get_json(...)`,
+  `jsonify({"error": ...})`, and `current_app.config.get(...)` /
+  `getattr(daemon, "_x")` boilerplate.  `server.py` registers global
+  Flask 400/404/405/500 handlers so unhandled exceptions and malformed
+  requests return the unified error shape instead of Flask's default
+  HTML/JSON.
+- **Split up god-classes** — the three biggest god-classes were broken up:
+  - `dispmanx_backend.py` (~1150 lines) delegates GPU introspection,
+    wlr-randr output detection and display power to `display/hardware.py`.
+  - `routes/media.py` delegates all filesystem logic to
+    `backend/web/media_service.py` (the route keeps thin aliases for the
+    existing test/monkeypatch contract).
+  - `StateManager` delegates its health-metric subsystem to
+    `backend/system_metrics.py`.
+  Each extracted service thread-locks its mutable state (TTL caches, the
+  CPU-jiffies delta, and the web file-list pagination cache).
+- **End-user documentation** — rewrote `docs/USER_GUIDE.md` as a complete
+  setup + feature guide (overview, installation, Wi-Fi setup, dashboard,
+  Immich & MQTT deep-dives, keyboard mapping, OTA updates, troubleshooting)
+  with screenshot placeholders in `docs/images/`; added a new `docs/FAQ.md`;
+  folded the standalone Wi-Fi setup guide into the user guide; and documented
+  the default SSH/Samba logins (`pi` / `raspberry`) with a change-them security
+  tip, plus the required Immich API-key scopes (`asset.read`,
+  `asset.download`, `album.read`, `album.download`).
+
+### Security
+
+- **Sanitised OTA update script inputs** — `UpdateManager._write_and_launch_update_script`
+  now shell-quotes every externally-influenced value (`repo_root`,
+  `target_ref`, `channel`, `log_path`) with `shlex.quote` before embedding
+  them in the generated bash script, so a crafted git ref / channel /
+  version can never break out of the embedded string literals and inject
+  shell commands.
+- **Wi-Fi passphrases no longer appear in process argv** — `network_manager`
+  writes the WPA passphrase to a 0600 temp file and passes it to `nmcli`
+  via `--passwd-file` instead of appending `password <value>` (or
+  `wifi-sec.psk <value>`) to the command line, where it was world-readable
+  via `/proc/<pid>/cmdline` / `ps`.  The temp file is deleted on every
+  exit path.
+- **Bounded update-check threads** — repeated update checks (manual button,
+  channel switches) now go through `UpdateManager.check_for_updates_async`,
+  which coalesces rapid triggers so at most one on-demand check thread is
+  alive at any time instead of spawning an unbounded number.
+- **Immich cancel race fixed** — `ImmichSyncer.cancel()` now sets the
+  cancellation flag under `_sync_lock` (matching the locked reset at the
+  start of each cycle), and all flag reads use a lock-protected
+  `_is_cancel_requested()`, so a cancel arriving while a new cycle is
+  starting can no longer be silently lost.
+- **`dispmanx_backend` texture cap aligned with the ≤3 rule** — the
+  GPU-resident texture ceiling is now `_max_textures = 3` (matching the
+  documented current/next/blend limit and the GPU-log format) instead of
+  the previous `8`.
+- **Single upload-size source of truth** — the 2 GiB upload cap is now
+  defined once as `media_service.MAX_UPLOAD_BYTES` and reused for Flask's
+  `MAX_CONTENT_LENGTH` in `server.py`, removing the duplicated literal.
+
+### Fixed
+
+- **Progress-bar race on `processing_status.json`** — the folder watcher's
+  `scanning` counter could stall (e.g. show "7/8") because the optimisation
+  queue's concurrent, lock-free read-modify-write clobbered the watcher's
+  update with a stale snapshot.  Both writers now go through a shared,
+  lock-protected `merge_json()` in `shared/io.py`, so each phase update is
+  merged atomically instead of being overwritten.
+
+### Removed
+
+- **ffmpeg-frame frontend video player** (`ffmpeg_player.py`) — removed the
+  experimental `VideoPlayer` backend and its `"ffmpeg"` `player_backend`
+  option.  The frontend now uses the VLC subprocess exclusively, enforcing
+  the architecture rule that the frontend never runs ffmpeg/ffprobe.
+
 ## [1.1.10-beta.12]
 
 ### Added
@@ -38,6 +162,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (Transcoding)** encodes only the videos that need it and adds them to the
   playlist.  `VideoProcessor` is split into `scan()` and `transcode()` so
   the scan result (probe info + frames) is reused by the encode.
+- **Transcoding bar counts only real encodes** — a video whose transcode
+  cache already exists and validates is reused without encoding and does
+  **not** count toward the "Transcoding video" progress bar.  Only videos
+  that actually run ffmpeg advance the bar, so it no longer fills up on
+  every restart with already-cached videos.
 - **Full-profile transcode classification** — a video is classified as
   needing transcoding using the *same* full profile check the encoder uses
   (target codec, resolution, fps, bitrate, H.264 level, HDR, colour depth),
@@ -61,6 +190,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Optimisation queue dedups by path** — enqueues and internal queues drop
   duplicates, so overlapping watch paths or racing scans can never process
   the same file twice.
+
+### Fixed
+
+- **HEIC/HEIF images no longer skipped as "unreadable"** — iPhone/HEIC
+  originals (often delivered with a `.jpg` extension via Immich sync) failed
+  metadata gathering because the watch/optimise pipeline never registered the
+  optional `pillow_heif` decoder, so PIL raised `UnidentifiedImageError` and
+  the file was marked skipped.  The pipeline now registers the HEIF opener
+  (folder watcher, thumbnail generator, image processor worker) and HEIC
+  sources are forced through optimisation so they're converted to a real
+  JPEG cache the frontend can play.
 
 ## [1.1.10-beta.11]
 

@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
+
+from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +40,12 @@ def keyboard_learn():
     POST {"cmd": "check"} — poll for result.
     POST {"cmd": "cancel"} — cancel learning.
     """
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     action = data.get("cmd", "")
 
-    daemon = current_app.config.get("METIXEL_DAEMON")
-    if not daemon:
-        return jsonify({"error": "Daemon not available"}), 503
-
-    handler = getattr(daemon, "_keyboard_handler", None)
+    handler = get_daemon_component("_keyboard_handler")
     if not handler:
-        return jsonify({"error": "Keyboard handler not running"}), 503
+        return jsonify_error("Keyboard handler not running", 503)
 
     if action == "start":
         target = data.get("target", "")
@@ -55,7 +53,7 @@ def keyboard_learn():
             handler.start_learn(target)
             return jsonify({"status": "learning", "target": target})
         except ValueError as e:
-            return jsonify({"error": str(e)}), 400
+            return jsonify_error(str(e), 400)
 
     elif action == "check":
         result = handler.get_learn_result()
@@ -82,7 +80,7 @@ def keyboard_learn():
     elif action == "clear":
         target = data.get("target", "")
         if not target:
-            return jsonify({"error": "Missing target command"}), 400
+            return jsonify_error("Missing target command", 400)
         state = current_app.config["METIXEL_STATE"]
         stored = dict(state.config.input.get("keyboard_map", {}) or {})
         # Remove the command from config and set it to empty list
@@ -93,7 +91,7 @@ def keyboard_learn():
         handler.set_key_map(stored)
         return jsonify({"status": "cleared", "command": target})
 
-    return jsonify({"error": "Unknown action"}), 400
+    return jsonify_error("Unknown action", 400)
 
 
 def _key_name(code: int) -> str:

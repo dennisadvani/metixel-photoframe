@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=15">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=17">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -619,56 +619,6 @@
                 </div>
 
                 <div class="card">
-                    <h2>Keyboard / Remote Control</h2>
-                    <p class="hint">Map keys from a USB wireless remote or keyboard to Metixel controls. Click <strong>Learn</strong>, then press the desired key on your remote.</p>
-                    <table id="kbd-map-table" style="width:100%;border-collapse:collapse;margin-top:0.5rem">
-                        <thead>
-                            <tr style="text-align:left;border-bottom:1px solid var(--border)">
-                                <th style="padding:0.35rem 0.5rem;font-size:0.85rem;color:var(--text-muted)">Function</th>
-                                <th style="padding:0.35rem 0.5rem;font-size:0.85rem;color:var(--text-muted)">Mapped Key(s)</th>
-                                <th style="padding:0.35rem 0.5rem"></th>
-                            </tr>
-                        </thead>
-                        <tbody id="kbd-map-body">
-                            <tr><td colspan="3" style="padding:0.5rem;color:var(--text-muted);font-size:0.85rem">Loading key map…</td></tr>
-                        </tbody>
-                    </table>
-                    <div id="kbd-learn-status" style="margin-top:0.5rem;padding:0.4rem 0.6rem;border-radius:4px;display:none;font-size:0.85rem"></div>
-                </div>
-
-                <div class="card">
-                    <h2>Time</h2>
-                    <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
-                        <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
-                        <span style="font-weight:600;font-size:0.9rem">Server Time</span>
-                        <span id="server-clock" style="font-family:monospace;font-size:1.05rem;margin-left:0.3rem">--:--:--</span>
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Timezone</span>
-                        <div style="display:flex;gap:0.4rem;align-items:center">
-                            <select id="cfg-timezone" style="flex:1">
-                                <option value="">Auto-detect</option>
-                            </select>
-                            <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
-                        </div>
-                    </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-ntp-enabled" checked>
-                        <span>NTP Time Sync</span>
-                    </label>
-                    <div class="form-group" id="ntp-servers-group" style="margin-top:0.3rem">
-                        <span class="form-label">NTP Servers</span>
-                        <div style="display:flex;flex-direction:column;gap:0.25rem">
-                            <input type="text" id="cfg-ntp-server-1" placeholder="0.debian.pool.ntp.org">
-                            <input type="text" id="cfg-ntp-server-2" placeholder="1.debian.pool.ntp.org">
-                            <input type="text" id="cfg-ntp-server-3" placeholder="2.debian.pool.ntp.org">
-                        </div>
-                        <p class="hint" style="margin-top:0.2rem">Up to 3 servers. Leave blank to use defaults.</p>
-                    </div>
-                    <button id="btn-save-time">Save Time Settings</button>
-                </div>
-
-                <div class="card">
                     <h2>Updates</h2>
                     <p class="hint">System and version information. Use this to verify what's running before applying updates.</p>
                     <div class="info-grid" id="updates-info">
@@ -738,6 +688,24 @@
                     </div>
                 </div>
 
+                <div class="card">
+                    <h2>Keyboard / Remote Control</h2>
+                    <p class="hint">Map keys from a USB wireless remote or keyboard to Metixel controls. Click <strong>Learn</strong>, then press the desired key on your remote.</p>
+                    <table id="kbd-map-table" style="width:100%;border-collapse:collapse;margin-top:0.5rem">
+                        <thead>
+                            <tr style="text-align:left;border-bottom:1px solid var(--border)">
+                                <th style="padding:0.35rem 0.5rem;font-size:0.85rem;color:var(--text-muted)">Function</th>
+                                <th style="padding:0.35rem 0.5rem;font-size:0.85rem;color:var(--text-muted)">Mapped Key(s)</th>
+                                <th style="padding:0.35rem 0.5rem"></th>
+                            </tr>
+                        </thead>
+                        <tbody id="kbd-map-body">
+                            <tr><td colspan="3" style="padding:0.5rem;color:var(--text-muted);font-size:0.85rem">Loading key map…</td></tr>
+                        </tbody>
+                    </table>
+                    <div id="kbd-learn-status" style="margin-top:0.5rem;padding:0.4rem 0.6rem;border-radius:4px;display:none;font-size:0.85rem"></div>
+                </div>
+
                 <!-- Display Settings (moved from Settings page) -->
                 <div class="card">
                     <h2>Display Settings</h2>
@@ -781,6 +749,38 @@
                     </div>
                     <button id="btn-save-display">Save Display Settings</button>
                     <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
+                </div>
+
+                <div class="card">
+                    <h2>Time</h2>
+                    <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
+                        <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
+                        <span style="font-weight:600;font-size:0.9rem">Server Time</span>
+                        <span id="server-clock" style="font-family:monospace;font-size:1.05rem;margin-left:0.3rem">--:--:--</span>
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Timezone</span>
+                        <div style="display:flex;gap:0.4rem;align-items:center">
+                            <select id="cfg-timezone" style="flex:1">
+                                <option value="">Auto-detect</option>
+                            </select>
+                            <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
+                        </div>
+                    </div>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-ntp-enabled" checked>
+                        <span>NTP Time Sync</span>
+                    </label>
+                    <div class="form-group" id="ntp-servers-group" style="margin-top:0.3rem">
+                        <span class="form-label">NTP Servers</span>
+                        <div style="display:flex;flex-direction:column;gap:0.25rem">
+                            <input type="text" id="cfg-ntp-server-1" placeholder="0.debian.pool.ntp.org">
+                            <input type="text" id="cfg-ntp-server-2" placeholder="1.debian.pool.ntp.org">
+                            <input type="text" id="cfg-ntp-server-3" placeholder="2.debian.pool.ntp.org">
+                        </div>
+                        <p class="hint" style="margin-top:0.2rem">Up to 3 servers. Leave blank to use defaults.</p>
+                    </div>
+                    <button id="btn-save-time">Save Time Settings</button>
                 </div>
 
                 <!-- MQTT / Home Assistant Settings -->
@@ -903,6 +903,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=25"></script>
+    <script type="module" src="/static/js/main.js?v=26"></script>
 </body>
 </html>

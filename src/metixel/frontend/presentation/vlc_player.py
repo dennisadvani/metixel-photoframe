@@ -1,83 +1,58 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
-"""VLC + SDL2 video player (subprocess + python-vlc) for Metixel Photoframe.
+"""VLC subprocess video player for Metixel Photoframe.
 
-Hardware-accelerated playback via a borderless SDL2 window embedding VLC.
-Recommended for Phase 1 (Pi).
+Launches the ``vlc`` CLI as a separate process so it does not contend
+with pi3d for the GPU/GLES context (in-process libVLC fails for that
+reason).  The caller polls the returned ``Popen`` and queries playback
+status via VLC's RC TCP interface.  Recommended for Phase 1 (Pi).
 """
 
 from __future__ import annotations
 
-import contextlib
-import ctypes
 import logging
 import os
 import subprocess
-import sys
-import threading
 import time
 
 logger = logging.getLogger(__name__)
 
 
 class VlcVideoPlayer:
-    """Play videos using SDL2 + python-vlc with hardware decoding.
+    """Play videos by spawning the ``vlc`` CLI as a subprocess.
 
-    Creates a borderless SDL2 window, embeds VLC via ``set_xwindow()``,
-    and uses ``h264_v4l2m2m`` hardware decoding on Raspberry Pi.  Works
-    under cage/XWayland without DRM lease contention — the same approach
-    used by the PicFrame project.
-
-    Key improvements (from picframe analysis):
-
-    - **VLC event callbacks** (MediaPlayerPlaying, EndReached, Error)
-      replace polling ``get_state()`` every 50ms.  Callbacks fire exactly
-      when state changes, eliminating race conditions.
-    - **Progress watchdog** monitors ``player.get_time()`` and kills the
-      player if no progress is detected for >3 seconds (handles VLC
-      hangs on malformed video without freezing the slideshow).
-    - **Window lifecycle**: window starts hidden, shown only on
-      MediaPlayerPlaying, hidden on stop/end/error.  Waits for
-      ``SDL_WINDOWEVENT_SHOWN`` before proceeding.
-    - Cross-platform embedding (X11, macOS NSView, Windows HWND).
+    A separate VLC process gets its own GPU context (or X11 software
+    rendering) and renders via XWayland under cage — the same model used
+    by the PicFrame project.  ``h264_v4l2m2m`` hardware decoding is
+    available on Raspberry Pi.  Playback status is queried over VLC's RC
+    TCP interface rather than by polling an in-process player.
 
     Usage::
 
         player = VlcVideoPlayer()
-        player.play("/path/to/video.mp4")           # blocks until video ends
-        # or
-        player.play("/path/to/video.mp4", block=False)
-        while player.is_playing:
-            player.poll()
+        proc = player.play("/path/to/video.mp4", block=False)
+        while proc is not None and proc.poll() is None:
+            if player.is_playing:
+                # ... render loop / state machine ...
+                pass
             time.sleep(0.05)
         player.stop()
 
     On Raspberry Pi, install::
 
-        sudo apt install -y vlc python3-vlc
-        pip install pysdl2
+        sudo apt install -y vlc
     """
-
-    # Seconds without time progress before the player is considered stuck
-    STUCK_TIMEOUT = 3.0
-
-    # Seconds to wait for SDL_WINDOWEVENT_SHOWN after ShowWindow
-    WINDOW_SHOWN_TIMEOUT = 4.0
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def __init__(self) -> None:
-        self._window: ctypes.c_void_p | None = None
-        self._player: vlc.MediaPlayer | None = None  # type: ignore[name-defined]  # noqa: F821
-        self._instance: vlc.Instance | None = None  # type: ignore[name-defined]  # noqa: F821
         self._playing: bool = False
         self._finished: bool = False
         self._video_path: str = ""
         self._duration: float = 0.0
         self._start_time: float = 0.0
-        self._event: sdl2.SDL_Event | None = None  # type: ignore[name-defined]  # noqa: F821
         self._screen_w: int = 1920
         self._screen_h: int = 1080
         self._hw_codecs: list[str] = []
@@ -85,21 +60,6 @@ class VlcVideoPlayer:
         # RC interface for querying VLC playback status via TCP.
         # Port 0 means "not configured" — VLC hasn't been launched yet.
         self._rc_port: int = 0
-
-        # VLC event-callback driven state
-        self._vlc_playing_event = threading.Event()
-        self._vlc_ended_event = threading.Event()
-        self._vlc_error_event = threading.Event()
-        self._vlc_callbacks_registered: bool = False
-
-        # Window lifecycle flags (set from VLC callbacks on the VLC thread)
-        self._show_window_request: bool = False
-        self._hide_window_request: bool = False
-
-        # Progress watchdog
-        self._last_vlc_time: int = 0
-        self._last_progress_time: float = 0.0
-        self._startup: bool = True
 
     def play(
         self,
@@ -111,25 +71,26 @@ class VlcVideoPlayer:
         loop: bool = False,
         fit_mode: str = "contain",
     ) -> int | subprocess.Popen[bytes] | None:
-        """Start video playback via SDL2 + VLC.
+        """Start video playback via the VLC CLI subprocess.
 
         Args:
             video_path: Path to the video file.
-            screen_w: Screen width in pixels (for the SDL2 window).
-            screen_h: Screen height in pixels (for the SDL2 window).
-            block: If True, run the SDL2 event loop until the video ends.
-                   If False, start playback and return immediately —
-                   caller must call :meth:`poll` and :meth:`stop`.
-            loop: If True, loop the video indefinitely.
+            screen_w: Screen width in pixels (for crop/fill fit modes).
+            screen_h: Screen height in pixels (for crop/fill fit modes).
+            block: If True, block until VLC exits and return its exit code.
+                   If False, start playback and return immediately with the
+                   ``Popen`` handle — the caller polls it and calls
+                   :meth:`stop`.
+            loop: Unused (VLC is launched with ``--play-and-exit``).
             fit_mode: How to fit the video to the screen.
                       ``"contain"`` (default) — letterbox/pillarbox,
                       ``"cover"`` — crop to fill,
                       ``"fill"`` — stretch to fill (distorts AR).
 
         Returns:
-            Exit code (0 = success) when ``block=True``, or ``None``
-            when ``block=False``.  Returns ``None`` if VLC/SDL2 is
-            unavailable.
+            Exit code (0 = success) when ``block=True``, a ``Popen``
+            handle when ``block=False``, or ``None`` if VLC is
+            unavailable or playback could not be started.
         """
         self.stop()
 
@@ -154,15 +115,9 @@ class VlcVideoPlayer:
             return None
 
     def stop(self) -> None:
-        """Stop playback and release SDL2/VLC resources."""
+        """Stop playback and release VLC resources."""
         self._playing = False
         self._finished = True
-        # Signal VLC callbacks so the event loop can exit cleanly
-        self._vlc_playing_event.clear()
-        self._vlc_ended_event.set()
-        if self._player:
-            with contextlib.suppress(Exception):
-                self._player.stop()
         self._teardown()
 
     # ------------------------------------------------------------------
@@ -299,63 +254,11 @@ class VlcVideoPlayer:
     def poll(self) -> int | None:
         """Check if the VLC player has finished.
 
-        Returns:
-            Exit code (0 = success) if the video ended, ``None`` if still
-            playing, or ``None`` if no video was started.
+        In the subprocess model the caller owns the ``Popen`` returned
+        from :meth:`play` and polls it directly; there is no in-process
+        player to query here.  Returns ``None`` when no playback is
+        active.
         """
-        if self._player is None:
-            return None
-
-        # Check VLC event-driven flags first (fast path — no VLC API call)
-        if self._vlc_error_event.is_set():
-            self._playing = False
-            self._finished = True
-            self._duration = time.monotonic() - self._start_time
-            logger.error("VLC playback error (event): %s", self._video_path)
-            self._teardown()
-            return 1
-
-        if self._vlc_ended_event.is_set():
-            self._playing = False
-            self._finished = True
-            self._duration = time.monotonic() - self._start_time
-            logger.info(
-                "VLC playback ended (event): %.1fs elapsed (%s)",
-                self._duration,
-                self._video_path,
-            )
-            self._teardown()
-            return 0
-
-        # Fallback: check state directly (belt-and-suspenders)
-        try:
-            state = self._player.get_state()
-            import vlc  # type: ignore
-
-            if state == vlc.State.Ended:
-                self._playing = False
-                self._finished = True
-                self._duration = time.monotonic() - self._start_time
-                logger.info(
-                    "VLC playback ended (poll): %.1fs elapsed (%s)",
-                    self._duration,
-                    self._video_path,
-                )
-                self._teardown()
-                return 0
-            elif state == vlc.State.Error:
-                self._playing = False
-                self._finished = True
-                self._duration = time.monotonic() - self._start_time
-                logger.error("VLC playback error (poll): %s", self._video_path)
-                self._teardown()
-                return 1
-        except Exception:
-            self._playing = False
-            self._finished = True
-            self._teardown()
-            return 1
-
         return None
 
     # ------------------------------------------------------------------
@@ -455,637 +358,18 @@ class VlcVideoPlayer:
         return list(self._hw_codecs)
 
     # ------------------------------------------------------------------
-    # Internal: playback implementation
-    # ------------------------------------------------------------------
-
-    def _play_impl(
-        self,
-        video_path: str,
-        *,
-        block: bool = True,
-        loop: bool = False,
-        fit_mode: str = "contain",
-    ) -> int | None:
-        """Internal: set up SDL2 + VLC and start playback.
-
-        The ``fit_mode`` controls how the video fills the screen using
-        VLC player API calls (the same approach used by picframe):
-
-        - ``"contain"`` — VLC default; maintains aspect ratio,
-          letterbox/pillarbox as needed.  No overrides applied.
-        - ``"cover"`` — crop the source video to the display's aspect
-          ratio so it fills the screen completely (like CSS
-          background-size: cover).  Uses ``media.add_option(":crop=...")``.
-        - ``"fill"`` — stretch the video to fill the screen by forcing
-          the output aspect ratio to match the display.  Uses
-          ``player.video_set_aspect_ratio()`` — same API as picframe.
-
-        Important: do NOT use ``--crop`` or ``--aspect-ratio`` as VLC
-        Instance() constructor args.  Those are CLI-only flags that
-        don't work through the libVLC API.
-        """
-
-        import sdl2  # type: ignore
-        import vlc  # type: ignore
-
-        # -- SDL2 setup ---------------------------------------------------
-        if sdl2.SDL_Init(sdl2.SDL_INIT_VIDEO) != 0:
-            logger.error(
-                "SDL2 init failed: %s",
-                sdl2.SDL_GetError().decode(),
-            )
-            return None
-
-        self._window = sdl2.SDL_CreateWindow(
-            b"Metixel Video",
-            0,
-            0,
-            self._screen_w,
-            self._screen_h,
-            sdl2.SDL_WINDOW_HIDDEN | sdl2.SDL_WINDOW_BORDERLESS,
-        )
-        if not self._window:
-            logger.error(
-                "SDL2 window creation failed: %s",
-                sdl2.SDL_GetError().decode(),
-            )
-            sdl2.SDL_Quit()
-            return None
-
-        sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
-
-        # -- VLC setup ----------------------------------------------------
-        # Probe ffmpeg decoders to see what HW blocks are available
-        # (for logging only — VLC auto-detects hardware decoders on its
-        # own; we do NOT pass --codec because VLC codec module names
-        # differ from ffmpeg's).
-        self._detect_best_codec()
-
-        # Minimal VLC args.  Force x11 video output to avoid GPU context
-        # contention with pi3d — both can't own the GLES context at once.
-        # The xcb_x11 output renders via X11 software blitting into the
-        # embedded SDL2 window; pi3d keeps the GPU for slideshow textures.
-        vlc_args = [
-            "--no-audio",
-            "--quiet",
-            "--verbose=0",
-            "--vout",
-            "xcb_x11",
-        ]
-
-        try:
-            self._instance = vlc.Instance(vlc_args)
-            self._player = self._instance.media_player_new()
-        except Exception as e:
-            logger.error("VLC init failed: %s", e)
-            self._teardown_sdl2()
-            return None
-
-        # -- Register VLC event callbacks ---------------------------------
-        self._register_vlc_events()
-
-        # -- Embed VLC in the SDL2 window ---------------------------------
-        if not self._embed_vlc_window():
-            self._teardown()
-            return None
-
-        # -- Apply fit mode via VLC player API (picframe approach) ---------
-        # picframe uses player.video_set_aspect_ratio() to force the video
-        # output to match the display — this is the only fit-related API
-        # call that is proven to work through libVLC.
-        #
-        #   - fill:   player.video_set_aspect_ratio() — stretches/squashes
-        #             the video to fill the display exactly.
-        #   - cover:  same as fill (VLC's crop can't be set reliably via
-        #             the libVLC API; video_set_aspect_ratio gets close).
-        #   - contain: nothing — VLC's default letterbox/pillarbox.
-        #
-        display_ratio = self._compute_crop_ratio(
-            self._screen_w,
-            self._screen_h,
-        )
-
-        # Load media (use media_new_path for local files — media_new
-        # expects a URI/MRL and may silently fail on plain paths).
-        media = self._instance.media_new_path(video_path)
-
-        if fit_mode in ("cover", "fill"):
-            # Force the video to stretch to the display aspect ratio.
-            # This is the same API call picframe uses (their --fit_display
-            # flag calls video_set_aspect_ratio).
-            self._player.video_set_aspect_ratio(display_ratio)
-            logger.debug(
-                "VLC %s mode: aspect-ratio=%s (display %dx%d)",
-                fit_mode,
-                display_ratio,
-                self._screen_w,
-                self._screen_h,
-            )
-        else:
-            logger.debug(
-                "VLC contain mode: no aspect override (display %dx%d)",
-                self._screen_w,
-                self._screen_h,
-            )
-
-        self._player.set_media(media)
-        # NOTE: Do NOT call set_fullscreen().  The SDL2 window is already
-        # borderless and sized to the full display.  picframe doesn't call
-        # it either — and on a hidden window it can cause VLC's video
-        # output to fail silently.
-
-        # Create the SDL event object early — _wait_for_window_shown
-        # needs it for SDL_PollEvent.
-        self._event = sdl2.SDL_Event()
-
-        # Show the window BEFORE calling play().  VLC's gles2/gl video
-        # outputs need a mapped (visible) X11 window to create an OpenGL
-        # context — rendering to a hidden window fails with "parent window
-        # not available" on this Pi's VLC build (3.0.23, gles2-enabled).
-        sdl2.SDL_ShowWindow(self._window)
-        self._wait_for_window_shown(self.WINDOW_SHOWN_TIMEOUT)
-        sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
-        if self._screen_w > 1 and self._screen_h > 1:
-            sdl2.SDL_WarpMouseInWindow(
-                self._window,
-                self._screen_w - 1,
-                self._screen_h - 1,
-            )
-
-        self._playing = True
-        self._finished = False
-        self._start_time = time.monotonic()
-
-        # Reset watchdog state
-        self._last_vlc_time = 0
-        self._last_progress_time = time.time()
-        self._startup = True
-
-        logger.info(
-            "VlcVideoPlayer starting: %s (hw_codecs=%s)",
-            video_path,
-            ", ".join(self._hw_codecs) if self._hw_codecs else "auto",
-        )
-
-        if self._player.play() == -1:
-            logger.error("VLC play() failed: %s", video_path)
-            self._teardown()
-            return None
-
-        # DO NOT show window here — wait for MediaPlayerPlaying callback
-        # to ensure VLC has rendered its first frame before revealing.
-
-        if block:
-            return self._run_event_loop()
-        else:
-            return None
-
-    def _run_event_loop(self) -> int:
-        """Run the SDL2 event loop driven by VLC callbacks + progress watchdog.
-
-        This replaces the old polling-based loop.  VLC event callbacks
-        drive state transitions (playing → ended/error), and a progress
-        watchdog detects stuck playback.
-
-        Also handles window show/hide based on flags set from VLC
-        callbacks running on VLC's internal thread.
-        """
-        import sdl2  # type: ignore
-
-        try:
-            while self._playing and self._player is not None:
-                # -- Poll SDL2 events ------------------------------------
-                try:
-                    assert self._event is not None
-                    while sdl2.SDL_PollEvent(ctypes.byref(self._event)):
-                        if self._event.type == sdl2.SDL_QUIT:
-                            self._playing = False
-                            break
-                except Exception:
-                    pass  # SDL2 may raise if window was destroyed externally
-
-                if self._player is None:
-                    break
-
-                # -- Window show/hide lifecycle ---------------------------
-                # (flags set by VLC callbacks on the VLC thread)
-                if self._show_window_request:
-                    self._handle_show_window()
-                    self._show_window_request = False
-
-                if self._hide_window_request:
-                    self._handle_hide_window()
-                    self._hide_window_request = False
-
-                # -- Re-hide cursor if it became visible ----------------
-                if sdl2.SDL_ShowCursor(sdl2.SDL_QUERY) == 1:
-                    sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
-
-                # -- Progress watchdog for stuck playback ----------------
-                try:
-                    state = self._player.get_state()
-                    import vlc  # type: ignore
-
-                    if state == vlc.State.Playing and not self._check_video_progress():
-                        # _check_video_progress already logs + tears down
-                        break
-                except Exception:
-                    logger.warning(
-                        "VLC state check failed — player may have crashed",
-                    )
-                    self._playing = False
-                    self._finished = True
-                    break
-
-                # -- VLC event-driven exit ------------------------------
-                if self._vlc_error_event.is_set():
-                    logger.error("VLC error event: %s", self._video_path)
-                    self._playing = False
-                    self._finished = True
-                    break
-                if self._vlc_ended_event.is_set():
-                    logger.debug("VLC ended event: %s", self._video_path)
-                    self._playing = False
-                    self._finished = True
-                    break
-
-                time.sleep(0.05)  # 20 Hz — VLC renders independently
-
-        except Exception:
-            logger.exception("VLC event loop error")
-            self._playing = False
-            self._finished = True
-
-        self._duration = time.monotonic() - self._start_time
-
-        rc = 0 if self._finished else 1
-        logger.info(
-            "VlcVideoPlayer finished: rc=%d elapsed=%.1fs path=%s",
-            rc,
-            self._duration,
-            self._video_path,
-        )
-
-        self._teardown()
-        return rc
-
-    # ------------------------------------------------------------------
-    # Internal: VLC event callbacks
-    # ------------------------------------------------------------------
-
-    def _register_vlc_events(self) -> None:
-        """Attach VLC event callbacks for playback state changes.
-
-        Callbacks fire on VLC's internal thread and set threading.Event
-        flags consumed by the main event loop.  This is more reliable
-        than polling get_state() and avoids missed transitions.
-        """
-        if self._player is None or self._vlc_callbacks_registered:
-            return
-
-        try:
-            import vlc  # type: ignore
-
-            event_manager = self._player.event_manager()
-            event_manager.event_attach(
-                vlc.EventType.MediaPlayerPlaying,
-                self._on_vlc_playing,
-            )
-            event_manager.event_attach(
-                vlc.EventType.MediaPlayerStopped,
-                self._on_vlc_stopped,
-            )
-            event_manager.event_attach(
-                vlc.EventType.MediaPlayerEndReached,
-                self._on_vlc_ended,
-            )
-            event_manager.event_attach(
-                vlc.EventType.MediaPlayerEncounteredError,
-                self._on_vlc_error,
-            )
-            self._vlc_callbacks_registered = True
-            logger.debug("VLC event callbacks registered")
-        except Exception:
-            logger.warning("Failed to register VLC event callbacks")
-
-    def _on_vlc_playing(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
-        """VLC callback: MediaPlayerPlaying.
-
-        Fired when VLC has started rendering frames.  This is the right
-        moment to show the SDL2 window — avoids a flash of empty/black
-        window before the first frame is ready.
-        """
-        logger.debug("VLC event: MediaPlayerPlaying")
-        self._vlc_playing_event.set()
-        self._vlc_ended_event.clear()
-        self._vlc_error_event.clear()
-        self._show_window_request = True
-        self._last_vlc_time = 0
-        self._last_progress_time = time.time()
-        self._startup = True
-
-    def _on_vlc_stopped(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
-        """VLC callback: MediaPlayerStopped."""
-        logger.debug("VLC event: MediaPlayerStopped")
-        self._hide_window_request = True
-        self._vlc_playing_event.clear()
-        self._vlc_ended_event.set()
-
-    def _on_vlc_ended(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
-        """VLC callback: MediaPlayerEndReached."""
-        logger.debug("VLC event: MediaPlayerEndReached")
-        self._hide_window_request = True
-        self._vlc_playing_event.clear()
-        self._vlc_ended_event.set()
-
-    def _on_vlc_error(self, event: vlc.Event) -> None:  # type: ignore[name-defined]  # noqa: F821
-        """VLC callback: MediaPlayerEncounteredError."""
-        logger.error("VLC event: MediaPlayerEncounteredError")
-        self._hide_window_request = True
-        self._vlc_playing_event.clear()
-        self._vlc_error_event.set()
-        # Force-stop VLC so we don't sit in an error state forever
-        if self._player:
-            with contextlib.suppress(Exception):
-                self._player.stop()
-
-    # ------------------------------------------------------------------
-    # Internal: progress watchdog
-    # ------------------------------------------------------------------
-
-    def _check_video_progress(self) -> bool:
-        """Check if VLC playback is making progress.
-
-        Monitors ``player.get_time()`` — if the time doesn't advance
-        for ``STUCK_TIMEOUT`` seconds (3s), the player is considered
-        stuck and playback is aborted.  This prevents a hung VLC from
-        freezing the entire slideshow.
-
-        Also handles the startup grace period (``_startup=True``):
-        during startup, we wait for ``get_time() > 0`` before declaring
-        the player "started".
-
-        Returns:
-            True if progressing normally, False if stuck or failed.
-        """
-        if not self._player:
-            logger.error("Player not initialized — cannot check progress")
-            return False
-
-        current_time = self._player.get_time()
-        now = time.time()
-
-        if not self._startup and current_time == self._last_vlc_time:
-            # No time advancement — check if stuck for too long
-            if now - self._last_progress_time > self.STUCK_TIMEOUT:
-                logger.error(
-                    "VLC stuck for >%.1fs (time=%d, last_time=%d) — aborting playback of %s",
-                    self.STUCK_TIMEOUT,
-                    current_time,
-                    self._last_vlc_time,
-                    self._video_path,
-                )
-                self._vlc_error_event.set()
-                self._playing = False
-                self._finished = True
-                if self._player:
-                    with contextlib.suppress(Exception):
-                        self._player.stop()
-                return False
-        elif current_time == -1:
-            # VLC returns -1 if no media is loaded
-            logger.warning(
-                "No media loaded or media invalid: %s",
-                self._video_path,
-            )
-            if self._player:
-                with contextlib.suppress(Exception):
-                    self._player.stop()
-            self._playing = False
-            self._finished = True
-            return False
-        else:
-            # Progress detected — reset the stuck timer
-            self._last_progress_time = now
-            if self._startup and current_time > 0:
-                logger.debug(
-                    "Video started playing (time=%d): %s",
-                    current_time,
-                    self._video_path,
-                )
-                self._startup = False
-
-        self._last_vlc_time = current_time
-        return True
-
-    # ------------------------------------------------------------------
-    # Internal: window lifecycle
-    # ------------------------------------------------------------------
-
-    def _handle_show_window(self) -> None:
-        """Show the SDL2 window and wait for it to be visible.
-
-        Called when VLC signals MediaPlayerPlaying.  Waits for the
-        ``SDL_WINDOWEVENT_SHOWN`` event to ensure the window compositor
-        has actually mapped the window before proceeding.
-        """
-        try:
-            import sdl2  # type: ignore
-        except ImportError:
-            return
-
-        if self._window is None:
-            return
-
-        if not (sdl2.SDL_GetWindowFlags(self._window) & sdl2.SDL_WINDOW_SHOWN):
-            sdl2.SDL_ShowWindow(self._window)
-            self._wait_for_window_shown(self.WINDOW_SHOWN_TIMEOUT)
-            sdl2.SDL_ShowCursor(sdl2.SDL_DISABLE)
-            # Warp mouse to bottom-right corner (off-screen on most frames)
-            if self._screen_w > 1 and self._screen_h > 1:
-                sdl2.SDL_WarpMouseInWindow(
-                    self._window,
-                    self._screen_w - 1,
-                    self._screen_h - 1,
-                )
-            logger.debug("Window shown: %dx%d", self._screen_w, self._screen_h)
-
-    def _handle_hide_window(self) -> None:
-        """Hide the SDL2 window when playback stops."""
-        try:
-            import sdl2  # type: ignore
-        except ImportError:
-            return
-
-        if self._window is None:
-            return
-
-        if sdl2.SDL_GetWindowFlags(self._window) & sdl2.SDL_WINDOW_SHOWN:
-            sdl2.SDL_HideWindow(self._window)
-            logger.debug("Window hidden")
-
-    def _wait_for_window_shown(self, timeout: float = 4.0) -> bool:
-        """Wait for the ``SDL_WINDOWEVENT_SHOWN`` event for this window.
-
-        After ``SDL_ShowWindow()``, the window may not be immediately
-        visible — the compositor needs time to map it.  This polls for
-        the shown event with a configurable timeout.
-
-        Returns:
-            True if the window was shown within the timeout, False otherwise.
-        """
-        try:
-            import sdl2  # type: ignore
-        except ImportError:
-            return False
-
-        if self._window is None or self._event is None:
-            return False
-
-        start = time.time()
-        window_id = sdl2.SDL_GetWindowID(self._window)
-        while (time.time() - start) < timeout:
-            while sdl2.SDL_PollEvent(ctypes.byref(self._event)) != 0:
-                if (
-                    self._event is not None
-                    and self._event.type == sdl2.SDL_WINDOWEVENT
-                    and self._event.window.event == sdl2.SDL_WINDOWEVENT_SHOWN
-                    and self._event.window.windowID == window_id
-                ):
-                    return True
-            time.sleep(0.01)
-        logger.warning(
-            "Player window not shown within %.0f seconds",
-            timeout,
-        )
-        return False
-
-    # ------------------------------------------------------------------
-    # Internal: VLC window embedding (cross-platform)
-    # ------------------------------------------------------------------
-
-    def _embed_vlc_window(self) -> bool:
-        """Embed VLC's video output into the SDL2 window.
-
-        Supports:
-        - Linux: X11 via set_xwindow (including KMSDRM for Pi Zero)
-        - macOS: NSView via set_nsobject
-        - Windows: HWND via set_hwnd
-        """
-        try:
-            import sdl2  # type: ignore
-        except ImportError:
-            return False
-
-        wm_info = sdl2.SDL_SysWMinfo()
-        sdl2.SDL_VERSION(wm_info.version)
-        if not sdl2.SDL_GetWindowWMInfo(self._window, ctypes.byref(wm_info)):
-            logger.error("Cannot get SDL2 window WM info")
-            return False
-
-        if sys.platform == "darwin":
-            return self._embed_macos(wm_info)
-        elif sys.platform.startswith("linux"):
-            return self._embed_linux(wm_info)
-        elif sys.platform == "win32":
-            return self._embed_windows()
-        else:
-            logger.error(
-                "VLC embedding not supported on platform: %s",
-                sys.platform,
-            )
-            return False
-
-    def _embed_linux(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]  # noqa: F821
-        """Embed VLC in X11/KMSDRM window (Linux)."""
-        import sdl2  # type: ignore
-
-        if self._player is None:
-            return False
-        if wm_info.subsystem in (sdl2.SDL_SYSWM_X11, sdl2.SDL_SYSWM_KMSDRM):
-            xid = wm_info.info.x11.window
-            self._player.set_xwindow(xid)
-            logger.debug("VLC embedded in X11 window: %s (subsystem=%s)", xid, wm_info.subsystem)
-            return True
-        else:
-            logger.error(
-                "VLC embedding not supported on subsystem: %s",
-                wm_info.subsystem,
-            )
-            return False
-
-    def _embed_macos(self, wm_info: sdl2.SDL_SysWMinfo) -> bool:  # type: ignore[name-defined]  # noqa: F821
-        """Embed VLC in NSView (macOS)."""
-        try:
-            from rubicon.objc import ObjCInstance  # type: ignore
-
-            if self._player is None:
-                return False
-            nswindow_ptr = wm_info.info.cocoa.window
-            nswindow = ObjCInstance(ctypes.c_void_p(nswindow_ptr))
-            nsview = nswindow.contentView
-            self._player.set_nsobject(nsview.ptr.value)
-            logger.debug("VLC embedded in NSView: %s", nsview)
-            return True
-        except ImportError:
-            logger.error("rubicon-objc not installed — cannot embed on macOS")
-            return False
-        except Exception as e:
-            logger.error("macOS VLC embedding failed: %s", e)
-            return False
-
-    def _embed_windows(self) -> bool:
-        """Embed VLC in HWND (Windows)."""
-        try:
-            import sdl2  # type: ignore
-
-            if self._player is None:
-                return False
-            hwnd = sdl2.SDL_GetWindowID(self._window)
-            self._player.set_hwnd(hwnd)
-            logger.debug("VLC embedded in Windows HWND: %s", hwnd)
-            return True
-        except Exception as e:
-            logger.error("Windows VLC embedding failed: %s", e)
-            return False
-
-    # ------------------------------------------------------------------
     # Internal: cleanup
     # ------------------------------------------------------------------
 
     def _teardown(self) -> None:
-        """Release VLC and SDL2 resources."""
-        # Unregister VLC callbacks to avoid stale references
-        self._vlc_callbacks_registered = False
+        """Release VLC resources.
 
-        # Reset RC port (TCP — no filesystem cleanup needed)
+        In the subprocess model there is no in-process VLC/SDL2 state to
+        release — the caller owns the ``Popen`` and terminates it.  We
+        only reset the RC port so a subsequent :meth:`play` allocates a
+        fresh one.
+        """
         self._rc_port = 0
-
-        if self._player:
-            with contextlib.suppress(Exception):
-                self._player.stop()
-            with contextlib.suppress(Exception):
-                self._player.release()
-            self._player = None
-        if self._instance:
-            with contextlib.suppress(Exception):
-                self._instance.release()
-            self._instance = None
-        self._teardown_sdl2()
-
-    def _teardown_sdl2(self) -> None:
-        """Release SDL2 window and quit."""
-        try:
-            import sdl2  # type: ignore
-        except ImportError:
-            self._window = None
-            return
-        if self._window:
-            with contextlib.suppress(Exception):
-                sdl2.SDL_DestroyWindow(self._window)
-            self._window = None
-        with contextlib.suppress(Exception):
-            sdl2.SDL_Quit()
 
     # ------------------------------------------------------------------
     # Internal: codec detection
@@ -1146,17 +430,14 @@ class VlcVideoPlayer:
 
     @staticmethod
     def _vlc_available() -> bool:
-        """Check if python-vlc bindings are importable."""
-        try:
-            import vlc  # type: ignore # noqa: F401
+        """Check if the ``vlc`` binary is on PATH (the subprocess player)."""
+        import shutil
 
-            return True
-        except ImportError:
-            return False
+        return shutil.which("vlc") is not None
 
     @staticmethod
     def _sdl2_available() -> bool:
-        """Check if pysdl2 is importable."""
+        """Check if pysdl2 is importable (kept for API compatibility)."""
         try:
             import sdl2  # type: ignore # noqa: F401
 
@@ -1166,5 +447,5 @@ class VlcVideoPlayer:
 
     @staticmethod
     def is_available() -> bool:
-        """Check if both VLC and SDL2 bindings are available."""
-        return VlcVideoPlayer._vlc_available() and VlcVideoPlayer._sdl2_available()
+        """Check if the VLC CLI subprocess player is available."""
+        return VlcVideoPlayer._vlc_available()
