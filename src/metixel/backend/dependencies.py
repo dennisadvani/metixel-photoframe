@@ -29,7 +29,18 @@ logger = logging.getLogger(__name__)
 # The pip invocation used to install missing deps. Kept explicit so tests can
 # inject a fake; runs as the current user (which works for the Pi ``pi`` user,
 # and needs no sudo because pip installs into the user site-packages).
-_DEFAULT_PIP = ("python3", "-m", "pip", "install", "--break-system-packages")
+#
+# ``--no-cache-dir`` avoids pip failing when an OTA (which runs pip as root via
+# systemd-run) leaves a root-owned cache that the backend user cannot write —
+# the self-heal must install deps regardless of cache state.
+_DEFAULT_PIP = (
+    "python3",
+    "-m",
+    "pip",
+    "install",
+    "--break-system-packages",
+    "--no-cache-dir",
+)
 
 
 def _parse_requirement_name(line: str) -> str | None:
