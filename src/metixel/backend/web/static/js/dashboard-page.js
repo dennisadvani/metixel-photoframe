@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     setButtonBusy,
     setStat,
@@ -288,7 +289,7 @@ import {
 
                 // Delete — destructive, so confirm first.
                 if (delBtn) {
-                    if (!window.confirm("Delete this media file?\n" + path)) return;
+                    if (!(await confirmDialog("Delete this media file?\n" + path, { danger: true, okText: "Delete" }))) return;
                     var drestore = setButtonBusy(delBtn, "Deleting…");
                     var dresult = await apiPost("/processing/delete", { path: path });
                     if (dresult && dresult.status === "ok") {

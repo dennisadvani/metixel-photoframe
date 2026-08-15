@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     setButtonBusy,
     setChecked,
@@ -194,7 +195,7 @@ import {
         var installBtn = document.getElementById("btn-apply-update");
         installBtn?.addEventListener("click", async function () {
             var ch = document.getElementById("cfg-update-channel")?.value || "stable";
-            if (!confirm("Install the latest update from the " + ch + " channel? Services will restart.")) {
+            if (!(await confirmDialog("Install the latest update from the " + ch + " channel? Services will restart.", { okText: "Install" }))) {
                 return;
             }
 

@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     setButtonBusy,
     setChecked,
@@ -110,7 +111,7 @@ import { loadMedia } from "./media-page.js";
             btn.addEventListener("click", async function () {
                 var albumId = btn.getAttribute("data-id");
                 var albumName = btn.getAttribute("data-name");
-                if (!confirm('Remove "' + albumName + '" from sync and delete its local folder (album_' + albumId + ')?')) return;
+                if (!(await confirmDialog('Remove "' + albumName + '" from sync and delete its local folder (album_' + albumId + ')?', { danger: true, okText: "Remove" }))) return;
                 var result = await apiPost("/immich/albums/remove", { id: albumId });
                 if (result && result.status === "ok") {
                     showToast("Removed " + albumName, "success");

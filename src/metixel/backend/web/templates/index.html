@@ -9,8 +9,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
+    <link rel="icon" href="/static/favicon/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
+    <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=17">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=18">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -175,7 +180,7 @@
                         </div>
                         <div class="proc-phase" data-phase="inspecting_videos" style="margin-bottom:0.6rem">
                             <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
-                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">videocam</span> Scanning video</span>
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">videocam</span> Scanning videos</span>
                                 <span class="proc-pct">—</span>
                             </div>
                             <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
@@ -184,7 +189,7 @@
                         </div>
                         <div class="proc-phase" data-phase="transcoding" style="margin-bottom:0.6rem">
                             <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
-                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">movie</span> Transcoding video</span>
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">movie</span> Transcoding videos</span>
                                 <span class="proc-pct">—</span>
                             </div>
                             <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
@@ -503,7 +508,7 @@
                         <span class="form-label">Sync Directory</span>
                         <div style="display:flex;gap:0.4rem;align-items:center">
                             <input type="text" id="cfg-immich-sync-dir" placeholder="media/sync/immich/" style="flex:1">
-                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-immich-sync-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-immich-sync-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
                         </div>
                     </div>
                     <p class="hint">Where downloaded assets are stored. Relative paths are under <code>/opt/metixel/</code>.</p>
@@ -596,7 +601,7 @@
                         <span class="form-label">Cache Dir</span>
                         <div style="display:flex;gap:0.4rem">
                             <input type="text" id="cfg-cache-dir" placeholder="cache/" style="flex:1">
-                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
                         </div>
                     </div>
                     <div class="form-group">
@@ -902,7 +907,19 @@
         </div>
     </div>
 
+    <!-- Confirm Dialog -->
+    <div id="confirm-modal" class="modal">
+        <div class="modal-content" style="max-width:420px">
+            <h3 id="confirm-title">Are you sure?</h3>
+            <p id="confirm-message" class="confirm-message" style="margin:0.5rem 0 1rem 0;color:var(--text-secondary)"></p>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap">
+                <button id="confirm-cancel" class="btn--secondary">Cancel</button>
+                <button id="confirm-ok" class="btn--primary">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=29"></script>
+    <script type="module" src="/static/js/main.js?v=30"></script>
 </body>
 </html>
