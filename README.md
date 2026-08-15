@@ -119,7 +119,7 @@ The manual setup script prompts for your **release channel** (stable/beta)
 and **WiFi country code** before installing — no config file editing needed.
 
 After installation, connect to Wi-Fi using one of several methods — see
-**[WiFi Setup Guide →](docs/WIFI_SETUP.md)**
+[User Guide →](docs/USER_GUIDE.md)
 
 ### Manual Service Control
 
@@ -149,8 +149,8 @@ sudo journalctl -u metixel-backend -f    # Follow logs
 |---|---|
 | **[docs/USER_GUIDE.md](docs/USER_GUIDE.md)** | Full user guide — setup, adding media, customising, troubleshooting |
 | **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)** | Quick-start guide — 10 minutes to first slideshow |
+| **[docs/FAQ.md](docs/FAQ.md)** | Frequently asked questions and quick fixes |
 | **[docs/INSTALLATION.md](docs/INSTALLATION.md)** | Both install methods in detail (image + manual) |
-| **[docs/WIFI_SETUP.md](docs/WIFI_SETUP.md)** | All Wi-Fi connection methods (captive portal, Ethernet, SSH, etc.) |
 | **[docs/HARDWARE.md](docs/HARDWARE.md)** | Hardware setup, wiring, and accessories |
 | [`FEATURES.md`](FEATURES.md) | Complete feature list |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Full system design & implementation roadmap |

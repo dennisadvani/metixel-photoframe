@@ -33,7 +33,7 @@ Use [Raspberry Pi Imager](https://www.raspberrypi.com/software/):
 
 > **Note:** Pi Imager's advanced options (gear icon) are not available for
 > custom images. Configure Wi-Fi after boot using the captive portal or
-> Ethernet — see **[WiFi Setup](WIFI_SETUP.md)**.
+> Ethernet — see the **[User Guide](USER_GUIDE.md)**.
 
 Alternatively, use `dd` or any other flashing tool:
 
@@ -203,7 +203,7 @@ units (`PYTHONPATH=/opt/metixel/src`).
 
 ## After installation
 
-- **[WiFi Setup](WIFI_SETUP.md)** — All the ways to connect your Pi to Wi-Fi
+- **[User Guide](USER_GUIDE.md)** — Full setup, Wi-Fi, Immich & MQTT
 - **[Configuration Guide](CONFIGURATION.md)** — Every setting explained
 - **[Dashboard Walkthrough](DASHBOARD.md)** — Tour of the web UI
 - **[Adding Media](MEDIA_SOURCES.md)** — Local files, network shares, Immich

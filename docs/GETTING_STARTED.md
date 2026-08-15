@@ -44,7 +44,7 @@ else to configure.
 
 > **Note:** Pi Imager's advanced options (gear icon) are not available for
 > custom images. To configure Wi-Fi before first boot, see the alternative
-> methods in **[WiFi Setup](WIFI_SETUP.md)**.
+> methods in the **[User Guide](USER_GUIDE.md)**.
 
 ---
 
@@ -75,8 +75,8 @@ Metixel will show a PIN on screen and create a Wi-Fi hotspot called
 > go to `http://<ip>`. Configure Wi-Fi from the **Network** tab in the
 > dashboard.
 
-For alternative Wi-Fi setup methods (SSH, raspi-config, etc.), see
-**[WiFi Setup](WIFI_SETUP.md)**.
+For alternative Wi-Fi setup methods (SSH, raspi-config, etc.), see the
+**[User Guide](USER_GUIDE.md)**.
 
 ---
 
@@ -118,8 +118,7 @@ minute or two (larger files take longer due to optimisation).
 
 ## What's next?
 
-- **[WiFi Setup](WIFI_SETUP.md)** — All the ways to get your Pi online
+- **[User Guide](USER_GUIDE.md)** — Full setup, every feature, Wi-Fi, Immich & MQTT
+- **[FAQ](FAQ.md)** — Common questions and quick fixes
 - **[Installation Guide](INSTALLATION.md)** — Manual install for tinkerers (flash Trixie yourself)
-- **[Configuration Guide](CONFIGURATION.md)** — Every setting explained
-- **[Troubleshooting](TROUBLESHOOTING.md)** — Common problems and fixes
 - **[Hardware Guide](HARDWARE.md)** — Enclosures, displays, wiring, accessories
