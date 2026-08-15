@@ -584,6 +584,17 @@ class OptimisationQueue:
             return False
         return item.cached_path != item.original_path
 
+    def _image_requires_optimisation(self, item: MediaItem) -> bool:
+        """Whether this image needs a real optimisation (a new cache created).
+
+        A valid, non-trivial cached image (>= 1 KB) means the file was already
+        optimised in a previous run — no new work is done, so it should not
+        count toward the "Optimising images" progress bar.  Returns True when
+        the cache is missing or too small (i.e. real work will run).
+        """
+        cached = item.cached_path
+        return not (cached.is_file() and cached.stat().st_size >= 1024)
+
     def _video_needs_optimisation(self, item: MediaItem) -> bool:
         """Check whether a video needs transcoding.
 
@@ -659,6 +670,12 @@ class OptimisationQueue:
         _batch_start = time.monotonic()
 
         optimised: list[MediaItem] = []
+        # Determine which images in this batch need real optimisation (a new
+        # cache file created) vs are cache hits (already optimised).  Only real
+        # optimisations count toward the "Optimising images" bar, so re-scanning
+        # already-cached images never fills it.
+        batch_real = [self._image_requires_optimisation(item) for item in batch]
+        real_done = 0
         for idx, item in enumerate(batch):
             _img_start = time.monotonic()
             logger.debug(
@@ -721,25 +738,33 @@ class OptimisationQueue:
                 _sleep,
             )
             time.sleep(_sleep)
-            # Cumulative progress — uses the full queue backlog
-            # (batch + remaining queue + already processed) so the
-            # bar doesn't reset every 6 items.
-            with self._queue_lock:
-                queue_remaining = len(self._image_queue)
-            _total = self._img_processed + len(batch) + queue_remaining
-            _current = self._img_processed + idx + 1
-            _write_progress(
-                "optimising_images",
-                _total,
-                _current,
-                item.original_path.name,
-            )
+            # Cumulative progress — only advance the bar for images that
+            # actually created a new cache entry.  Cache hits are still
+            # processed (to return a MediaItem and ensure a thumbnail) but
+            # don't count, so a re-scan of already-optimised images never
+            # fills the "Optimising images" bar.
+            if batch_real[idx]:
+                real_done += 1
+                with self._queue_lock:
+                    queue_real = sum(
+                        1 for i in self._image_queue if self._image_requires_optimisation(i)
+                    )
+                _total = (
+                    self._img_processed + real_done + (sum(batch_real) - real_done) + queue_real
+                )
+                _current = self._img_processed + real_done
+                _write_progress(
+                    "optimising_images",
+                    _total,
+                    _current,
+                    item.original_path.name,
+                )
 
         # ── Batch summary ─────────────────────────────────────────────
         _batch_elapsed = time.monotonic() - _batch_start
         _mem_after = self._read_mem_used_mb()
         _mem_delta = _mem_after - _mem_before
-        self._img_processed += len(batch)
+        self._img_processed += real_done
 
         if optimised:
             self._state.add_playlist_items(optimised)
@@ -796,6 +821,10 @@ class OptimisationQueue:
 
             # ── Phase B: encode only the videos that actually need it ──
             transcode_total = self._vid_transcoded + len(pending_encode)
+            # Start the Transcoding bar at 0/Total as soon as Phase B begins,
+            # so the UI shows "0/N" immediately instead of staying blank until
+            # the first encode finishes.
+            _write_progress("transcoding", transcode_total, 0, "")
             for scan in pending_encode:
                 self._transcode_video(scan, transcode_total)
         finally:

@@ -5,6 +5,49 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.10-beta.14]
+
+### Changed
+
+- **"Optimising images" bar counts only real optimisations** — the bar now
+  advances only for images that actually create a new cache entry, matching
+  the "Transcoding video" bar.  Cache hits (a valid cached image already
+  exists) are still processed to return a `MediaItem` and ensure a thumbnail,
+  but no longer fill the bar — so re-scanning an already-optimised library
+  doesn't inflate progress.  Backed by a new `_image_requires_optimisation`
+  helper that checks the cache file's existence/size.
+- **"Transcoding video" bar starts at `0/Total`** — Phase B writes an explicit
+  `0/N` progress line when the encode phase begins, so the bar shows `0/5`
+  immediately instead of staying blank until the first encode finishes.
+- **Folder-browser default is the media folder** — the browse endpoint now
+  starts at `<install root>/media` (instead of the install root) so users
+  open the browser where their photos/videos live.  The route also uses the
+  shared `install_root()` helper instead of hardcoding the Linux-only
+  `/opt/metixel` path, so browsing works in the desktop (Windows) dev
+  environment too.
+
+### Fixed
+
+- **Folder-browser modal never opened** — the modal element had an inline
+  `style="display:none"`, which overrode the `.modal.open { display: flex }`
+  class that the JS toggles, so the dialog stayed invisible on every page.
+  The redundant inline style was removed (the `.modal` CSS already hides it
+  by default).
+- **Browse buttons / modal controls not wired up on other pages** — the
+  `.btn-browse` buttons and the modal's dismiss handlers (Cancel button,
+  backdrop click) were bound inside the Settings page loader, so they only
+  worked after the Settings page had been visited.  All folder-browser
+  controls (open buttons, Cancel, backdrop click, and a new Escape-to-close)
+  are now bound at module load time, so they work on the Settings, Image Sync
+  and Advanced pages regardless of navigation order.
+
+### Added
+
+- **Browse endpoint tests** — `tests/backend/web/test_routes_browse.py`
+  (8 tests) covering subdirectory listing (files/hidden excluded, sorted),
+  empty directories, parent-path reporting, 404/400 error cases, relative
+  paths resolved against the install root, and the media-folder default.
+
 ## [1.1.10-beta.13]
 
 ### Added

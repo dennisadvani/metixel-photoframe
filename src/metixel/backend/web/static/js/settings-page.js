@@ -394,21 +394,6 @@ import {
                     showToast("Failed to set timezone: " + ((result && result.message) || "Unknown error"), "error");
                 }
             });
-
-            // Browse buttons for cache dir and sync dir
-            document.querySelectorAll(".btn-browse").forEach(function (btn) {
-                btn.addEventListener("click", function () {
-                    var targetId = this.getAttribute("data-target");
-                    var inputEl = document.getElementById(targetId);
-                    if (inputEl) openFolderBrowser(inputEl);
-                });
-            });
-
-            // Folder Browser modal handlers
-            document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
-            document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
-                if (e.target === this) closeFolderBrowser();
-            });
         }
     }
 
@@ -540,9 +525,9 @@ import {
         _browserTargetInput = inputEl;
         var modal = document.getElementById("folder-browser-modal");
         if (modal) modal.classList.add("open");
-        // Start browsing at the current input value or /opt/metixel/
-        var startPath = inputEl.value.trim() || "/opt/metixel/";
-        browseFolder(startPath);
+        // Start browsing at the current input value, or let the backend
+        // default to the media folder when the field is empty.
+        browseFolder(inputEl.value.trim() || "");
     }
 
     function closeFolderBrowser() {
@@ -632,5 +617,34 @@ import {
             el.style.opacity = enabled ? "1" : "0.5";
         }
     }
+
+// Bind all folder-browser controls at module import time — the DOM is fully
+// parsed by then (ES modules are deferred) — so the browse buttons AND the
+// modal's cancel controls (Cancel button, backdrop click, Escape) work on
+// every page (Settings, Image Sync, Advanced) regardless of navigation order,
+// not just after the Settings page has been visited.
+
+// Open: every folder-browse button.
+document.querySelectorAll(".btn-browse").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+        var targetId = this.getAttribute("data-target");
+        var inputEl = document.getElementById(targetId);
+        if (inputEl) openFolderBrowser(inputEl);
+    });
+});
+
+// Close: the Cancel button.
+document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
+// Close: clicking the modal backdrop (outside the dialog).
+document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
+    if (e.target === this) closeFolderBrowser();
+});
+// Close: pressing Escape while the modal is open.
+document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+        var modal = document.getElementById("folder-browser-modal");
+        if (modal && modal.classList.contains("open")) closeFolderBrowser();
+    }
+});
 
 export { loadSettings };
