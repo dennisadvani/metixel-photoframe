@@ -801,13 +801,13 @@ class OptimisationQueue:
         try:
             # ── Phase A: scan every video ─────────────────────────────
             scan_total = self._vid_scanned + len(batch)
-            pending_transcode: list[VideoScan] = []
+            pending_encode: list[VideoScan] = []
             for item in batch:
-                self._scan_video(item, pending_transcode, scan_total)
+                self._scan_video(item, pending_encode, scan_total)
 
-            # ── Phase B: transcode the subset ─────────────────────────
-            transcode_total = self._vid_transcoded + len(pending_transcode)
-            for scan in pending_transcode:
+            # ── Phase B: encode only the videos that actually need it ──
+            transcode_total = self._vid_transcoded + len(pending_encode)
+            for scan in pending_encode:
                 self._transcode_video(scan, transcode_total)
         finally:
             with self._queue_lock:
@@ -816,7 +816,7 @@ class OptimisationQueue:
     def _scan_video(
         self,
         item: MediaItem,
-        pending_transcode: list[VideoScan],
+        pending_encode: list[VideoScan],
         scan_total: int,
     ) -> None:
         """Scan a single video (Phase A): probe + thumbnail + frames + decide.
@@ -825,8 +825,11 @@ class OptimisationQueue:
 
         * Scan OK + frames present + no transcode needed → added to the
           playlist immediately (streaming).
-        * Scan OK + transcode needed → appended to ``pending_transcode``
-          for Phase B.
+        * Scan OK + transcode needed + cache missing/invalid → appended to
+          ``pending_encode`` so Phase B actually encodes it (counts in the
+          "Transcoding" bar).
+        * Scan OK + transcode needed + valid cache already present → the
+          cache is reused immediately (NOT counted in the transcode bar).
         * Scan failure / missing frames → marked failed (excluded, shown in
           the status area with a Retry action).
         """
@@ -871,7 +874,22 @@ class OptimisationQueue:
                 journal.mark_failed(item.original_path, reason)
                 return
             if scan.needs_transcode:
-                pending_transcode.append(scan)
+                if processor.requires_encode(scan):
+                    # Real encode needed — queue for Phase B (counts in the
+                    # "Transcoding" bar).
+                    pending_encode.append(scan)
+                else:
+                    # Valid cache already exists — finalize (reuse) without
+                    # encoding, so it does NOT appear in the transcode bar.
+                    result = processor.transcode(scan)
+                    if result is not None:
+                        self._state.add_playlist_items([result])
+                        logger.info(
+                            "[OPTQ] VID done (cache) | %4dx%-4d | %s",
+                            result.width,
+                            result.height,
+                            item.original_path.name,
+                        )
             else:
                 # No transcode needed — build the NOT_TRANSCODED item and
                 # stream it into the playlist right away.

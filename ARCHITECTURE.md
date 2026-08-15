@@ -262,9 +262,8 @@ metixel-photoframe/                           # Repository root
 │       │   │   ├── video_state.py      # Video state machine mixin
 │       │   │   ├── transitions.py      # Fade, slide, zoom, Ken Burns math
 │       │   │   ├── layout.py           # Fit-to-screen, virtual matte, smart crop
-│       │   │   ├── video_player.py     # Facade: VlcVideoPlayer/VideoPlayer re-exports
-│       │   │   ├── vlc_player.py       # VLC-based video playback
-│       │   │   └── ffmpeg_player.py    # ffmpeg-frame video playback (experimental)
+│       │   │   ├── video_player.py     # Facade: VlcVideoPlayer re-export
+│       │   │   └── vlc_player.py       # VLC subprocess video playback
 │       │   ├── widgets/
 │       │   │   ├── __init__.py
 │       │   │   ├── base.py             # Widget ABC

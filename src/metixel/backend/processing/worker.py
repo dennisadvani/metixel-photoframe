@@ -41,6 +41,12 @@ import json
 import sys
 from pathlib import Path
 
+from metixel.backend.processing.utils import ensure_heif_support
+
+# Register the optional HEIF decoder so HEIC originals (often mislabelled
+# .jpg via Immich sync) can be decoded by this worker subprocess.
+ensure_heif_support()
+
 JPEG_QUALITY = 85
 THUMBNAIL_SIZE = 320
 

@@ -47,7 +47,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "video": {
         "playback_enabled": True,
-        "player_backend": "auto",  # auto, vlc, ffmpeg
+        "player_backend": "auto",  # auto, vlc
         "max_duration_seconds": 0,  # 0 = unlimited
         "transcoding_enabled": True,
         "transcoding_profile": "",  # pi2, pi3, pi4, pi5, custom — empty = auto-detect

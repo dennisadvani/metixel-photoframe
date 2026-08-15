@@ -568,6 +568,26 @@ class VideoProcessor:
             failure_reason=failure_reason,
         )
 
+    def requires_encode(self, scan: VideoScan) -> bool:
+        """Whether an actual ffmpeg encode is needed for this scan.
+
+        ``scan.needs_transcode`` is a *profile* decision (the video should be
+        transcoded); this adds the *cache* state — the cached file is missing,
+        corrupt, or no longer within profile limits.  Used to decide which
+        videos populate the "Transcoding" progress bar: only real encodes are
+        counted, not cache reuse.  Does not mutate anything.
+        """
+        if not scan.needs_transcode:
+            return False
+        cached_path = self._video_cache / f"{scan.file_hash}.mp4"
+        if not cached_path.exists():
+            return True
+        if not self._validate_cached_video(cached_path):
+            return True
+        cached_info = self._probe(cached_path)
+        profile = self._resolve_profile()
+        return VideoProcessor.needs_optimisation(cached_info, profile)
+
     @staticmethod
     def _hash_file(path: Path) -> str:
         sha = hashlib.sha256()

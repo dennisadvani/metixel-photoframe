@@ -346,3 +346,55 @@ class TestFolderWatcherStateIntegration:
         assert removed == 2
         assert len(mock_state._playlist) == 1
         assert mock_state._playlist[0].id == "b"
+
+
+class TestFolderWatcherHeif:
+    """HEIC/HEIF originals are readable and always converted to JPEG."""
+
+    def _watcher(self, mock_state, tmp_path) -> FolderWatcher:
+        from metixel.backend.processing.journal import ProcessingJournal
+
+        mock_state.config.sync["local"]["watch_paths"] = [str(tmp_path)]
+        watcher = FolderWatcher(mock_state)
+        watcher._journal = mock_state.journal
+        return watcher
+
+    def test_heif_forced_to_cache_even_within_limits(self, mock_state, tmp_path):
+        """A HEIC source within display resolution must still be optimised to JPEG."""
+        from metixel.shared.models import MediaItem, MediaType
+
+        watcher = self._watcher(mock_state, tmp_path)
+        item = MediaItem(
+            id="heif1",
+            original_path=Path("/tmp/photo.jpg"),
+            cached_path=Path("/tmp/photo.jpg"),
+            media_type=MediaType.IMAGE,
+            width=1000,
+            height=1000,
+            exif_data={"format": "HEIF"},
+        )
+        cached = watcher._resolve_cached_path(item)
+        assert cached != item.original_path
+        assert str(cached).endswith(".jpg")
+
+    def test_jpeg_within_limits_plays_original(self, mock_state, tmp_path):
+        from metixel.shared.models import MediaItem, MediaType
+
+        watcher = self._watcher(mock_state, tmp_path)
+        item = MediaItem(
+            id="jpg1",
+            original_path=Path("/tmp/photo.jpg"),
+            cached_path=Path("/tmp/photo.jpg"),
+            media_type=MediaType.IMAGE,
+            width=1000,
+            height=1000,
+            exif_data={"format": "JPEG"},
+        )
+        assert watcher._resolve_cached_path(item) == item.original_path
+
+    def test_ensure_heif_support_is_safe_noop(self):
+        """ensure_heif_support() must not raise, with or without pillow-heif."""
+        from metixel.backend.processing.utils import ensure_heif_support
+
+        ensure_heif_support()
+        ensure_heif_support()  # idempotent

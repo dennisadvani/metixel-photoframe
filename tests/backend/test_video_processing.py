@@ -820,3 +820,74 @@ class TestVideoScanTranscode:
         assert result.transcode_status == TranscodeStatus.NOT_TRANSCODED
         assert result.cached_path == result.original_path
 
+    def test_requires_encode_missing_cache_true(self, tmp_path) -> None:
+        """A video that needs transcode with no cache file requires an encode."""
+        h265_profile = {
+            "codec": "h265",
+            "max_width": 3840,
+            "max_height": 2160,
+            "max_fps": 60,
+            "max_bitrate": 80,
+            "color_depth": 10,
+            "hdr_support": True,
+        }
+        p = self._make_proc(tmp_path, h265_profile)
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None and scan.needs_transcode is True
+        assert p.requires_encode(scan) is True
+
+    def test_requires_encode_no_transcode_false(self, tmp_path) -> None:
+        h264_profile = {
+            "codec": "h264",
+            "max_width": 1920,
+            "max_height": 1080,
+            "max_fps": 30,
+            "max_bitrate": 7,
+            "color_depth": 8,
+            "hdr_support": False,
+            "h264_level": "4.0",
+        }
+        p = self._make_proc(tmp_path, h264_profile)
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None and scan.needs_transcode is False
+        assert p.requires_encode(scan) is False
+
+    def test_requires_encode_valid_cache_false(self, tmp_path) -> None:
+        """A valid in-limits cache means no encode is needed (cache reuse)."""
+        h265_profile = {
+            "codec": "h265",
+            "max_width": 3840,
+            "max_height": 2160,
+            "max_fps": 60,
+            "max_bitrate": 80,
+            "color_depth": 10,
+            "hdr_support": True,
+        }
+        p = self._make_proc(tmp_path, h265_profile)
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None and scan.needs_transcode is True
+
+        cached = p._video_cache / f"{scan.file_hash}.mp4"
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        cached.write_bytes(b"x" * 2048)
+
+        def fake_probe(path):
+            if str(path) == str(cached):
+                # cached output is in-limits H.265
+                return {
+                    "width": 1280,
+                    "height": 720,
+                    "codec_name": "hevc",
+                    "fps": 25.0,
+                    "bitrate": 3,
+                    "color_depth": 8,
+                    "h264_level": "",
+                    "color_trc": "bt709",
+                }
+            return dict(self.H264_SOURCE)
+
+        p._validate_cached_video = mock.Mock(return_value=True)
+        p._probe = mock.Mock(side_effect=fake_probe)
+        assert p.requires_encode(scan) is False
+
+

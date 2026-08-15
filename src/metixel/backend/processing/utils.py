@@ -22,6 +22,22 @@ if TYPE_CHECKING:
 _NICE_BINARY: str | None = shutil.which("nice")
 
 
+def ensure_heif_support() -> None:
+    """Register pillow-heif so PIL can decode HEIC/HEIF images (optional dep).
+
+    iPhone/HEIC originals often arrive with a ``.jpg`` extension (e.g. via
+    Immich sync); Pillow cannot decode them unless the optional
+    ``pillow_heif`` package registers its opener.  Safe to call multiple
+    times; no-op when ``pillow_heif`` is not installed.
+    """
+    try:
+        import pillow_heif  # type: ignore[import-not-found, import-untyped]
+
+        pillow_heif.register_heif_opener()
+    except ImportError:
+        pass
+
+
 def nice_cmd(cmd: Sequence[str]) -> list[str]:
     """Wrap a command with ``nice -n 19`` if available.
 

@@ -22,9 +22,13 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
-from metixel.backend.processing.utils import nice_cmd
+from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
 
 logger = logging.getLogger(__name__)
+
+# Register the optional HEIF decoder so HEIC originals (often mislabelled
+# .jpg via Immich sync) can be thumbnailed.
+ensure_heif_support()
 
 THUMBNAIL_SIZE = 320
 

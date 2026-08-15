@@ -51,6 +51,10 @@ Base URL: `http://<frame-ip>/api` (port 8080 also works — Flask listens direct
 - `POST /api/processing/retry` — Forget a failed/skipped journal entry so
   the next folder scan re-processes it.  Body: `{"path": "<resolved path>"}`
   (the `issues[].path` from `/api/health/processing-status`).
+- `POST /api/processing/delete` — Delete a failed/skipped media file and
+  drop its journal entry (and any matching playlist item).  Body:
+  `{"path": "<resolved path>"}`.  Only files inside a configured watch
+  folder can be deleted; returns `{"status": "ok", "deleted": bool}`.
 
 ### Filesystem
 - `GET /api/browse?path=...` — Browse folders for path selection

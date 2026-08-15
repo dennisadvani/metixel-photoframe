@@ -17,7 +17,12 @@ from typing import Any
 
 from PIL import Image
 
+from metixel.backend.processing.utils import ensure_heif_support
 from metixel.shared.models import MediaItem, MediaType
+
+# Register the optional HEIF decoder so HEIC originals (often mislabelled
+# .jpg via Immich sync) can be processed by the image worker subprocess.
+ensure_heif_support()
 
 logger = logging.getLogger(__name__)
 

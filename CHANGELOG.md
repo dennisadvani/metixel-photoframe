@@ -5,6 +5,15 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Removed
+
+- **ffmpeg-frame frontend video player** (`ffmpeg_player.py`) — removed the
+  experimental `VideoPlayer` backend and its `"ffmpeg"` `player_backend`
+  option.  The frontend now uses the VLC subprocess exclusively, enforcing
+  the architecture rule that the frontend never runs ffmpeg/ffprobe.
+
 ## [1.1.10-beta.12]
 
 ### Added
@@ -38,6 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (Transcoding)** encodes only the videos that need it and adds them to the
   playlist.  `VideoProcessor` is split into `scan()` and `transcode()` so
   the scan result (probe info + frames) is reused by the encode.
+- **Transcoding bar counts only real encodes** — a video whose transcode
+  cache already exists and validates is reused without encoding and does
+  **not** count toward the "Transcoding video" progress bar.  Only videos
+  that actually run ffmpeg advance the bar, so it no longer fills up on
+  every restart with already-cached videos.
 - **Full-profile transcode classification** — a video is classified as
   needing transcoding using the *same* full profile check the encoder uses
   (target codec, resolution, fps, bitrate, H.264 level, HDR, colour depth),
@@ -61,6 +75,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Optimisation queue dedups by path** — enqueues and internal queues drop
   duplicates, so overlapping watch paths or racing scans can never process
   the same file twice.
+
+### Fixed
+
+- **HEIC/HEIF images no longer skipped as "unreadable"** — iPhone/HEIC
+  originals (often delivered with a `.jpg` extension via Immich sync) failed
+  metadata gathering because the watch/optimise pipeline never registered the
+  optional `pillow_heif` decoder, so PIL raised `UnidentifiedImageError` and
+  the file was marked skipped.  The pipeline now registers the HEIF opener
+  (folder watcher, thumbnail generator, image processor worker) and HEIC
+  sources are forced through optimisation so they're converted to a real
+  JPEG cache the frontend can play.
 
 ## [1.1.10-beta.11]
 
