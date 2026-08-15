@@ -10,7 +10,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=14">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=15">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -173,6 +173,15 @@
                                 <div class="proc-fill" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
                             </div>
                         </div>
+                        <div class="proc-phase" data-phase="inspecting_videos" style="margin-bottom:0.6rem">
+                            <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">videocam</span> Scanning video</span>
+                                <span class="proc-pct">—</span>
+                            </div>
+                            <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
+                                <div class="proc-fill" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
+                            </div>
+                        </div>
                         <div class="proc-phase" data-phase="transcoding" style="margin-bottom:0.6rem">
                             <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
                                 <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">movie</span> Transcoding video</span>
@@ -184,6 +193,12 @@
                         </div>
                     </div>
                     <div id="processing-idle" style="font-size:0.82rem;color:var(--text-muted)">Idle — no processing active</div>
+                    <div id="processing-issues" style="display:none;margin-top:0.6rem;border-top:1px solid var(--border);padding-top:0.5rem">
+                        <div style="font-size:0.82rem;color:var(--text-secondary);margin-bottom:0.35rem;font-weight:600">
+                            <span class="material-symbols-outlined" style="font-size:0.95rem;vertical-align:middle">report</span> Processing issues
+                        </div>
+                        <div id="processing-issues-list" style="display:flex;flex-direction:column;gap:0.4rem"></div>
+                    </div>
                 </div>
 
                 <div class="card">
@@ -888,6 +903,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=24"></script>
+    <script type="module" src="/static/js/main.js?v=25"></script>
 </body>
 </html>

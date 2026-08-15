@@ -13,6 +13,7 @@ import {
     setButtonBusy,
     setStat,
     showToast,
+    timeAgo,
     updatePowerButton
 } from "./core.js";
 
@@ -275,6 +276,25 @@ import {
                 }
             });
 
+            // Retry a failed/skipped item from the processing-issues area.
+            // Delegated so buttons rendered on each poll keep working.
+            var issuesList = document.getElementById("processing-issues-list");
+            issuesList?.addEventListener("click", async function (ev) {
+                var btn = ev.target.closest(".issue-retry");
+                if (!btn) return;
+                var path = btn.getAttribute("data-path");
+                if (!path) return;
+                var restore = setButtonBusy(btn, "Retrying…");
+                var result = await apiPost("/processing/retry", { path: path });
+                if (result && result.status === "ok") {
+                    showToast("Retry scheduled — will re-scan shortly", "info");
+                    await refreshProcessing();
+                } else {
+                    restore();
+                    showToast("Failed to schedule retry", "error");
+                }
+            });
+
         }
 
         // Load persistent messages (shown once per dashboard visit)
@@ -406,7 +426,7 @@ import {
         var idleEl = document.getElementById("processing-idle");
         var anyActive = false;
 
-        ["scanning", "optimising_images", "transcoding"].forEach(function (phase) {
+        ["scanning", "optimising_images", "inspecting_videos", "transcoding"].forEach(function (phase) {
             var container = document.querySelector('.proc-phase[data-phase="' + phase + '"]');
             if (!container) return;
 
@@ -445,10 +465,58 @@ import {
             }
         });
 
+        // Render the processing-issues status area (failed/skipped media)
+        _renderProcessingIssues(status);
+
         // Show/hide the idle message
         if (idleEl) {
             idleEl.style.display = anyActive ? "none" : "";
         }
+    }
+
+    /**
+     * Render the "Processing issues" status area below the progress bars.
+     * Lists failed/skipped media from the processing journal with a Retry
+     * action, so the user can see why an item is missing from the slideshow.
+     * @param {object} status - The /health/processing-status response.
+     */
+    function _renderProcessingIssues(status) {
+        var container = document.getElementById("processing-issues");
+        var listEl = document.getElementById("processing-issues-list");
+        if (!container || !listEl) return;
+
+        var issues = (status && status.issues) || [];
+        if (issues.length === 0) {
+            container.style.display = "none";
+            listEl.innerHTML = "";
+            return;
+        }
+        container.style.display = "";
+        listEl.innerHTML = "";
+
+        issues.slice(0, 8).forEach(function (issue) {
+            var isFailed = issue.state === "failed";
+            var icon = isFailed ? "error" : "warning";
+            var color = isFailed ? "var(--danger)" : "#f0a030";
+            var label = isFailed ? "Failed" : "Skipped";
+            var reason = issue.reason || "";
+            var when = issue.updated_at ? " · " + (timeAgo(issue.updated_at) || "") : "";
+            var path = escapeHtml(issue.path || "");
+            var name = escapeHtml(issue.name || issue.path || "");
+
+            var row = document.createElement("div");
+            row.className = "issue-row";
+            row.innerHTML =
+                '<div class="issue-main">'
+                + '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;color:' + color + '">' + icon + '</span>'
+                + '<div class="issue-text">'
+                + '<div class="issue-title" title="' + path + '">' + name + '</div>'
+                + '<div class="issue-reason">' + escapeHtml(label + (reason ? " — " + reason : "")) + when + '</div>'
+                + '</div>'
+                + '</div>'
+                + '<button class="btn--sm issue-retry" data-path="' + path + '">Retry</button>';
+            listEl.appendChild(row);
+        });
     }
 
     /** Refresh the Sync Status card on the Dashboard. */

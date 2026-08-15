@@ -17,6 +17,7 @@ import contextlib
 import hashlib
 import logging
 import subprocess
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +43,32 @@ from metixel.backend.processing.probe import (
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class VideoScan:
+    """Result of the Phase A video scan (probe + thumbnail + frames).
+
+    Carried into Phase B (:meth:`VideoProcessor.transcode`) so the encode
+    reuses the probe info and frame/thumbnail paths instead of re-probing.
+    Non-fatal problems (e.g. a frame failing to extract) are recorded in
+    ``errors`` so the caller can exclude the video if frames are required.
+    """
+
+    source_path: Path
+    source: str
+    file_hash: str
+    info: dict
+    thumbnail_path: Path
+    first_frame_path: Path | None
+    last_frame_path: Path | None
+    needs_transcode: bool
+    errors: list = field(default_factory=list)
+
+    @property
+    def has_frames(self) -> bool:
+        """Whether both first and last frames are available (playable)."""
+        return self.first_frame_path is not None and self.last_frame_path is not None
 
 
 class VideoProcessor:
@@ -351,19 +378,31 @@ class VideoProcessor:
         return False
 
     def process(self, source_path: Path, source: str = "local") -> MediaItem | None:
-        """Process a single video file. Returns MediaItem or None on failure.
+        """Process a single video end-to-end (scan + transcode).
 
-        Thumbnail extraction is always attempted first.  If transcoding is
-        enabled, the video is transcoded to a cache-friendly H.264 MP4 at
-        the configured resolution and quality.  If transcoding is disabled,
-        the original file is used directly for playback.
+        Returns a MediaItem or ``None`` on failure.  Convenience wrapper
+        around :meth:`scan` + :meth:`transcode` for callers that don't need
+        the two-phase (scan-all-then-transcode) pipeline.
+        """
+        scan = self.scan(source_path, source=source)
+        if scan is None:
+            return None
+        return self.transcode(scan)
 
-        Returns a MediaItem with the appropriate ``transcode_status`` set
-        so the presentation engine can enforce guardrails.
+    def scan(self, source_path: Path, source: str = "local") -> VideoScan | None:
+        """Phase A — probe + thumbnail + first/last frames + transcode decision.
+
+        Extracts everything the frontend needs (thumbnail for the media page,
+        first/last frames for slideshow preload/swap) and decides, using the
+        full profile check, whether the video must be transcoded.
+
+        Returns a :class:`VideoScan`, or ``None`` if the file cannot be read
+        at all.  Non-fatal problems (e.g. a frame failing to extract) are
+        recorded in ``scan.errors`` so the caller can exclude the video when
+        frames are required for playback.
         """
         try:
             file_hash = self._hash_file(source_path)
-            cached_path = self._video_cache / f"{file_hash}.mp4"
             thumb_path = self._thumb_cache / f"{file_hash}.jpg"
 
             # Probe source for metadata
@@ -388,129 +427,147 @@ class VideoProcessor:
                 file_hash,
             )
 
-            # If the source is within all profile limits, skip transcode.
-            codec_name = info.get("codec_name", "")
-            vw = info.get("width", 0) or 0
-            vh = info.get("height", 0) or 0
-
-            # Resolve the effective transcoding profile
+            # Full profile check — the same decision the transcode phase uses,
+            # so H.264 sources on an H.265 profile are correctly flagged as
+            # needing transcoding (previously the coarse watch-stage check
+            # under-counted them, hiding encodes under "Scanning video").
             profile = self._resolve_profile()
-
-            # Determine if optimised enough
-            needs_opt = VideoProcessor.needs_optimisation(info, profile)
-            if not needs_opt:
-                logger.debug(
-                    "Video already optimal (%s %dx%d) — skipping transcode for %s",
-                    codec_name,
-                    vw,
-                    vh,
-                    source_path.name,
-                )
-                return self._build_item(
-                    source_path,
-                    source_path,
-                    thumb_path,
-                    info,
-                    source,
-                    file_hash,
-                    status=TranscodeStatus.NOT_TRANSCODED,
-                    first_frame=first_frame,
-                    last_frame=last_frame,
-                )
-
-            # If transcoding is disabled, use original file
-            if not self._transcoding_enabled:
-                logger.debug("Transcoding disabled — using original file for %s", source_path.name)
-                return self._build_item(
-                    source_path,
-                    source_path,
-                    thumb_path,
-                    info,
-                    source,
-                    file_hash,
-                    status=TranscodeStatus.NOT_TRANSCODED,
-                    first_frame=first_frame,
-                    last_frame=last_frame,
-                )
-
-            # If cached file already exists, validate it against the current
-            # profile.  A profile change (e.g. Pi 4 → Pi 3) makes previously
-            # cached files too large / wrong codec — they must be re-transcoded.
-            if cached_path.exists():
-                if self._validate_cached_video(cached_path):
-                    cached_info = self._probe(cached_path)
-                    if not VideoProcessor.needs_optimisation(cached_info, profile):
-                        logger.debug("Cached video still valid for current profile: %s", file_hash)
-                        return self._build_item(
-                            source_path,
-                            cached_path,
-                            thumb_path,
-                            info,
-                            source,
-                            file_hash,
-                            status=TranscodeStatus.TRANSCODED,
-                            first_frame=first_frame,
-                            last_frame=last_frame,
-                        )
-                    else:
-                        logger.info(
-                            "Cached video exceeds new profile limits — re-transcoding: %s",
-                            cached_path.name,
-                        )
-                        self._cleanup_cached_video(cached_path, thumb_path, file_hash)
-                else:
-                    logger.warning(
-                        "Cached video is corrupt — will re-transcode: %s",
-                        cached_path.name,
-                    )
-                    self._cleanup_cached_video(cached_path, thumb_path, file_hash)
-            else:
-                # No cached file exists for this content hash.  This is the
-                # silent path — previously indistinguishable from a corrupt
-                # or profile-mismatched cache.  Log it explicitly so every
-                # re-transcode is attributable to exactly one cause.
-                logger.info(
-                    "No cached video found for %s — transcoding",
-                    source_path.name,
-                )
-
-            # Mark as transcoding, then transcode
-            self._transcoding.add(file_hash)
-            try:
-                self._transcode(source_path, cached_path, info)
-                status = TranscodeStatus.TRANSCODED
-                playback_path = cached_path
-                logger.info(
-                    "Video transcoded: %s → %s",
-                    source_path.name,
-                    file_hash,
-                )
-            except RuntimeError as e:
-                logger.warning(
-                    "Transcode failed for %s: %s — will play original file",
-                    source_path.name,
-                    e,
-                )
-                status = TranscodeStatus.FAILED
-                playback_path = source_path
-            finally:
-                self._transcoding.discard(file_hash)
-
-            return self._build_item(
-                source_path,
-                playback_path,
-                thumb_path,
-                info,
-                source,
-                file_hash,
-                status=status,
-                first_frame=first_frame,
-                last_frame=last_frame,
+            needs_transcode = bool(
+                profile is not None
+                and VideoProcessor.needs_optimisation(info, profile)
             )
 
+            errors: list[str] = []
+            if first_frame is None or last_frame is None:
+                errors.append("Frame extraction failed (first/last frame missing)")
+
+            return VideoScan(
+                source_path=source_path,
+                source=source,
+                file_hash=file_hash,
+                info=info,
+                thumbnail_path=thumb_path,
+                first_frame_path=first_frame,
+                last_frame_path=last_frame,
+                needs_transcode=needs_transcode,
+                errors=errors,
+            )
         except Exception:
-            logger.exception("Failed to process video: %s", source_path)
+            logger.exception("Failed to scan video: %s", source_path)
             return None
+
+    def transcode(self, scan: VideoScan) -> MediaItem | None:
+        """Phase B — produce a playable MediaItem, encoding if necessary.
+
+        * ``scan.needs_transcode`` is False → ``NOT_TRANSCODED`` (play the
+          original at its own quality).
+        * Needs transcode → reuse a valid cached file, otherwise encode.
+          A failed encode returns a ``FAILED`` item — the caller must NOT
+          add it to the playlist (no native-resolution fallback).
+        """
+        source_path = scan.source_path
+        file_hash = scan.file_hash
+        info = scan.info
+        profile = self._resolve_profile()
+        cached_path = self._video_cache / f"{file_hash}.mp4"
+
+        # Within all profile limits (or transcoding disabled) — play original.
+        if not scan.needs_transcode:
+            logger.debug(
+                "Video already optimal (%s %dx%d) — skipping transcode for %s",
+                info.get("codec_name", ""),
+                info.get("width", 0) or 0,
+                info.get("height", 0) or 0,
+                source_path.name,
+            )
+            return self._build_item(
+                source_path,
+                source_path,
+                scan.thumbnail_path,
+                info,
+                scan.source,
+                file_hash,
+                status=TranscodeStatus.NOT_TRANSCODED,
+                first_frame=scan.first_frame_path,
+                last_frame=scan.last_frame_path,
+            )
+
+        # If cached file already exists, validate it against the current
+        # profile.  A profile change (e.g. Pi 4 → Pi 3) makes previously
+        # cached files too large / wrong codec — they must be re-transcoded.
+        if cached_path.exists():
+            if self._validate_cached_video(cached_path):
+                cached_info = self._probe(cached_path)
+                if not VideoProcessor.needs_optimisation(cached_info, profile):
+                    logger.debug("Cached video still valid for current profile: %s", file_hash)
+                    return self._build_item(
+                        source_path,
+                        cached_path,
+                        scan.thumbnail_path,
+                        info,
+                        scan.source,
+                        file_hash,
+                        status=TranscodeStatus.TRANSCODED,
+                        first_frame=scan.first_frame_path,
+                        last_frame=scan.last_frame_path,
+                    )
+                logger.info(
+                    "Cached video exceeds new profile limits — re-transcoding: %s",
+                    cached_path.name,
+                )
+                self._cleanup_cached_video(cached_path, scan.thumbnail_path, file_hash)
+            else:
+                logger.warning(
+                    "Cached video is corrupt — will re-transcode: %s",
+                    cached_path.name,
+                )
+                self._cleanup_cached_video(cached_path, scan.thumbnail_path, file_hash)
+        else:
+            # No cached file exists for this content hash.  This is the
+            # silent path — previously indistinguishable from a corrupt
+            # or profile-mismatched cache.  Log it explicitly so every
+            # re-transcode is attributable to exactly one cause.
+            logger.info(
+                "No cached video found for %s — transcoding",
+                source_path.name,
+            )
+
+        # Mark as transcoding, then transcode
+        self._transcoding.add(file_hash)
+        failure_reason: str | None = None
+        try:
+            self._transcode(source_path, cached_path, info)
+            status = TranscodeStatus.TRANSCODED
+            playback_path = cached_path
+            logger.info(
+                "Video transcoded: %s → %s",
+                source_path.name,
+                file_hash,
+            )
+        except RuntimeError as e:
+            logger.warning(
+                "Transcode failed for %s: %s — video will be excluded from the playlist",
+                source_path.name,
+                e,
+            )
+            status = TranscodeStatus.FAILED
+            playback_path = source_path
+            failure_reason = str(e)
+        finally:
+            self._transcoding.discard(file_hash)
+
+        return self._build_item(
+            source_path,
+            playback_path,
+            scan.thumbnail_path,
+            info,
+            scan.source,
+            file_hash,
+            status=status,
+            first_frame=scan.first_frame_path,
+            last_frame=scan.last_frame_path,
+            failure_reason=failure_reason,
+        )
 
     @staticmethod
     def _hash_file(path: Path) -> str:
@@ -533,6 +590,7 @@ class VideoProcessor:
         status: TranscodeStatus,
         first_frame: Path | None = None,
         last_frame: Path | None = None,
+        failure_reason: str | None = None,
     ) -> MediaItem:
         return MediaItem(
             id=file_hash,
@@ -547,6 +605,7 @@ class VideoProcessor:
             last_frame_path=last_frame,
             source=source_name,
             transcode_status=status,
+            failure_reason=failure_reason,
         )
 
     # -- Helpers (delegated to probe / ffmpeg_cmds / frames) -----------------

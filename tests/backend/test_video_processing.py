@@ -706,3 +706,117 @@ class TestProcessCacheMissLogging:
         assert "No cached video found" not in caplog.text
         proc._transcode.assert_not_called()
         proc._build_item.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# video.py — scan()/transcode() split (full-profile classification)
+# ---------------------------------------------------------------------------
+
+
+class TestVideoScanTranscode:
+    """The two-phase split: ``scan()`` probes/thumbs/frames and decides, using
+    the full profile check, whether the video needs transcoding; ``transcode()``
+    turns the scan into a playable item.  No real ffmpeg/ffprobe runs.
+    """
+
+    H264_SOURCE = {
+        "width": 1920,
+        "height": 1080,
+        "codec_name": "h264",
+        "fps": 25.0,
+        "bitrate": 5,
+        "color_depth": 8,
+        "duration": 10.0,
+    }
+
+    def _make_proc(self, tmp_path, profile):
+        from metixel.backend.processing.video import VideoProcessor
+
+        p = VideoProcessor(
+            cache_dir=tmp_path / "cache",
+            screen_width=1920,
+            screen_height=1080,
+            video_config={
+                "transcoding_enabled": True,
+                "transcoding_profile": "custom",
+            },
+        )
+        p._hash_file = mock.Mock(return_value="feedface12345678")
+        p._probe = mock.Mock(return_value=dict(self.H264_SOURCE))
+        p._extract_thumbnail = mock.Mock()
+        p._extract_video_frames = mock.Mock(
+            return_value=(Path("/tmp/f1.jpg"), Path("/tmp/f2.jpg"))
+        )
+        p._resolve_profile = mock.Mock(return_value=profile)
+        return p
+
+    def test_h264_source_on_h265_profile_needs_transcode(self, tmp_path) -> None:
+        """The bug case: H.264 source + H.265 target profile → transcode needed."""
+        h265_profile = {
+            "codec": "h265",
+            "max_width": 3840,
+            "max_height": 2160,
+            "max_fps": 60,
+            "max_bitrate": 80,
+            "color_depth": 10,
+            "hdr_support": True,
+        }
+        p = self._make_proc(tmp_path, h265_profile)
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None
+        assert scan.needs_transcode is True
+        assert scan.has_frames is True
+        assert scan.errors == []
+
+    def test_h264_source_within_h264_profile_no_transcode(self, tmp_path) -> None:
+        h264_profile = {
+            "codec": "h264",
+            "max_width": 1920,
+            "max_height": 1080,
+            "max_fps": 30,
+            "max_bitrate": 7,
+            "color_depth": 8,
+            "hdr_support": False,
+            "h264_level": "4.0",
+        }
+        p = self._make_proc(tmp_path, h264_profile)
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None
+        assert scan.needs_transcode is False
+
+    def test_scan_records_missing_frames_error(self, tmp_path) -> None:
+        p = self._make_proc(tmp_path, None)
+        p._extract_video_frames = mock.Mock(return_value=(None, None))
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None
+        assert scan.has_frames is False
+        assert scan.errors, "expected a frame-extraction error to be recorded"
+
+    def test_scan_returns_none_when_unreadable(self, tmp_path) -> None:
+        from metixel.backend.processing.video import VideoProcessor
+
+        p = self._make_proc(tmp_path, None)
+        p._probe = mock.Mock(side_effect=RuntimeError("boom"))
+        assert p.scan(tmp_path / "clip.mp4") is None
+
+    def test_transcode_no_transcode_returns_not_transcoded(self, tmp_path) -> None:
+        from metixel.shared.models import TranscodeStatus
+
+        h264_profile = {
+            "codec": "h264",
+            "max_width": 1920,
+            "max_height": 1080,
+            "max_fps": 30,
+            "max_bitrate": 7,
+            "color_depth": 8,
+            "hdr_support": False,
+            "h264_level": "4.0",
+        }
+        p = self._make_proc(tmp_path, h264_profile)
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None and scan.needs_transcode is False
+        result = p.transcode(scan)
+        assert result is not None
+        assert result.transcode_status == TranscodeStatus.NOT_TRANSCODED
+        assert result.cached_path == result.original_path
+

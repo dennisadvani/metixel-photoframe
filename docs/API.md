@@ -42,6 +42,15 @@ Base URL: `http://<frame-ip>/api` (port 8080 also works — Flask listens direct
 - `GET /api/health/display/info` — Detected display resolution
 - `GET /api/health/processing` — Background processing status
 - `GET /api/health/processing-status` — Per-phase processing progress
+  (`scanning` / `optimising_images` / `inspecting_videos` / `transcoding`),
+  plus `issues` (failed/skipped media from the processing journal, with
+  `path`, `name`, `state`, `reason`, `updated_at`) and `journal_stats`
+  (per-state counts).
+
+### Processing
+- `POST /api/processing/retry` — Forget a failed/skipped journal entry so
+  the next folder scan re-processes it.  Body: `{"path": "<resolved path>"}`
+  (the `issues[].path` from `/api/health/processing-status`).
 
 ### Filesystem
 - `GET /api/browse?path=...` — Browse folders for path selection

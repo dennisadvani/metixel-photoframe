@@ -109,11 +109,13 @@ class TestGetConfigSection:
         data = json.loads(resp.data)
         assert data["ap_fallback_enabled"] is True
 
-    def test_get_system_section(self, client):
+    def test_get_system_section(self, client, mock_state):
         resp = client.get("/api/config/system")
         assert resp.status_code == 200
         data = json.loads(resp.data)
-        assert data["cache_dir"] == "cache/"
+        # The conftest fixture overrides cache_dir to a temp path — the
+        # endpoint must return the configured value, not a hard-coded default.
+        assert data["cache_dir"] == mock_state.config.system["cache_dir"]
         assert data["log_level"] == "NONE"
         assert data["first_run"] is True
 

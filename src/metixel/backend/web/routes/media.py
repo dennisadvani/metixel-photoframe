@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Media management API endpoints."""
 
+import contextlib
 import hashlib
 import io
 import logging
@@ -576,6 +577,13 @@ def clear_image_cache():
         freed_bytes,
         *cache_subdirs,
     )
+
+    # ── Reset processing journal ──────────────────────────────────────
+    # Every cached file is gone, so all journal outcomes are stale.  Wipe
+    # the journal so the next folder scan re-discovers and re-processes
+    # everything (failed entries get a clean retry too).
+    with contextlib.suppress(Exception):
+        state.journal.clear()
 
     # ── Reset backend playlist ──────────────────────────────────────
     # All MediaItems point to now-deleted cached files.  Clear the

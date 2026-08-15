@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Processing journal** — a single-writer, persisted per-file state store
+  (`<cache_dir>/processing_state.json`) records each media file's lifecycle
+  and outcome (`pending` / `processing` / `ready` / `failed` / `skipped`)
+  with its `(mtime_ns, size)` fingerprint.  The folder watcher now never
+  re-picks-up the same file twice within a run, and permanently-failed
+  transcodes are remembered across restarts instead of being re-attempted
+  forever.  All mutations funnel through one lock + debounced atomic write,
+  so concurrent threads (watcher, optimisation queue, web API) can never
+  interleave writes.
+- **Failed/skipped media status area** — the dashboard's Background
+  Processing card now shows a "Processing issues" list below the progress
+  bars (mirroring the Sync Status card) with the file, reason and a **Retry**
+  button per failed item.  Backed by `GET /api/health/processing-status`
+  (`issues` + `journal_stats`) and `POST /api/processing/retry`.
+- **"Scanning video" progress bar** — a new `inspecting_videos` phase
+  separates video *scanning* from *transcoding*, so the "Transcoding" bar
+  no longer over-counts optimal H.264 videos.
+
+### Changed
+
+- **Two-phase video pipeline** — the optimisation queue now processes
+  videos in two passes: **Phase A (Scanning video)** probes, thumbnails and
+  extracts first/last frames for **every** queued video (recording any scan
+  error in the journal and excluding unreadable/frameless videos); videos
+  that don't need transcoding are added to the playlist as soon as they
+  finish scanning (streaming).  Once all scanning is done, **Phase B
+  (Transcoding)** encodes only the videos that need it and adds them to the
+  playlist.  `VideoProcessor` is split into `scan()` and `transcode()` so
+  the scan result (probe info + frames) is reused by the encode.
+- **Full-profile transcode classification** — a video is classified as
+  needing transcoding using the *same* full profile check the encoder uses
+  (target codec, resolution, fps, bitrate, H.264 level, HDR, colour depth),
+  not the coarse source-codec-only check.  On an H.265-profile frame this
+  correctly flags H.264 sources for transcoding — previously those encodes
+  were hidden under the "Scanning video" bar and the "Transcoding" bar
+  stayed empty while transcoding ran.
+- **Failed videos are excluded from the playlist** — when a transcode fails
+  (`TranscodeStatus.FAILED`), the video is **not** added to the slideshow
+  and never falls back to playing the original at native resolution.
+  `MediaItem.is_ready_to_play` now treats `FAILED` as unplayable, and the
+  `OptimisationQueue` records the failure (with `failure_reason`) in the
+  journal instead of adding it.  A file change or the new Retry action
+  re-attempts it.
+- **Folder watcher uses the journal as its source of truth** — the in-memory
+  `_known_files` snapshot is replaced by the persisted journal.  Ready files
+  are skipped on incremental scans (rebuilt once on startup so the tmpfs
+  playlist is restored); failed/skipped files are never re-attempted while
+  unchanged; deleted files are removed from playlist, queue, cache and
+  journal.
+- **Optimisation queue dedups by path** — enqueues and internal queues drop
+  duplicates, so overlapping watch paths or racing scans can never process
+  the same file twice.
+
 ## [1.1.10-beta.11]
 
 ### Added

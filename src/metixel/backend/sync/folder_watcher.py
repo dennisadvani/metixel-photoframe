@@ -23,6 +23,12 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from metixel.backend.processing.journal import (
+    STATE_FAILED,
+    STATE_READY,
+    STATE_SKIPPED,
+    ProcessingJournal,
+)
 from metixel.backend.processing.thumbnail import (
     generate_image_thumbnail,
     generate_video_thumbnail,
@@ -95,18 +101,25 @@ class FolderWatcher:
     - **Deleted files**: removed from the playlist
     """
 
-    def __init__(self, state: StateManager, opt_queue: OptimisationQueue | None = None) -> None:
+    def __init__(
+        self,
+        state: StateManager,
+        opt_queue: OptimisationQueue | None = None,
+        journal: ProcessingJournal | None = None,
+    ) -> None:
         self._state = state
         self._config = state.config
         self._opt_queue = opt_queue
         self._running: bool = False
 
+        # Processing journal — the single-writer persisted store of per-file
+        # pipeline state.  Falls back to the shared journal owned by
+        # StateManager so every pipeline participant writes through one lock.
+        self._journal: ProcessingJournal = journal if journal is not None else state.journal
+
         # Resolve watch paths from config (new object format with enabled flag).
         self._watch_paths: list[Path] = self._resolve_watch_paths()
         self._poll_interval: int = self._config.sync["local"]["poll_interval_seconds"]
-
-        # File state snapshot: {absolute_path: (mtime_ns, size_bytes)}
-        self._known_files: dict[Path, tuple[int, int]] = {}
 
         # Track whether the initial full scan has completed
         self._initial_scan_done: bool = False
@@ -114,6 +127,21 @@ class FolderWatcher:
         # Periodic config refresh (so new watch paths added via the web UI
         # are picked up without a backend restart).
         self._last_config_refresh: float = 0.0
+
+    @property
+    def _known_files(self) -> dict[Path, tuple[int, int]]:
+        """Backward-compatible snapshot of known files (path → fingerprint).
+
+        Derived from the processing journal so existing callers/tests that
+        inspect the watcher's file snapshot keep working.
+        """
+        result: dict[Path, tuple[int, int]] = {}
+        for key, entry in self._journal.snapshot().items():
+            result[Path(key)] = (
+                int(entry.get("mtime_ns", 0) or 0),
+                int(entry.get("size", 0) or 0),
+            )
+        return result
 
     def _resolve_watch_paths(self) -> list[Path]:
         """Resolve the watch_paths config to a list of enabled Path objects.
@@ -202,24 +230,35 @@ class FolderWatcher:
         self._running = False
 
     def reset_snapshot(self) -> None:
-        """Reset the known-files snapshot so the next scan re-discovers everything.
+        """Reset the processing journal so the next scan re-discovers everything.
 
         Called when config changes affect the pipeline (watch paths
         changed, video playback toggled, etc.).  The next call to
         ``_scan()`` will treat all files as new and re-gather metadata.
         """
-        self._known_files.clear()
+        self._journal.clear()
         self._initial_scan_done = False
         logger.info("Folder watcher snapshot reset — will re-scan all paths")
 
     # -- Scanning ------------------------------------------------------------
 
     def _scan(self) -> None:
-        """Scan watch directories for new, changed, or deleted files.
+        """Scan watch directories and reconcile against the processing journal.
 
-        On the first scan (initial_scan_done=False), builds the baseline
-        snapshot and gathers metadata for all discovered files.  Subsequent
-        scans diff against the snapshot to detect incremental changes.
+        The persisted journal (not an in-memory snapshot) is the source of
+        truth, so a file is never picked up twice within a run:
+
+        * **New files** (no journal entry) → gathered + queued.
+        * **Modified files** (fingerprint changed) → old playlist/queue
+          entries removed, re-gathered.
+        * **Deleted files** → removed from the playlist, queue, and journal.
+        * **Ready files** → skipped on incremental scans; re-gathered on the
+          first scan after startup so the playlist (tmpfs, lost on reboot)
+          is rebuilt from cache.
+        * **Failed/skipped files** → skipped while the fingerprint is
+          unchanged, so doomed transcodes are never re-attempted.
+        * **Pending/processing files** → skipped while fresh (in-flight);
+          re-gathered only if stale (crash recovery).
         """
         # 1. Walk all enabled watch paths and discover current files
         current_files: dict[Path, tuple[int, int]] = {}
@@ -229,66 +268,74 @@ class FolderWatcher:
                 continue
             self._walk_path(watch_path, current_files)
 
-        # 2. If this is the initial scan, gather metadata for everything
-        if not self._initial_scan_done:
-            self._initial_scan_done = True
-            self._known_files = dict(current_files)
+        journal = self._journal
+        is_initial = not self._initial_scan_done
+        grace = max(2 * self._poll_interval, 30)
 
-            total = len(current_files)
-            if total > 0:
-                _write_progress("scanning", total, 0, "")
-                logger.info(
-                    "Initial scan: discovered %d media files across %d watch paths",
-                    total,
-                    len(self._watch_paths),
-                )
-                self._gather_and_enqueue(list(current_files.keys()), is_initial=True)
-            else:
-                _write_progress("complete", 0, 0, "")
-                logger.info("Initial scan: no media files found")
-            return
+        # 2. Classify each current file against the journal
+        new_paths: list[Path] = []
+        changed_paths: list[Path] = []
+        recheck_paths: list[Path] = []
 
-        # 3. Diff: detect new, changed, and deleted files
-        known_paths = set(self._known_files.keys())
-        current_paths = set(current_files.keys())
+        for path, fingerprint in current_files.items():
+            entry = journal.get(path)
+            if entry is None:
+                new_paths.append(path)
+                continue
+            if entry.get("mtime_ns") != fingerprint[0] or entry.get("size") != fingerprint[1]:
+                changed_paths.append(path)
+                continue
+            state = entry.get("state")
+            if state in (STATE_FAILED, STATE_SKIPPED):
+                # Never re-attempt a doomed file unless it changed on disk.
+                continue
+            if state == STATE_READY:
+                # Rebuild the playlist from cache on the first scan after
+                # startup; skip on incremental scans.
+                if is_initial:
+                    recheck_paths.append(path)
+                continue
+            # pending/processing — skip while fresh, re-gather if stale
+            if (time.time() - entry.get("updated_at", 0.0)) > grace:
+                recheck_paths.append(path)
 
-        new_paths = current_paths - known_paths
-        deleted_paths = known_paths - current_paths
-        common_paths = known_paths & current_paths
-
-        # Modified: same path, different mtime or size
-        changed_paths: set[Path] = set()
-        for p in common_paths:
-            if self._known_files[p] != current_files[p]:
-                changed_paths.add(p)
-
-        # 4. Act on changes
-        if new_paths:
-            logger.info(
-                "Detected %d new file(s): %s",
-                len(new_paths),
-                ", ".join(str(p.name) for p in list(new_paths)[:5]),
-            )
-            self._gather_and_enqueue(list(new_paths))
-
-        if changed_paths:
-            logger.info(
-                "Detected %d changed file(s): %s",
-                len(changed_paths),
-                ", ".join(str(p.name) for p in list(changed_paths)[:5]),
-            )
-            self._process_changed(list(changed_paths))
-
+        # 3. Handle deletions first (frees playlist/queue/cache + journal)
+        current_path_keys = {str(p) for p in current_files}
+        deleted_paths = set(journal.paths()) - current_path_keys
         if deleted_paths:
             logger.info(
                 "Detected %d deleted file(s): %s",
                 len(deleted_paths),
-                ", ".join(str(p.name) for p in list(deleted_paths)[:5]),
+                ", ".join(str(Path(p).name) for p in list(deleted_paths)[:5]),
             )
-            self._handle_deleted(deleted_paths)
+            self._handle_deleted({Path(p) for p in deleted_paths})
 
-        # 5. Update snapshot
-        self._known_files = current_files
+        # 4. Mark pending BEFORE gathering so a slow gather can't cause a
+        #    subsequent scan (or a restart mid-scan) to re-add the same files.
+        to_gather = new_paths + recheck_paths
+        for path in to_gather:
+            journal.mark_pending(path, current_files[path])
+
+        # 5. Act on changes
+        if changed_paths:
+            logger.info(
+                "Detected %d changed file(s): %s",
+                len(changed_paths),
+                ", ".join(str(p.name) for p in changed_paths[:5]),
+            )
+            self._process_changed(changed_paths)
+
+        if to_gather:
+            total = len(to_gather)
+            logger.info(
+                "Scan: %d file(s) to process (initial=%s) across %d watch path(s)",
+                total,
+                is_initial,
+                len(self._watch_paths),
+            )
+            self._gather_and_enqueue(to_gather, is_initial=is_initial)
+
+        self._initial_scan_done = True
 
     def _walk_path(self, root: Path, out: dict[Path, tuple[int, int]]) -> None:
         """Recursively walk a directory, collecting media files with stat metadata.
@@ -364,8 +411,16 @@ class FolderWatcher:
                     # PLAY_CACHED   → cached_path = expected cache file
                     stub.cached_path = self._resolve_cached_path(stub)
                     stubs.append(stub)
+                else:
+                    # Unreadable / unsupported source — record it so it is
+                    # never re-picked-up and shows in the status area.
+                    self._journal.mark_skipped(
+                        path,
+                        "Could not read media metadata (unreadable or unsupported)",
+                    )
             except Exception:
                 logger.exception("Failed to gather metadata: %s", path)
+                self._journal.mark_skipped(path, "Metadata gather error")
 
             # Push to optimisation queue in batches to avoid holding
             # too many items in memory at once.
@@ -715,7 +770,12 @@ class FolderWatcher:
         if self._opt_queue is not None:
             self._opt_queue.remove_items(old_ids)
 
-        # Re-gather metadata and push to optimisation queue
+        # Re-gather metadata and push to optimisation queue.  Record the new
+        # fingerprint as pending first so a subsequent scan doesn't re-add.
+        for p in paths:
+            with contextlib.suppress(OSError):
+                st = p.stat()
+                self._journal.mark_pending(p, (st.st_mtime_ns, st.st_size))
         self._gather_and_enqueue(paths)
 
     def _handle_deleted(self, paths: set[Path]) -> None:
@@ -738,6 +798,11 @@ class FolderWatcher:
         # Clean up cached files for deleted originals (use the resolved
         # IDs to find cache files, not the path-based fallback hash).
         self._cleanup_cached_for_deleted(ids_to_remove)
+
+        # Drop deleted files from the journal so they are treated as new
+        # if they reappear on disk.
+        for p in paths:
+            self._journal.remove(p)
 
     def _cleanup_cached_for_deleted(self, item_ids: set[str]) -> None:
         """Remove cached thumbnails and optimised files for deleted originals.

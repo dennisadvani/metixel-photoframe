@@ -10,6 +10,7 @@ OTA update manager).  Routes are then exercised through ``app.test_client()``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,12 @@ def mock_state(tmp_path: Path):
     from metixel.backend.state import StateManager
 
     config_path = tmp_path / "config.json"
+    # Point the cache dir (and therefore the processing journal) at the temp
+    # directory so tests never write into the workspace.
+    config_path.write_text(
+        json.dumps({"system": {"cache_dir": str(tmp_path / "cache")}}),
+        encoding="utf-8",
+    )
     return StateManager(config_path, run_dir=tmp_path / "run")
 
 
