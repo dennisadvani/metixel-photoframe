@@ -125,11 +125,11 @@ def set_log_level():
     The new level is persisted to ``config.json`` so it survives a
     restart.
     """
-    from flask import request
+    from metixel.backend.web.helpers import get_body, jsonify_error
 
-    data = request.get_json(silent=True)
-    if data is None or "level" not in data:
-        return jsonify({"error": "Missing 'level' in JSON body"}), 400
+    data = get_body()
+    if "level" not in data:
+        return jsonify_error("Missing 'level' in JSON body", 400)
 
     level_name = data["level"].upper()
     valid_levels = {
@@ -140,12 +140,11 @@ def set_log_level():
         "NONE": _NONE_LEVEL,
     }
     if level_name not in valid_levels:
-        return jsonify(
-            {
-                "error": f"Invalid level: {data['level']}",
-                "valid": sorted(valid_levels.keys()),
-            }
-        ), 400
+        return jsonify_error(
+            f"Invalid level: {data['level']}",
+            400,
+            valid=sorted(valid_levels.keys()),
+        )
 
     new_level = valid_levels[level_name]
 

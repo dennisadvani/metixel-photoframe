@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
 
+from metixel.backend.web.helpers import get_body, jsonify_error
 from metixel.shared.ipc import ControlMessage
 
 logger = logging.getLogger(__name__)
@@ -45,12 +46,12 @@ def dismiss_persistent():
     state = current_app.config["METIXEL_STATE"]
     ipc = current_app.config.get("METIXEL_IPC")
 
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     dismiss_all = data.get("all", False)
     target_id = data.get("id", "")
 
     if not dismiss_all and not target_id:
-        return jsonify({"error": "Must provide 'id' or 'all': true"}), 400
+        return jsonify_error("Must provide 'id' or 'all': true", 400)
 
     config = state.config
     persistent: list[dict] = config.messages.get("persistent", [])
@@ -71,7 +72,7 @@ def dismiss_persistent():
             else:
                 new_persistent.append(entry)
         if count == 0:
-            return jsonify({"error": f"No persistent message found with id={target_id!r}"}), 404
+            return jsonify_error(f"No persistent message found with id={target_id!r}", 404)
 
     # Atomically update config
     state.update_config("messages", {"persistent": new_persistent})

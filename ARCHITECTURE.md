@@ -210,6 +210,7 @@ metixel-photoframe/                           # Repository root
 │       │   ├── web/
 │       │   │   ├── __init__.py
 │       │   │   ├── server.py           # Flask application
+│       │   │   ├── helpers.py          # Shared error/validation/daemon-access helpers
 │       │   │   ├── routes/
 │       │   │   │   ├── __init__.py
 │       │   │   │   ├── config.py       # Config CRUD (core sections)

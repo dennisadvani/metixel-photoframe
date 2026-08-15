@@ -8,7 +8,9 @@ import logging
 import os
 import subprocess
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify
+
+from metixel.backend.web.helpers import get_body, jsonify_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,13 +47,12 @@ def set_timezone():
 
     Requires a NOPASSWD sudoers entry for timedatectl.
     """
-    data = request.get_json(silent=True)
-    if data is None or "timezone" not in data:
-        return jsonify({"error": "Missing 'timezone' in JSON body"}), 400
+    data = get_body()
+    missing = data.get("timezone", "").strip() if isinstance(data, dict) else ""
+    if not missing:
+        return jsonify_error("Missing or empty 'timezone' in JSON body", 400)
 
-    tz = data["timezone"].strip()
-    if not tz:
-        return jsonify({"error": "Timezone cannot be empty"}), 400
+    tz = missing
 
     try:
         result = subprocess.run(
@@ -154,9 +155,9 @@ def configure_ntp():
 
     Requires a NOPASSWD sudoers entry for systemctl and tee.
     """
-    data = request.get_json(silent=True)
-    if data is None or "enabled" not in data:
-        return jsonify({"error": "Missing 'enabled' in JSON body"}), 400
+    data = get_body()
+    if "enabled" not in data:
+        return jsonify_error("Missing 'enabled' in JSON body", 400)
 
     enabled = bool(data["enabled"])
     servers = data.get("servers", [])

@@ -9,6 +9,8 @@ import subprocess
 
 from flask import Blueprint, current_app, jsonify, request
 
+from metixel.backend.web.helpers import get_body, jsonify_error
+
 logger = logging.getLogger(__name__)
 
 config_bp = Blueprint("config", __name__)
@@ -27,7 +29,7 @@ def get_config_section(section: str):
     state = current_app.config["METIXEL_STATE"]
     config = state.config
     if section not in config.to_dict():
-        return jsonify({"error": f"Unknown config section: {section}"}), 404
+        return jsonify_error(f"Unknown config section: {section}", 404)
 
     # If the caller asked to apply a WiFi country code, run iw reg set
     # immediately so the radio uses correct channels without a reboot.
@@ -102,16 +104,18 @@ def video_profiles():
 def update_config_section(section: str):
     """Update a config section. Triggers hot reload in the frontend."""
     state = current_app.config["METIXEL_STATE"]
-    data = request.get_json(silent=True)
-    if data is None:
+    data = get_body()
+    if not data:
         logger.warning(
             "PUT /%s: invalid or missing JSON body (Content-Type: %s)",
             section,
             request.content_type,
         )
-        return jsonify(
-            {"error": "Invalid JSON body", "hint": "Send JSON with Content-Type: application/json"}
-        ), 400
+        return jsonify_error(
+            "Invalid JSON body",
+            400,
+            hint="Send JSON with Content-Type: application/json",
+        )
 
     try:
         logger.info("PUT /%s: updating with keys=%s", section, list(data.keys()))
@@ -162,20 +166,18 @@ def update_config_section(section: str):
             }
         )
     except KeyError:
-        return jsonify(
-            {
-                "error": f"Unknown config section: {section}",
-                "valid_sections": list(state.config.to_dict().keys()),
-            }
-        ), 404
+        return jsonify_error(
+            f"Unknown config section: {section}",
+            404,
+            valid_sections=list(state.config.to_dict().keys()),
+        )
     except Exception as e:
         logger.exception("Failed to update config section '%s'", section)
-        return jsonify(
-            {
-                "error": str(e),
-                "hint": "Check server logs for details",
-            }
-        ), 500
+        return jsonify_error(
+            str(e),
+            500,
+            hint="Check server logs for details",
+        )
 
 
 @config_bp.route("/reload", methods=["POST"])

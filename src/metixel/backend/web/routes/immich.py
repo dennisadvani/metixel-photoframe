@@ -13,7 +13,9 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
+
+from metixel.backend.web.helpers import get_body, jsonify_error
 
 if TYPE_CHECKING:
     from metixel.backend.sync.immich import ImmichSyncer
@@ -38,12 +40,11 @@ def list_albums():
         albums = syncer._list_albums()  # noqa: SLF001 (internal access)
     except Exception as e:
         logger.exception("Failed to list Immich albums")
-        return jsonify(
-            {
-                "error": str(e),
-                "hint": "Check server URL, API key, and network connectivity",
-            }
-        ), 502
+        return jsonify_error(
+            str(e),
+            502,
+            hint="Check server URL, API key, and network connectivity",
+        )
 
     # Simplify for the frontend — only return what the picker needs
     result = [
@@ -64,11 +65,11 @@ def list_albums():
 def add_album():
     """Add an album to the configured sync group (deduplicated by id)."""
 
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     album_id = (data.get("id") or "").strip()
     name = (data.get("name") or "").strip()
     if not album_id or not name:
-        return jsonify({"error": "Missing album id or name"}), 400
+        return jsonify_error("Missing album id or name", 400)
 
     state = current_app.config["METIXEL_STATE"]
     config = state.config
@@ -89,10 +90,10 @@ def remove_album():
     all downloaded files are deleted.
     """
 
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     album_id = (data.get("id") or "").strip()
     if not album_id:
-        return jsonify({"error": "Missing album id"}), 400
+        return jsonify_error("Missing album id", 400)
 
     state = current_app.config["METIXEL_STATE"]
     config = state.config
@@ -202,12 +203,12 @@ def test_connection():
     """
     import requests as req_lib
 
-    data = request.get_json(silent=True) or {}
+    data = get_body()
     server_url = data.get("server_url", "").rstrip("/")
     api_key = data.get("api_key", "")
 
     if not server_url or not api_key:
-        return jsonify({"error": "Missing server_url or api_key"}), 400
+        return jsonify_error("Missing server_url or api_key", 400)
 
     headers = {"Accept": "application/json", "x-api-key": api_key}
 

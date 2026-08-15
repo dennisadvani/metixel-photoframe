@@ -180,5 +180,12 @@ def create_app(
             response.headers["Expires"] = "0"
         return response
 
+    # Install global 400/404/405/500 handlers returning the unified error
+    # shape so unhandled exceptions and malformed requests don't fall
+    # through to Flask's default HTML/JSON responses.
+    from metixel.backend.web.helpers import register_error_handlers
+
+    register_error_handlers(app)
+
     logger.info("Flask application created")
     return app

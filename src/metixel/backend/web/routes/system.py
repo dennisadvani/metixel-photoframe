@@ -7,8 +7,9 @@ from __future__ import annotations
 import logging
 import subprocess
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
 
+from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
 from metixel.shared.platform import read_device_tree_model, read_vcgencmd_mem_str
 from metixel.shared.subprocess import schedule_sudo
 
@@ -44,8 +45,7 @@ def _schedule_sudo(
 @system_bp.route("/mqtt-status", methods=["GET"])
 def mqtt_status():
     """Report the MQTT broker connection state for the dashboard."""
-    daemon = current_app.config.get("METIXEL_DAEMON")
-    client = getattr(daemon, "_mqtt_client", None) if daemon is not None else None
+    client = get_daemon_component("_mqtt_client")
     if client is not None and hasattr(client, "status"):
         return jsonify(client.status())
 
@@ -131,9 +131,9 @@ def toggle_quiet_boot():
 
     Requires a NOPASSWD sudoers entry for bash.
     """
-    data = request.get_json(silent=True)
-    if data is None or "enabled" not in data:
-        return jsonify({"error": "Missing 'enabled' (true/false) in JSON body"}), 400
+    data = get_body()
+    if "enabled" not in data:
+        return jsonify_error("Missing 'enabled' (true/false) in JSON body", 400)
 
     enabled = bool(data["enabled"])
     script = "/opt/metixel/scripts/quiet_boot.sh"

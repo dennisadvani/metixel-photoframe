@@ -37,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `/opt/metixel` / `/run/metixel` literals.
 - **Unified sudo scheduling** — the web system route's delayed-restart
   logic now delegates to `shared/subprocess.schedule_sudo`.
+- **Centralised web layer** (`backend/web/helpers.py`) — new shared
+  `jsonify_error` (single `{status, error, message}` error shape),
+  `get_body` / `require_fields` (JSON body parsing + validation), and
+  `get_daemon_component` (safe daemon-attribute access).  Route modules
+  now use these instead of repeating `request.get_json(...)`,
+  `jsonify({"error": ...})`, and `current_app.config.get(...)` /
+  `getattr(daemon, "_x")` boilerplate.  `server.py` registers global
+  Flask 400/404/405/500 handlers so unhandled exceptions and malformed
+  requests return the unified error shape instead of Flask's default
+  HTML/JSON.
 
 ### Fixed
 

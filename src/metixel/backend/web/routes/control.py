@@ -6,7 +6,14 @@ from __future__ import annotations
 
 import logging
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify
+
+from metixel.backend.web.helpers import (
+    get_body,
+    get_daemon_component,
+    jsonify_error,
+    require_fields,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -20,9 +27,10 @@ def send_control():
     Accepts JSON: {"cmd": "next|prev|pause|resume|switch_album|screen_off|screen_on"}
     """
     ipc = current_app.config.get("METIXEL_IPC")
-    data = request.get_json(silent=True)
-    if data is None or "cmd" not in data:
-        return jsonify({"error": "Missing 'cmd' in JSON body"}), 400
+    data = get_body()
+    missing = require_fields(data, "cmd")
+    if missing:
+        return missing
 
     cmd = data["cmd"]
     valid_cmds = {
@@ -39,15 +47,18 @@ def send_control():
         "dismiss_all_messages",
     }
     if cmd not in valid_cmds:
-        return jsonify({"error": f"Unknown command: {cmd}. Valid: {sorted(valid_cmds)}"}), 400
+        return jsonify_error(
+            f"Unknown command: {cmd}. Valid: {sorted(valid_cmds)}",
+            400,
+        )
 
     if cmd in ("screen_on", "screen_off"):
         # Screen-power goes through the daemon choke-point so the flag, the
         # frontend IPC, and the immediate MQTT publish all stay in sync with
         # every other source (scheduler, keyboard/CEC/IR, MQTT commands).
-        daemon = current_app.config.get("METIXEL_DAEMON")
-        if daemon is not None and hasattr(daemon, "set_display_power"):
-            daemon.set_display_power(cmd == "screen_on", source="web")
+        daemon = get_daemon_component("set_display_power")
+        if daemon is not None:
+            daemon(cmd == "screen_on", source="web")
         elif ipc is not None:
             from metixel.shared.ipc import ControlMessage
 
