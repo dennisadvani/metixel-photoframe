@@ -23,9 +23,9 @@
 
 **The picture frame, not the dashboard.**<br>
 No clocks, no widgets, no weather overlays. Metixel treats your photographs like art for image and videos, with nothing to distract from the moment.
+
 **The Favorite-to-Frame workflow.**<br>
 Stop letting daily memories get forgotten in the cloud. Connect Metixel to an Immich album, and any photo you drop in from your phone automatically hangs on your wall, or upload from your phone.
-
 **Zero-terminal setup.**<br>
 DIY hardware shouldn't require a computer science degree. Once installed, Metixel is managed entirely from a web interface — no SSH, no config files, no command-line rituals.
 
