@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://github.com/dennisadvani/metixel-photoframe">
-    <img src="docs\images\metixel_logo_red_white_background.png" alt="Metixel Photoframe" width="450">
+    <img src="docs/images/metixel_logo_red_white_background.png" alt="Metixel Photoframe" width="450">
   </a>
 </p>
 
@@ -18,7 +18,8 @@
 </p> -->
 
 <p align="center">
-  <img src="docs\images\metixel_youtube_400px_5fps.gif" alt="Metixel Photoframe in action"  width="70%">
+  <video src="https://github.com/dennisadvani/metixel-photoframe/releases/download/v1.0.7/github_800px_loop.mp4" autoplay loop muted playsinline width="70%">
+  </video>
 </p>
 
 <p align="center">
