@@ -100,10 +100,17 @@ Write-Host "Pulling latest dev..." -ForegroundColor Green
 git pull origin dev
 if ($LASTEXITCODE -ne 0) { throw "git pull failed" }
 
-# Check clean working tree
+# Check clean working tree.
+# Refresh the index FIRST: on Windows (core.autocrlf) `git diff-index` can
+# spuriously report a clean tree as dirty right after a pull/checkout due to
+# the "racy git" stat-cache problem (low-resolution filesystem timestamps).
+# git update-index --refresh updates the stat cache so the check is reliable.
+git update-index --refresh *> $null
 git diff-index --quiet HEAD --
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Working tree is dirty. Commit or stash changes first." -ForegroundColor Red
+    Write-Host "  Modified/untracked:"
+    git status --porcelain
     exit 1
 }
 
