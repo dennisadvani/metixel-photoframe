@@ -5,6 +5,50 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.1.10-beta.15]
+
+### Added
+
+- **Startup dependency self-heal** — on boot the backend reads
+  `requirements-pip.txt`, detects any missing runtime dependency via
+  `importlib.metadata`, and installs it as **root** through
+  `sudo -n systemd-run` into the system dist-packages. This makes a **single
+  OTA** resolve newly-required deps (e.g. `pillow-heif` for HEIC/HEIF) even
+  for devices upgrading from older code whose OTA bootstrap didn't install
+  them. The install runs via `systemd-run` (a fresh, non-hardened unit)
+  because the hardened backend service (`ProtectHome`/`ProtectSystem`) can
+  neither write to `~/.local` nor the system packages — keeping deps in the
+  same location the OTA uses.
+- **OTA regression tests** — `tests/backend/test_update_manager.py` (bootstrap
+  hand-off + `scripts/ota_install.sh` content) and
+  `tests/backend/test_dependencies.py` (self-heal detects missing deps and
+  installs as root/system-wide, never `--user`).
+- **Confirm dialog + accessibility improvements** — destructive actions use a
+  confirmation dialog; browse buttons and modal controls gained accessible
+  labels and Escape-to-close; media error vs empty states render clearly.
+- **Favicon** for the web dashboard.
+
+### Changed
+
+- **OTA updates now apply the NEW version's dependency steps** — the update
+  script is a **thin bootstrap** that only stops services, checks out the
+  target, then hands off to `scripts/ota_install.sh` from the freshly
+  checked-out repo (system packages + `pip install -e .` +
+  `requirements-pip.txt`). Upgrades therefore install new/changed system and
+  pip deps regardless of what the previously-running code knew.
+- **Dev channel restored** in the web UI update channel selector (Stable /
+  Beta / Dev).
+- **Display power management** — quiet mode suppresses redundant MQTT/log
+  spam when the display state is unchanged, and schedule handling was
+  improved for wrap-around schedules that span midnight.
+
+### Fixed
+
+- **HEIC/HEIF media skipped during optimisation** — `pillow-heif` was never
+  installed by OTA because runtime deps only lived in the pyproject optional
+  extras (skipped by `pip install -e .`). Runtime pip deps are now installed
+  on every upgrade (and self-healed on boot).
+
 ## [1.1.10-beta.14]
 
 ### Changed

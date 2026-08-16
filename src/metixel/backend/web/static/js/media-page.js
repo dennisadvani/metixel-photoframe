@@ -133,9 +133,19 @@ import {
         var el = document.getElementById("media-list");
         var data = await apiGet("/media/list?offset=" + offset + "&limit=" + _mediaLimit);
 
-        if (!data || !data.items || data.items.length === 0) {
+        if (!data) {
+            // API error (connection / backend down) — the connection overlay
+            // shows the reconnecting banner; give a clear in-page message too.
             if (offset === 0) {
-                el.innerHTML = '<p style="color:var(--text-muted)">No media found. Add images or videos to the media folder.</p>';
+                el.innerHTML = '<p style="color:var(--danger)">Could not load the media library. Check that the backend is running and refresh the page.</p>';
+            }
+            _mediaLoading = false;
+            return;
+        }
+
+        if (!data.items || data.items.length === 0) {
+            if (offset === 0) {
+                el.innerHTML = '<p style="color:var(--text-muted)">No media yet — use <strong>Upload Media</strong> above, or copy photos/videos into the media folder.</p>';
             }
             _mediaLoading = false;
             return;

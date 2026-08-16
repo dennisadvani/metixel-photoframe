@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     setButtonBusy,
     setChecked,
@@ -86,7 +87,8 @@ import {
         if (!el) return;
         var descs = {
             "stable": "Stable releases are thoroughly tested and recommended for most users.",
-            "beta": "Beta releases include new features ready for wider testing. May have minor issues."
+            "beta": "Beta releases include new features ready for wider testing. May have minor issues.",
+            "dev": "Latest commits from the development branch. Bleeding edge — use for testing only."
         };
         el.textContent = descs[channel] || "";
     }
@@ -103,7 +105,7 @@ import {
             return;
         }
         var html = "";
-        var channels = ["stable", "beta"];
+        var channels = ["stable", "beta", "dev"];
         var currentCh = status.current_channel || "stable";
 
         channels.forEach(function (ch) {
@@ -194,7 +196,7 @@ import {
         var installBtn = document.getElementById("btn-apply-update");
         installBtn?.addEventListener("click", async function () {
             var ch = document.getElementById("cfg-update-channel")?.value || "stable";
-            if (!confirm("Install the latest update from the " + ch + " channel? Services will restart.")) {
+            if (!(await confirmDialog("Install the latest update from the " + ch + " channel? Services will restart.", { okText: "Install" }))) {
                 return;
             }
 

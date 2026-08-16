@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     setButtonBusy,
     setChecked,
@@ -197,7 +198,7 @@ import {
                 var forgetBtn = document.getElementById("btn-forget-wifi");
                 if (forgetBtn) {
                     forgetBtn.addEventListener("click", async function () {
-                        if (!confirm("Forget the '" + escapeHtml(status.ssid) + "' network and disconnect? The AP will reactivate if no other network is available.")) return;
+                        if (!(await confirmDialog("Forget the '" + status.ssid + "' network and disconnect? The AP will reactivate if no other network is available.", { okText: "Forget" }))) return;
                         var restore = setButtonBusy(forgetBtn, "…");
                         var result = await apiPost("/network/forget", { ssid: status.ssid });
                         if (result && result.status === "ok") {

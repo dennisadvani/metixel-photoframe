@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     sanitizeInt,
     setButtonBusy,
     setChecked,
@@ -376,14 +377,25 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                     width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
                     height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
-                    schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
-                    schedule_on_time: document.getElementById("cfg-schedule-on").value,
-                    schedule_off_time: document.getElementById("cfg-schedule-off").value,
                 });
                 if (result) {
                     showToast("Display settings saved!", "success");
                 } else {
                     showToast("Failed to save display settings", "error");
+                }
+            });
+
+            // Display Power Save Schedule — saves only the schedule keys.
+            document.getElementById("btn-save-schedule")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/display", {
+                    schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
+                    schedule_on_time: document.getElementById("cfg-schedule-on").value,
+                    schedule_off_time: document.getElementById("cfg-schedule-off").value,
+                });
+                if (result) {
+                    showToast("Display power schedule saved!", "success");
+                } else {
+                    showToast("Failed to save display power schedule", "error");
                 }
             });
 
@@ -517,10 +529,11 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             // Clear image cache
             var clearCacheBtn = document.getElementById("btn-clear-cache");
             clearCacheBtn?.addEventListener("click", async () => {
-                if (!confirm("Clear all cached files and restart services?\n\n"
+                if (!(await confirmDialog("Clear all cached files and restart services?\n\n"
                            + "This deletes transcoded videos, thumbnails, and processed images, "
-                           + "then restarts the backend and frontend to prevent missing-file errors. "
-                           + "Playback will be interrupted for ~10 seconds.")) {
+                           + "then restarts the backend and frontend. "
+                           + "Playback will be interrupted for ~10 seconds.",
+                           { danger: true, okText: "Clear cache" }))) {
                     return;
                 }
                 var restoreCache = setButtonBusy(clearCacheBtn, "Clearing…");
@@ -545,7 +558,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             // Restart all services
             var restartBtn = document.getElementById("btn-restart-services");
             restartBtn?.addEventListener("click", async () => {
-                if (!confirm("Restart all Metixel services? Playback will be interrupted for ~10 seconds.")) {
+                if (!(await confirmDialog("Restart all Metixel services? Playback will be interrupted for ~10 seconds.", { okText: "Restart" }))) {
                     return;
                 }
                 setButtonBusy(restartBtn, "Restarting…");
@@ -561,7 +574,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             // Reboot system
             var rebootBtn = document.getElementById("btn-reboot-system");
             rebootBtn?.addEventListener("click", async () => {
-                if (!confirm("Reboot the entire system? The photo frame will be unavailable for ~60 seconds.")) {
+                if (!(await confirmDialog("Reboot the entire system? The photo frame will be unavailable for ~60 seconds.", { danger: true, okText: "Reboot" }))) {
                     return;
                 }
                 setButtonBusy(rebootBtn, "Rebooting…");
@@ -576,7 +589,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             // Shutdown system
             var shutdownBtn = document.getElementById("btn-shutdown-system");
             shutdownBtn?.addEventListener("click", async () => {
-                if (!confirm("Shut down the entire system? You will need to physically power-cycle the Pi to turn it back on.")) {
+                if (!(await confirmDialog("Shut down the entire system? You will need to physically power-cycle the Pi to turn it back on.", { danger: true, okText: "Shut down" }))) {
                     return;
                 }
                 setButtonBusy(shutdownBtn, "Shutting down…");

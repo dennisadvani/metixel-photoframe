@@ -81,6 +81,29 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
+15. **OTA is a thin bootstrap + hand-off + startup self-heal.** The runtime pip deps
+    (`requirements-pip.txt`) and system deps (`requirements-system.txt`) must be applied on
+    every upgrade:
+    - **Thin bootstrap (`update_manager._build_update_script`):** the generated OTA script only
+      stops services, `git fetch`/`git reset --hard` to the target, then runs
+      `bash "$REPO/scripts/ota_install.sh" "$REPO"` from the **freshly checked-out** repo. All
+      install steps live in `scripts/ota_install.sh` *in the repo*, so the running (old) code is
+      never relied on to know the current steps — a device upgrading from an old release applies
+      the NEW version's install logic. Never bake install steps inline into the generated script.
+    - **Startup self-heal (`backend/dependencies.py`):** on boot, `BackendDaemon.run()` calls
+      `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
+      installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
+      for HEIC) even for devices upgrading from code that predates the hand-off.
+    - **Ownership/sudo:** the backend service is hardened (`ProtectHome=yes` → `/home` read-only;
+      `ProtectSystem=full` → `/usr` read-only), so it CANNOT install to `~/.local` or the system
+      dist-packages, and plain `sudo` inherits the hardened mount namespace. The self-heal must
+      run pip as **root** via `sudo -n systemd-run --wait --collect --unit=metixel-deps` into the
+      **system** dist-packages — the same location the OTA installs to (never `--user`; never
+      split deps across `~/.local` and `/usr`).
+    - Runtime deps go in `requirements-pip.txt`, NOT only in pyproject optional extras (those are
+      skipped by `pip install -e .` and were the root cause of the HEIC/HEIF OTA bug).
+    - Guarded by `tests/backend/test_update_manager.py` and `tests/backend/test_dependencies.py`.
+
 ## Web UI Style Guide
 
 The dashboard (`metixel/backend/web/`) is a vanilla-JS SPA with a burgundy-on-white design system. **Keep styling consistent** — follow these rules for any UI change.
@@ -181,7 +204,10 @@ mypy src/metixel/
 | `src/metixel/display/tk_backend.py` | Desktop dev: tkinter-based software renderer |
 | `src/metixel/display/__init__.py` | Backend auto-detection factory |
 | `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
-| `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue |
+| `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue + startup dependency self-heal |
+| `src/metixel/backend/dependencies.py` | Startup dependency self-heal — detects/installs missing `requirements-pip.txt` deps as root via `sudo systemd-run` |
+| `src/metixel/backend/update_manager.py` | OTA updates — thin bootstrap script + `scripts/ota_install.sh` hand-off, launched via `systemd-run` |
+| `scripts/ota_install.sh` | OTA install steps (system packages + `pip install -e .` + `requirements-pip.txt`) — run from the NEW checkout |
 | `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
 | `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
 | `src/metixel/backend/processing/video.py` | `VideoProcessor` facade — `process()` + `needs_optimisation()`; delegates ffmpeg work to `probe`/`ffmpeg_cmds`/`frames` |

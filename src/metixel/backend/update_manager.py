@@ -415,20 +415,25 @@ class UpdateManager:
     # -- Internal: Update Script ---------------------------------------------
 
     @staticmethod
-    def _write_and_launch_update_script(repo_root: str, target_ref: str, channel: str) -> None:
-        """Write and detach a shell script that performs the actual update.
+    def _build_update_script(repo_root: str, target_ref: str, channel: str) -> str:
+        """Build the OTA bootstrap shell script (pure, testable).
 
-        The script:
+        The bootstrap is deliberately THIN: it stops services, checks out the
+        target ref, then hands off to ``scripts/ota_install.sh`` in the freshly
+        checked-out repository. Because the install logic lives in the repo
+        (not baked into this generated script), a device upgrading from an
+        older release runs the NEW version's install steps — so new/changed
+        system and pip dependencies are always applied on upgrade.
+
+        Steps:
         1. Waits for the backend to fully stop
         2. Stops cage explicitly
         3. ``git fetch`` + ``git reset --hard``
-        4. ``pip install --break-system-packages -e .``
-        5. Restarts both services
+        4. Runs ``scripts/ota_install.sh`` from the new checkout
+           (system packages + ``pip install -e .`` + ``requirements-pip.txt``)
+        5. Restarts both services (via EXIT trap)
         6. Removes itself
         """
-        import stat
-
-        script_path = "/opt/metixel/cache/metixel-update.sh"
         log_path = "/opt/metixel/cache/metixel-update.log"
         # All externally-influenced values are shell-quoted so they can never
         # break out of the embedded bash string literals (defence-in-depth —
@@ -437,10 +442,14 @@ class UpdateManager:
         ref_q = shlex.quote(target_ref)
         channel_q = shlex.quote(channel)
         log_q = shlex.quote(log_path)
-        script = f"""#!/bin/bash
-# Metixel OTA update — launched as a transient systemd service
+        return f"""#!/bin/bash
+# Metixel OTA bootstrap — launched as a transient systemd service
 # so it survives the backend being stopped (runs in its own cgroup).
 # Uses a trap to guarantee services are restarted even if git/pip fail.
+#
+# The actual install steps (system + pip dependencies) live in
+# scripts/ota_install.sh in the repo and are run AFTER checkout, so they
+# always reflect the NEW version being installed.
 set -uo pipefail
 
 REPO={repo_q}
@@ -478,26 +487,10 @@ git fetch --tags --force origin || echo "WARNING: git fetch failed (continuing)"
 echo "Checking out $REF…"
 git reset --hard "$REF" || echo "WARNING: git checkout failed (continuing)"
 
-# ── Install missing system packages ──
-# New releases may require additional apt packages (e.g. python3-evdev).
-# This is idempotent — already-installed packages are skipped.
-if [ -f "$REPO/requirements-system.txt" ]; then
-    echo "Checking system packages…"
-    while IFS= read -r pkg; do
-        [ -z "$pkg" ] && continue
-        [[ "$pkg" =~ ^# ]] && continue
-        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
-            echo "  Installing: $pkg"
-            sudo -n apt-get install -y -qq "$pkg" 2>/dev/null \
-                || echo "  WARNING: failed to install $pkg"
-        fi
-    done < "$REPO/requirements-system.txt"
-fi
-
-# ── Reinstall Python package ──
-echo "Reinstalling Python package…"
-pip install --break-system-packages -e "$REPO" \
-    || echo "WARNING: pip install failed (continuing)"
+# ── Run the NEW install steps from the freshly-checked-out code ──
+echo "Running install steps from new checkout…"
+bash "$REPO/scripts/ota_install.sh" "$REPO" \
+    || echo "WARNING: install steps failed (continuing)"
 
 echo "Update finished: $(date)"
 echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' \
@@ -506,6 +499,15 @@ echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' \
 # ── Clean up script (trap handles restart next) ──
 rm -f "$0"
 """
+
+    @staticmethod
+    def _write_and_launch_update_script(repo_root: str, target_ref: str, channel: str) -> None:
+        """Write and detach the OTA update script (see ``_build_update_script``)."""
+        import stat
+
+        script_path = "/opt/metixel/cache/metixel-update.sh"
+        script = UpdateManager._build_update_script(repo_root, target_ref, channel)
+
         # Write the script
         with open(script_path, "w") as f:
             f.write(script)

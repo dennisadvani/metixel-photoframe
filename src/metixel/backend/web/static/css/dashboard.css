@@ -1403,6 +1403,29 @@ footer {
         width: 100%;
     }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Accessibility
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Visible keyboard focus ring (mouse clicks don't trigger :focus-visible) */
+:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+/* Respect users who prefer reduced motion: collapse animations/transitions */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
     /* Single column on phones — 2 narrow columns make long filenames wrap awkwardly */
     .media-grid {
         grid-template-columns: 1fr;
@@ -1476,6 +1499,12 @@ footer {
 
 .modal.open {
     display: flex;
+}
+
+/* Confirm dialog message — render newlines literally, wrap long paths */
+.confirm-message {
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .modal-content {

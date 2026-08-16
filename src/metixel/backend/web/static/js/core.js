@@ -51,6 +51,64 @@ export function showToast(message, type, durationMs) {
     }, durationMs);
 }
 
+// -- Confirm Dialog --------------------------------------------------------
+
+/**
+ * Show a modal confirmation dialog.
+ *
+ * Resolves `true` if the user confirms, `false` if they cancel, click the
+ * backdrop, or press Escape.  The dialog is the shared `#confirm-modal`
+ * element in `index.html`; the message is rendered as plain text (newlines
+ * shown literally via `white-space: pre-wrap`), so callers pass unescaped
+ * text and never need to call `escapeHtml`.
+ *
+ * @param {string} message - The message text.
+ * @param {object} [opts]
+ * @param {string} [opts.title] - Dialog title (default "Are you sure?").
+ * @param {string} [opts.okText] - Confirm button label (default "Confirm").
+ * @param {boolean} [opts.danger] - Use the danger (red) style for the confirm button.
+ * @returns {Promise<boolean>}
+ */
+export function confirmDialog(message, opts) {
+    opts = opts || {};
+    var modal = document.getElementById("confirm-modal");
+    var titleEl = document.getElementById("confirm-title");
+    var msgEl = document.getElementById("confirm-message");
+    var okBtn = document.getElementById("confirm-ok");
+    var cancelBtn = document.getElementById("confirm-cancel");
+
+    return new Promise(function (resolve) {
+        var done = false;
+        function finish(val) {
+            if (done) return;
+            done = true;
+            okBtn.removeEventListener("click", onOk);
+            cancelBtn.removeEventListener("click", onCancel);
+            modal.removeEventListener("click", onBackdrop);
+            document.removeEventListener("keydown", onKey);
+            modal.classList.remove("open");
+            resolve(val);
+        }
+        function onOk() { finish(true); }
+        function onCancel() { finish(false); }
+        function onBackdrop(e) { if (e.target === modal) finish(false); }
+        function onKey(e) { if (e.key === "Escape") finish(false); }
+
+        if (titleEl) titleEl.textContent = opts.title || "Are you sure?";
+        if (msgEl) msgEl.textContent = message;
+        if (okBtn) {
+            okBtn.textContent = opts.okText || "Confirm";
+            okBtn.className = opts.danger ? "btn--primary btn--danger" : "btn--primary";
+            okBtn.addEventListener("click", onOk);
+        }
+        if (cancelBtn) cancelBtn.addEventListener("click", onCancel);
+        modal.addEventListener("click", onBackdrop);
+        document.addEventListener("keydown", onKey);
+        modal.classList.add("open");
+        if (okBtn) okBtn.focus();
+    });
+}
+
 // -- Page Navigation -------------------------------------------------------
 
 // Drawer elements. ES modules are deferred, so the DOM is fully parsed by
@@ -128,7 +186,10 @@ export function setStat(id, value) {
 export function updatePowerButton(on) {
     var btn = document.getElementById("btn-display-power");
     if (!btn) return;
-    btn.innerHTML = on ? "⏻ Turn Display Off" : "⏻ Turn Display On";
+    // Use the Material Symbol (not the ⏻ Unicode power character) so the
+    // icon renders consistently on every platform/mobile.
+    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> '
+        + (on ? "Turn Display Off" : "Turn Display On");
     btn.classList.toggle("btn--danger", !on);
 }
 

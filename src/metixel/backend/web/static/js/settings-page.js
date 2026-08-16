@@ -466,6 +466,7 @@ import {
         browseBtn.type = "button";
         browseBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span>';
         browseBtn.title = "Browse folders";
+        browseBtn.setAttribute("aria-label", "Browse folders");
         browseBtn.className = "btn--secondary";
         browseBtn.style.cssText = "flex-shrink:0;padding:0.3rem 0.5rem;font-size:0.9rem";
         browseBtn.addEventListener("click", function () {

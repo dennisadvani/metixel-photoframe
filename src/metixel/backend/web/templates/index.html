@@ -9,8 +9,13 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <title>Metixel Photoframe — Dashboard</title>
+    <link rel="icon" href="/static/favicon/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
+    <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=17">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=19">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -175,7 +180,7 @@
                         </div>
                         <div class="proc-phase" data-phase="inspecting_videos" style="margin-bottom:0.6rem">
                             <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
-                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">videocam</span> Scanning video</span>
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">videocam</span> Scanning videos</span>
                                 <span class="proc-pct">—</span>
                             </div>
                             <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
@@ -184,7 +189,7 @@
                         </div>
                         <div class="proc-phase" data-phase="transcoding" style="margin-bottom:0.6rem">
                             <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
-                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">movie</span> Transcoding video</span>
+                                <span><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">movie</span> Transcoding videos</span>
                                 <span class="proc-pct">—</span>
                             </div>
                             <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
@@ -503,7 +508,7 @@
                         <span class="form-label">Sync Directory</span>
                         <div style="display:flex;gap:0.4rem;align-items:center">
                             <input type="text" id="cfg-immich-sync-dir" placeholder="media/sync/immich/" style="flex:1">
-                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-immich-sync-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-immich-sync-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
                         </div>
                     </div>
                     <p class="hint">Where downloaded assets are stored. Relative paths are under <code>/opt/metixel/</code>.</p>
@@ -596,7 +601,7 @@
                         <span class="form-label">Cache Dir</span>
                         <div style="display:flex;gap:0.4rem">
                             <input type="text" id="cfg-cache-dir" placeholder="cache/" style="flex:1">
-                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
                         </div>
                     </div>
                     <div class="form-group">
@@ -646,6 +651,7 @@
                                 <select id="cfg-update-channel">
                                     <option value="stable">Stable (recommended)</option>
                                     <option value="beta">Beta</option>
+                                    <option value="dev">Dev (latest commits)</option>
                                 </select>
                             </div>
                             <p class="hint" id="update-channel-desc">Stable releases are thoroughly tested and recommended for most users.</p>
@@ -706,51 +712,6 @@
                     <div id="kbd-learn-status" style="margin-top:0.5rem;padding:0.4rem 0.6rem;border-radius:4px;display:none;font-size:0.85rem"></div>
                 </div>
 
-                <!-- Display Settings (moved from Settings page) -->
-                <div class="card">
-                    <h2>Display Settings</h2>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-display-auto"> Auto-detect resolution
-                    </label>
-                    <p class="hint" id="display-detected-res" style="margin-bottom:0.6rem">Detected: —</p>
-                    <div class="field-group" id="display-resolution-fields">
-                        <div class="form-group">
-                            <span class="form-label">Width</span>
-                            <input type="number" id="cfg-display-width" min="320" max="7680" value="0" placeholder="1920">
-                            <span style="font-size:0.8rem;color:var(--text-muted)">px</span>
-                        </div>
-                        <div class="form-group">
-                            <span class="form-label">Height</span>
-                            <input type="number" id="cfg-display-height" min="200" max="4320" value="0" placeholder="1080">
-                            <span style="font-size:0.8rem;color:var(--text-muted)">px</span>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">FPS Limit</span>
-                        <input type="number" id="cfg-fps-limit" min="10" max="60" value="30">
-                    </div>
-                    <hr style="border-color:var(--border);margin:0.8rem 0">
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-schedule-enabled">
-                        <span>Power Schedule</span>
-                    </label>
-                    <p class="hint">Automatically turn the display on and off at set times.</p>
-                    <div id="schedule-fields" style="margin-top:0.5rem">
-                        <div style="display:flex;gap:0.8rem;flex-wrap:wrap">
-                            <div class="form-group" style="flex:1;min-width:120px">
-                                <span class="form-label">Turn On</span>
-                                <input type="time" id="cfg-schedule-on" value="07:00">
-                            </div>
-                            <div class="form-group" style="flex:1;min-width:120px">
-                                <span class="form-label">Turn Off</span>
-                                <input type="time" id="cfg-schedule-off" value="22:00">
-                            </div>
-                        </div>
-                    </div>
-                    <button id="btn-save-display">Save Display Settings</button>
-                    <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
-                </div>
-
                 <div class="card">
                     <h2>Time</h2>
                     <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
@@ -781,6 +742,27 @@
                         <p class="hint" style="margin-top:0.2rem">Up to 3 servers. Leave blank to use defaults.</p>
                     </div>
                     <button id="btn-save-time">Save Time Settings</button>
+
+                    <hr style="border-color:var(--border);margin:0.8rem 0">
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-schedule-enabled">
+                        <span>Screen Power Save Schedule</span>
+                    </label>
+                    <p class="hint">The display turns off at the "Screen Off" time and on at the "Screen On" time each day. Times may wrap past midnight (e.g. Off 21:00 and On 07:00).</p>
+                    <div id="schedule-fields" style="margin-top:0.5rem">
+                        <div style="display:flex;gap:0.8rem;flex-wrap:wrap">
+                            <div class="form-group" style="flex:1;min-width:120px">
+                                <span class="form-label">Screen Off At</span>
+                                <input type="time" id="cfg-schedule-off" value="22:00">
+                            </div>
+                            <div class="form-group" style="flex:1;min-width:120px">
+                                <span class="form-label">Screen On At</span>
+                                <input type="time" id="cfg-schedule-on" value="07:00">
+                            </div>
+                        </div>
+                    </div>
+                    <button id="btn-save-schedule">Save Display Power Schedule</button>
+                    <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
                 </div>
 
                 <!-- MQTT / Home Assistant Settings -->
@@ -831,6 +813,32 @@
                         <button id="btn-save-mqtt">Save MQTT Settings</button>
                         <button id="btn-restart-mqtt" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Restart Services</button>
                     </div>
+                </div>
+
+                <!-- Display Settings (moved under MQTT) -->
+                <div class="card">
+                    <h2>Display Settings</h2>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-display-auto"> Auto-detect resolution
+                    </label>
+                    <p class="hint" id="display-detected-res" style="margin-bottom:0.6rem">Detected: —</p>
+                    <div class="field-group" id="display-resolution-fields">
+                        <div class="form-group">
+                            <span class="form-label">Width</span>
+                            <input type="number" id="cfg-display-width" min="320" max="7680" value="0" placeholder="1920">
+                            <span style="font-size:0.8rem;color:var(--text-muted)">px</span>
+                        </div>
+                        <div class="form-group">
+                            <span class="form-label">Height</span>
+                            <input type="number" id="cfg-display-height" min="200" max="4320" value="0" placeholder="1080">
+                            <span style="font-size:0.8rem;color:var(--text-muted)">px</span>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">FPS Limit</span>
+                        <input type="number" id="cfg-fps-limit" min="10" max="60" value="30">
+                    </div>
+                    <button id="btn-save-display">Save Display Settings</button>
                 </div>
 
                 <!-- Web Server card hidden — uncomment to re-enable
@@ -902,7 +910,19 @@
         </div>
     </div>
 
+    <!-- Confirm Dialog -->
+    <div id="confirm-modal" class="modal">
+        <div class="modal-content" style="max-width:420px">
+            <h3 id="confirm-title">Are you sure?</h3>
+            <p id="confirm-message" class="confirm-message" style="margin:0.5rem 0 1rem 0;color:var(--text-secondary)"></p>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap">
+                <button id="confirm-cancel" class="btn--secondary">Cancel</button>
+                <button id="confirm-ok" class="btn--primary">Confirm</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=29"></script>
+    <script type="module" src="/static/js/main.js?v=33"></script>
 </body>
 </html>
