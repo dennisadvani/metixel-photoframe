@@ -768,17 +768,17 @@ class FrontendRenderer:
             self._presentation.prev_item()
         elif msg.cmd == "pause":
             self._presentation.pause()
-            _show_feedback(self._overlay, "Paused", "Slideshow paused", 3.0)
+            _show_feedback(self._overlay, "Control", "Slideshow paused", 3.0)
         elif msg.cmd == "resume":
             self._presentation.resume()
-            _show_feedback(self._overlay, "Resumed", "Slideshow resumed", 3.0)
+            _show_feedback(self._overlay, "Control", "Slideshow resumed", 3.0)
         elif msg.cmd == "toggle_pause":
             if self._presentation._paused:
                 self._presentation.resume()
-                _show_feedback(self._overlay, "Resumed", "Slideshow resumed", 3.0)
+                _show_feedback(self._overlay, "Control", "Slideshow resumed", 3.0)
             else:
                 self._presentation.pause()
-                _show_feedback(self._overlay, "Paused", "Slideshow paused", 3.0)
+                _show_feedback(self._overlay, "Control", "Slideshow paused", 3.0)
         elif msg.cmd == "screen_off":
             if self._backend:
                 self._backend.display_power(False)
