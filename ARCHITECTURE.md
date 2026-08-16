@@ -94,8 +94,6 @@ graph TB
     subgraph "External Systems"
         IMMICH[Immich Server<br/>REST API]
         HA[Home Assistant<br/>MQTT Broker]
-        NAS[Network Storage<br/>SMB/NFS]
-        USB[USB Drive]
     end
 
     subgraph "Metixel Photoframe — Core System"
@@ -136,8 +134,6 @@ graph TB
 
     IMMICH -->|HTTPS| SYNC
     HA <-->|MQTT| MQTT
-    NAS -->|File Watch| SYNC
-    USB -->|File Watch| SYNC
     SYNC -->|Metadata stubs| OPTQ
     OPTQ -->|Optimised items| CACHE
     OPTQ -->|Ready-to-play| STATE
@@ -319,9 +315,14 @@ metixel-photoframe/                           # Repository root
 │   ├── display/
 │   └── shared/
 │
-├── docs/                              # Additional documentation
-│   ├── API.md
-│   ├── HARDWARE.md
+├── docs/                              # Documentation
+│   ├── CHANGELOG.md                   # Release notes
+│   ├── FEATURES.md                    # Feature list
+│   ├── INSTALLATION.md                # Install + set up your frame
+│   ├── USER_GUIDE.md                  # Reference manual
+│   ├── FAQ.md
+│   ├── THIRD_PARTY_LICENSES.md        # Dependency licenses
+│   ├── NOTICE                         # Attributions
 │   └── WIDGET_DEV.md
 │
 ├── ARCHITECTURE.md                    # This file

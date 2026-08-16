@@ -148,7 +148,7 @@ if ($Finalize) {
     Write-Host "=== Release $Tag tagged on main ===" -ForegroundColor Green
     Write-Host ""
     Write-Host "Next step: create a GitHub Release from the tag:"
-    Write-Host "  gh release create $Tag --prerelease --title `"$Finalize`" --notes `"See CHANGELOG.md`""
+    Write-Host "  gh release create $Tag --prerelease --title `"$Finalize`" --notes `"See docs/CHANGELOG.md`""
     Write-Host "  (use --prerelease for beta/rc, omit for stable)"
     exit 0
 }
@@ -259,5 +259,5 @@ Write-Host "After merging, finalise the release (tags main + pushes the tag):" -
 Write-Host "  .\scripts\release.ps1 -Finalize $NewVersion"
 Write-Host ""
 Write-Host "Then create a GitHub Release from the tag:"
-Write-Host "  gh release create v$NewVersion --prerelease --title `"$NewVersion`" --notes `"See CHANGELOG.md`""
+Write-Host "  gh release create v$NewVersion --prerelease --title `"$NewVersion`" --notes `"See docs/CHANGELOG.md`""
 Write-Host "  (use --prerelease for beta/rc, omit for stable)"
