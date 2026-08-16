@@ -30,7 +30,7 @@
 
 ## What is Metixel Photoframe?
 
-Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated digital photo frame. It's a complete operating system overlay — not just an app — designed to run headless on a wall or shelf, pulling photos from local folders, USB drives, network shares, or an [Immich](https://immich.app/) server.
+Metixel Photoframe turns a Raspberry Pi into a polished, hardware-accelerated digital photo frame. It's a complete operating system overlay — not just an app — designed to run headless on a wall or shelf, pulling photos from local folders, network shares, or an [Immich](https://immich.app/) server.
 
 - **Image playback** supporting JPEG, PNG, WebP, BMP, and GIF — with EXIF auto-rotation and smooth hardware-accelerated crossfades. iPhone HEIC/HEIF photos are automatically converted to JPEG on upload
 - **Video playback** supporting MP4, MOV, M4V, AVI, MKV, WebM, and MPG/MPEG (H.264/AVC, H.265/HEVC, MPEG-4, VP8/VP9, and more via ffmpeg), with automatic transcoding to Pi-friendly H.264 + AAC and HDR → SDR tone-mapping
