@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks for suggesting a feature. Please check the existing issues and
-        [FEATURES.md](https://github.com/dennisadvani/metixel-photoframe/blob/main/FEATURES.md)
+        [FEATURES.md](https://github.com/dennisadvani/metixel-photoframe/blob/main/docs/FEATURES.md)
         to make sure it isn't already planned.
   - type: textarea
     id: problem

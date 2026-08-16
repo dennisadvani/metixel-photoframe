@@ -84,7 +84,7 @@ if [ "$FINALIZE" = "next" ]; then
     echo -e "${GREEN}═══ Release $TAG tagged on main ═══${NC}"
     echo ""
     echo "Next step: create a GitHub Release from the tag:"
-    echo "  gh release create $TAG --prerelease --title \"$NEW_VERSION\" --notes \"See CHANGELOG.md\""
+    echo "  gh release create $TAG --prerelease --title \"$NEW_VERSION\" --notes \"See docs/CHANGELOG.md\""
     echo "  (use --prerelease for beta/rc, omit for stable)"
     exit 0
 fi
@@ -239,5 +239,5 @@ echo -e "${GREEN}After merging, finalise the release (tags main + pushes the tag
 echo "  $0 --finalize $NEW_VERSION"
 echo ""
 echo "Then create a GitHub Release from the tag:"
-echo "  gh release create v$NEW_VERSION --prerelease --title \"$NEW_VERSION\" --notes \"See CHANGELOG.md\""
+echo "  gh release create v$NEW_VERSION --prerelease --title \"$NEW_VERSION\" --notes \"See docs/CHANGELOG.md\""
 echo "  (use --prerelease for beta/rc, omit for stable)"

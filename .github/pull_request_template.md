@@ -37,7 +37,7 @@ Closes #<!-- issue number -->
 <!-- CI cannot verify these — the author must confirm them. -->
 
 - [ ] Web UI change? `cd web-tests && npx playwright test` passes against a live frame
-- [ ] `CHANGELOG.md` updated under `[Unreleased]`
+- [ ] `docs/CHANGELOG.md` updated under `[Unreleased]`
 - [ ] Docs updated if user-facing behaviour, URLs, or the API changed
 
 ## Notes for reviewers

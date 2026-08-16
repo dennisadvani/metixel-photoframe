@@ -24,13 +24,71 @@ tests), and the workflow for getting changes merged.
    component relationships, and implementation roadmap.
 2. **Check the [issues](https://github.com/dennisadvani/metixel-photoframe/issues)**
    for open tasks — especially anything labelled `good first issue`.
-3. **Set up a dev environment** — see **Path C: Development setup (VS Code sync
-   to Pi)** in [`docs/INSTALLATION.md`](docs/INSTALLATION.md#path-c-development-setup-vs-code-sync-to-pi).
+3. **Set up a dev environment** — see [Development setup (VS Code sync to Pi)](#development-setup-vs-code-sync-to-pi) below.
 
 Metixel development targets a Raspberry Pi — the display backend (pi3d + Mesa)
 doesn't run on a desktop. The workflow is to edit code on your workstation and
 sync it to the Pi over SSH using the bundled VS Code tasks (`.vscode/tasks.json`
 + `.vscode/sync-to-pi.ps1`).
+
+### Development setup (VS Code sync to Pi)
+
+#### 1. Set up a Pi
+
+First, install Metixel on a Pi using **Path A** or **Path B** in
+[`docs/INSTALLATION.md`](docs/INSTALLATION.md).
+
+#### 2. One-time SSH setup on your workstation
+
+The sync workflow uses passwordless SSH from your VS Code PC to the Pi.
+Do this once per PC:
+
+1. **Generate an SSH key pair** (skip if you already have one):
+
+   ```powershell
+   ssh-keygen -t ed25519
+   ```
+
+2. **Install your public key on the Pi:**
+
+   ```powershell
+   type $env:USERPROFILE\.ssh\id_ed25519.pub | ssh pi@<pi-ip> "mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys"
+   ```
+
+   Replace `<pi-ip>` with your Pi's IP address. Enter the Pi's password
+   when prompted (this is the only time it's needed).
+
+3. **Add the Pi to your known hosts** and verify the connection:
+
+   ```powershell
+   ssh pi@<pi-ip> "echo ok"
+   ```
+
+   Answer `yes` when asked to trust the host key. The sync script also
+   passes `StrictHostKeyChecking=accept-new`, so first-run connections
+   work even without this step — but verifying once here confirms your
+   key is installed correctly.
+
+4. **Verify passwordless sudo** works on the Pi:
+
+   ```powershell
+   ssh pi@<pi-ip> "sudo -n true && echo sudo-ok"
+   ```
+
+   The sync script uses `sudo rsync` to install files into the
+   root-owned tree under `/opt/metixel`. The default Raspberry Pi OS
+   `pi` user has passwordless sudo, so this normally just works. If it
+   prints nothing, enable it with `sudo visudo` and add:
+   `pi ALL=(ALL) NOPASSWD: ALL`.
+
+#### 3. Point the tasks at your Pi
+
+Edit `.vscode/tasks.json` and update the IP addresses in the `piHost`
+input (search for `"id": "piHost"`) to match your Pi(s). The tasks
+prompt you to pick a target Pi every time they run.
+
+Then use the VS Code task runner (**Terminal → Run Task…** or
+`Ctrl+Shift+P` → "Tasks: Run Task") — see **Development workflow** below.
 
 ## Development workflow
 
@@ -208,7 +266,7 @@ Full details in [`web-tests/README.md`](web-tests/README.md).
    save buttons and controls still work.
 3. Verify on the Pi: **[Pi] Sync Code (scp)** + **[Pi] Sync + Restart All (scp)**, then
    **[Pi] Follow Logs** to confirm the services boot cleanly.
-4. Update [`CHANGELOG.md`](CHANGELOG.md) under `## [Unreleased]` — and
+4. Update [`CHANGELOG.md`](docs/CHANGELOG.md) under `## [Unreleased]` — and
    `docs/` if the change affects user-facing behaviour, URLs, or the API.
 5. Open a pull request. Keep changes focused — one concern per PR.
 
