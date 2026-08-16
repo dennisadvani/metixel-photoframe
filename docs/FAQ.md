@@ -1,8 +1,5 @@
 # Metixel Photoframe — Frequently Asked Questions
 
-> **Images to be added:** screenshot placeholders are marked like
-> `![Screenshot: …](images/…)` and will be filled in later.
-
 ---
 
 ## Photos & videos

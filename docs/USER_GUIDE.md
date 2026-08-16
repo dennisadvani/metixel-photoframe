@@ -1,9 +1,6 @@
 # Metixel Photoframe — User Guide
 
-> **Images to be added:** this guide is written with screenshot placeholders
-> marked like `![Screenshot: …](images/…)`. Screenshots will be dropped into
-> the `docs/images/` folder as they're captured. Nothing in the text depends on
-> them — the instructions are complete on their own.
+> Screenshots referenced throughout this guide live in `docs/images/`.
 
 ## Table of Contents
 
@@ -268,10 +265,10 @@ The dashboard gives you a live overview:
 
 - **Upload Media** — add photos/videos from your device.
 - **Filter** — by filename, folder, or type (Images / Videos).
-- **Grid** — click a thumbnail to see details. A badge shows whether a video is
-  *Queued*, *Transcoding*, or ready. Use **Delete** to remove an item.
+- **Grid** — A badge shows whether a video is
+  *Queued*, *Transcoding*, or ready.
 
-![Screenshot: media library grid with filters and badges](images\media-upload.png)
+![Screenshot: media library grid with filters and badges](images/media-upload.png)
 
 ### Settings page
 
@@ -506,7 +503,7 @@ Give Home Assistant a few minutes (or restart it) after enabling MQTT on the
 frame. If discovery doesn't pick it up, check the broker is reachable and that
 the frame shows **Connected**.
 
-![Screenshot: Metixel in Home Assistant MQTT](images\home-assistant-device.png)
+![Screenshot: Metixel in Home Assistant MQTT](images/home-assistant-device.png)
 
 > **Manual setup (advanced):** if you prefer not to use discovery, create MQTT
 > entities in Home Assistant pointing at the topics in the table above using the
