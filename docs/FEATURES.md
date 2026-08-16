@@ -11,9 +11,7 @@ A comprehensive list of every feature in Metixel Photoframe, organized by subsys
 - **Two-texture ping-pong GPU pipeline** — active slot displayed while inactive slot preloads the next image
 - **Smooth transitions** — crossfade, fade-through-black, or instant cut; configurable duration (default 2500ms)
 - **Configurable fit modes** — contain, cover, fill, with smart-cover for opposite-orientation images
-- **Matte bars** — configurable RGB color for letterboxing/pillarboxing
 - **Boot screen** — animated Metixel logo with rotating spinner; smooth 0.8s ease-out fade to first slide
-- **30 FPS render loop** — capped for Pi Zero 2 W (512MB RAM) compatibility
 - **Display sleep scheduler** — configurable on/off times (e.g. off at 22:00, on at 07:00)
 - **Display power control** — DRM DPMS via sysfs on KMS, or `vcgencmd display_power` on legacy
 
@@ -59,7 +57,6 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **Non-blocking state machine** | VLC plays on top of the slideshow; frame swaps underneath are invisible |
 | **Last-frame swap** | VLC's window is covered by a cached last-frame JPEG at 80% of video duration for a seamless transition |
 | **Guardrails** | Max duration filter, transcoding enabled/disabled toggle, playback enabled/disabled master switch |
-| **Pi Zero 2 W** | Untested — image-only; no video, optimisation, or transcoding |
 
 ---
 
@@ -69,9 +66,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 |---|---|
 | **Web upload** | Media Library → **Upload Media** (or drag & drop) — any browser on the network; opens the phone gallery on iOS/Android; HEIC/HEIF photos auto-converted to JPEG |
 | **Local folder** | Watch paths configured in the Web UI — new files auto-detected by polling |
-| **Network share** | Mount SMB/NFS shares, add mount point as a watch path |
 | **Immich** | Configure server URL + API key — albums, favorites, and people auto-sync on configurable interval |
-| **USB drive** | Add the USB mount point as a watch path |
 
 ---
 

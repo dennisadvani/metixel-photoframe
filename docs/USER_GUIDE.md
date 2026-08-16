@@ -52,6 +52,10 @@ The frame is designed to be left on and forgotten about:
 
 ## 2. Setup / Installation
 
+> **New here?** The quick path is **[Installation & Setup](INSTALLATION.md)**.
+> This chapter is the detailed reference — most people only need the quick
+> path.
+
 ### Step 1 — Flash the Metixel image onto an SD card (recommended)
 
 1. Download the latest **Metixel OS image** from the [releases page](https://github.com/dennisadvani/metixel-photoframe/releases).
@@ -535,7 +539,7 @@ controls (next, previous, pause, power, etc.).
 
 The frame responds to your remote immediately. (HDMI-CEC support for TV remotes
 is available but needs the optional `python3-libcec` package — see
-`docs/HARDWARE.md`.)
+`docs/INSTALLATION.md`.)
 
 ---
 
@@ -595,5 +599,5 @@ Quick fixes for common issues. See also `docs/FAQ.md` for more.
 - **Optimised/thumbnail cache:** the cache folder — safe to clear if you ever
   need space (the frame regenerates it).
 
-For advanced setup, hardware notes, and developer docs, see `docs/INSTALLATION.md`,
-`docs/HARDWARE.md`, and `docs/WIDGET_DEV.md`.
+For advanced setup, hardware notes, and developer docs, see `docs/INSTALLATION.md`
+and `docs/WIDGET_DEV.md`.

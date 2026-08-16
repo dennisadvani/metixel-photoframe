@@ -1,5 +1,40 @@
 # Metixel Photoframe — Frequently Asked Questions
 
+## Contents
+
+- [Photos & videos](#photos--videos)
+  - [My photos aren't showing up — what do I check?](#my-photos-arent-showing-up--what-do-i-check)
+  - [Why is there a delay before a new photo appears?](#why-is-there-a-delay-before-a-new-photo-appears)
+  - [My videos are blurry / won't play](#my-videos-are-blurry--wont-play)
+  - [Can I use Google Photos / iCloud / OneDrive?](#can-i-use-google-photos--icloud--onedrive)
+  - [How many photos/videos can it hold?](#how-many-photosvideos-can-it-hold)
+  - [It's a Raspberry Pi — what if the SD card is full?](#its-a-raspberry-pi--what-if-the-sd-card-is-full)
+- [Display & power](#display--power)
+  - [The screen is black / dimmed during the day](#the-screen-is-black--dimmed-during-the-day)
+  - [The screen is staying on all night](#the-screen-is-staying-on-all-night)
+  - [How do I reboot or shut down cleanly?](#how-do-i-reboot-or-shut-down-cleanly)
+- [Network & access](#network--access)
+  - [The frame isn't connecting to my Wi-Fi / I changed my Wi-Fi and it can't join](#the-frame-isnt-connecting-to-my-wi-fi--i-changed-my-wi-fi-and-it-cant-join)
+  - [How do I find the frame's IP address again?](#how-do-i-find-the-frames-ip-address-again)
+  - [The web dashboard isn't loading](#the-web-dashboard-isnt-loading)
+  - [I forgot the dashboard password](#i-forgot-the-dashboard-password)
+- [Immich sync](#immich-sync)
+  - [Immich sync isn't pulling my photos](#immich-sync-isnt-pulling-my-photos)
+  - [I lost my Immich API key](#i-lost-my-immich-api-key)
+  - [What permissions does the Immich API key need?](#what-permissions-does-the-immich-api-key-need)
+  - [How often does Immich sync?](#how-often-does-immich-sync)
+- [MQTT & Home Assistant](#mqtt--home-assistant)
+  - [MQTT isn't talking to Home Assistant](#mqtt-isnt-talking-to-home-assistant)
+  - [I have more than one frame — will they clash on MQTT?](#i-have-more-than-one-frame--will-they-clash-on-mqtt)
+  - [Which topics does Metixel use?](#which-topics-does-metixel-use)
+- [General](#general)
+  - [What are the default SSH / Samba logins?](#what-are-the-default-ssh--samba-logins)
+  - [How do I update the software?](#how-do-i-update-the-software)
+  - [Is my data private?](#is-my-data-private)
+  - [How do I factory-reset / start fresh?](#how-do-i-factory-reset--start-fresh)
+  - [What Pi models are supported?](#what-pi-models-are-supported)
+  - [Where can I get more help?](#where-can-i-get-more-help)
+
 ---
 
 ## Photos & videos
@@ -214,10 +249,9 @@ also remove your photos, delete the media folders too.
 
 Pi 5 (recommended), Pi 4, and Pi 3 are fully supported. Pi 2 and Pi Zero 2 W
 work but are for advanced users (32-bit manual install, with limits on video
-performance). See `docs/INSTALLATION.md` and `docs/HARDWARE.md` for details.
+performance). See `docs/INSTALLATION.md` for details.
 
 ### Where can I get more help?
 
-The main **user guide** is `docs/USER_GUIDE.md`. Developer and hardware details
-are in `docs/INSTALLATION.md`, `docs/HARDWARE.md`, and the project's
-`ARCHITECTURE.md`.
+The main **user guide** is `docs/USER_GUIDE.md`. Installation and hardware
+details are in `docs/INSTALLATION.md`, and the project's `ARCHITECTURE.md`.

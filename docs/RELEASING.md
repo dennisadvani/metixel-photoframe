@@ -201,7 +201,7 @@ Doing it by hand:
 # 1. Bump the version
 python scripts/bump_version.py --minor --beta 1
 
-# 2. Update CHANGELOG.md
+# 2. Update docs/CHANGELOG.md
 #    Move [Unreleased] items into a new [0.2.0-beta.1] section:
 #
 #    ## [0.2.0-beta.1] — 2026-08-01
@@ -212,7 +212,7 @@ python scripts/bump_version.py --minor --beta 1
 
 # 3. Commit the version bump + changelog
 #    (requires gh authenticated: gh auth login)
-git add src/metixel/__init__.py CHANGELOG.md
+git add src/metixel/__init__.py docs/CHANGELOG.md
 git commit -m "chore: bump version to 0.2.0-beta.1"
 
 # 4. Push the release branch and open a PR to main
@@ -231,7 +231,7 @@ git push origin v0.2.0-beta.1
 #
 #    • Tag:        v0.2.0-beta.1
 #    • Title:      v0.2.0-beta.1 — Descriptive Summary
-#    • Description: Paste the CHANGELOG.md entries for this version
+#    • Description: Paste the docs/CHANGELOG.md entries for this version
 #    • [x] Set as a pre-release        <- THIS IS THE KEY CHECKBOX
 #    • [ ] Set as the latest release   <- leave unchecked (GitHub default)
 #    • Click "Publish release"
@@ -256,11 +256,11 @@ python scripts/bump_version.py --release
 #    Or if you want to bump + release in one step:
 python scripts/bump_version.py --minor   # strips pre-release automatically
 
-# 2. Finalise CHANGELOG.md
+# 2. Finalise docs/CHANGELOG.md
 #    Move [Unreleased] items into the release section, set the date.
 
 # 3. Commit (requires gh authenticated: gh auth login)
-git add src/metixel/__init__.py CHANGELOG.md
+git add src/metixel/__init__.py docs/CHANGELOG.md
 git commit -m "chore: release v0.2.0"
 
 # 4. Push the release branch and open a PR to main
@@ -277,7 +277,7 @@ git push origin v0.2.0
 #
 #    • Tag:        v0.2.0
 #    • Title:      v0.2.0
-#    • Description: Paste CHANGELOG.md entries
+#    • Description: Paste docs/CHANGELOG.md entries
 #    • [ ] Set as a pre-release          <- UNCHECKED
 #    • [x] Set as the latest release     <- CHECKED
 #    • Click "Publish release"
@@ -285,7 +285,7 @@ git push origin v0.2.0
 
 ### Post-Release
 
-After publishing, the `[Unreleased]` section in `CHANGELOG.md` should
+After publishing, the `[Unreleased]` section in `docs/CHANGELOG.md` should
 be empty.  Add a new empty `[Unreleased]` section for future work:
 
 ```markdown
@@ -338,7 +338,7 @@ The tag name after stripping the leading `v` must match the
 |---|---|
 | `src/metixel/__init__.py` | Canonical version string (`__version__`) |
 | `scripts/bump_version.py` | Bump the version programmatically |
-| `CHANGELOG.md` | Human-readable release notes |
+| `docs/CHANGELOG.md` | Human-readable release notes |
 | `pyproject.toml` | Package metadata (version is dynamic, reads `__version__`) |
 | `ARCHITECTURE.md` | Top-of-file version badge (update manually) |
 | GitHub Release | OTA discovery source + downloadable tarball |
