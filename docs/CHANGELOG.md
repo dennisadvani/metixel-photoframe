@@ -5,6 +5,24 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.1]
+
+### Fixed
+
+- **Captive-portal Wi-Fi reconnect failing for secured networks** — the
+  beta.13 security hardening passes the WPA passphrase to `nmcli` via
+  `--passwd-file` so it never appears in `argv`.  On nmcli builds that
+  reject that option (e.g. nmcli 1.52.x, which errors with ``Option
+  '--passwd-file' is unknown``), every connect to a password-protected
+  network through the captive portal failed with a "WiFi Connection
+  Failed" popup; only a reboot (which lets NetworkManager re-associate a
+  previously-saved profile) recovered.  `network_manager` now probes the
+  installed nmcli once for `--passwd-file` support and falls back to
+  passing the passphrase inline (`password <pw>` for one-shot connects,
+  `wifi-sec.psk <pw>` for profile creation) when it's unsupported — so
+  secured-network reconnects work on all builds, with a logged warning on
+  the less-secure fallback.  Guarded by new `tests/backend/test_network_manager.py`.
+
 ## [1.2.0]
 
 ### Added

@@ -268,15 +268,77 @@ def _parse_scan_results() -> list[dict[str, Any]]:
     return networks
 
 
+#: Cached result of the nmcli ``--passwd-file`` capability probe (None = unknown).
+_PASSWD_FILE_SUPPORT: bool | None = None
+
+
+def _nmcli_supports_passwd_file() -> bool:
+    """Return whether the installed nmcli accepts the global ``--passwd-file`` option.
+
+    ``--passwd-file`` (which lets us hand the WPA passphrase to nmcli without
+    putting it in argv) is only present on newer NetworkManager builds.  On
+    builds like nmcli 1.52.x the option is rejected with ``Option
+    '--passwd-file' is unknown`` — which made every captive-portal reconnect
+    fail.  We probe once and cache the result; a probe failure defaults to
+    False so the (working) inline fallback is used.
+    """
+    global _PASSWD_FILE_SUPPORT
+    if _PASSWD_FILE_SUPPORT is not None:
+        return _PASSWD_FILE_SUPPORT
+    supported = False
+    try:
+        result = subprocess.run(
+            ["nmcli", "--passwd-file", os.devnull, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        err = (result.stderr or "").lower()
+        # Supported builds print the version (or a different, option-accepting
+        # error); unsupported ones explicitly reject the option.
+        supported = "unknown option" not in err and "--passwd-file" not in err
+    except Exception:  # noqa: BLE001 — nmcli may be missing entirely
+        supported = False
+    _PASSWD_FILE_SUPPORT = supported
+    if not supported:
+        logger.warning(
+            "nmcli does not support --passwd-file on this build — Wi-Fi "
+            "passphrases will be passed via argv (visible in ps). Consider "
+            "upgrading NetworkManager."
+        )
+    return supported
+
+
+def _inline_password_args(args: list[str], password: str) -> list[str]:
+    """Build nmcli args that pass the passphrase inline (no ``--passwd-file``).
+
+    nmcli accepts the secret differently per subcommand:
+    * ``device wifi connect <ssid>`` → append ``password <pw>``
+    * ``connection add ...`` → append ``wifi-sec.psk <pw>``
+    * ``connection up <con>`` → no secret argument needed (profile has it)
+    """
+    if "device" in args and "wifi" in args and "connect" in args:
+        return [*args, "password", password]
+    if args[0:2] == ["connection", "add"]:
+        return [*args, "wifi-sec.psk", password]
+    if args[0:2] == ["connection", "up"]:
+        return args
+    # Unknown command — best-effort inline secret.
+    return [*args, "password", password]
+
+
 def _nmcli_with_password(
     args: list[str], password: str, timeout: float
 ) -> subprocess.CompletedProcess[str]:
-    """Run ``sudo nmcli <args>`` passing a Wi-Fi passphrase via a passwd-file.
+    """Run ``sudo nmcli <args>``, passing a Wi-Fi passphrase without breaking.
 
-    The passphrase is written to a 0600 temp file and handed to nmcli via
-    ``--passwd-file`` instead of being placed in the process argv (argv is
-    world-readable via ``/proc/<pid>/cmdline`` / ``ps``, leaking the secret
-    to any local process).  The temp file is deleted on every exit path.
+    When the installed nmcli supports ``--passwd-file`` the passphrase is
+    written to a 0600 temp file and handed to nmcli via that option — so it
+    never appears in the process argv (argv is world-readable via
+    ``/proc/<pid>/cmdline`` / ``ps``, leaking the secret to any local
+    process).  On nmcli builds that reject ``--passwd-file`` (e.g. 1.52.x)
+    the secret is passed inline instead, so captive-portal reconnects keep
+    working.  The temp file is deleted on every exit path.
     """
     if not password:
         return subprocess.run(
@@ -286,21 +348,30 @@ def _nmcli_with_password(
             timeout=timeout,
         )
 
-    fd, path = tempfile.mkstemp(prefix="metixel-wifi-", suffix=".secret")
-    try:
-        with os.fdopen(fd, "w") as f:
-            # nmcli passwd-file format: ``<setting>.<property>:<value>``
-            f.write(f"802-11-wireless-security.psk:{password}\n")
-        os.chmod(path, 0o600)
-        return subprocess.run(
-            ["sudo", "nmcli", "--passwd-file", path, *args],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    finally:
-        with contextlib.suppress(OSError):
-            os.unlink(path)
+    if _nmcli_supports_passwd_file():
+        fd, path = tempfile.mkstemp(prefix="metixel-wifi-", suffix=".secret")
+        try:
+            with os.fdopen(fd, "w") as f:
+                # nmcli passwd-file format: ``<setting>.<property>:<value>``
+                f.write(f"802-11-wireless-security.psk:{password}\n")
+            os.chmod(path, 0o600)
+            return subprocess.run(
+                ["sudo", "nmcli", "--passwd-file", path, *args],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+    # Fallback: this nmcli build rejects --passwd-file → pass the secret inline.
+    return subprocess.run(
+        ["sudo", "nmcli", *_inline_password_args(args, password)],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
 
 
 def connect_to_network(ssid: str, password: str) -> tuple[bool, str]:
