@@ -8,6 +8,8 @@
 *Where your photographs and videos are front and center in your home — synced with Immich, managed from your browser, and hung beautifully on the wall.*
 
 <p align="center">
+  <a href="#features"><img src="https://img.shields.io/badge/Features-334155?style=for-the-badge" alt="Features"></a>
+  &nbsp;
   <a href="https://github.com/dennisadvani/metixel-photoframe/releases/latest"><img src="https://img.shields.io/badge/Download-8B1A2B?style=for-the-badge" alt="Download"></a>
   &nbsp;
   <a href="docs/INSTALLATION.md"><img src="https://img.shields.io/badge/Install-334155?style=for-the-badge" alt="Install"></a>
@@ -19,13 +21,14 @@
 
 <a href="https://github.com/dennisadvani/metixel-photoframe/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/dennisadvani/metixel-photoframe/actions/workflows/ci.yml/badge.svg"></a> <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue">
 
-<img src="docs/images/metixel_github_10fps.gif" alt="Metixel Photoframe in action" width="70%">
+<img src="docs/images/metixel_github_10fps.gif" alt="Metixel Photoframe in action" width="100%">
 
 **The picture frame, not the dashboard.**<br>
 No clocks, no widgets, no weather overlays. Metixel treats your photographs like art for image and videos, with nothing to distract from the moment.
 
 **The Favorite-to-Frame workflow.**<br>
 Stop letting daily memories get forgotten in the cloud. Connect Metixel to an Immich album, and any photo you drop in from your phone automatically hangs on your wall, or upload from your phone.
+
 **Zero-terminal setup.**<br>
 DIY hardware shouldn't require a computer science degree. Once installed, Metixel is managed entirely from a web interface — no SSH, no config files, no command-line rituals.
 
