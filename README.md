@@ -7,10 +7,15 @@
 *An open-source digital photo frame for the Raspberry Pi.*  
 *Where your photographs and videos are front and center in your home — synced with Immich, managed from your browser, and hung beautifully on the wall.*
 
-<a href="https://github.com/dennisadvani/metixel-photoframe/releases/latest" style="display:inline-block;padding:0.6em 1.9em;margin:0.4em;border-radius:2em;background:#8B1A2B;color:#ffffff;text-decoration:none;font-weight:600;font-size:0.95rem;letter-spacing:0.03em;">Download</a>
-<a href="docs/INSTALLATION.md" style="display:inline-block;padding:0.6em 1.9em;margin:0.4em;border-radius:2em;background:#334155;color:#ffffff;text-decoration:none;font-weight:600;font-size:0.95rem;letter-spacing:0.03em;">Install</a>
-<a href="docs/INSTALLATION.md#set-up-your-frame" style="display:inline-block;padding:0.6em 1.9em;margin:0.4em;border-radius:2em;background:#334155;color:#ffffff;text-decoration:none;font-weight:600;font-size:0.95rem;letter-spacing:0.03em;">Set up</a>
-<a href="docs/FAQ.md" style="display:inline-block;padding:0.6em 1.9em;margin:0.4em;border-radius:2em;background:#334155;color:#ffffff;text-decoration:none;font-weight:600;font-size:0.95rem;letter-spacing:0.03em;">FAQ</a>
+<p align="center">
+  <a href="https://github.com/dennisadvani/metixel-photoframe/releases/latest"><img src="https://img.shields.io/badge/Download-8B1A2B?style=for-the-badge" alt="Download"></a>
+  &nbsp;
+  <a href="docs/INSTALLATION.md"><img src="https://img.shields.io/badge/Install-334155?style=for-the-badge" alt="Install"></a>
+  &nbsp;
+  <a href="docs/INSTALLATION.md#set-up-your-frame"><img src="https://img.shields.io/badge/Set_up-334155?style=for-the-badge" alt="Set up"></a>
+  &nbsp;
+  <a href="docs/FAQ.md"><img src="https://img.shields.io/badge/FAQ-334155?style=for-the-badge" alt="FAQ"></a>
+</p>
 
 <a href="https://github.com/dennisadvani/metixel-photoframe/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/dennisadvani/metixel-photoframe/actions/workflows/ci.yml/badge.svg"></a> <img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue">
 
@@ -18,7 +23,6 @@
 
 **The picture frame, not the dashboard.**<br>
 No clocks, no widgets, no weather overlays. Metixel treats your photographs like art for image and videos, with nothing to distract from the moment.
-
 **The Favorite-to-Frame workflow.**<br>
 Stop letting daily memories get forgotten in the cloud. Connect Metixel to an Immich album, and any photo you drop in from your phone automatically hangs on your wall, or upload from your phone.
 
