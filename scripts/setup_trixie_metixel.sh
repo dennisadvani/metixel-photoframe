@@ -46,7 +46,7 @@ fi
 
 if [ "${INSIDE_REPO}" = false ]; then
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     Metixel Photoframe — Setup                              ║"
+    echo "║     Metixel Photoframe — Setup                               ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 
@@ -81,7 +81,7 @@ if [ "${INSIDE_REPO}" = false ]; then
     echo ""
 
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     Cloning repository and running full setup...            ║"
+    echo "║     Cloning repository and running full setup...             ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 

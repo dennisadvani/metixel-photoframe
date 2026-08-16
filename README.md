@@ -18,8 +18,7 @@
 </p> -->
 
 <p align="center">
-  <video src="https://github.com/dennisadvani/metixel-photoframe/releases/download/v1.0.7/github_800px_loop.mp4" autoplay loop muted playsinline width="70%">
-  </video>
+  <img src="docs/images/metixel_github_10fps.gif" alt="Metixel Photoframe in action" width="70%">
 </p>
 
 <p align="center">
