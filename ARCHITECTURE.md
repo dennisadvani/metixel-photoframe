@@ -67,7 +67,7 @@ cage -- python3 -m metixel --mode frontend --config etc/config.json
 ```
 
 The application code and `Pi3dBackend` are identical across all platforms. Only the launch wrapper changes.
-| **GPU Memory** | `dtoverlay=vc4-kms-v3d` + `gpu_mem=16` | `dtoverlay=vc4-kms-v3d` + `gpu_mem=16` |
+| **GPU Memory** | `dtoverlay=vc4-kms-v3d` + `gpu_mem=128` | `dtoverlay=vc4-kms-v3d` + `gpu_mem=128` |
 | **Kernel** | 6.6 LTS (Trixie default) | 6.6 LTS (Trixie default) |
 | **Init System** | systemd (stripped) | systemd or Busybox init (Buildroot) |
 
@@ -407,7 +407,7 @@ Next frame reflects change
 #### Step 1.1: OS Image & Quiet Boot
 - Trixie Lite base image (64-bit for Pi 3/4/5; 32-bit for Pi 2/Zero 2 W)
 - Pre-built `.img` available for 64-bit models; manual install for 32-bit
-- `config.txt`: `dtoverlay=vc4-kms-v3d`, `gpu_mem=16`, `disable_splash=1`
+- `config.txt`: `dtoverlay=vc4-kms-v3d`, `gpu_mem=128`, `disable_splash=1`
 - `cmdline.txt`: `console=tty3 quiet loglevel=3 logo.nologo`
 - Plymouth splash screen with metixel logo (optional)
 - Debug mode: GPIO pin 17 HIGH or `/boot/debug` file → verbose boot

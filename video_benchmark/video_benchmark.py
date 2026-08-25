@@ -212,6 +212,23 @@ def scp_to(pi: PiConfig, local: Path, remote: str) -> None:
     )
 
 
+def crop_ratio(display_size: str) -> str:
+    """Return a VLC ``--crop``/``--aspect-ratio`` string (W:H) for a display.
+
+    Mirrors the app's ``VlcVideoPlayer._compute_crop_ratio``: reduce the
+    display resolution to its simplest integer ratio (e.g. "16:9").
+    """
+    from math import gcd
+
+    w_str, _, h_str = display_size.lower().partition("x")
+    try:
+        w, h = int(w_str), int(h_str)
+    except ValueError:
+        return "16:9"
+    g = gcd(w, h)
+    return f"{w // g}:{h // g}"
+
+
 def open_tunnel(pi: PiConfig, port: int) -> subprocess.Popen:
     """Open an SSH local-port-forward tunnel from this workstation to the Pi.
 
@@ -387,6 +404,19 @@ def main() -> None:
         default=None,
         help="Alias for --ip",
     )
+    parser.add_argument(
+        "--fit-mode",
+        default="contain",
+        choices=["contain", "cover", "fill"],
+        help="How to fit the video to the display: cover (crop, like the app), "
+             "contain (letterbox), or fill (stretch). Default: contain",
+    )
+    parser.add_argument(
+        "--display",
+        dest="display_size",
+        default="1920x1080",
+        help="Display resolution as WxH for crop/fill fit modes (default 1920x1080)",
+    )
     args = parser.parse_args()
 
     # ── Pi config ─────────────────────────────────────────────────────
@@ -465,10 +495,19 @@ def main() -> None:
     tmp.close()
 
     remote_path = f"{REMOTE_DIR}/{out_path.name}"
+    # Apply the same fit-mode logic as the app's VlcVideoPlayer:
+    #   cover → --crop=W:H (CSS cover)
+    #   fill  → --aspect-ratio=W:H (stretch)
+    #   contain → nothing (letterbox/pillarbox)
+    fit_flag = ""
+    if args.fit_mode == "cover":
+        fit_flag = f" --crop={crop_ratio(args.display_size)}"
+    elif args.fit_mode == "fill":
+        fit_flag = f" --aspect-ratio={crop_ratio(args.display_size)}"
     vlc_cmd = (
         f"vlc --no-audio --play-and-exit --no-video-title-show "
         f"--intf dummy --extraintf rc --rc-host localhost:{rc_port} "
-        f"--fullscreen {remote_path}"
+        f"--fullscreen{fit_flag} {remote_path}"
     )
     print(f"\n[pi] Launching VLC fullscreen on {pi.ssh_target}…")
     print(f"[pi]   {vlc_cmd}")
