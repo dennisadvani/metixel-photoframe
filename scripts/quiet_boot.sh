@@ -121,7 +121,9 @@ apply_quiet_boot() {
 
     add_config_line "${BOOT_CONFIG}" "disable_splash=1"
     add_config_line "${BOOT_CONFIG}" "avoid_warnings=2"
-    add_config_line "${BOOT_CONFIG}" "gpu_mem=16"
+    # NOTE: do NOT set gpu_mem here.  The setup script (setup_trixie_metixel.sh)
+    # sets gpu_mem=128 for hardware video decode; forcing gpu_mem=16 here would
+    # override it (last line wins) and break the V4L2 hardware decoder.
 
     # -----------------------------------------------------------------------
     # 2. /boot/firmware/cmdline.txt — the critical piece
@@ -250,7 +252,7 @@ fi' "${RC_LOCAL}"
     echo ""
     echo "=== Quiet Boot v3 Applied ==="
     echo ""
-    echo "  config.txt:   disable_splash=1, avoid_warnings=2, gpu_mem=16"
+    echo "  config.txt:   disable_splash=1, avoid_warnings=2"
     echo "  cmdline.txt:  console=tty3 (kernel output hidden), quiet loglevel=0,"
     echo "                logo.nologo, vt.global_cursor_default=0"
     echo "  systemd:      getty@tty1 masked, ShowStatus=no, journal console off"
@@ -279,7 +281,8 @@ revert_quiet_boot() {
     if [ -f "${BOOT_CONFIG}" ]; then
         remove_config_line "${BOOT_CONFIG}" "disable_splash=1"
         remove_config_line "${BOOT_CONFIG}" "avoid_warnings=2"
-        remove_config_line "${BOOT_CONFIG}" "gpu_mem=16"
+        # gpu_mem is intentionally NOT touched — it is managed by the
+        # setup script (setup_trixie_metixel.sh), not quiet boot.
     else
         echo "  ! ${BOOT_CONFIG} not found — skipping"
     fi
@@ -387,7 +390,7 @@ revert_quiet_boot() {
     echo ""
     echo "=== Factory Defaults Restored ==="
     echo ""
-    echo "  config.txt:   disable_splash, avoid_warnings, gpu_mem removed"
+    echo "  config.txt:   disable_splash, avoid_warnings removed"
     echo "  cmdline.txt:  console=tty1 restored, quiet params stripped,"
     echo "                fsck.repair=yes restored"
     echo "  systemd:      getty unmasks, drop-ins removed"
