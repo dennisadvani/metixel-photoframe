@@ -5,6 +5,20 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.2]
+
+### Fixed
+
+- **Broken hardware video decode on Raspberry Pi 2/3 due to `gpu_mem=16`** —
+  `scripts/quiet_boot.sh` unconditionally appended `gpu_mem=16` to
+  `/boot/firmware/config.txt`, overriding the correct `gpu_mem=128` set by
+  `setup_trixie_metixel.sh` (last line wins).  With only 16 MB of GPU memory
+  the VideoCore VCHI service failed to initialise, disabling the V4L2 hardware
+  decoder (`h264_v4l2m2m`).  VLC fell back to software decode, which could not
+  keep up with 1080p H.264 on the Pi 2/3's ARM cores — causing choppy video
+  playback.  `quiet_boot.sh` no longer touches `gpu_mem` (the setup script
+  owns it).  Also corrected stale `gpu_mem=16` references in `ARCHITECTURE.md`.
+
 ## [1.2.1]
 
 ### Fixed
