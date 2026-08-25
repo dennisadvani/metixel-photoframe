@@ -138,7 +138,7 @@ def list_media():
 
     Query params:
         offset (int): 0-based start index (default 0)
-        limit  (int): max items per page (default 50, max 200)
+        limit  (int): max items per page (default 20, max 200)
 
     Returns:
         JSON: ``{items, total, offset, limit, has_more, images, videos}``
@@ -161,9 +161,15 @@ def list_media():
     except (ValueError, TypeError):
         offset = 0
     try:
-        limit = max(1, min(200, int(request.args.get("limit", 50))))
+        limit = max(1, min(200, int(request.args.get("limit", 20))))
     except (ValueError, TypeError):
-        limit = 50
+        limit = 20
+
+    # Parse filters (server-side — keeps the browser from downloading the
+    # whole library just to filter it, which matters on low-power Pis).
+    name_filter = (request.args.get("name") or "").strip().lower()
+    folder_filter = (request.args.get("folder") or "").strip()
+    type_filter = (request.args.get("type") or "").strip()
 
     cache_dir = _resolve_cache_dir(state)
     thumb_dir = cache_dir / "thumbnails"
@@ -198,7 +204,28 @@ def list_media():
                         vid_count += 1
             _file_list_cache[cache_key] = (now, all_paths, img_count, vid_count)
 
-    total = len(all_paths)
+    # ── Apply filters to the full path list ──────────────────────────
+    # Filtering happens server-side (before pagination) so the browser only
+    # ever receives the page it displays, not the entire library.
+    filtered_paths: list[Path] = []
+    for entry in all_paths:
+        suffix = entry.suffix.lower()
+        is_video = suffix in VIDEO_EXTENSIONS
+        if type_filter == "video" and not is_video:
+            continue
+        if type_filter == "image" and is_video:
+            continue
+        if name_filter and name_filter not in entry.name.lower():
+            continue
+        if folder_filter and _watch_folder_name(entry, watch_paths) != folder_filter:
+            continue
+        filtered_paths.append(entry)
+
+    total = len(filtered_paths)
+    img_count = sum(
+        1 for p in filtered_paths if p.suffix.lower() in IMAGE_EXTENSIONS
+    )
+    vid_count = total - img_count
 
     # ── Snapshot video transcode queue status ─────────────────────────
     # Cross-reference file hashes so the web UI can show "Queued" /
@@ -212,7 +239,7 @@ def list_media():
             logger.debug("Could not query video queue status", exc_info=True)
 
     # ── Slice the requested page ─────────────────────────────────────
-    page_paths = all_paths[offset : offset + limit]
+    page_paths = filtered_paths[offset : offset + limit]
 
     items = []
     for entry in page_paths:
