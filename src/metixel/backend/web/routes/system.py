@@ -10,6 +10,7 @@ import subprocess
 from flask import Blueprint, current_app, jsonify
 
 from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
+from metixel.shared.paths import live_dir
 from metixel.shared.platform import read_device_tree_model, read_vcgencmd_mem_str
 from metixel.shared.subprocess import schedule_sudo
 
@@ -136,7 +137,7 @@ def toggle_quiet_boot():
         return jsonify_error("Missing 'enabled' (true/false) in JSON body", 400)
 
     enabled = bool(data["enabled"])
-    script = "/opt/metixel/scripts/quiet_boot.sh"
+    script = str(live_dir() / "scripts" / "quiet_boot.sh")
     args = ["sudo", "-n", "bash", script]
     if not enabled:
         args.append("--revert")

@@ -11,8 +11,8 @@ Wants=network-online.target
 Type=simple
 User=pi
 Group=pi
-WorkingDirectory=/opt/metixel
-Environment=PYTHONPATH=/opt/metixel/src
+WorkingDirectory=/opt/metixel/live
+Environment=PYTHONPATH=/opt/metixel/live/src
 Environment=PYTHONUNBUFFERED=1
 Environment=METIXEL_DISPLAY_BACKEND=auto
 
@@ -20,8 +20,8 @@ Environment=METIXEL_DISPLAY_BACKEND=auto
 RuntimeDirectory=metixel
 RuntimeDirectoryMode=0755
 
-ExecStartPre=/bin/mkdir -p /opt/metixel/logs /opt/metixel/cache
-ExecStart=/usr/bin/python3 -m metixel --mode backend --config /opt/metixel/etc/config.json
+ExecStartPre=/bin/mkdir -p /opt/metixel/data/logs /opt/metixel/data/cache /opt/metixel/data/config /opt/metixel/data/media /opt/metixel/data/backups
+ExecStart=/usr/bin/python3 -m metixel --mode backend --config /opt/metixel/data/config.json
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -38,7 +38,7 @@ MemoryMax=768M
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=yes
-ReadWritePaths=/opt/metixel /tmp /boot/firmware /etc/systemd /etc/sysctl.d
+ReadWritePaths=/opt/metixel/releases /opt/metixel/data /opt/metixel/live /tmp /boot/firmware /etc/systemd /etc/sysctl.d
 
 [Install]
 WantedBy=multi-user.target

@@ -22,23 +22,26 @@ from metixel.backend.update_manager import UpdateManager
 # tests/backend/ -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INSTALL_SCRIPT = _REPO_ROOT / "scripts" / "ota_install.sh"
+_UPDATE_SCRIPT = _REPO_ROOT / "scripts" / "update.sh"
 
 
 class TestBuildUpdateScript:
-    def test_bootstrap_hands_off_to_install_script(self) -> None:
-        """The generated bootstrap must run scripts/ota_install.sh from the
-        freshly checked-out repo so the NEW version's install steps apply."""
-        script = UpdateManager._build_update_script("/opt/metixel", "v1.0.0", "stable")
+    def test_bootstrap_hands_off_to_update_script(self) -> None:
+        """The generated bootstrap must delegate to scripts/update.sh (the
+        atomic Blue/Green updater) so the NEW version's install steps apply."""
+        script = UpdateManager._build_update_script("v1.0.0", "stable")
 
-        assert "scripts/ota_install.sh" in script
-        assert 'bash "$REPO/scripts/ota_install.sh" "$REPO"' in script
-        # Services are still restarted via the EXIT trap.
+        assert "scripts/update.sh" in script
+        assert 'bash "$UPDATE_SH" "$REF"' in script
+        # Services are still restarted via the EXIT trap (safety net).
         assert "systemctl restart metixel-backend metixel-cage" in script
+        # The ref is passed through to update.sh for git clone --branch.
+        assert "v1.0.0" in script
 
     def test_quotes_external_values(self) -> None:
         """Externally-influenced values (ref/channel) are shell-quoted so they
         can't break out of the embedded bash string literals."""
-        script = UpdateManager._build_update_script("/opt/metixel", "ref-with'quotes", "stable")
+        script = UpdateManager._build_update_script("ref-with'quotes", "stable")
 
         # shlex.quote() wraps the apostrophe in a quoted splice, so the raw
         # contiguous value must not appear in the script.
@@ -70,3 +73,77 @@ class TestInstallScript:
 
         assert "requirements-system.txt" in content
         assert "apt-get install" in content
+
+    def test_install_script_strict_by_default(self) -> None:
+        """The install script must FAIL (not warn-and-continue) by default so
+        the Blue/Green swap never happens on an incomplete install (e.g. when
+        packages are unavailable offline)."""
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        # Strict mode aborts on failure.
+        assert "_fail() { echo \"  ERROR: $* — aborting install\" >&2; exit 1; }" in content
+        assert "aborting" in content
+
+    def test_install_script_supports_continue_on_error_flag(self) -> None:
+        """The legacy tolerant mode is preserved behind --continue-on-error for
+        non-OTA contexts (e.g. startup dependency self-heal)."""
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "--continue-on-error" in content
+        assert "WARNING" in content
+
+    def test_install_script_self_migrates_old_layout(self) -> None:
+        """The install script must detect the old monolithic layout (no /data,
+        no /live) and self-migrate to Blue/Green before installing, so the
+        first upgrade through the existing OTA flow bridges to the new layout."""
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "migrate_to_atomic.sh" in content
+        assert "Old monolithic layout detected" in content
+        # Runs with --no-restart (the OTA bootstrap handles the restart) and
+        # --no-backup (the checkout just reset to the new code).
+        assert "--no-restart" in content
+        assert "--no-backup" in content
+        # Re-points the working repo at the migrated release.
+        assert "MIGRATED_RELEASE_DIR" in content
+
+    def test_migrate_script_keeps_logging_conf_in_etc(self) -> None:
+        """logging.conf must stay at /opt/metixel/etc (reached via live/etc) —
+        __main__.py resolves it via config_path.parent.parent/etc, so moving it
+        to /data would break file-based logging after migration."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Only config.json moves into /data, not logging.conf.
+        assert "config.json" in content
+        assert "logging.conf stays at /opt/metixel/etc" in content
+        # The live symlink points at the install-root etc (so live/etc resolves).
+        assert 'ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc"' in content
+
+
+class TestUpdateScript:
+    """The atomic updater drives install + swap + rollback via update.sh."""
+
+    def test_update_script_exists(self) -> None:
+        assert _UPDATE_SCRIPT.is_file(), (
+            "scripts/update.sh missing — the OTA bootstrap hands off to it"
+        )
+
+    def test_update_script_stages_and_swaps(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        # Stages via git clone into a temp dir, then renames into releases/.
+        assert "git clone --branch" in content
+        assert "releases" in content
+        # Atomic swap via symlink flip.
+        assert "ln -sfn" in content
+        assert "live" in content
+
+    def test_update_script_has_rollback(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        # Health-check + rollback path exists.
+        assert "health" in content
+        assert "ROLLING BACK" in content
+        # config is backed up before the swap for rollback safety.
+        assert "backups" in content

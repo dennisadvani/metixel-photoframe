@@ -41,6 +41,7 @@ from metixel.shared.media import (
     content_hash,
 )
 from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.paths import resolve_install_path
 
 if TYPE_CHECKING:
     from metixel.backend.processing.optimisation_queue import OptimisationQueue
@@ -660,9 +661,7 @@ class FolderWatcher:
             the OptimisationQueue creates it).
         """
         config = self._state.config
-        cache_dir = Path(config.system.get("cache_dir", "cache/"))
-        if not cache_dir.is_absolute():
-            cache_dir = Path("/opt/metixel") / cache_dir
+        cache_dir = resolve_install_path(config.system.get("cache_dir", "cache/"))
         display = config.display
         screen_w = display.get("width") or 1920
         screen_h = display.get("height") or 1080
@@ -818,9 +817,7 @@ class FolderWatcher:
             return
 
         config = self._state.config
-        cache_dir = Path(config.system.get("cache_dir", "cache/"))
-        if not cache_dir.is_absolute():
-            cache_dir = Path("/opt/metixel") / cache_dir
+        cache_dir = resolve_install_path(config.system.get("cache_dir", "cache/"))
 
         for file_hash in item_ids:
             # Thumbnails are NOT deleted — they're small (~50 KB),

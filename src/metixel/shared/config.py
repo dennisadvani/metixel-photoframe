@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from metixel.shared.io import atomic_write_json
-from metixel.shared.paths import install_root
+from metixel.shared.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -427,9 +427,10 @@ def resolve_watch_paths(
     Args:
         config: The application :class:`Config`.
         base_dir: Directory that relative paths are resolved against.
-                  Defaults to ``/opt/metixel`` on Linux, ``Path.cwd()`` otherwise.
+                  Defaults to the persistent data directory (``/opt/metixel/data``
+                  on Linux, ``Path.cwd()`` otherwise).
     """
-    base_dir = install_root() if base_dir is None else Path(base_dir)
+    base_dir = data_dir() if base_dir is None else Path(base_dir)
 
     raw = config.sync.get("local", {}).get("watch_paths", [])
     paths: list[Path] = []

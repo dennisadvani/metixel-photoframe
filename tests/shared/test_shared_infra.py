@@ -19,7 +19,16 @@ from metixel.shared.media import (
     is_media,
     is_video,
 )
-from metixel.shared.paths import install_root, resolve_install_path, run_dir, run_path
+from metixel.shared.paths import (
+    data_dir,
+    install_root,
+    live_dir,
+    release_dir,
+    releases_dir,
+    resolve_install_path,
+    run_dir,
+    run_path,
+)
 from metixel.shared.retry import backoff_delays, retry
 
 # ---------------------------------------------------------------------------
@@ -114,6 +123,18 @@ class TestPaths:
         """run_path() should join a name onto the run dir."""
         monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
         assert run_path("playlist.json") == tmp_path / "playlist.json"
+
+    def test_data_dir_under_install_root(self):
+        """data_dir() should be a child of the install root (persistent data)."""
+        assert data_dir() == install_root() / "data"
+
+    def test_releases_dir_and_live_and_release(self):
+        """releases/live/release dirs should be laid out under the install root."""
+        assert releases_dir() == install_root() / "releases"
+        assert release_dir("v1.2.0") == releases_dir() / "v1.2.0"
+        # live_dir() falls back to the install root when no symlink exists
+        # (desktop dev), so it should always be absolute.
+        assert live_dir().is_absolute()
 
 
 # ---------------------------------------------------------------------------

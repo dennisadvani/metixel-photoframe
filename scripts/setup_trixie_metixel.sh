@@ -253,15 +253,36 @@ pip3 install ${PIP_IGNORE} -r requirements-pip.txt 2>/dev/null || \
     pip3 install ${PIP_IGNORE} -r requirements-pip.txt
 
 # -- Git safe.directory (OTA updates run as root via systemd-run) ------------
+# Marks the canonical install location AND the release dir (added in step 4).
 echo "[3b/9] Marking repository as safe for git..."
 git config --system --add safe.directory /opt/metixel 2>/dev/null || true
+git config --system --add safe.directory /opt/metixel/releases 2>/dev/null || true
 
-# -- Directory structure -----------------------------------------------------
-echo "[4/9] Creating directory structure..."
-mkdir -p /opt/metixel/media /opt/metixel/media/sync/immich /opt/metixel/media/my_media /opt/metixel/cache /opt/metixel/logs /opt/metixel/etc /run/metixel
-cp -n "${METIXEL_DIR}/etc/config.example.json" /opt/metixel/etc/config.json 2>/dev/null || true
-cp -n "${METIXEL_DIR}/etc/logging.conf" /opt/metixel/etc/logging.conf 2>/dev/null || true
-chown -R pi:pi /opt/metixel /run/metixel 2>/dev/null || true
+# -- Directory structure (atomic Blue/Green layout) --------------------------
+echo "[4/9] Creating directory structure (data / releases / live)..."
+mkdir -p /opt/metixel/data/config /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/backups /opt/metixel/releases /run/metixel
+
+# Move the cloned app code into a versioned release folder, and put config in
+# /data (persistent). The app runs from the live symlink.
+RELEASE_TAG="${LATEST_TAG:-$(git -C "${METIXEL_DIR}" describe --tags --abbrev=0 2>/dev/null || echo main)}"
+RELEASE_TAG="${RELEASE_TAG#v}"
+RELEASE_TAG="v${RELEASE_TAG}"
+RELEASE_DIR="/opt/metixel/releases/${RELEASE_TAG}"
+mkdir -p "${RELEASE_DIR}"
+cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"
+rm -rf "${RELEASE_DIR}/media" "${RELEASE_DIR}/cache" "${RELEASE_DIR}/logs" 2>/dev/null || true
+
+# Persist config.json into /data (user-editable). logging.conf stays at
+# /opt/metixel/etc (available via live/etc) — __main__.py resolves it as
+# config_path.parent.parent/etc/logging.conf, i.e. /opt/metixel/etc/logging.conf.
+cp "${RELEASE_DIR}/etc/config.example.json" /opt/metixel/data/config.json 2>/dev/null || true
+cp -n "${RELEASE_DIR}/etc/logging.conf" /opt/metixel/etc/logging.conf 2>/dev/null || true
+chown -R pi:pi "${RELEASE_DIR}" /opt/metixel/data /opt/metixel/etc /run/metixel 2>/dev/null || true
+
+# Create the live symlink → active release.
+ln -sfn "${RELEASE_DIR}" /opt/metixel/live
+chown -h pi:pi /opt/metixel/live 2>/dev/null || true
+git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 
 # -- systemd services --------------------------------------------------------
 echo "[5/9] Installing systemd services..."
@@ -313,7 +334,7 @@ fi
 # Write to Metixel config so the Web UI reflects it
 python3 -c "
 import json, os
-cfg_path = '/opt/metixel/etc/config.json'
+cfg_path = '/opt/metixel/data/config.json'
 if os.path.exists(cfg_path):
     with open(cfg_path) as f:
         cfg = json.load(f)
@@ -366,10 +387,10 @@ fi
 systemctl unmask hostapd dnsmasq 2>/dev/null || true
 
 # -- Samba share (media only) ------------------------------------------------
-# Only shares /opt/metixel/media so users can add/remove photos and videos.
+# Only shares /opt/metixel/data/media so users can add/remove photos/videos.
 # For full-project access during development, run setup_trixie_dev_env.sh
 # which adds a separate [metixel] share pointing to /opt/metixel.
-echo "[8/9] Configuring Samba share (/opt/metixel/media as 'metixel-media')..."
+echo "[8/9] Configuring Samba share (/opt/metixel/data/media as 'metixel-media')..."
 
 # Add 'invalid users = nobody' to the [homes] section so the system
 # 'nobody' user doesn't get an auto-share (don't comment out [homes]
@@ -394,7 +415,7 @@ if ! grep -q '\[metixel-media\]' "${SMB_CONF}" 2>/dev/null; then
     tee -a "${SMB_CONF}" > /dev/null <<'SMBEOF'
 [metixel-media]
    comment = Metixel Photoframe Media Share
-   path = /opt/metixel/media
+   path = /opt/metixel/data/media
    browseable = yes
    read only = no
    guest ok = no

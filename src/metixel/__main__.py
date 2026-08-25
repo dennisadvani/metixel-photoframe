@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from metixel import __version__
+from metixel.shared.paths import data_dir, ensure_data_dirs
 
 
 def _setup_logging(config_path: Path, log_level: int) -> None:
@@ -46,7 +47,7 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
 
     # 2. File handler — use logging.conf if available, else default path
     log_conf = config_path.parent.parent / "etc" / "logging.conf"
-    log_dir = Path("/opt/metixel/logs")
+    log_dir = data_dir() / "logs"
     log_file = log_dir / "metixel.log"
 
     if log_conf.exists():
@@ -139,8 +140,8 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("etc/config.json"),
-        help="Path to configuration file (default: etc/config.json)",
+        default=data_dir() / "config.json",
+        help="Path to configuration file (default: /opt/metixel/data/config.json)",
     )
     parser.add_argument(
         "--debug",
@@ -148,6 +149,10 @@ def main() -> None:
         help="Enable debug logging",
     )
     args = parser.parse_args()
+
+    # Ensure the persistent data directories exist (config, logs, media,
+    # cache) before logging writes to them on a fresh install.
+    ensure_data_dirs()
 
     # Configure logging
     log_level = logging.DEBUG if args.debug else logging.INFO

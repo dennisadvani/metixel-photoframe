@@ -5,6 +5,38 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Atomic Blue/Green OTA updates** — the install root is now separated into
+  persistent data (`/opt/metixel/data/`: config, logs, media, cache) and
+  disposable versioned application code (`/opt/metixel/releases/<version>/`
+  + `/opt/metixel/live` symlink). Updates stage a new release, install its
+  system/pip packages **strictly** (any failure aborts before the swap), back
+  up the config, atomically flip the `live` symlink, health-check the new
+  release, and roll back (symlink flip + config restore) on failure.
+  `scripts/update.sh` performs the workflow; `scripts/migrate_to_atomic.sh`
+  migrates an older monolithic install in place without losing user data.
+- **Package lifecycle management** — Metixel-managed packages are tracked in
+  `/opt/metixel/data/installed_packages.json`; updates install new and remove
+  obsolete managed packages (apt/pip), never touching pre-existing ones.
+- **Self-migrating first upgrade** — a device still on the old monolithic
+  layout is transparently bridged: the new `ota_install.sh` detects the flat
+  layout and runs `migrate_to_atomic.sh` (moving data to `/data`, code to
+  `/releases/<version>`, creating the `live` symlink, rewriting systemd units)
+  before installing. No manual migration step is required on upgrade.
+
+### Changed
+
+- All code paths now resolve persistent data (config, logs, media, cache)
+  through `src/metixel/shared/paths.py` against `/opt/metixel/data/`.
+- The OTA bootstrap (`update_manager._build_update_script`) now delegates to
+  `scripts/update.sh` instead of in-place `git fetch`/`git reset --hard`.
+- `scripts/ota_install.sh` is **strict by default** (fails on any apt/pip
+  error); the legacy tolerant mode is preserved behind `--continue-on-error`.
+- systemd units and setup/build scripts use the Blue/Green layout.
+
 ## [1.2.1]
 
 ### Fixed

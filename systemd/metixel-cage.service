@@ -13,8 +13,8 @@ Type=simple
 User=pi
 Group=pi
 SupplementaryGroups=video render input tty
-WorkingDirectory=/opt/metixel
-Environment=PYTHONPATH=/opt/metixel/src
+WorkingDirectory=/opt/metixel/live
+Environment=PYTHONPATH=/opt/metixel/live/src
 Environment=PYTHONUNBUFFERED=1
 Environment=METIXEL_DISPLAY_BACKEND=auto
 Environment=XDG_RUNTIME_DIR=/run/user/1000
@@ -34,7 +34,7 @@ ExecStartPre=+/bin/chmod 0700 /run/user/1000
 # the frontend connects to XWayland, so the frame renders at the real
 # monitor's native resolution (fixes aspect-ratio distortion on Pi 5 with
 # an empty second HDMI port).
-ExecStart=/usr/bin/cage -d -- /opt/metixel/scripts/cage_launch.sh
+ExecStart=/usr/bin/cage -d -- /opt/metixel/live/scripts/cage_launch.sh
 
 # Restart on failure or exit
 Restart=always

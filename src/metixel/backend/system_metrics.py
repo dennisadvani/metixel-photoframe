@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from metixel.shared.config import Config
+from metixel.shared.paths import resolve_install_path
 from metixel.shared.system_stats import read_meminfo
 
 logger = logging.getLogger(__name__)
@@ -34,10 +35,6 @@ class SystemMetrics:
     All mutable state (the CPU-jiffies delta cache) is guarded by a lock so
     concurrent health polls from the web API and MQTT thread are safe.
     """
-
-    #: Install prefix used to resolve relative cache/media dirs.  Mirrors the
-    #: production layout; kept identical to the pre-refactor behaviour.
-    _INSTALL_PREFIX = Path("/opt/metixel")
 
     def __init__(self, config_provider: Callable[[], Config]) -> None:
         self._config_provider = config_provider
@@ -97,17 +94,11 @@ class SystemMetrics:
 
     def _resolve_media_dir(self) -> Path:
         """Resolve the configured media directory to an absolute path."""
-        media_dir = Path(self._config.system.get("media_dir", "media/"))
-        if not media_dir.is_absolute():
-            media_dir = self._INSTALL_PREFIX / media_dir
-        return media_dir
+        return resolve_install_path(self._config.system.get("media_dir", "media/"))
 
     def _resolve_cache_dir(self) -> Path:
         """Resolve the configured cache directory to an absolute path."""
-        cache_dir = Path(self._config.system.get("cache_dir", "cache/"))
-        if not cache_dir.is_absolute():
-            cache_dir = self._INSTALL_PREFIX / cache_dir
-        return cache_dir
+        return resolve_install_path(self._config.system.get("cache_dir", "cache/"))
 
     # -- Size helpers -------------------------------------------------------
 

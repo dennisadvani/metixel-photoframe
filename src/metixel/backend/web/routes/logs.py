@@ -13,12 +13,14 @@ import os
 
 from flask import Blueprint, current_app, jsonify
 
+from metixel.shared.paths import data_dir
+
 logger = logging.getLogger(__name__)
 
 logs_bp = Blueprint("logs", __name__)
 
 # Default log file path used by RotatingFileHandler (see etc/logging.conf)
-_DEFAULT_LOG_PATH = "/opt/metixel/logs/metixel.log"
+_DEFAULT_LOG_PATH = str(data_dir() / "logs" / "metixel.log")
 
 
 def _read_from_ring_buffer(count: int = 200) -> list[dict]:
