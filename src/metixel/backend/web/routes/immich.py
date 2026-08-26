@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import logging
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from flask import Blueprint, current_app, jsonify
 
 from metixel.backend.web.helpers import get_body, jsonify_error
+from metixel.shared.paths import resolve_install_path
 
 if TYPE_CHECKING:
     from metixel.backend.sync.immich import ImmichSyncer
@@ -104,9 +104,7 @@ def remove_album():
     import shutil
 
     sync_dir = config.sync["immich"].get("sync_dir", "media/sync/immich/")
-    sync_dir_path = Path(sync_dir)
-    if not sync_dir_path.is_absolute():
-        sync_dir_path = Path("/opt/metixel") / sync_dir_path
+    sync_dir_path = resolve_install_path(sync_dir)
     album_dir = sync_dir_path / f"album_{album_id}"
     deleted = False
     if album_dir.is_dir():

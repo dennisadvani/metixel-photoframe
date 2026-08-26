@@ -27,6 +27,7 @@ from typing import Any
 from metixel import __version__
 from metixel.backend.state import StateManager
 from metixel.shared.adapters import RequestsHttpGateway
+from metixel.shared.paths import data_dir, live_dir
 from metixel.shared.ports import HttpGateway
 
 logger = logging.getLogger(__name__)
@@ -381,7 +382,7 @@ class UpdateManager:
                 }
 
             logger.info("Applying update: channel=%s target=%s", target_channel, target_ref)
-            self._write_and_launch_update_script(str(self._repo_root), target_ref, target_channel)
+            self._write_and_launch_update_script(target_ref, target_channel)
 
             # Record the update attempt
             now_iso = datetime.now(UTC).isoformat()
@@ -415,44 +416,42 @@ class UpdateManager:
     # -- Internal: Update Script ---------------------------------------------
 
     @staticmethod
-    def _build_update_script(repo_root: str, target_ref: str, channel: str) -> str:
+    def _build_update_script(target_ref: str, channel: str) -> str:
         """Build the OTA bootstrap shell script (pure, testable).
 
-        The bootstrap is deliberately THIN: it stops services, checks out the
-        target ref, then hands off to ``scripts/ota_install.sh`` in the freshly
-        checked-out repository. Because the install logic lives in the repo
-        (not baked into this generated script), a device upgrading from an
-        older release runs the NEW version's install steps — so new/changed
-        system and pip dependencies are always applied on upgrade.
+        The bootstrap is deliberately THIN: it stops services, then hands off
+        to ``scripts/update.sh <ref>`` in the pipeline. ``update.sh`` performs
+        the atomic Blue/Green staging, install, symlink swap, health-check and
+        rollback. Because the install logic lives in the repo, a device
+        upgrading from an older release runs the NEW version's ``update.sh``
+        steps — so new/changed system and pip dependencies are always applied.
+
+        Note: the actual ``update.sh`` invoked is the one under the **live**
+        symlink at bootstrap time (the currently running release). The staging
+        clone + fresh ``ota_install.sh`` happen inside ``update.sh``.
 
         Steps:
-        1. Waits for the backend to fully stop
-        2. Stops cage explicitly
-        3. ``git fetch`` + ``git reset --hard``
-        4. Runs ``scripts/ota_install.sh`` from the new checkout
-           (system packages + ``pip install -e .`` + ``requirements-pip.txt``)
-        5. Restarts both services (via EXIT trap)
-        6. Removes itself
+        1. Stops cage + backend
+        2. Runs ``bash scripts/update.sh <target_ref>`` (atomic swap + rollback)
+        3. Restarts services (via EXIT trap in the bootstrap as a safety net)
+        4. Removes itself
         """
-        log_path = "/opt/metixel/cache/metixel-update.log"
+        log_path = str(data_dir() / "cache" / "metixel-update.log")
         # All externally-influenced values are shell-quoted so they can never
         # break out of the embedded bash string literals (defence-in-depth —
         # target_ref/channel come from GitHub API data / user config).
-        repo_q = shlex.quote(repo_root)
+        script_q = shlex.quote(str(live_dir() / "scripts" / "update.sh"))
         ref_q = shlex.quote(target_ref)
         channel_q = shlex.quote(channel)
         log_q = shlex.quote(log_path)
         return f"""#!/bin/bash
 # Metixel OTA bootstrap — launched as a transient systemd service
 # so it survives the backend being stopped (runs in its own cgroup).
-# Uses a trap to guarantee services are restarted even if git/pip fail.
-#
-# The actual install steps (system + pip dependencies) live in
-# scripts/ota_install.sh in the repo and are run AFTER checkout, so they
-# always reflect the NEW version being installed.
+# Stops services, then delegates to scripts/update.sh (the atomic
+# Blue/Green updater: staging → install → swap → health-check → rollback).
 set -uo pipefail
 
-REPO={repo_q}
+UPDATE_SH={script_q}
 REF={ref_q}
 CHANNEL={channel_q}
 LOG={log_q}
@@ -476,21 +475,11 @@ echo "Stopping metixel services…"
 sudo -n systemctl stop metixel-cage metixel-backend 2>/dev/null || true
 sleep 2
 
-# ── Git operations ──
-echo "Fetching from origin…"
-cd "$REPO"
-# systemd-run executes as root without HOME set, so --global fails.
-# Use --system to write to /etc/gitconfig instead.
-git config --system --add safe.directory "$REPO" 2>/dev/null || true
-git fetch --tags --force origin || echo "WARNING: git fetch failed (continuing)"
-
-echo "Checking out $REF…"
-git reset --hard "$REF" || echo "WARNING: git checkout failed (continuing)"
-
-# ── Run the NEW install steps from the freshly-checked-out code ──
-echo "Running install steps from new checkout…"
-bash "$REPO/scripts/ota_install.sh" "$REPO" \
-    || echo "WARNING: install steps failed (continuing)"
+# ── Delegate to the atomic Blue/Green updater ──
+# Performs: staging → install (strict) → remove obsolete → config backup →
+# symlink swap → restart + health-check → rollback on failure.
+echo "Running atomic update: $REF"
+bash "$UPDATE_SH" "$REF"
 
 echo "Update finished: $(date)"
 echo "New version: $(python3 -c 'import metixel; print(metixel.__version__)' \
@@ -501,12 +490,12 @@ rm -f "$0"
 """
 
     @staticmethod
-    def _write_and_launch_update_script(repo_root: str, target_ref: str, channel: str) -> None:
+    def _write_and_launch_update_script(target_ref: str, channel: str) -> None:
         """Write and detach the OTA update script (see ``_build_update_script``)."""
         import stat
 
-        script_path = "/opt/metixel/cache/metixel-update.sh"
-        script = UpdateManager._build_update_script(repo_root, target_ref, channel)
+        script_path = str(data_dir() / "cache" / "metixel-update.sh")
+        script = UpdateManager._build_update_script(target_ref, channel)
 
         # Write the script
         with open(script_path, "w") as f:
@@ -560,13 +549,14 @@ rm -f "$0"
     def _resolve_repo_root(self) -> Path | None:
         """Find the git repository root (the directory containing ``.git``).
 
-        Layout-agnostic: checks the canonical install location first, then
-        walks up from this module's file — so it works whether the package
-        lives at the repo root (flat layout) or under ``src/`` (src/ layout).
+        Layout-agnostic: follows the ``live`` symlink to the active release
+        first (Pi deployments), then walks up from this module's file — so it
+        works whether the package lives at the repo root (flat layout) or
+        under ``src/`` (src/ layout).
         """
-        # Fast path: the canonical install location (Pi deployments).
-        if (Path("/opt/metixel") / ".git").is_dir():
-            return Path("/opt/metixel")
+        # Fast path: the live symlink resolves to the active release's git repo.
+        if (live_dir() / ".git").is_dir():
+            return live_dir()
 
         # Walk up from this module to the nearest directory containing .git.
         current = Path(__file__).resolve().parent

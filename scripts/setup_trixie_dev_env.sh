@@ -40,8 +40,8 @@ sudo pip3 install ${PIP_IGNORE} pytest pytest-cov ruff mypy 2>/dev/null || \
 # Adds a [metixel] share for the entire /opt/metixel tree — useful during
 # development when you need to edit code, configs, and scripts over the
 # network.  The production setup_trixie_metixel.sh creates a separate
-# [metixel-media] share scoped to /opt/metixel/media only; the two shares
-# can coexist without conflict.
+# [metixel-media] share scoped to /opt/metixel/data/media only; the two
+# shares can coexist without conflict.
 echo "[2/3] Configuring Samba share (/opt/metixel as 'metixel')..."
 SMB_CONF="/etc/samba/smb.conf"
 if ! grep -q '\[metixel\]' "${SMB_CONF}" 2>/dev/null; then

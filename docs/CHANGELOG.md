@@ -5,19 +5,82 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.2.2]
+## [1.2.2-beta.1]
 
-### Fixed
+### Added
 
-- **Broken hardware video decode on Raspberry Pi 2/3 due to `gpu_mem=16`** —
-  `scripts/quiet_boot.sh` unconditionally appended `gpu_mem=16` to
-  `/boot/firmware/config.txt`, overriding the correct `gpu_mem=128` set by
-  `setup_trixie_metixel.sh` (last line wins).  With only 16 MB of GPU memory
-  the VideoCore VCHI service failed to initialise, disabling the V4L2 hardware
-  decoder (`h264_v4l2m2m`).  VLC fell back to software decode, which could not
-  keep up with 1080p H.264 on the Pi 2/3's ARM cores — causing choppy video
-  playback.  `quiet_boot.sh` no longer touches `gpu_mem` (the setup script
-  owns it).  Also corrected stale `gpu_mem=16` references in `ARCHITECTURE.md`.
+- **Atomic Blue/Green OTA updates** — the install root is now separated into
+  persistent data (`/opt/metixel/data/`: config, logs, media, cache) and
+  disposable versioned application code (`/opt/metixel/releases/<version>/`
+  + `/opt/metixel/live` symlink). Updates stage a new release, install its
+  system/pip packages **strictly** (any failure aborts before the swap), back
+  up the config, atomically flip the `live` symlink, health-check the new
+  release, and roll back (symlink flip + config restore) on failure.
+  `scripts/update.sh` performs the workflow; `scripts/migrate_to_atomic.sh`
+  migrates an older monolithic install in place without losing user data.
+- **Package lifecycle management** — Metixel-managed packages are tracked in
+  `/opt/metixel/data/installed_packages.json`; updates install new and remove
+  obsolete managed packages (apt/pip), never touching pre-existing ones.
+- **Self-migrating upgrade** — a device still on the old monolithic
+  layout is transparently bridged: the new `ota_install.sh` detects the flat
+  layout and runs `migrate_to_atomic.sh` (moving data to `/data`, code to
+  `/releases/<version>`, creating the `live` symlink, rewriting systemd units)
+  before installing. No manual migration step is required on upgrade.
+- **Versioned device fixups** — `ota_install.sh` runs one-time repair scripts
+  from `scripts/fixups/` (listed in `scripts/fixups/manifest.txt`) to fix
+  device-level issues that aren't packages or config files (e.g. `gpu_mem` in
+  `/boot/firmware/config.txt`). Each runs exactly once per device, tracked in
+  `/opt/metixel/data/installed_fixups.json`, and is warn-and-continue.
+
+### Changed
+
+- `logging.conf` now lives at `/opt/metixel/data/etc/logging.conf` (all
+  persistent config under `/data`); `__main__.py` resolves it via
+  `data_dir()/etc/logging.conf` instead of `config_path.parent.parent`
+  arithmetic.
+- **CEC dependency fixed** — the Debian `python3-libcec` package does not exist
+  in Trixie and was aborting the strict OTA install. Removed it from
+  `requirements-system.txt`; the PyPI `cec` package (python-cec, which the code
+  actually uses) is now tracked in `requirements-pip.txt`.
+- **Migration `PYTHONPATH` rewrite hardened** — now handles both
+  `PYTHONPATH=/opt/metixel/src` and `PYTHONPATH=/opt/metixel` (no `/src`), fixing
+  a crash-loop on devices whose unit lacked the `/src` suffix.
+- **Migration package manifest fixed** — `installed_packages.json` now reads the
+  requirements manifests from the release dir (where the code moved), not the
+  now-empty install root.
+- **GPU-mem fixup hardened** — now removes duplicate `gpu_mem=` lines and
+  appends a single `gpu_mem=128` (the last duplicate line previously won).
+- **Folder browser now resolves against `/data`** — `browse.py` used
+  `install_root() / "media"` and the settings-page JS hardcoded the `/opt/metixel/`
+  base prefix, both of which broke folder selection after media moved to
+  `/opt/metixel/data/media/`. Both now use the persistent data dir
+  (`data_dir()` / `/opt/metixel/data/`).
+- **StateManager journal path** — now resolves the cache dir via
+  `resolve_install_path` (data-relative) instead of `install_root`.
+- **Migration robustness for clean monolithic installs** — `migrate_to_atomic.sh`
+  now (1) treats a partial/aborted migration (stray `data/`, no valid `live`
+  symlink) as repairable rather than "already migrated", (2) chowns the entire
+  install root to `pi:pi` so the service can write (fixes a crash-loop where
+  `pi` couldn't create `data/config`), (3) makes every data/code move idempotent
+  on re-entry, and (4) enables the services after installing canonical units.
+  `ota_install.sh` self-migration detection now keys off a *valid* `live`
+  symlink so it bridges partial states too.
+- **Migration preserves the whole media/logs/cache folders** — the migration no
+  longer pre-creates `data/{media,cache,logs}` as empty placeholders (which
+  silently orphaned the real top-level folders, losing custom watch folders).
+  It now `mv`s the **entire** top-level `media/`, `logs/`, and `cache/` folders
+  into `/data` (with a copy-merge fallback on re-entry), so user-created custom
+  subfolders added to the watched local folders are never lost.
+
+### Changed
+
+- All code paths now resolve persistent data (config, logs, media, cache)
+  through `src/metixel/shared/paths.py` against `/opt/metixel/data/`.
+- The OTA bootstrap (`update_manager._build_update_script`) now delegates to
+  `scripts/update.sh` instead of in-place `git fetch`/`git reset --hard`.
+- `scripts/ota_install.sh` is **strict by default** (fails on any apt/pip
+  error); the legacy tolerant mode is preserved behind `--continue-on-error`.
+- systemd units and setup/build scripts use the Blue/Green layout.
 
 ## [1.2.1]
 

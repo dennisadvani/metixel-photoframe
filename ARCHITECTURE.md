@@ -67,7 +67,7 @@ cage -- python3 -m metixel --mode frontend --config etc/config.json
 ```
 
 The application code and `Pi3dBackend` are identical across all platforms. Only the launch wrapper changes.
-| **GPU Memory** | `dtoverlay=vc4-kms-v3d` + `gpu_mem=16` | `dtoverlay=vc4-kms-v3d` + `gpu_mem=16` |
+| **GPU Memory** | `dtoverlay=vc4-kms-v3d` + `gpu_mem=128` | `dtoverlay=vc4-kms-v3d` + `gpu_mem=128` |
 | **Kernel** | 6.6 LTS (Trixie default) | 6.6 LTS (Trixie default) |
 | **Init System** | systemd (stripped) | systemd or Busybox init (Buildroot) |
 
@@ -407,7 +407,7 @@ Next frame reflects change
 #### Step 1.1: OS Image & Quiet Boot
 - Trixie Lite base image (64-bit for Pi 3/4/5; 32-bit for Pi 2/Zero 2 W)
 - Pre-built `.img` available for 64-bit models; manual install for 32-bit
-- `config.txt`: `dtoverlay=vc4-kms-v3d`, `gpu_mem=16`, `disable_splash=1`
+- `config.txt`: `dtoverlay=vc4-kms-v3d`, `gpu_mem=128`, `disable_splash=1`
 - `cmdline.txt`: `console=tty3 quiet loglevel=3 logo.nologo`
 - Plymouth splash screen with metixel logo (optional)
 - Debug mode: GPIO pin 17 HIGH or `/boot/debug` file → verbose boot
@@ -752,10 +752,43 @@ Debug mode: `/boot/debug` file OR GPIO 17 pulled HIGH → verbose boot.
 
 ### 6.6 OTA Update Mechanism
 
-Updates are applied **in-place** by `UpdateManager` (`backend/update_manager.py`)
-via a **git-based self-update** — there is no A/B root partition scheme, no
-signed tarball download, no `/boot/autoboot.txt`, and no bootloader `tryboot`
-flag. The live git checkout at `/opt/metixel/` is the update target.
+Updates are applied by `UpdateManager` (`backend/update_manager.py`) via an
+**atomic Blue/Green deployment** — no A/B root partition scheme, no signed
+tarball download, no `/boot/autoboot.txt`, and no bootloader `tryboot` flag.
+
+The install root at `/opt/metixel/` is strictly separated into persistent data
+and disposable code:
+
+```
+/opt/metixel/data/            persistent — config, logs, media, cache (never overwritten)
+/opt/metixel/releases/<ver>/  versioned application code (v1.0.0, v1.1.0, …)
+/opt/metixel/live             symlink → the currently active release
+```
+
+The git checkout lives **inside each release folder**; the live release is
+reached through the `live` symlink. Application code paths resolve through the
+symlink, while all persistent data (config, logs, media, cache) resolves to
+`/opt/metixel/data/`. See `src/metixel/shared/paths.py`.
+
+#### Repository vs. device layout
+
+The git repository is the **blueprint**; the device is the **built artifact**.
+The repo is *not* organized as data-vs-code — it holds code and **templates**
+together, and the separation is imposed at install time:
+
+| | Git repository (source) | Device (runtime) |
+|---|---|---|
+| Code | `src/`, `scripts/`, `systemd/` | `releases/<ver>/` (reached via `live`) |
+| Templates | `etc/config.example.json`, `etc/logging.conf` | copied into the release, then seeded |
+| Runtime data | *(never committed)* | `/opt/metixel/data/` (config, logs, media, cache) |
+
+`etc/` stays in git at the repo root because it holds **templates**, not user
+data. The setup/build scripts copy `etc/` into each release folder, then seed
+the *real* `config.json` and `logging.conf` into `/opt/metixel/data/` (and
+`/opt/metixel/data/etc/`). The release keeps `etc/` only as the template source;
+all persistent config lives under `/data`. Moving `etc/` under `data/` in git
+would be wrong — it would commit templates as "data" and strip the release of
+the templates it needs to seed from.
 
 #### Discovery
 
@@ -776,29 +809,73 @@ from `updates.channel`. Auto-checking is governed by `updates.auto_check` and
 
 The apply step cannot run inside the backend process — stopping the service
 kills the process. `UpdateManager` therefore writes a **thin bootstrap** shell
-script to `/opt/metixel/cache/metixel-update.sh` and launches it with
+script to `/opt/metixel/data/cache/metixel-update.sh` and launches it with
 `systemd-run` as a **transient unit** (`metixel-update`, `--collect`), so it
 runs in its own cgroup and survives the backend being stopped:
 
 1. Stop `metixel-cage.service` (frontend renderer), then `metixel-backend.service`
-2. `git config --system --add safe.directory /opt/metixel`
-3. `git fetch --tags --force origin`
-4. `git reset --hard <target ref>` (stable/beta tag or dev HEAD)
-5. **Hand off** to the install steps in the freshly checked-out repo:
-   `bash "$REPO/scripts/ota_install.sh" "$REPO"` — which installs missing
-   system packages from `requirements-system.txt` (idempotent), then
-   `pip install --break-system-packages -e "$REPO"`, then installs/updates the
-   runtime pip dependencies from `requirements-pip.txt`.
-6. A `trap` on EXIT guarantees `systemctl restart metixel-backend metixel-cage`
+2. **Hand off** to `scripts/update.sh <target ref>` (under the `live` symlink),
+   which performs the atomic Blue/Green workflow in `scripts/update.sh`:
+   - **Staging** — `git clone --branch <ref> --depth 1` into a temp dir, then
+     rename to `/opt/metixel/releases/<version>/`
+   - **Install (strict)** — install missing system packages from
+     `requirements-system.txt`, `pip install --break-system-packages -e`,
+     and `requirements-pip.txt`. Any failure (e.g. no internet) **aborts**
+     here: the staging folder is deleted and the live release is untouched —
+     no half-installed state.
+   - **Remove obsolete** — uninstall Metixel-managed packages no longer in the
+     new manifests (tracked in `/opt/metixel/data/installed_packages.json`),
+     never pre-existing packages.
+   - **Config backup** — snapshot `config.json` into
+     `/opt/metixel/data/backups/` before the swap so a config-structure change
+     in the new release can't break a rollback.
+   - **Atomic swap** — `ln -sfn releases/<version> /opt/metixel/live`
+   - **Restart + health-check** — restart services and poll `/api/health`; on
+     failure, flip the symlink back to the previous release, restore the
+     config, and restart.
+3. A `trap` on EXIT guarantees `systemctl restart metixel-backend metixel-cage`
    runs whether the update succeeded or failed — the frame is never left black
-7. The script deletes itself; the transient unit is collected on exit
+4. The script deletes itself; the transient unit is collected on exit
 
-The bootstrap is deliberately **thin**: it only stops services, checks out the
-target, and delegates to `scripts/ota_install.sh`. Because that script lives
-*in the repo*, the running code (which generates the bootstrap at click-time)
-is never relied on to know the current install steps — so a device upgrading
-from an older release applies the **new** version's install logic, including
-newly-required system and pip dependencies.
+The bootstrap is deliberately **thin**: it only stops services and delegates to
+`scripts/update.sh`. Because that script lives *in the repo*, the running code
+(which generates the bootstrap at click-time) is never relied on to know the
+current install steps — so a device upgrading from an older release applies the
+**new** version's install logic, including newly-required system and pip
+dependencies.
+
+#### Migrating an older monolithic install
+
+A device still on the old flat layout (everything in `/opt/metixel`, no `/data`,
+no `/live`) cannot run `update.sh` yet. But its existing git-based OTA still
+works: the old bootstrap does `git reset --hard <ref>` and then runs the **new**
+`scripts/ota_install.sh` from the fresh flat checkout. `ota_install.sh` detects
+the flat layout (no `/data`, no `/live`) and, before installing, runs
+`scripts/migrate_to_atomic.sh --no-restart --no-backup` to:
+
+1. move persistent data (config, logs, media, cache) into `/opt/metixel/data/`,
+2. move the application code into `/opt/metixel/releases/<version>/`,
+3. create the `live` symlink → the release, and rewrite the systemd units,
+4. record the managed package manifest.
+
+It then prints `MIGRATED_RELEASE_DIR=<new release path>`, which `ota_install.sh`
+captures to re-point the working tree at the moved code before running
+`pip install -e`. The old bootstrap's EXIT `trap` restarts services against the
+newly-written units, leaving the device permanently on the Blue/Green layout —
+one step, no operator action. `logging.conf` moves into `/opt/metixel/data/etc/`
+alongside `config.json`; `__main__.py` resolves it as `data_dir()/etc/logging.conf`
+(never `config_path.parent.parent` arithmetic).
+
+#### Versioned device fixups
+
+Some device-level issues can't be fixed by a package install or a config file
+change (e.g. an incorrect `gpu_mem=` in `/boot/firmware/config.txt`). `ota_install.sh`
+runs one-time repair scripts from `scripts/fixups/` (listed in
+`scripts/fixups/manifest.txt`) after installing packages. Each fixup runs
+**exactly once per device**, tracked in `/opt/metixel/data/installed_fixups.json`,
+and is **warn-and-continue** — a failure is logged but never aborts the update.
+A fixup may print `REBOOT_REQUIRED` to signal that a reboot is needed to apply
+its change. See `scripts/fixups/README.md`.
 
 #### Startup dependency self-heal (single-step OTA dep resolution)
 

@@ -20,6 +20,8 @@ import tempfile
 import time
 from typing import Any
 
+from metixel.shared.paths import live_dir
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -661,9 +663,9 @@ def start_ap_mode() -> bool:
             # nothing for that line.
             if unit not in check.stdout:
                 logger.error(
-                    "%s not found — AP mode unavailable. "
-                    "Run: sudo bash /opt/metixel/scripts/setup_ap.sh",
+                    "%s not found — AP mode unavailable. Run: sudo bash %s/scripts/setup_ap.sh",
                     unit,
+                    live_dir(),
                 )
                 return False
 

@@ -22,23 +22,26 @@ from metixel.backend.update_manager import UpdateManager
 # tests/backend/ -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _INSTALL_SCRIPT = _REPO_ROOT / "scripts" / "ota_install.sh"
+_UPDATE_SCRIPT = _REPO_ROOT / "scripts" / "update.sh"
 
 
 class TestBuildUpdateScript:
-    def test_bootstrap_hands_off_to_install_script(self) -> None:
-        """The generated bootstrap must run scripts/ota_install.sh from the
-        freshly checked-out repo so the NEW version's install steps apply."""
-        script = UpdateManager._build_update_script("/opt/metixel", "v1.0.0", "stable")
+    def test_bootstrap_hands_off_to_update_script(self) -> None:
+        """The generated bootstrap must delegate to scripts/update.sh (the
+        atomic Blue/Green updater) so the NEW version's install steps apply."""
+        script = UpdateManager._build_update_script("v1.0.0", "stable")
 
-        assert "scripts/ota_install.sh" in script
-        assert 'bash "$REPO/scripts/ota_install.sh" "$REPO"' in script
-        # Services are still restarted via the EXIT trap.
+        assert "scripts/update.sh" in script
+        assert 'bash "$UPDATE_SH" "$REF"' in script
+        # Services are still restarted via the EXIT trap (safety net).
         assert "systemctl restart metixel-backend metixel-cage" in script
+        # The ref is passed through to update.sh for git clone --branch.
+        assert "v1.0.0" in script
 
     def test_quotes_external_values(self) -> None:
         """Externally-influenced values (ref/channel) are shell-quoted so they
         can't break out of the embedded bash string literals."""
-        script = UpdateManager._build_update_script("/opt/metixel", "ref-with'quotes", "stable")
+        script = UpdateManager._build_update_script("ref-with'quotes", "stable")
 
         # shlex.quote() wraps the apostrophe in a quoted splice, so the raw
         # contiguous value must not appear in the script.
@@ -70,3 +73,176 @@ class TestInstallScript:
 
         assert "requirements-system.txt" in content
         assert "apt-get install" in content
+
+    def test_install_script_strict_by_default(self) -> None:
+        """The install script must FAIL (not warn-and-continue) by default so
+        the Blue/Green swap never happens on an incomplete install (e.g. when
+        packages are unavailable offline)."""
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        # Strict mode aborts on failure.
+        assert "_fail() { echo \"  ERROR: $* — aborting install\" >&2; exit 1; }" in content
+        assert "aborting" in content
+
+    def test_install_script_supports_continue_on_error_flag(self) -> None:
+        """The legacy tolerant mode is preserved behind --continue-on-error for
+        non-OTA contexts (e.g. startup dependency self-heal)."""
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "--continue-on-error" in content
+        assert "WARNING" in content
+
+    def test_install_script_self_migrates_old_layout(self) -> None:
+        """The install script must detect the absence of a valid live symlink
+        (clean monolithic layout OR a partial/aborted migration) and self-migrate
+        to Blue/Green before installing."""
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "migrate_to_atomic.sh" in content
+        assert "No valid live symlink" in content
+        # Detection is based on a VALID live symlink (not merely data/ existence),
+        # so a partial migration state is also bridged.
+        assert "readlink -f" in content
+        assert "ALREADY_LIVE" in content
+        # Runs with --no-restart (the OTA bootstrap handles the restart) and
+        # --no-backup (the checkout just reset to the new code).
+        assert "--no-restart" in content
+        assert "--no-backup" in content
+        # Re-points the working repo at the migrated release.
+        assert "MIGRATED_RELEASE_DIR" in content
+
+    def test_migrate_script_moves_logging_conf_to_data_etc(self) -> None:
+        """logging.conf must move into /data/etc (not stay at /opt/metixel/etc) —
+        __main__.py resolves it as data_dir()/etc/logging.conf, so all persistent
+        config lives under /data."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Both config.json and logging.conf move into /data.
+        assert "config.json" in content
+        assert "logging.conf" in content
+        assert 'mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"' in content
+        # No live/etc symlink is created (logging.conf is under /data now).
+        assert 'ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc"' not in content
+
+    def test_migrate_script_reads_manifests_from_release_dir(self) -> None:
+        """The installed_packages.json recorder must read the requirements
+        manifests from RELEASE_DIR (the code has already moved there), not from
+        the now-empty INSTALL_ROOT."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        assert 'python3 - "${RELEASE_DIR}" "${DATA_DIR}"' in content
+        assert 'release_dir, data_dir = sys.argv[1], sys.argv[2]' in content
+        assert 'os.path.join(release_dir, "requirements-system.txt")' in content
+        assert 'root = "/opt/metixel"' not in content
+
+    def test_migrate_script_copies_canonical_systemd_units(self) -> None:
+        """Migration must COPY the shipped systemd units from the release rather
+        than sed-mutating the old ones — the sed approach left some devices with
+        a stale PYTHONPATH (crash-loop) when the installed value didn't match."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Copies the canonical units from the release into /etc/systemd/system.
+        assert 'cp "${RELEASE_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"' in content
+        assert "metixel-backend.service metixel-cage.service metixel-frontend.service" in content
+        # The fragile per-value sed rewrite is gone (it left PYTHONPATH stale).
+        assert "PYTHONPATH=/opt/metixel$|PYTHONPATH" not in content
+        assert "sed -i" not in content
+
+    def test_migrate_script_repairs_partial_state(self) -> None:
+        """A partial/aborted migration (data/ present but no valid live symlink)
+        must be REPAIRED on re-run, not treated as already-migrated."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Only a VALID live symlink counts as migrated.
+        assert 'if [ -L "${LIVE_LINK}" ] && [ -d "$(readlink -f "${LIVE_LINK}"' in content
+        # A stray data/ triggers a repair re-run, not a bail-out.
+        assert "Re-running migration to repair a partial/aborted previous run" in content
+        # The whole install root is chowned to pi so the service can write.
+        assert 'chown -R pi:pi "${INSTALL_ROOT}"' in content
+
+    def test_migrate_script_moves_whole_media_logs_cache_folders(self) -> None:
+        """The migration must move the ENTIRE media/logs/cache folders (not
+        file-by-file) so user-created custom watch folders are preserved, and
+        it must NOT pre-create data/media etc as placeholders that would block
+        the move."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Step 3 must NOT pre-create media/cache/logs placeholders (they come
+        # from the move), so the top-level folder isn't orphaned.
+        assert 'mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/backups"' in content
+        assert '"${DATA_DIR}/media" "${DATA_DIR}/cache" "${DATA_DIR}/logs"' not in content
+        # Step 4 moves the whole folder (mv) or copy-merges on re-entry.
+        assert 'for item in media logs cache; do' in content
+        assert 'mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"' in content
+        assert 'cp -an "${INSTALL_ROOT}/${item}/." "${DATA_DIR}/${item}/"' in content
+
+
+class TestFixups:
+    """Versioned device-repair fixups run once per device during install."""
+
+    def test_fixup_manifest_and_scripts_exist(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        manifest = repo / "scripts" / "fixups" / "manifest.txt"
+        assert manifest.is_file()
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            assert (repo / "scripts" / "fixups" / line).is_file(), (
+                f"fixup {line} listed in manifest but missing"
+            )
+
+    def test_install_script_runs_fixups(self) -> None:
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "fixups/manifest.txt" in content
+        assert "installed_fixups.json" in content
+        # Fixups are warn-and-continue (do not abort the update).
+        assert "WARNING: fixup" in content
+
+    def test_gpu_mem_fixup_handles_duplicate_lines(self) -> None:
+        """The gpu-mem fixup must handle duplicate gpu_mem= lines (the last one
+        wins in config.txt) by removing ALL of them and appending a single 128."""
+        repo = Path(__file__).resolve().parents[2]
+        fixup = repo / "scripts" / "fixups" / "v1.3.0-gpu-mem.sh"
+        content = fixup.read_text(encoding="utf-8")
+
+        # Removes every gpu_mem= line, then appends a single gpu_mem=128.
+        assert "sed -i '/^gpu_mem=/d'" in content
+        assert 'echo "gpu_mem=128" >> "${BOOT}"' in content
+        # Only corrects when there isn't exactly one gpu_mem=128.
+        assert 'COUNT' in content
+        assert 'HAS_128' in content
+
+
+class TestUpdateScript:
+    """The atomic updater drives install + swap + rollback via update.sh."""
+
+    def test_update_script_exists(self) -> None:
+        assert _UPDATE_SCRIPT.is_file(), (
+            "scripts/update.sh missing — the OTA bootstrap hands off to it"
+        )
+
+    def test_update_script_stages_and_swaps(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        # Stages via git clone into a temp dir, then renames into releases/.
+        assert "git clone --branch" in content
+        assert "releases" in content
+        # Atomic swap via symlink flip.
+        assert "ln -sfn" in content
+        assert "live" in content
+
+    def test_update_script_has_rollback(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        # Health-check + rollback path exists.
+        assert "health" in content
+        assert "ROLLING BACK" in content
+        # config is backed up before the swap for rollback safety.
+        assert "backups" in content

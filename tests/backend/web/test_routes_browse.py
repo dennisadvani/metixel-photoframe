@@ -4,7 +4,7 @@
 
 The route lists subdirectories for the folder-browser modal in the web UI.
 These tests use absolute ``tmp_path`` directories (platform-independent) and
-monkeypatch :func:`install_root` for the relative-path / default-path cases.
+monkeypatch :func:`data_dir` for the relative-path / default-path cases.
 """
 
 from __future__ import annotations
@@ -71,13 +71,13 @@ class TestBrowseFolder:
         assert resp.status_code == 400
         assert "Not a directory" in resp.get_json()["error"]
 
-    def test_relative_path_resolved_against_install_root(self, client, tmp_path: Path, monkeypatch):
-        """A relative path is joined onto the install root."""
+    def test_relative_path_resolved_against_data_dir(self, client, tmp_path: Path, monkeypatch):
+        """A relative path is joined onto the persistent data dir."""
         import metixel.backend.web.routes.browse as browse_mod
 
-        root = tmp_path / "root"
+        root = tmp_path / "data"
         (root / "media").mkdir(parents=True)
-        monkeypatch.setattr(browse_mod, "install_root", lambda: root)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
 
         resp = client.get("/api/browse", query_string={"path": "media"})
 
@@ -87,12 +87,12 @@ class TestBrowseFolder:
         assert data["entries"] == []
 
     def test_default_path_is_media_folder(self, client, tmp_path: Path, monkeypatch):
-        """With no ``path`` param, browsing starts at ``<install root>/media``."""
+        """With no ``path`` param, browsing starts at ``<data dir>/media``."""
         import metixel.backend.web.routes.browse as browse_mod
 
-        root = tmp_path / "root"
+        root = tmp_path / "data"
         (root / "media" / "my_photos").mkdir(parents=True)
-        monkeypatch.setattr(browse_mod, "install_root", lambda: root)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
 
         resp = client.get("/api/browse")
 
@@ -105,9 +105,9 @@ class TestBrowseFolder:
         """An empty ``path`` param (sent when the field is blank) defaults to media."""
         import metixel.backend.web.routes.browse as browse_mod
 
-        root = tmp_path / "root"
+        root = tmp_path / "data"
         (root / "media" / "my_photos").mkdir(parents=True)
-        monkeypatch.setattr(browse_mod, "install_root", lambda: root)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
 
         resp = client.get("/api/browse", query_string={"path": ""})
 

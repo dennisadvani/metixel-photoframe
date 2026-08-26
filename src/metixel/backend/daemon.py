@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 from metixel.backend.dependencies import ensure_runtime_dependencies
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import IPCClient
-from metixel.shared.paths import install_root
+from metixel.shared.paths import live_dir
 from metixel.shared.paths import run_dir as default_run_dir
 from metixel.shared.ports import Ports
 
@@ -149,7 +149,7 @@ class BackendDaemon:
         ``metixel.backend.dependencies``. Failures are logged, never raised.
         """
         try:
-            ensure_runtime_dependencies(install_root())
+            ensure_runtime_dependencies(live_dir())
         except Exception:  # noqa: BLE001 — dependency self-heal must never
             # block startup or crash the daemon.
             logger.exception("Runtime dependency self-heal failed (continuing)")

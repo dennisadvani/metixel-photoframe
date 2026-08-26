@@ -92,12 +92,42 @@ if [ -f "${PROJECT_ROOT}/scripts/quiet_boot.sh" ]; then
     sudo bash "${PROJECT_ROOT}/scripts/quiet_boot.sh" "${MOUNT_DIR}"
 fi
 
-# Install Metixel Photoframe
+# Install Metixel Photoframe — atomic Blue/Green layout.
+# NOTE: the prebuilt image is a flat (non-git) copy into a versioned release
+# folder + live symlink. It is NOT OTA-updatable via git (no .git) — a fresh
+# clone via setup_trixie_metixel.sh is required for OTA updates.
 echo "  Installing Metixel Photoframe application..."
-sudo mkdir -p "${MOUNT_DIR}/opt/metixel" "${MOUNT_DIR}/opt/metixel/src"
-sudo cp -r "${PROJECT_ROOT}/src/metixel" "${MOUNT_DIR}/opt/metixel/src/"
-sudo cp -r "${PROJECT_ROOT}/etc" "${MOUNT_DIR}/opt/metixel/"
-sudo cp "${PROJECT_ROOT}/requirements-pip.txt" "${MOUNT_DIR}/opt/metixel/"
+APP_VERSION="$(grep -E '^__version__' "${PROJECT_ROOT}/src/metixel/__init__.py" 2>/dev/null | sed -E 's/.*"([^"]+)".*/\1/')"
+APP_VERSION="${APP_VERSION:-v1.0.0}"
+RELEASE_DIR="${MOUNT_DIR}/opt/metixel/releases/v${APP_VERSION#v}"
+LIVE_DIR="${MOUNT_DIR}/opt/metixel/live"
+
+sudo mkdir -p "${MOUNT_DIR}/opt/metixel/data" \
+    "${MOUNT_DIR}/opt/metixel/data/config" \
+    "${MOUNT_DIR}/opt/metixel/data/logs" \
+    "${MOUNT_DIR}/opt/metixel/data/media" \
+    "${MOUNT_DIR}/opt/metixel/data/cache" \
+    "${MOUNT_DIR}/opt/metixel/releases"
+sudo mkdir -p "${RELEASE_DIR}"
+
+# Copy application code into the versioned release folder.
+sudo cp -r "${PROJECT_ROOT}/src/metixel" "${RELEASE_DIR}/src/"
+sudo cp -r "${PROJECT_ROOT}/etc" "${RELEASE_DIR}/etc/"
+sudo cp "${PROJECT_ROOT}/requirements-pip.txt" "${RELEASE_DIR}/"
+sudo cp -r "${PROJECT_ROOT}/scripts" "${RELEASE_DIR}/scripts/"
+
+# Seed the persistent config from the example (user edits live in /data).
+sudo cp "${RELEASE_DIR}/etc/config.example.json" "${MOUNT_DIR}/opt/metixel/data/config.json"
+
+# Seed sample media into /data/media (persistent) so a fresh image has content.
+if [ -d "${PROJECT_ROOT}/data/media/sample_media" ]; then
+    sudo mkdir -p "${MOUNT_DIR}/opt/metixel/data/media/sample_media"
+    sudo cp -n "${PROJECT_ROOT}"/data/media/sample_media/* \
+        "${MOUNT_DIR}/opt/metixel/data/media/sample_media/" 2>/dev/null || true
+fi
+
+# Create the live symlink → active release.
+sudo ln -sfn "/opt/metixel/releases/v${APP_VERSION#v}" "${LIVE_DIR}"
 
 # Copy systemd units
 sudo cp "${PROJECT_ROOT}/systemd/metixel-backend.service" "${MOUNT_DIR}/etc/systemd/system/"

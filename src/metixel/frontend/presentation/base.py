@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import subprocess
 import threading
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,6 +15,7 @@ from metixel.frontend.presentation.layout import LayoutEngine
 from metixel.frontend.presentation.transitions import TransitionEngine
 from metixel.shared.config import Config
 from metixel.shared.models import MediaItem
+from metixel.shared.paths import resolve_install_path
 
 
 class BaseEngineState:
@@ -65,10 +65,7 @@ class BaseEngineState:
     def _cache_base(self) -> str:
         """Resolved cache directory from config (always absolute)."""
         cache_dir = self._config.system.get("cache_dir", "cache/")
-        path = Path(cache_dir)
-        if not path.is_absolute():
-            path = Path("/opt/metixel") / path
-        return str(path)
+        return str(resolve_install_path(cache_dir))
 
     # ------------------------------------------------------------------
     # Cross-mixin interface stubs — implemented by the concrete mixins.

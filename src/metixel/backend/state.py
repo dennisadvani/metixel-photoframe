@@ -19,7 +19,7 @@ from metixel.backend.system_metrics import SystemMetrics
 from metixel.shared.config import Config
 from metixel.shared.io import atomic_write_json
 from metixel.shared.models import MediaItem
-from metixel.shared.paths import install_root
+from metixel.shared.paths import resolve_install_path
 
 if TYPE_CHECKING:
     from metixel.backend.processing.journal import ProcessingJournal
@@ -76,9 +76,7 @@ class StateManager:
 
     def _journal_path(self) -> Path:
         """Resolve the journal file path inside the configured cache dir."""
-        cache_dir = Path(self._config.system.get("cache_dir", "cache/"))
-        if not cache_dir.is_absolute():
-            cache_dir = install_root() / cache_dir
+        cache_dir = resolve_install_path(self._config.system.get("cache_dir", "cache/"))
         return cache_dir / "processing_state.json"
 
     def flush_journal(self) -> None:

@@ -167,7 +167,7 @@ After answering, press Enter to begin. The script runs for 30–60 minutes:
 | 1 | Installs system packages (cage, XWayland, Mesa, ffmpeg, VLC, Samba, hostapd, dnsmasq) |
 | 2 | Configures iptables redirect (port 80 → 8080) for the web dashboard |
 | 3 | Installs Python packages (pi3d, Flask, Pillow, etc.) |
-| 4 | Creates directory structure under `/opt/metixel` |
+| 4 | Creates the Blue/Green directory structure (`/opt/metixel/data` for persistent config/logs/media/cache, `/opt/metixel/releases/<version>` for app code, `/opt/metixel/live` symlink) |
 | 5 | Installs and enables systemd services (`metixel-backend`, `metixel-cage`) |
 | 6 | Enables Wi-Fi and applies the chosen country code (rfkill unblock, iw reg set) |
 | 7 | Configures the captive portal (hostapd + dnsmasq) |

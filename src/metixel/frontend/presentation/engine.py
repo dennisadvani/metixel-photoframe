@@ -115,10 +115,7 @@ class PresentationEngine(
     def _cache_base(self) -> str:
         """Resolved cache directory from config (always absolute)."""
         cache_dir = self._config.system.get("cache_dir", "cache/")
-        path = Path(cache_dir)
-        if not path.is_absolute():
-            path = Path("/opt/metixel") / path
-        return str(path)
+        return str(resolve_install_path(cache_dir))
 
     @property
     def _inactive(self) -> int:

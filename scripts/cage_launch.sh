@@ -66,4 +66,4 @@ for o in outputs:
 PY
 
 # Launch the frontend as cage's client.
-exec python3 -m metixel --mode frontend --config /opt/metixel/etc/config.json
+exec python3 -m metixel --mode frontend --config /opt/metixel/data/config.json

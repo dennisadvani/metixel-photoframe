@@ -36,6 +36,7 @@ from metixel.backend.processing.video import VideoProcessor, VideoScan
 from metixel.backend.state import StateManager
 from metixel.shared.io import merge_json
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
+from metixel.shared.paths import resolve_install_path
 from metixel.shared.system_stats import read_meminfo, read_system_stats
 
 logger = logging.getLogger(__name__)
@@ -377,9 +378,7 @@ class OptimisationQueue:
         sw = display.get("width") or 1920
         sh = display.get("height") or 1080
 
-        cache_dir = Path(config.system.get("cache_dir", "cache/"))
-        if not cache_dir.is_absolute():
-            cache_dir = Path("/opt/metixel") / cache_dir
+        cache_dir = resolve_install_path(config.system.get("cache_dir", "cache/"))
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Image threshold config
@@ -427,9 +426,7 @@ class OptimisationQueue:
         after an unclean shutdown.
         """
         config = self._state.config
-        cache_dir = Path(config.system.get("cache_dir", "cache/"))
-        if not cache_dir.is_absolute():
-            cache_dir = Path("/opt/metixel") / cache_dir
+        cache_dir = resolve_install_path(config.system.get("cache_dir", "cache/"))
         video_cache = cache_dir / "videos"
         if not video_cache.is_dir():
             return

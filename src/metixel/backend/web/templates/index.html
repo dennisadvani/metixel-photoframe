@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=19">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=20">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -244,7 +244,10 @@
                     </div>
                     <div id="upload-progress" class="upload-progress" style="display:none"></div>
                     <div class="media-filter-bar">
-                        <input type="text" id="media-filter-name" placeholder="Filter by filename…" autocomplete="off">
+                        <input type="text" id="media-filter-name" placeholder="Filter by filename… (press Enter)" autocomplete="off">
+                        <button id="btn-media-search" type="button" class="btn--sm" aria-label="Search">
+                            <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">search</span>
+                        </button>
                         <select id="media-filter-folder">
                             <option value="">All folders</option>
                         </select>
@@ -253,6 +256,9 @@
                             <option value="image">Images</option>
                             <option value="video">Videos</option>
                         </select>
+                        <button id="btn-media-clear" type="button" class="btn--sm" aria-label="Clear filters">
+                            <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">filter_alt_off</span> Clear
+                        </button>
                     </div>
                     <div id="media-list">Loading media...</div>
                 </div>
@@ -923,6 +929,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=33"></script>
+    <script type="module" src="/static/js/main.js?v=36"></script>
 </body>
 </html>

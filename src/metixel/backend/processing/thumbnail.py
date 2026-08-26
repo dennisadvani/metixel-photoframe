@@ -23,6 +23,7 @@ from PIL import Image, UnidentifiedImageError
 
 from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
 from metixel.shared.media import content_hash
+from metixel.shared.paths import resolve_install_path
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +50,7 @@ def _validate_thumbnail(path: Path) -> bool:
 
 def _resolve_thumb_dir(cache_dir: str | Path) -> Path:
     """Resolve and create the thumbnails cache directory."""
-    cd = Path(cache_dir)
-    if not cd.is_absolute():
-        cd = Path("/opt/metixel") / cd
+    cd = resolve_install_path(cache_dir)
     thumb_dir = cd / "thumbnails"
     thumb_dir.mkdir(parents=True, exist_ok=True)
     return thumb_dir

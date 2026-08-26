@@ -81,15 +81,51 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
-15. **OTA is a thin bootstrap + hand-off + startup self-heal.** The runtime pip deps
-    (`requirements-pip.txt`) and system deps (`requirements-system.txt`) must be applied on
+15. **OTA is a thin bootstrap + atomic Blue/Green hand-off + startup self-heal.** The runtime pip
+    deps (`requirements-pip.txt`) and system deps (`requirements-system.txt`) must be applied on
     every upgrade:
     - **Thin bootstrap (`update_manager._build_update_script`):** the generated OTA script only
-      stops services, `git fetch`/`git reset --hard` to the target, then runs
-      `bash "$REPO/scripts/ota_install.sh" "$REPO"` from the **freshly checked-out** repo. All
-      install steps live in `scripts/ota_install.sh` *in the repo*, so the running (old) code is
-      never relied on to know the current steps — a device upgrading from an old release applies
-      the NEW version's install logic. Never bake install steps inline into the generated script.
+      stops services, then delegates to `scripts/update.sh <target ref>` under the `live` symlink.
+      The Blue/Green workflow (staging → strict install → remove obsolete → config backup →
+      symlink swap → health-check → rollback) lives in `scripts/update.sh` *in the repo*, so the
+      running (old) code is never relied on to know the current steps — a device upgrading from
+      an old release applies the NEW version's install logic. Never bake install steps inline
+      into the generated script.
+    - **Atomic swap + rollback:** `update.sh` stages the new release into
+      `/opt/metixel/releases/<version>`, installs packages **strictly** (any failure, e.g. no
+      internet, aborts before the swap and deletes the staging dir), backs up the config, then
+      `ln -sfn` flips the `/opt/metixel/live` symlink. It health-checks `/api/health` and rolls
+      back (symlink flip + config restore) if the new release doesn't come up.
+    - **Package lifecycle:** Metixel-managed packages are tracked in
+      `/opt/metixel/data/installed_packages.json`; an update removes obsolete managed packages
+      (apt remove / pip uninstall) — never pre-existing ones.
+    - **Self-migrating first upgrade:** a device still on the old monolithic layout (no `/data`,
+      no `/live`) is bridged by `ota_install.sh`, which detects the flat layout and runs
+      `migrate_to_atomic.sh --no-restart --no-backup` BEFORE installing. Migration moves code
+      into `releases/<ver>`, creates the `live` symlink, and rewrites systemd units; then
+      `ota_install.sh` re-points the working repo at the migrated release (via the
+      `MIGRATED_RELEASE_DIR=` line it prints) so `pip install -e` targets the new location.
+      `logging.conf` lives at `/opt/metixel/data/etc/logging.conf` — `__main__.py` resolves it
+      as `data_dir()/etc/logging.conf` (never `config_path.parent.parent` arithmetic). All
+      persistent config (config.json + logging.conf) lives under `/data`.
+    - **Versioned device fixups:** `ota_install.sh` runs one-time repair scripts from
+      `scripts/fixups/` (listed in `scripts/fixups/manifest.txt`) to fix device-level issues
+      that aren't packages or config files (e.g. `gpu_mem` in `/boot/firmware/config.txt`).
+      Each runs exactly once per device, tracked in `/opt/metixel/data/installed_fixups.json`,
+      and is warn-and-continue (a failure never aborts the update).
+    - **Startup self-heal (`backend/dependencies.py`):** on boot, `BackendDaemon.run()` calls
+      `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
+      installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
+      for HEIC) even for devices upgrading from code that predates the hand-off.
+    - **Ownership/sudo:** the backend service is hardened (`ProtectHome=yes` → `/home` read-only;
+      `ProtectSystem=full` → `/usr` read-only), so it CANNOT install to `~/.local` or the system
+      dist-packages, and plain `sudo` inherits the hardened mount namespace. The self-heal must
+      run pip as **root** via `sudo -n systemd-run --wait --collect --unit=metixel-deps` into the
+      **system** dist-packages — the same location the OTA installs to (never `--user`; never
+      split deps across `~/.local` and `/usr`).
+    - Runtime deps go in `requirements-pip.txt`, NOT only in pyproject optional extras (those are
+      skipped by `pip install -e .` and were the root cause of the HEIC/HEIF OTA bug).
+    - Guarded by `tests/backend/test_update_manager.py` and `tests/backend/test_dependencies.py`.
     - **Startup self-heal (`backend/dependencies.py`):** on boot, `BackendDaemon.run()` calls
       `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
       installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
@@ -206,8 +242,11 @@ mypy src/metixel/
 | `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue + startup dependency self-heal |
 | `src/metixel/backend/dependencies.py` | Startup dependency self-heal — detects/installs missing `requirements-pip.txt` deps as root via `sudo systemd-run` |
-| `src/metixel/backend/update_manager.py` | OTA updates — thin bootstrap script + `scripts/ota_install.sh` hand-off, launched via `systemd-run` |
-| `scripts/ota_install.sh` | OTA install steps (system packages + `pip install -e .` + `requirements-pip.txt`) — run from the NEW checkout |
+| `src/metixel/backend/update_manager.py` | OTA updates — thin bootstrap script delegating to `scripts/update.sh`, launched via `systemd-run` |
+| `scripts/update.sh` | Atomic Blue/Green updater — staging → strict install → remove obsolete → config backup → symlink swap → health-check → rollback |
+| `scripts/migrate_to_atomic.sh` | Migration of an old monolithic install to the `/data` + `/releases` + `/live` layout — invoked automatically by `ota_install.sh` on the first Blue/Green upgrade |
+| `scripts/ota_install.sh` | OTA/system install steps (system packages + `pip install -e .` + `requirements-pip.txt`, strict by default) — run from the NEW checkout |
+| `src/metixel/shared/paths.py` | Central path resolution: `install_root`/`data_dir`/`releases_dir`/`live_dir`/`resolve_install_path` |
 | `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
 | `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
 | `src/metixel/backend/processing/video.py` | `VideoProcessor` facade — `process()` + `needs_optimisation()`; delegates ffmpeg work to `probe`/`ffmpeg_cmds`/`frames` |

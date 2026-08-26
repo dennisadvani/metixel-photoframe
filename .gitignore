@@ -58,3 +58,7 @@ htmlcov/
 
 # Runtime config (local changes should not block git pull)
 etc/config.json
+
+# Test videos (large files, not source code)
+video_benchmark/source
+video_benchmark/out

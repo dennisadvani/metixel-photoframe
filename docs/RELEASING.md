@@ -85,11 +85,26 @@ for 5 minutes to stay within rate limits.
 
 When the user clicks **Install**, the backend:
 
-1. Stops `metixel-cage.service` (frontend renderer)
-2. Runs `git fetch --tags --force origin`
-3. Runs `git reset --hard refs/tags/vX.Y.Z`
-4. Runs `pip install -e .` (pick up dependency changes)
-5. Restarts `metixel-backend.service` + `metixel-cage.service`
+1. Stops `metixel-cage.service` + `metixel-backend.service` (the bootstrap runs
+   as a transient `systemd-run` unit, so it survives the backend stopping)
+2. Runs `scripts/update.sh refs/tags/vX.Y.Z` — the atomic **Blue/Green**
+   updater in the live release:
+   - **Staging** — `git clone --branch <tag>` the new release into
+     `/opt/metixel/releases/<version>/`
+   - **Install (strict)** — apt + pip install new packages; any failure
+     (e.g. no internet) aborts *before* the swap, deletes the staging folder,
+     and leaves the live release untouched
+   - **Remove** — uninstall obsolete Metixel-managed packages
+   - **Config backup** — snapshot `config.json` into
+     `/opt/metixel/data/backups/` for rollback safety
+   - **Atomic swap** — `ln -sfn releases/<version> /opt/metixel/live`
+   - **Restart + health-check** — poll `/api/health`; on failure flip the
+     symlink back to the previous release, restore the config, and restart
+3. Restarts `metixel-backend.service` + `metixel-cage.service`
+
+> **Note:** Blue/Green OTA requires the device to run from a git clone in a
+> release folder (set up by `setup_trixie_metixel.sh`). Prebuilt images
+> (`build_phase1.sh`) are flat copies and are **not** OTA-updatable.
 
 > **Important:** The `github_repo` field in `config.json` must match the
 > actual GitHub repository.  The default is `dennisadvani/metixel-photoframe`.

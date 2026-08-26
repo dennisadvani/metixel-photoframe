@@ -595,9 +595,9 @@ Quick fixes for common issues. See also `docs/FAQ.md` for more.
 
 - **Photos you upload / drop in:** the watched local folders (see **Settings →
   Local Folders**).
-- **Immich downloads:** `media/sync/immich/album_<id>/` on the frame.
-- **Optimised/thumbnail cache:** the cache folder — safe to clear if you ever
-  need space (the frame regenerates it).
+- **Immich downloads:** `/opt/metixel/data/media/sync/immich/album_<id>/` on the frame.
+- **Optimised/thumbnail cache:** `/opt/metixel/data/cache/` — safe to clear if
+  you ever need space (the frame regenerates it).
 
 For advanced setup, hardware notes, and developer docs, see `docs/INSTALLATION.md`
 and `docs/WIDGET_DEV.md`.

@@ -15,13 +15,9 @@ import {
     // -- Media --------------------------------------------------------------
 
     var _mediaOffset = 0;
-    var _mediaLimit = 50;
+    var _mediaLimit = 20;
     var _mediaHasMore = false;
     var _mediaLoading = false;
-    /** Full media items cache for client-side filtering */
-    var _allMediaItems = [];
-    /** Set of unique folders extracted from media paths */
-    var _mediaFolders = [];
     /** Guard so upload/drop bindings are attached once */
     var _mediaUploadBound = false;
 
@@ -29,8 +25,6 @@ import {
         _mediaOffset = 0;
         _mediaHasMore = false;
         _mediaLoading = false;
-        _allMediaItems = [];
-        _mediaFolders = [];
 
         var el = document.getElementById("media-list");
         el.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
@@ -66,64 +60,54 @@ import {
         _bindUpload();
     }
 
-    /** Apply client-side filters and re-render the media grid. */
+    /** Read the current filter values from the toolbar. */
+    function _currentFilters() {
+        return {
+            name: (document.getElementById("media-filter-name")?.value || "").trim(),
+            folder: document.getElementById("media-filter-folder")?.value || "",
+            type: document.getElementById("media-filter-type")?.value || ""
+        };
+    }
 
+    /** Build the query string for the media list request from the filters. */
+    function _mediaQueryString(offset) {
+        var f = _currentFilters();
+        var qs = "offset=" + offset + "&limit=" + _mediaLimit;
+        if (f.name) qs += "&name=" + encodeURIComponent(f.name);
+        if (f.folder) qs += "&folder=" + encodeURIComponent(f.folder);
+        if (f.type) qs += "&type=" + encodeURIComponent(f.type);
+        return qs;
+    }
+
+    /**
+     * Trigger a server-side filtered query. Filtering happens on the backend
+     * so the browser only downloads the page it displays — important on
+     * low-power Pis. Resets to page 0 and re-fetches.
+     */
     function _applyMediaFilters() {
-        var nameFilter = (document.getElementById("media-filter-name")?.value || "").toLowerCase().trim();
-        var folderFilter = document.getElementById("media-filter-folder")?.value || "";
-        var typeFilter = document.getElementById("media-filter-type")?.value || "";
+        _mediaOffset = 0;
+        _mediaHasMore = false;
+        _fetchMediaPage(0);
+    }
 
-        var filtered = _allMediaItems.filter(function (item) {
-            // Filename filter
-            if (nameFilter && item.name.toLowerCase().indexOf(nameFilter) === -1) return false;
-            // Folder filter — match by folder name (e.g. "sample_media")
-            if (folderFilter) {
-                var itemFolder = item.folder || "";
-                if (itemFolder !== folderFilter) return false;
-            }
-            // Type filter
-            if (typeFilter && item.media_type !== typeFilter) return false;
-            return true;
-        });
+    /** Clear all filters and reload the full library. */
+    function _clearMediaFilters() {
+        var nameInput = document.getElementById("media-filter-name");
+        var folderSel = document.getElementById("media-filter-folder");
+        var typeSel = document.getElementById("media-filter-type");
+        if (nameInput) nameInput.value = "";
+        if (folderSel) folderSel.value = "";
+        if (typeSel) typeSel.value = "";
+        _applyMediaFilters();
+    }
 
+    /** Show a loading placeholder while a fresh (page 0) query is in flight. */
+    function _showMediaLoading() {
         var el = document.getElementById("media-list");
-        var grid = document.getElementById("media-grid");
-        if (!grid) {
-            el.innerHTML = '<div class="media-grid" id="media-grid"></div>';
-            grid = document.getElementById("media-grid");
-        } else {
-            grid.innerHTML = "";
-        }
-
-        if (filtered.length === 0) {
-            var emptyMsg = "No media match the current filters.";
-            if (folderFilter) {
-                emptyMsg = 'No media in &quot;' + escapeHtml(folderFilter)
-                    + '&quot; — check the folder is enabled under Settings → Local Folders.';
-            } else if (nameFilter || typeFilter) {
-                emptyMsg = "No media match the current filters — try clearing the search or type filter.";
-            }
-            el.innerHTML = '<p class="media-summary">0 files</p>'
-                + '<p style="color:var(--text-muted)">' + emptyMsg + '</p>'
-                + '<div class="media-grid" id="media-grid"></div>';
-            return;
-        }
-
-        // Update summary
-        var summaryEl = el.querySelector(".media-summary");
-        if (!summaryEl) {
-            summaryEl = document.createElement("p");
-            summaryEl.className = "media-summary";
-            el.insertBefore(summaryEl, el.firstChild);
-        }
-        var imgCount = 0, vidCount = 0;
-        filtered.forEach(function (item) { if (item.media_type === "video") vidCount++; else imgCount++; });
-        var parts = [];
-        if (imgCount) parts.push(imgCount + " images");
-        if (vidCount) parts.push(vidCount + " videos");
-        summaryEl.textContent = parts.length ? parts.join(", ") : filtered.length + " files";
-
-        _renderMediaBatch(grid, filtered, 0);
+        if (!el) return;
+        el.innerHTML = '<p class="media-loading">'
+            + '<span class="material-symbols-outlined upload-spin" style="font-size:1em;vertical-align:middle">sync</span>'
+            + ' Loading…</p>';
     }
 
     async function _fetchMediaPage(offset) {
@@ -131,7 +115,10 @@ import {
         _mediaLoading = true;
 
         var el = document.getElementById("media-list");
-        var data = await apiGet("/media/list?offset=" + offset + "&limit=" + _mediaLimit);
+        // Show a visual indicator for fresh queries — filtering can take a
+        // moment on the Pi (e.g. switching to Videos).
+        if (offset === 0) _showMediaLoading();
+        var data = await apiGet("/media/list?" + _mediaQueryString(offset));
 
         if (!data) {
             // API error (connection / backend down) — the connection overlay
@@ -143,25 +130,10 @@ import {
             return;
         }
 
-        if (!data.items || data.items.length === 0) {
-            if (offset === 0) {
-                el.innerHTML = '<p style="color:var(--text-muted)">No media yet — use <strong>Upload Media</strong> above, or copy photos/videos into the media folder.</p>';
-            }
-            _mediaLoading = false;
-            return;
-        }
-
         _mediaOffset = data.offset + data.items.length;
         _mediaHasMore = data.has_more;
 
-        // Store all items for client-side filtering
-        if (offset === 0) {
-            _allMediaItems = data.items.slice();
-        } else {
-            _allMediaItems = _allMediaItems.concat(data.items);
-        }
-
-        // Build summary on first page
+        // Build summary + grid on first page
         var html = '';
         if (offset === 0) {
             var summaryParts = [];
@@ -179,8 +151,26 @@ import {
             grid = document.getElementById("media-grid");
         }
 
-        // Apply current filters instead of raw render
-        _applyMediaFilters();
+        if (!data.items || data.items.length === 0) {
+            if (offset === 0) {
+                var f = _currentFilters();
+                var emptyMsg = "No media match the current filters.";
+                if (f.folder) {
+                    emptyMsg = 'No media in &quot;' + escapeHtml(f.folder)
+                        + '&quot; — check the folder is enabled under Settings → Local Folders.';
+                } else if (f.name || f.type) {
+                    emptyMsg = "No media match the current filters — try clearing the search or type filter.";
+                }
+                el.innerHTML = '<p class="media-summary">0 files</p>'
+                    + '<p style="color:var(--text-muted)">' + emptyMsg + '</p>'
+                    + '<div class="media-grid" id="media-grid"></div>';
+            }
+            _mediaLoading = false;
+            return;
+        }
+
+        // Render the returned page directly (already filtered server-side)
+        _renderMediaBatch(grid, data.items, 0);
 
         // Show "Load more" button
         _updateLoadMoreButton(el);
@@ -195,14 +185,30 @@ import {
     function _bindMediaFilters() {
         if (_mediaFiltersBound) return;
         _mediaFiltersBound = true;
-        document.getElementById("media-filter-name")?.addEventListener("input", function () {
-            _applyMediaFilters();
-        });
+
+        // Folder & type apply immediately on change (single discrete events).
         document.getElementById("media-filter-folder")?.addEventListener("change", function () {
             _applyMediaFilters();
         });
         document.getElementById("media-filter-type")?.addEventListener("change", function () {
             _applyMediaFilters();
+        });
+
+        // Name filter submits on Enter only — the Pi is low-power, so avoid
+        // firing a request on every keystroke.
+        document.getElementById("media-filter-name")?.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                _applyMediaFilters();
+            }
+        });
+
+        // Search button (mobile has no Enter key) and clear-filters button.
+        document.getElementById("btn-media-search")?.addEventListener("click", function () {
+            _applyMediaFilters();
+        });
+        document.getElementById("btn-media-clear")?.addEventListener("click", function () {
+            _clearMediaFilters();
         });
     }
 
