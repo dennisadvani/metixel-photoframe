@@ -164,6 +164,23 @@ class TestInstallScript:
         # The whole install root is chowned to pi so the service can write.
         assert 'chown -R pi:pi "${INSTALL_ROOT}"' in content
 
+    def test_migrate_script_moves_whole_media_logs_cache_folders(self) -> None:
+        """The migration must move the ENTIRE media/logs/cache folders (not
+        file-by-file) so user-created custom watch folders are preserved, and
+        it must NOT pre-create data/media etc as placeholders that would block
+        the move."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Step 3 must NOT pre-create media/cache/logs placeholders (they come
+        # from the move), so the top-level folder isn't orphaned.
+        assert 'mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/backups"' in content
+        assert '"${DATA_DIR}/media" "${DATA_DIR}/cache" "${DATA_DIR}/logs"' not in content
+        # Step 4 moves the whole folder (mv) or copy-merges on re-entry.
+        assert 'for item in media logs cache; do' in content
+        assert 'mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"' in content
+        assert 'cp -an "${INSTALL_ROOT}/${item}/." "${DATA_DIR}/${item}/"' in content
+
 
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""

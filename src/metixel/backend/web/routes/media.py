@@ -222,9 +222,7 @@ def list_media():
         filtered_paths.append(entry)
 
     total = len(filtered_paths)
-    img_count = sum(
-        1 for p in filtered_paths if p.suffix.lower() in IMAGE_EXTENSIONS
-    )
+    img_count = sum(1 for p in filtered_paths if p.suffix.lower() in IMAGE_EXTENSIONS)
     vid_count = total - img_count
 
     # ── Snapshot video transcode queue status ─────────────────────────

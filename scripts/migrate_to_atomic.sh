@@ -135,8 +135,12 @@ else
 fi
 
 # ── Create the target layout ────────────────────────────────────────────────
+# NOTE: data/{media,cache,logs} are NOT pre-created here — they must come from
+# the monolithic move below, so the ENTIRE top-level folder (including any
+# user-created custom subfolders) is preserved. Only empty scaffolding dirs
+# that have no monolithic source are created now.
 echo "[3/8] Creating /data, /releases, /live…"
-mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/logs" "${DATA_DIR}/media" "${DATA_DIR}/cache" "${DATA_DIR}/backups"
+mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/backups"
 mkdir -p "${RELEASES_DIR}"
 
 # ── Move persistent data → /data ────────────────────────────────────────────
@@ -153,9 +157,22 @@ fi
 if [ -e "${INSTALL_ROOT}/etc/logging.conf" ] && [ ! -e "${DATA_DIR}/etc/logging.conf" ]; then
     mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"
 fi
-for item in logs media cache; do
-    if [ -e "${INSTALL_ROOT}/${item}" ] && [ ! -e "${DATA_DIR}/${item}" ]; then
-        mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"
+# Move the ENTIRE media, logs and cache folders (not file-by-file) so every
+# subfolder the user may have added to the watched local folders is preserved.
+# Do NOT pre-create data/{media,cache,logs} — the `mv` of the whole top-level
+# folder is atomic and preserves custom subfolders. If the data/ dir already
+# exists (a re-entry/placeholder), fall back to a copy-merge so nothing is lost.
+for item in media logs cache; do
+    if [ -e "${INSTALL_ROOT}/${item}" ]; then
+        if [ -e "${DATA_DIR}/${item}" ]; then
+            # Both exist (re-entry over a placeholder/partial). Merge the
+            # top-level contents into the data copy (no overwrite), then remove
+            # the now-empty top-level dir so it isn't recreated as an orphan.
+            cp -an "${INSTALL_ROOT}/${item}/." "${DATA_DIR}/${item}/" 2>/dev/null || true
+            rm -rf "${INSTALL_ROOT}/${item}"
+        else
+            mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"
+        fi
     fi
 done
 # 'etc' may still hold other files — keep it with the code; config moved.

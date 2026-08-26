@@ -65,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   on re-entry, and (4) enables the services after installing canonical units.
   `ota_install.sh` self-migration detection now keys off a *valid* `live`
   symlink so it bridges partial states too.
+- **Migration preserves the whole media/logs/cache folders** — the migration no
+  longer pre-creates `data/{media,cache,logs}` as empty placeholders (which
+  silently orphaned the real top-level folders, losing custom watch folders).
+  It now `mv`s the **entire** top-level `media/`, `logs/`, and `cache/` folders
+  into `/data` (with a copy-merge fallback on re-entry), so user-created custom
+  subfolders added to the watched local folders are never lost.
 
 ### Changed
 
