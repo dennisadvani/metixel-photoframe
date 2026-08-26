@@ -45,8 +45,10 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
     root.setLevel(log_level)
     root.addHandler(console)
 
-    # 2. File handler — use logging.conf if available, else default path
-    log_conf = config_path.parent.parent / "etc" / "logging.conf"
+    # 2. File handler — use logging.conf if available, else default path.
+    #    logging.conf lives in the persistent data dir (data/etc), alongside
+    #    config.json — NOT derived from config_path.parent.parent arithmetic.
+    log_conf = data_dir() / "etc" / "logging.conf"
     log_dir = data_dir() / "logs"
     log_file = log_dir / "metixel.log"
 

@@ -264,20 +264,25 @@ mkdir -p /opt/metixel/data/config /opt/metixel/data/logs /opt/metixel/data/media
 
 # Move the cloned app code into a versioned release folder, and put config in
 # /data (persistent). The app runs from the live symlink.
-RELEASE_TAG="${LATEST_TAG:-$(git -C "${METIXEL_DIR}" describe --tags --abbrev=0 2>/dev/null || echo main)}"
+# RELEASE_TAG is deterministic: prefer the nearest tag, else fall back to the
+# branch name; strip any 'v' prefix and any -dirty/-g<hash> suffix so the
+# release folder name is stable and matches what update.sh expects.
+RELEASE_TAG="${LATEST_TAG:-$(git -C "${METIXEL_DIR}" describe --tags --abbrev=0 2>/dev/null || git -C "${METIXEL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
 RELEASE_TAG="${RELEASE_TAG#v}"
+RELEASE_TAG="${RELEASE_TAG%%-*}"
 RELEASE_TAG="v${RELEASE_TAG}"
 RELEASE_DIR="/opt/metixel/releases/${RELEASE_TAG}"
 mkdir -p "${RELEASE_DIR}"
 cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"
 rm -rf "${RELEASE_DIR}/media" "${RELEASE_DIR}/cache" "${RELEASE_DIR}/logs" 2>/dev/null || true
 
-# Persist config.json into /data (user-editable). logging.conf stays at
-# /opt/metixel/etc (available via live/etc) — __main__.py resolves it as
-# config_path.parent.parent/etc/logging.conf, i.e. /opt/metixel/etc/logging.conf.
+# Persist config.json + logging.conf into /data (user-editable). __main__.py
+# resolves logging.conf as data_dir()/etc/logging.conf, so it lives at
+# /opt/metixel/data/etc/logging.conf alongside config.json.
+mkdir -p /opt/metixel/data/etc
 cp "${RELEASE_DIR}/etc/config.example.json" /opt/metixel/data/config.json 2>/dev/null || true
-cp -n "${RELEASE_DIR}/etc/logging.conf" /opt/metixel/etc/logging.conf 2>/dev/null || true
-chown -R pi:pi "${RELEASE_DIR}" /opt/metixel/data /opt/metixel/etc /run/metixel 2>/dev/null || true
+cp -n "${RELEASE_DIR}/etc/logging.conf" /opt/metixel/data/etc/logging.conf 2>/dev/null || true
+chown -R pi:pi "${RELEASE_DIR}" /opt/metixel/data /run/metixel 2>/dev/null || true
 
 # Create the live symlink → active release.
 ln -sfn "${RELEASE_DIR}" /opt/metixel/live

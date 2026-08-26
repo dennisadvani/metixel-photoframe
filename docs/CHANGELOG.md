@@ -21,11 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Package lifecycle management** — Metixel-managed packages are tracked in
   `/opt/metixel/data/installed_packages.json`; updates install new and remove
   obsolete managed packages (apt/pip), never touching pre-existing ones.
-- **Self-migrating first upgrade** — a device still on the old monolithic
+- **Self-migrating upgrade** — a device still on the old monolithic
   layout is transparently bridged: the new `ota_install.sh` detects the flat
   layout and runs `migrate_to_atomic.sh` (moving data to `/data`, code to
   `/releases/<version>`, creating the `live` symlink, rewriting systemd units)
   before installing. No manual migration step is required on upgrade.
+- **Versioned device fixups** — `ota_install.sh` runs one-time repair scripts
+  from `scripts/fixups/` (listed in `scripts/fixups/manifest.txt`) to fix
+  device-level issues that aren't packages or config files (e.g. `gpu_mem` in
+  `/boot/firmware/config.txt`). Each runs exactly once per device, tracked in
+  `/opt/metixel/data/installed_fixups.json`, and is warn-and-continue.
+
+### Changed
+
+- `logging.conf` now lives at `/opt/metixel/data/etc/logging.conf` (all
+  persistent config under `/data`); `__main__.py` resolves it via
+  `data_dir()/etc/logging.conf` instead of `config_path.parent.parent`
+  arithmetic.
 
 ### Changed
 

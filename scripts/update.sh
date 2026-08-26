@@ -104,18 +104,21 @@ echo "Previous live: ${PREV_LIVE:-<none>}"
 echo ""
 echo "[1/7] Staging ${VERSION}…"
 rm -rf "${STAGING_DIR}"
-git clone --branch "${VERSION}" --depth 1 "${REPO_URL}" "${STAGING_DIR}" 
+git clone --branch "${VERSION}" --depth 1 "${REPO_URL}" "${STAGING_DIR}"
 mv "${STAGING_DIR}" "${RELEASE_DIR}"
 git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 
 # ── Cleanup trap: on ANY failure before swap, delete the staging release ───
+# Fires on ERR (a command fails) AND on EXIT while still pre-swap, so an
+# interrupted update never leaves a half-staged release behind. Cleared after
+# the swap (trap - ERR / trap - EXIT) so the rollback path owns the outcome.
 _cleanup_staging() {
     echo ""
     echo "--- Update failed — removing staging release ${RELEASE_DIR} ---"
     rm -rf "${RELEASE_DIR}"
     echo "Live release (${PREV_LIVE:-none}) left untouched."
 }
-trap _cleanup_staging ERR
+trap _cleanup_staging ERR EXIT
 
 # ── 2) INSTALL (strict) ────────────────────────────────────────────────────
 echo "[2/7] Running install steps for ${VERSION} (system + pip)…"
@@ -178,17 +181,20 @@ else
     CFG_BACKUP=""
     echo "  (no existing config to back up)"
 fi
-# Keep only the newest N config backups.
+# Keep only the newest N config backups. Use a plain glob + sort (no fragile
+# find|sort|tail|cut pipeline that can trip `set -e`/`pipefail` when empty).
 KEEP=$(( ${METIXEL_KEEP_CONFIG_BACKUPS:-5} ))
-find "${BACKUP_DIR}" -name 'config-*.json' -type f -printf '%T@ %p\n' \
-    2>/dev/null | sort -rn | tail -n +$((KEEP+1)) | cut -d' ' -f2- \
-    | while IFS= read -r old; do rm -f -- "${old}"; done
+mapfile -t OLD_BACKUPS < <(ls -1t "${BACKUP_DIR}"/config-*.json 2>/dev/null | tail -n +$((KEEP+1)))
+for old in "${OLD_BACKUPS[@]:-}"; do
+    [ -n "${old}" ] && rm -f -- "${old}"
+done
 
 # ── 5) ATOMIC SWAP ─────────────────────────────────────────────────────────
 echo "[5/7] Swapping live symlink → ${RELEASE_DIR}…"
 ln -sfn "${RELEASE_DIR}" "${LIVE_LINK}"
 chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
-trap - ERR  # from here failures are handled by the rollback path, not cleanup
+# From here failures are handled by the rollback path, not the staging cleanup.
+trap - ERR EXIT
 
 # ── 6) RESTART + HEALTH-CHECK ──────────────────────────────────────────────
 echo "[6/7] Restarting services…"

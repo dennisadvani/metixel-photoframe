@@ -237,8 +237,8 @@ to your own broker.
 # From a computer on the same network, replace <ip-address>:
 ssh pi@<ip-address>
 sudo systemctl stop metixel-backend metixel-cage
-sudo rm /opt/metixel/etc/config.json
-sudo rm -rf /opt/metixel/cache/*
+sudo rm /opt/metixel/data/config.json
+sudo rm -rf /opt/metixel/data/cache/*
 sudo reboot
 ```
 

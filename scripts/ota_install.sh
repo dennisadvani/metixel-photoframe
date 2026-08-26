@@ -99,4 +99,48 @@ if [ -f "$REPO/requirements-pip.txt" ]; then
         || _fail "pip dependency install failed"
 fi
 
+# ── Run versioned device fixups (exactly once per device) ──────────────────
+# Fixups repair device-level issues that aren't packages or config files
+# (e.g. gpu_mem in /boot/firmware/config.txt). They are warn-and-continue:
+# a failure is logged but does NOT abort the update. Each runs once, tracked
+# in data/installed_fixups.json. See scripts/fixups/README.md.
+FIXUP_MANIFEST="$REPO/scripts/fixups/manifest.txt"
+FIXUP_STATE="${INSTALL_ROOT}/data/installed_fixups.json"
+if [ -f "$FIXUP_MANIFEST" ]; then
+    echo "Running device fixups…"
+    # Load the set of already-applied fixups.
+    DONE=""
+    if [ -f "$FIXUP_STATE" ]; then
+        DONE="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))))' "$FIXUP_STATE" 2>/dev/null || true)"
+    fi
+    while IFS= read -r fixup; do
+        [ -z "$fixup" ] && continue
+        [[ "$fixup" =~ ^# ]] && continue
+        FIXUP_SCRIPT="$REPO/scripts/fixups/$fixup"
+        [ -f "$FIXUP_SCRIPT" ] || continue
+        if printf '%s\n' "$DONE" | grep -qx "$fixup"; then
+            echo "  fixup already applied: $fixup"
+            continue
+        fi
+        echo "  applying fixup: $fixup"
+        if bash "$FIXUP_SCRIPT"; then
+            # Record as applied (append to the JSON list).
+            python3 -c '
+import json, os, sys
+p = sys.argv[1]; name = sys.argv[2]
+data = []
+if os.path.isfile(p):
+    try: data = json.load(open(p))
+    except Exception: data = []
+if name not in data:
+    data.append(name)
+os.makedirs(os.path.dirname(p), exist_ok=True)
+json.dump(data, open(p, "w"), indent=2)
+' "$FIXUP_STATE" "$fixup"
+        else
+            echo "  WARNING: fixup $fixup failed (continuing)"
+        fi
+    done < "$FIXUP_MANIFEST"
+fi
+
 echo "=== Metixel install steps complete ==="

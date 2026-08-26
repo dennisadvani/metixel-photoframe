@@ -107,18 +107,53 @@ class TestInstallScript:
         # Re-points the working repo at the migrated release.
         assert "MIGRATED_RELEASE_DIR" in content
 
-    def test_migrate_script_keeps_logging_conf_in_etc(self) -> None:
-        """logging.conf must stay at /opt/metixel/etc (reached via live/etc) —
-        __main__.py resolves it via config_path.parent.parent/etc, so moving it
-        to /data would break file-based logging after migration."""
+    def test_migrate_script_moves_logging_conf_to_data_etc(self) -> None:
+        """logging.conf must move into /data/etc (not stay at /opt/metixel/etc) —
+        __main__.py resolves it as data_dir()/etc/logging.conf, so all persistent
+        config lives under /data."""
         mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
-        # Only config.json moves into /data, not logging.conf.
+        # Both config.json and logging.conf move into /data.
         assert "config.json" in content
-        assert "logging.conf stays at /opt/metixel/etc" in content
-        # The live symlink points at the install-root etc (so live/etc resolves).
-        assert 'ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc"' in content
+        assert "logging.conf" in content
+        assert 'mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"' in content
+        # No live/etc symlink is created (logging.conf is under /data now).
+        assert 'ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc"' not in content
+
+    def test_migrate_script_threads_install_root_into_heredoc(self) -> None:
+        """The installed_packages.json recorder must honour $INSTALL_ROOT rather
+        than hardcoding /opt/metixel."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        assert 'python3 - "${INSTALL_ROOT}"' in content
+        assert 'root = sys.argv[1]' in content
+        assert 'root = "/opt/metixel"' not in content
+
+
+class TestFixups:
+    """Versioned device-repair fixups run once per device during install."""
+
+    def test_fixup_manifest_and_scripts_exist(self) -> None:
+        repo = Path(__file__).resolve().parents[2]
+        manifest = repo / "scripts" / "fixups" / "manifest.txt"
+        assert manifest.is_file()
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            assert (repo / "scripts" / "fixups" / line).is_file(), (
+                f"fixup {line} listed in manifest but missing"
+            )
+
+    def test_install_script_runs_fixups(self) -> None:
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "fixups/manifest.txt" in content
+        assert "installed_fixups.json" in content
+        # Fixups are warn-and-continue (do not abort the update).
+        assert "WARNING: fixup" in content
 
 
 class TestUpdateScript:

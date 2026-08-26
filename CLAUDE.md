@@ -105,9 +105,14 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
       into `releases/<ver>`, creates the `live` symlink, and rewrites systemd units; then
       `ota_install.sh` re-points the working repo at the migrated release (via the
       `MIGRATED_RELEASE_DIR=` line it prints) so `pip install -e` targets the new location.
-      `logging.conf` must stay at `/opt/metixel/etc` (reached via `live/etc`) — `__main__.py`
-      resolves it as `config_path.parent.parent/etc/logging.conf`; only `config.json` lives in
-      `/data`.
+      `logging.conf` lives at `/opt/metixel/data/etc/logging.conf` — `__main__.py` resolves it
+      as `data_dir()/etc/logging.conf` (never `config_path.parent.parent` arithmetic). All
+      persistent config (config.json + logging.conf) lives under `/data`.
+    - **Versioned device fixups:** `ota_install.sh` runs one-time repair scripts from
+      `scripts/fixups/` (listed in `scripts/fixups/manifest.txt`) to fix device-level issues
+      that aren't packages or config files (e.g. `gpu_mem` in `/boot/firmware/config.txt`).
+      Each runs exactly once per device, tracked in `/opt/metixel/data/installed_fixups.json`,
+      and is warn-and-continue (a failure never aborts the update).
     - **Startup self-heal (`backend/dependencies.py`):** on boot, `BackendDaemon.run()` calls
       `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
       installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`

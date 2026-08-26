@@ -131,20 +131,23 @@ mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/logs" "${DATA_DIR}/media" "${DATA_DIR
 mkdir -p "${RELEASES_DIR}"
 
 # ── Move persistent data → /data ────────────────────────────────────────────
-# Only config.json moves into /data. logging.conf stays at /opt/metixel/etc —
-# __main__.py resolves it as config_path.parent.parent/etc/logging.conf, i.e.
-# /opt/metixel/etc/logging.conf — so it must remain at that stable, persistent
-# path (reachable via live/etc → /opt/metixel/etc).
+# config.json AND logging.conf move into /data (data/etc for logging.conf).
+# __main__.py resolves logging.conf as data_dir()/etc/logging.conf, so it must
+# live under /data/etc — all persistent config lives under /data.
 echo "[4/8] Moving persistent data (config, logs, media, cache) → /data…"
+mkdir -p "${DATA_DIR}/etc"
 if [ -e "${INSTALL_ROOT}/etc/config.json" ]; then
     mv "${INSTALL_ROOT}/etc/config.json" "${DATA_DIR}/config.json"
+fi
+if [ -e "${INSTALL_ROOT}/etc/logging.conf" ]; then
+    mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"
 fi
 for item in logs media cache; do
     if [ -e "${INSTALL_ROOT}/${item}" ]; then
         mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"
     fi
 done
-# 'etc' may still hold other files — keep it with the code; config.json moved.
+# 'etc' may still hold other files — keep it with the code; config moved.
 chown -R pi:pi "${DATA_DIR}" 2>/dev/null || true
 
 # ── Move application code → /releases/<version> ─────────────────────────────
@@ -172,17 +175,16 @@ chown -R pi:pi "${RELEASE_DIR}" 2>/dev/null || true
 # ── Create the live symlink ─────────────────────────────────────────────────
 echo "[6/8] Creating /opt/metixel/live symlink…"
 ln -sfn "${RELEASE_DIR}" "${LIVE_LINK}"
-ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc" 2>/dev/null || true
 chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
 # OTA updates run as root via systemd-run — mark the release repo as safe for git.
 git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 
 # ── Record the currently-managed packages (for future package removal) ──────
 echo "[7/8] Recording installed Metixel-managed packages…"
-python3 - <<'PYEOF'
-import json, os, subprocess, sys
+python3 - "${INSTALL_ROOT}" <<'PYEOF'
+import json, os, sys
 
-root = "/opt/metixel"
+root = sys.argv[1]
 installed = {"apt": [], "pip": []}
 
 # Record the packages Metixel currently manages from the requirements files.

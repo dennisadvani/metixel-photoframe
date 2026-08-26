@@ -770,6 +770,26 @@ reached through the `live` symlink. Application code paths resolve through the
 symlink, while all persistent data (config, logs, media, cache) resolves to
 `/opt/metixel/data/`. See `src/metixel/shared/paths.py`.
 
+#### Repository vs. device layout
+
+The git repository is the **blueprint**; the device is the **built artifact**.
+The repo is *not* organized as data-vs-code — it holds code and **templates**
+together, and the separation is imposed at install time:
+
+| | Git repository (source) | Device (runtime) |
+|---|---|---|
+| Code | `src/`, `scripts/`, `systemd/` | `releases/<ver>/` (reached via `live`) |
+| Templates | `etc/config.example.json`, `etc/logging.conf` | copied into the release, then seeded |
+| Runtime data | *(never committed)* | `/opt/metixel/data/` (config, logs, media, cache) |
+
+`etc/` stays in git at the repo root because it holds **templates**, not user
+data. The setup/build scripts copy `etc/` into each release folder, then seed
+the *real* `config.json` and `logging.conf` into `/opt/metixel/data/` (and
+`/opt/metixel/data/etc/`). The release keeps `etc/` only as the template source;
+all persistent config lives under `/data`. Moving `etc/` under `data/` in git
+would be wrong — it would commit templates as "data" and strip the release of
+the templates it needs to seed from.
+
 #### Discovery
 
 `UpdateManager` polls the GitHub API (default every 6 hours; results cached for
@@ -839,13 +859,23 @@ the flat layout (no `/data`, no `/live`) and, before installing, runs
 4. record the managed package manifest.
 
 It then prints `MIGRATED_RELEASE_DIR=<new release path>`, which `ota_install.sh`
-captures to re-point the working repo at the moved code before running
-`pip install -e`. The old bootstrap's EXIT trap restarts services against the
+captures to re-point the working tree at the moved code before running
+`pip install -e`. The old bootstrap's EXIT `trap` restarts services against the
 newly-written units, leaving the device permanently on the Blue/Green layout —
-one step, no operator action. `logging.conf` stays at `/opt/metixel/etc`
-(reached via `live/etc`), because `__main__.py` resolves it as
-`config_path.parent.parent/etc/logging.conf`; only `config.json` lives in
-`/data`.
+one step, no operator action. `logging.conf` moves into `/opt/metixel/data/etc/`
+alongside `config.json`; `__main__.py` resolves it as `data_dir()/etc/logging.conf`
+(never `config_path.parent.parent` arithmetic).
+
+#### Versioned device fixups
+
+Some device-level issues can't be fixed by a package install or a config file
+change (e.g. an incorrect `gpu_mem=` in `/boot/firmware/config.txt`). `ota_install.sh`
+runs one-time repair scripts from `scripts/fixups/` (listed in
+`scripts/fixups/manifest.txt`) after installing packages. Each fixup runs
+**exactly once per device**, tracked in `/opt/metixel/data/installed_fixups.json`,
+and is **warn-and-continue** — a failure is logged but never aborts the update.
+A fixup may print `REBOOT_REQUIRED` to signal that a reboot is needed to apply
+its change. See `scripts/fixups/README.md`.
 
 #### Startup dependency self-heal (single-step OTA dep resolution)
 
