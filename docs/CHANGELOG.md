@@ -50,6 +50,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   now-empty install root.
 - **GPU-mem fixup hardened** — now removes duplicate `gpu_mem=` lines and
   appends a single `gpu_mem=128` (the last duplicate line previously won).
+- **Folder browser now resolves against `/data`** — `browse.py` used
+  `install_root() / "media"` and the settings-page JS hardcoded the `/opt/metixel/`
+  base prefix, both of which broke folder selection after media moved to
+  `/opt/metixel/data/media/`. Both now use the persistent data dir
+  (`data_dir()` / `/opt/metixel/data/`).
+- **StateManager journal path** — now resolves the cache dir via
+  `resolve_install_path` (data-relative) instead of `install_root`.
 
 ### Changed
 

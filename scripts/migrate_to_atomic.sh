@@ -217,23 +217,17 @@ with open(os.path.join(data_dir, "installed_packages.json"), "w") as f:
 print("  recorded", len(installed["apt"]), "apt and", len(installed["pip"]), "pip packages")
 PYEOF
 
-# ── Rewrite systemd units to point at live + data ──────────────────────────
-echo "[8/8] Updating systemd unit files (live + data paths)…"
+# ── Install canonical systemd units (live + data paths) ────────────────────
+# Copy the SHIPPED unit files from the release rather than sed-mutating the old
+# ones. The shipped units are the authoritative Blue/Green definitions (correct
+# WorkingDirectory / PYTHONPATH / ExecStart / ReadWritePaths); this is the same
+# mechanism setup_trixie_metixel.sh uses, and it avoids the fragile exact-string
+# sed that previously left some devices with a stale PYTHONPATH (crash-loop).
+echo "[8/8] Installing canonical systemd unit files…"
 for unit in metixel-backend.service metixel-cage.service metixel-frontend.service; do
-    src="/etc/systemd/system/${unit}"
-    if [ ! -f "${src}" ]; then
-        continue
+    if [ -f "${RELEASE_DIR}/systemd/${unit}" ]; then
+        cp "${RELEASE_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"
     fi
-    sed -i \
-        -e 's|WorkingDirectory=/opt/metixel|WorkingDirectory=/opt/metixel/live|g' \
-        -e 's|PYTHONPATH=/opt/metixel/src|PYTHONPATH=/opt/metixel/live/src|g' \
-        -e 's|PYTHONPATH=/opt/metixel$|PYTHONPATH=/opt/metixel/live/src|g' \
-        -e 's|--config /opt/metixel/etc/config.json|--config /opt/metixel/data/config.json|g' \
-        -e 's|/opt/metixel/etc/config.json|/opt/metixel/data/config.json|g' \
-        -e 's|/opt/metixel/scripts/cage_launch.sh|/opt/metixel/live/scripts/cage_launch.sh|g' \
-        -e 's|ExecStartPre=/bin/mkdir -p /opt/metixel/logs /opt/metixel/cache|ExecStartPre=/bin/mkdir -p /opt/metixel/data/logs /opt/metixel/data/cache /opt/metixel/data/config /opt/metixel/data/media /opt/metixel/data/backups|g' \
-        -e 's|ReadWritePaths=/opt/metixel |ReadWritePaths=/opt/metixel/releases /opt/metixel/data /opt/metixel/live |g' \
-        "${src}"
 done
 
 systemctl daemon-reload

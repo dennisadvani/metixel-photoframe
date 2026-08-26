@@ -133,15 +133,19 @@ class TestInstallScript:
         assert 'os.path.join(release_dir, "requirements-system.txt")' in content
         assert 'root = "/opt/metixel"' not in content
 
-    def test_migrate_script_rewrites_both_pythonpath_forms(self) -> None:
-        """The systemd PYTHONPATH rewrite must handle BOTH
-        'PYTHONPATH=/opt/metixel/src' AND 'PYTHONPATH=/opt/metixel' (no /src),
-        otherwise a device whose unit lacks the /src suffix crash-loops."""
+    def test_migrate_script_copies_canonical_systemd_units(self) -> None:
+        """Migration must COPY the shipped systemd units from the release rather
+        than sed-mutating the old ones — the sed approach left some devices with
+        a stale PYTHONPATH (crash-loop) when the installed value didn't match."""
         mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
-        assert "PYTHONPATH=/opt/metixel/src|PYTHONPATH=/opt/metixel/live/src" in content
-        assert "PYTHONPATH=/opt/metixel$|PYTHONPATH=/opt/metixel/live/src" in content
+        # Copies the canonical units from the release into /etc/systemd/system.
+        assert 'cp "${RELEASE_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"' in content
+        assert "metixel-backend.service metixel-cage.service metixel-frontend.service" in content
+        # The fragile per-value sed rewrite is gone (it left PYTHONPATH stale).
+        assert "PYTHONPATH=/opt/metixel$|PYTHONPATH" not in content
+        assert "sed -i" not in content
 
 
 class TestFixups:

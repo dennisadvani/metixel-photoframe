@@ -595,9 +595,9 @@ import {
         if (selectBtn) {
             selectBtn.onclick = function () {
                 if (_browserTargetInput && data.current_path) {
-                    // Make path relative to /opt/metixel/ if possible
+                    // Make path relative to the persistent data dir if possible
                     var relPath = data.current_path;
-                    var basePrefix = "/opt/metixel/";
+                    var basePrefix = "/opt/metixel/data/";
                     if (relPath.indexOf(basePrefix) === 0) {
                         relPath = relPath.substring(basePrefix.length);
                         if (!relPath.endsWith("/")) relPath += "/";
