@@ -159,12 +159,14 @@ new_sys = set(names(req_sys))
 new_pip = set(names(req_pip))
 
 # Only remove packages Metixel previously recorded as installing.
-for pkg in sorted(prev.get("apt", []) - new_sys):
+prev_sys = set(prev.get("apt", []) or [])
+prev_pip = set(prev.get("pip", []) or [])
+for pkg in sorted(prev_sys - new_sys):
     print(f"  removing system pkg: {pkg}")
     subprocess.run(["apt-get", "remove", "-y", "--purge", pkg],
                    check=False, capture_output=True)
 
-for pkg in sorted(prev.get("pip", []) - new_pip):
+for pkg in sorted(prev_pip - new_pip):
     print(f"  removing pip pkg: {pkg}")
     subprocess.run(["pip", "uninstall", "-y", pkg], check=False,
                    capture_output=True)
