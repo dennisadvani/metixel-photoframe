@@ -276,6 +276,15 @@ mkdir -p "${RELEASE_DIR}"
 cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"
 rm -rf "${RELEASE_DIR}/media" "${RELEASE_DIR}/cache" "${RELEASE_DIR}/logs" 2>/dev/null || true
 
+# Seed sample media into /data/media (persistent). The repo ships sample media
+# under data/media/sample_media/ (tracked in git); copy it into the device's
+# data/media so a fresh install has content to display. Never overwrite an
+# existing sample_media (user may have replaced it).
+if [ -d "${METIXEL_DIR}/data/media/sample_media" ]; then
+    mkdir -p /opt/metixel/data/media/sample_media
+    cp -n "${METIXEL_DIR}"/data/media/sample_media/* /opt/metixel/data/media/sample_media/ 2>/dev/null || true
+fi
+
 # Persist config.json + logging.conf into /data (user-editable). __main__.py
 # resolves logging.conf as data_dir()/etc/logging.conf, so it lives at
 # /opt/metixel/data/etc/logging.conf alongside config.json.

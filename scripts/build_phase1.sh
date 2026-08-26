@@ -119,6 +119,13 @@ sudo cp -r "${PROJECT_ROOT}/scripts" "${RELEASE_DIR}/scripts/"
 # Seed the persistent config from the example (user edits live in /data).
 sudo cp "${RELEASE_DIR}/etc/config.example.json" "${MOUNT_DIR}/opt/metixel/data/config.json"
 
+# Seed sample media into /data/media (persistent) so a fresh image has content.
+if [ -d "${PROJECT_ROOT}/data/media/sample_media" ]; then
+    sudo mkdir -p "${MOUNT_DIR}/opt/metixel/data/media/sample_media"
+    sudo cp -n "${PROJECT_ROOT}"/data/media/sample_media/* \
+        "${MOUNT_DIR}/opt/metixel/data/media/sample_media/" 2>/dev/null || true
+fi
+
 # Create the live symlink → active release.
 sudo ln -sfn "/opt/metixel/releases/v${APP_VERSION#v}" "${LIVE_DIR}"
 
