@@ -57,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`data_dir()` / `/opt/metixel/data/`).
 - **StateManager journal path** — now resolves the cache dir via
   `resolve_install_path` (data-relative) instead of `install_root`.
+- **Migration robustness for clean monolithic installs** — `migrate_to_atomic.sh`
+  now (1) treats a partial/aborted migration (stray `data/`, no valid `live`
+  symlink) as repairable rather than "already migrated", (2) chowns the entire
+  install root to `pi:pi` so the service can write (fixes a crash-loop where
+  `pi` couldn't create `data/config`), (3) makes every data/code move idempotent
+  on re-entry, and (4) enables the services after installing canonical units.
+  `ota_install.sh` self-migration detection now keys off a *valid* `live`
+  symlink so it bridges partial states too.
 
 ### Changed
 

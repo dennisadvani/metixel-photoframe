@@ -93,13 +93,17 @@ class TestInstallScript:
         assert "WARNING" in content
 
     def test_install_script_self_migrates_old_layout(self) -> None:
-        """The install script must detect the old monolithic layout (no /data,
-        no /live) and self-migrate to Blue/Green before installing, so the
-        first upgrade through the existing OTA flow bridges to the new layout."""
+        """The install script must detect the absence of a valid live symlink
+        (clean monolithic layout OR a partial/aborted migration) and self-migrate
+        to Blue/Green before installing."""
         content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
 
         assert "migrate_to_atomic.sh" in content
-        assert "Old monolithic layout detected" in content
+        assert "No valid live symlink" in content
+        # Detection is based on a VALID live symlink (not merely data/ existence),
+        # so a partial migration state is also bridged.
+        assert "readlink -f" in content
+        assert "ALREADY_LIVE" in content
         # Runs with --no-restart (the OTA bootstrap handles the restart) and
         # --no-backup (the checkout just reset to the new code).
         assert "--no-restart" in content
@@ -146,6 +150,19 @@ class TestInstallScript:
         # The fragile per-value sed rewrite is gone (it left PYTHONPATH stale).
         assert "PYTHONPATH=/opt/metixel$|PYTHONPATH" not in content
         assert "sed -i" not in content
+
+    def test_migrate_script_repairs_partial_state(self) -> None:
+        """A partial/aborted migration (data/ present but no valid live symlink)
+        must be REPAIRED on re-run, not treated as already-migrated."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Only a VALID live symlink counts as migrated.
+        assert 'if [ -L "${LIVE_LINK}" ] && [ -d "$(readlink -f "${LIVE_LINK}"' in content
+        # A stray data/ triggers a repair re-run, not a bail-out.
+        assert "Re-running migration to repair a partial/aborted previous run" in content
+        # The whole install root is chowned to pi so the service can write.
+        assert 'chown -R pi:pi "${INSTALL_ROOT}"' in content
 
 
 class TestFixups:

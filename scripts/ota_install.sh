@@ -41,13 +41,21 @@ fi
 INSTALL_ROOT="${METIXEL_INSTALL_ROOT:-/opt/metixel}"
 
 # ── Self-migrate from the old monolithic layout (first Blue/Green upgrade) ──
-# A device still on the pre-Blue/Green layout has no /data and no live symlink.
+# A device still on the pre-Blue/Green layout has no working live symlink.
 # This is the FIRST upgrade that carries the new scripts, so we migrate in
 # place BEFORE installing: the code moves into releases/<ver>, the live symlink
 # is created, and the systemd units are rewritten. Only then do we install —
 # so `pip install -e` targets the NEW (post-migration) repo location.
-if [ ! -d "${INSTALL_ROOT}/data" ] && [ ! -L "${INSTALL_ROOT}/live" ]; then
-    echo "Old monolithic layout detected (no /data, no /live) — self-migrating to Blue/Green…"
+#
+# Detection matches migrate_to_atomic.sh's guard: migrate only if there is no
+# VALID live symlink. Both a clean monolithic install AND a partial/aborted
+# migration (data/ present but no live) are bridged here.
+ALREADY_LIVE="no"
+if [ -L "${INSTALL_ROOT}/live" ] && [ -d "$(readlink -f "${INSTALL_ROOT}/live" 2>/dev/null || true)" ]; then
+    ALREADY_LIVE="yes"
+fi
+if [ "${ALREADY_LIVE}" = "no" ]; then
+    echo "No valid live symlink — self-migrating to Blue/Green…"
     MIG_OUT="$(bash "${INSTALL_ROOT}/scripts/migrate_to_atomic.sh" --no-restart --no-backup 2>&1)"
     MIG_RC=$?
     printf '%s\n' "$MIG_OUT"

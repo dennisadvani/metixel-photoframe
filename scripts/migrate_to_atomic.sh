@@ -70,10 +70,19 @@ if [ ! -d "${INSTALL_ROOT}" ]; then
     exit 1
 fi
 
-# If already migrated, complain loudly and exit (idempotent-guard).
-if [ -L "${LIVE_LINK}" ] || [ -d "${DATA_DIR}" ]; then
-    echo "Already migrated (${LIVE_LINK} or ${DATA_DIR} exists). Nothing to do."
+# If already migrated, complain and exit (idempotent-guard).
+# Only treat as migrated when the `live` symlink is a valid release pointer.
+# A stray/partial `data/` from an aborted migration must NOT count as migrated
+# — otherwise this script bails on the next run and the device is stuck on a
+# broken half-migrated state.
+if [ -L "${LIVE_LINK}" ] && [ -d "$(readlink -f "${LIVE_LINK}" 2>/dev/null || true)" ]; then
+    echo "Already migrated (${LIVE_LINK} → $(readlink "${LIVE_LINK}")). Nothing to do."
     exit 0
+fi
+# Re-entry on a partial migration: a data/ dir may exist but no live symlink.
+# We proceed and REPAIR (idempotent) rather than bail.
+if [ -d "${DATA_DIR}" ]; then
+    echo "Re-running migration to repair a partial/aborted previous run."
 fi
 
 echo "╔══════════════════════════════════════════════════════════════╗"
@@ -136,14 +145,16 @@ mkdir -p "${RELEASES_DIR}"
 # live under /data/etc — all persistent config lives under /data.
 echo "[4/8] Moving persistent data (config, logs, media, cache) → /data…"
 mkdir -p "${DATA_DIR}/etc"
-if [ -e "${INSTALL_ROOT}/etc/config.json" ]; then
+# Idempotent moves: only move if the source still exists AND the target is not
+# already present (re-entry on a partial migration must not fail or clobber).
+if [ -e "${INSTALL_ROOT}/etc/config.json" ] && [ ! -e "${DATA_DIR}/config.json" ]; then
     mv "${INSTALL_ROOT}/etc/config.json" "${DATA_DIR}/config.json"
 fi
-if [ -e "${INSTALL_ROOT}/etc/logging.conf" ]; then
+if [ -e "${INSTALL_ROOT}/etc/logging.conf" ] && [ ! -e "${DATA_DIR}/etc/logging.conf" ]; then
     mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"
 fi
 for item in logs media cache; do
-    if [ -e "${INSTALL_ROOT}/${item}" ]; then
+    if [ -e "${INSTALL_ROOT}/${item}" ] && [ ! -e "${DATA_DIR}/${item}" ]; then
         mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"
     fi
 done
@@ -155,6 +166,7 @@ echo "[5/8] Moving application code → ${RELEASE_DIR}…"
 mkdir -p "${RELEASE_DIR}"
 # Move everything EXCEPT the dirs we already moved into /data (config, logs,
 # media, cache, etc) — those belong to the data layer now.  'run' is transient.
+# Idempotent on re-entry: skip a path if the release target already has it.
 for entry in "${INSTALL_ROOT}"/.* "${INSTALL_ROOT}"/*; do
     name="$(basename "$entry")"
     case "$name" in
@@ -162,10 +174,13 @@ for entry in "${INSTALL_ROOT}"/.* "${INSTALL_ROOT}"/*; do
             continue
             ;;
     esac
+    if [ -e "${RELEASE_DIR}/${name}" ]; then
+        continue
+    fi
     mv "$entry" "${RELEASE_DIR}/" 2>/dev/null || true
 done
 # Keep the git checkout inside the release so future updates reference the repo.
-if [ -d "${INSTALL_ROOT}/.git" ]; then
+if [ -d "${INSTALL_ROOT}/.git" ] && [ ! -d "${RELEASE_DIR}/.git" ]; then
     mv "${INSTALL_ROOT}/.git" "${RELEASE_DIR}/" 2>/dev/null || true
 fi
 # Recreate an empty 'etc' for any code-side default templates (config in /data).
@@ -217,6 +232,15 @@ with open(os.path.join(data_dir, "installed_packages.json"), "w") as f:
 print("  recorded", len(installed["apt"]), "apt and", len(installed["pip"]), "pip packages")
 PYEOF
 
+# ── Ensure the whole install root is pi-owned ──────────────────────────────
+# On a clean install /opt/metixel is often root-owned (setup ran via sudo).
+# The `pi` service must be able to create data subdirs (e.g. data/config via
+# ensure_data_dirs) and write logs/media/cache — so chown the entire root
+# recursively at the end. This prevents the crash-loop:
+#   PermissionError: /opt/metixel/data/config (created by pi but data owned root).
+chown -R pi:pi "${INSTALL_ROOT}" 2>/dev/null || true
+chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
+
 # ── Install canonical systemd units (live + data paths) ────────────────────
 # Copy the SHIPPED unit files from the release rather than sed-mutating the old
 # ones. The shipped units are the authoritative Blue/Green definitions (correct
@@ -231,6 +255,8 @@ for unit in metixel-backend.service metixel-cage.service metixel-frontend.servic
 done
 
 systemctl daemon-reload
+# Ensure the services are enabled so they survive reboot.
+systemctl enable metixel-backend.service metixel-cage.service 2>/dev/null || true
 
 # ── Finalise / restart ──────────────────────────────────────────────────────
 echo ""
