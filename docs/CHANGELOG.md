@@ -38,6 +38,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   persistent config under `/data`); `__main__.py` resolves it via
   `data_dir()/etc/logging.conf` instead of `config_path.parent.parent`
   arithmetic.
+- **CEC dependency fixed** — the Debian `python3-libcec` package does not exist
+  in Trixie and was aborting the strict OTA install. Removed it from
+  `requirements-system.txt`; the PyPI `cec` package (python-cec, which the code
+  actually uses) is now tracked in `requirements-pip.txt`.
+- **Migration `PYTHONPATH` rewrite hardened** — now handles both
+  `PYTHONPATH=/opt/metixel/src` and `PYTHONPATH=/opt/metixel` (no `/src`), fixing
+  a crash-loop on devices whose unit lacked the `/src` suffix.
+- **Migration package manifest fixed** — `installed_packages.json` now reads the
+  requirements manifests from the release dir (where the code moved), not the
+  now-empty install root.
+- **GPU-mem fixup hardened** — now removes duplicate `gpu_mem=` lines and
+  appends a single `gpu_mem=128` (the last duplicate line previously won).
 
 ### Changed
 

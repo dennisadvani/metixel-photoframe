@@ -26,12 +26,12 @@ vlc-data
 cpulimit
 
 # Input / CEC
-# python3-libcec provides the Python bindings the LibCecAdapter expects.
-# Do NOT install the PyPI 'cec' package (python-cec) — it exposes a different,
-# incompatible API.
+# libcec-dev + cec-utils provide the native libcec library. The Python
+# bindings come from the PyPI 'cec' package (python-cec) — see
+# requirements-pip.txt. The Debian 'python3-libcec' package does NOT exist in
+# Trixie and exposes a different API, so it is NOT listed here.
 cec-utils
 libcec-dev
-python3-libcec
 python3-evdev
 
 # Networking

@@ -121,15 +121,27 @@ class TestInstallScript:
         # No live/etc symlink is created (logging.conf is under /data now).
         assert 'ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc"' not in content
 
-    def test_migrate_script_threads_install_root_into_heredoc(self) -> None:
-        """The installed_packages.json recorder must honour $INSTALL_ROOT rather
-        than hardcoding /opt/metixel."""
+    def test_migrate_script_reads_manifests_from_release_dir(self) -> None:
+        """The installed_packages.json recorder must read the requirements
+        manifests from RELEASE_DIR (the code has already moved there), not from
+        the now-empty INSTALL_ROOT."""
         mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
-        assert 'python3 - "${INSTALL_ROOT}"' in content
-        assert 'root = sys.argv[1]' in content
+        assert 'python3 - "${RELEASE_DIR}" "${DATA_DIR}"' in content
+        assert 'release_dir, data_dir = sys.argv[1], sys.argv[2]' in content
+        assert 'os.path.join(release_dir, "requirements-system.txt")' in content
         assert 'root = "/opt/metixel"' not in content
+
+    def test_migrate_script_rewrites_both_pythonpath_forms(self) -> None:
+        """The systemd PYTHONPATH rewrite must handle BOTH
+        'PYTHONPATH=/opt/metixel/src' AND 'PYTHONPATH=/opt/metixel' (no /src),
+        otherwise a device whose unit lacks the /src suffix crash-loops."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        assert "PYTHONPATH=/opt/metixel/src|PYTHONPATH=/opt/metixel/live/src" in content
+        assert "PYTHONPATH=/opt/metixel$|PYTHONPATH=/opt/metixel/live/src" in content
 
 
 class TestFixups:
@@ -154,6 +166,20 @@ class TestFixups:
         assert "installed_fixups.json" in content
         # Fixups are warn-and-continue (do not abort the update).
         assert "WARNING: fixup" in content
+
+    def test_gpu_mem_fixup_handles_duplicate_lines(self) -> None:
+        """The gpu-mem fixup must handle duplicate gpu_mem= lines (the last one
+        wins in config.txt) by removing ALL of them and appending a single 128."""
+        repo = Path(__file__).resolve().parents[2]
+        fixup = repo / "scripts" / "fixups" / "v1.3.0-gpu-mem.sh"
+        content = fixup.read_text(encoding="utf-8")
+
+        # Removes every gpu_mem= line, then appends a single gpu_mem=128.
+        assert "sed -i '/^gpu_mem=/d'" in content
+        assert 'echo "gpu_mem=128" >> "${BOOT}"' in content
+        # Only corrects when there isn't exactly one gpu_mem=128.
+        assert 'COUNT' in content
+        assert 'HAS_128' in content
 
 
 class TestUpdateScript:

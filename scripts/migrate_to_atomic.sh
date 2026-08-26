@@ -180,21 +180,23 @@ chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
 git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 
 # ── Record the currently-managed packages (for future package removal) ──────
+# The code (and its requirements files) have already moved into RELEASE_DIR,
+# so read the manifests from there — NOT from INSTALL_ROOT (which is now empty).
 echo "[7/8] Recording installed Metixel-managed packages…"
-python3 - "${INSTALL_ROOT}" <<'PYEOF'
+python3 - "${RELEASE_DIR}" "${DATA_DIR}" <<'PYEOF'
 import json, os, sys
 
-root = sys.argv[1]
+release_dir, data_dir = sys.argv[1], sys.argv[2]
 installed = {"apt": [], "pip": []}
 
 # Record the packages Metixel currently manages from the requirements files.
-req_apt = os.path.join(root, "requirements-system.txt")
+req_apt = os.path.join(release_dir, "requirements-system.txt")
 if os.path.isfile(req_apt):
     with open(req_apt) as f:
         installed["apt"] = [ln.strip() for ln in f
                             if ln.strip() and not ln.lstrip().startswith("#")]
 
-req_pip = os.path.join(root, "requirements-pip.txt")
+req_pip = os.path.join(release_dir, "requirements-pip.txt")
 if os.path.isfile(req_pip):
     with open(req_pip) as f:
         names = []
@@ -209,8 +211,8 @@ if os.path.isfile(req_pip):
                 names.append(name)
         installed["pip"] = names
 
-os.makedirs(os.path.join(root, "data"), exist_ok=True)
-with open(os.path.join(root, "data", "installed_packages.json"), "w") as f:
+os.makedirs(data_dir, exist_ok=True)
+with open(os.path.join(data_dir, "installed_packages.json"), "w") as f:
     json.dump(installed, f, indent=2)
 print("  recorded", len(installed["apt"]), "apt and", len(installed["pip"]), "pip packages")
 PYEOF
@@ -225,6 +227,7 @@ for unit in metixel-backend.service metixel-cage.service metixel-frontend.servic
     sed -i \
         -e 's|WorkingDirectory=/opt/metixel|WorkingDirectory=/opt/metixel/live|g' \
         -e 's|PYTHONPATH=/opt/metixel/src|PYTHONPATH=/opt/metixel/live/src|g' \
+        -e 's|PYTHONPATH=/opt/metixel$|PYTHONPATH=/opt/metixel/live/src|g' \
         -e 's|--config /opt/metixel/etc/config.json|--config /opt/metixel/data/config.json|g' \
         -e 's|/opt/metixel/etc/config.json|/opt/metixel/data/config.json|g' \
         -e 's|/opt/metixel/scripts/cage_launch.sh|/opt/metixel/live/scripts/cage_launch.sh|g' \
