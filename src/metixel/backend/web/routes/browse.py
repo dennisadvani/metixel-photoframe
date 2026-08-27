@@ -56,9 +56,7 @@ def browse_folder():
         fallback = _safe_fallback(resolved, base)
         if fallback is None:
             return jsonify({"error": f"Path not found: {resolved}"}), 404
-        logger.warning(
-            "Browse path %s does not exist — falling back to %s", resolved, fallback
-        )
+        logger.warning("Browse path %s does not exist — falling back to %s", resolved, fallback)
         resolved = fallback
     if not resolved.is_dir():
         return jsonify({"error": f"Not a directory: {resolved}"}), 400
