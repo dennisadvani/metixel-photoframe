@@ -105,6 +105,15 @@ echo ""
 echo "[1/7] Staging ${VERSION}…"
 rm -rf "${STAGING_DIR}"
 git clone --branch "${VERSION}" --depth 1 "${REPO_URL}" "${STAGING_DIR}"
+# For the dev branch there is no single tag, so name the release folder after
+# the checked-out commit id. Every dev upgrade then gets its own folder (no
+# overlap with a previous dev release), while stable/beta keep their tag names.
+if [ "${VERSION}" = "dev" ]; then
+    COMMIT="$(git -C "${STAGING_DIR}" rev-parse --short HEAD)"
+    STAGING_VERSION="${COMMIT}"
+    RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"
+    echo "  dev staging → release folder: ${STAGING_VERSION}"
+fi
 mv "${STAGING_DIR}" "${RELEASE_DIR}"
 git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 

@@ -246,3 +246,18 @@ class TestUpdateScript:
         assert "ROLLING BACK" in content
         # config is backed up before the swap for rollback safety.
         assert "backups" in content
+
+    def test_update_script_names_dev_release_after_commit(self) -> None:
+        """The dev branch has no tag, so its release folder is named after the
+        checked-out commit id — giving every dev upgrade a unique folder and
+        avoiding overlap with a previous dev release."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        # The dev branch is detected and the commit id becomes the folder name.
+        assert 'if [ "${VERSION}" = "dev" ]; then' in content
+        assert 'COMMIT="$(git -C "${STAGING_DIR}" rev-parse --short HEAD)"' in content
+        assert 'STAGING_VERSION="${COMMIT}"' in content
+        assert 'RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"' in content
+
+        # The rename into releases/ still happens after the commit resolution.
+        assert 'mv "${STAGING_DIR}" "${RELEASE_DIR}"' in content
