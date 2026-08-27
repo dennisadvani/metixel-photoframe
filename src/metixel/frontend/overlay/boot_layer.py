@@ -209,14 +209,6 @@ class BootLayer(OverlayLayer):
                 logger.info("Boot screen fading out — slideshow is ready")
                 self._start_fade()
 
-            # Safety net: if the frontend never loads its queue, dismiss
-            # after a timeout rather than showing the boot screen forever.
-            if self._start_time > 0 and (now - self._start_time) > 300.0:
-                logger.warning(
-                    "Boot screen timed out after 300s — dismissing",
-                )
-                self._start_fade()
-
     def draw(self, backend: DisplayBackend) -> None:
         """Render logo + spinner.  Lazy-loads textures on first call."""
         if self._state == "done":

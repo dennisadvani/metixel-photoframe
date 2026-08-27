@@ -964,8 +964,10 @@ button:focus-visible {
     animation: upload-spin 1.1s linear infinite;
 }
 
+/* The Material `sync` glyph's arrows point counterclockwise, so spin the
+   icon counterclockwise to match the arrow direction. */
 @keyframes upload-spin {
-    to { transform: rotate(360deg); }
+    to { transform: rotate(-360deg); }
 }
 
 .progress-track {
