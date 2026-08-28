@@ -149,7 +149,9 @@ class TestInstallScript:
         assert "metixel-backend.service metixel-cage.service metixel-frontend.service" in content
         # The fragile per-value sed rewrite is gone (it left PYTHONPATH stale).
         assert "PYTHONPATH=/opt/metixel$|PYTHONPATH" not in content
-        assert "sed -i" not in content
+        # The systemd units are copied, not sed-mutated (the only sed -i left is
+        # the Samba share path rewrite, which is unrelated to systemd).
+        assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
 
     def test_migrate_script_repairs_partial_state(self) -> None:
         """A partial/aborted migration (data/ present but no valid live symlink)
@@ -180,6 +182,20 @@ class TestInstallScript:
         assert 'for item in media logs cache; do' in content
         assert 'mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"' in content
         assert 'cp -an "${INSTALL_ROOT}/${item}/." "${DATA_DIR}/${item}/"' in content
+
+    def test_migrate_script_updates_samba_share_path(self) -> None:
+        """The migration moves media/ to /data/media, so any Samba share pointing
+        at the old monolithic path must be rewritten to the new data location —
+        otherwise the share breaks after migration."""
+        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        content = mig.read_text(encoding="utf-8")
+
+        # Rewrites the old install-root media path to the data path.
+        assert 'path = ${INSTALL_ROOT}/media' in content
+        assert 'path = ${DATA_DIR}/media' in content
+        assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
+        # Restarts smbd so the new path takes effect.
+        assert "systemctl restart smbd" in content
 
 
 class TestFixups:
