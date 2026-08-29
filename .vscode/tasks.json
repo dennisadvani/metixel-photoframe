@@ -4,7 +4,7 @@
         {
             "label": "[Pi] Restart All Services and Clear Cache",
             "type": "shell",
-            "command": "sudo systemctl stop metixel-backend metixel-cage; rm -f /run/metixel/playlist.json; rm -rf /opt/metixel/cache/* 2>/dev/null;  sudo systemctl reset-failed metixel-backend metixel-cage; sudo systemctl start metixel-backend metixel-cage; echo restarted",
+            "command": "sudo systemctl stop metixel-backend metixel-cage; rm -f /run/metixel/playlist.json; rm -rf /opt/metixel/data/cache/* 2>/dev/null;  sudo systemctl reset-failed metixel-backend metixel-cage; sudo systemctl start metixel-backend metixel-cage; echo restarted",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
@@ -109,7 +109,7 @@
         {
             "label": "[Pi] Run Tests",
             "type": "shell",
-            "command": "cd /opt/metixel && python -m pytest tests/ -q --no-cov",
+            "command": "cd /opt/metixel/live && python -m pytest tests/ -q --no-cov",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
@@ -127,7 +127,7 @@
         {
             "label": "[Pi] Lint",
             "type": "shell",
-            "command": "cd /opt/metixel && ruff check src/metixel/ && ruff format --check src/metixel/",
+            "command": "cd /opt/metixel/live && ruff check src/metixel/ && ruff format --check src/metixel/",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
@@ -145,7 +145,7 @@
         {
             "label": "[Pi] Type Check",
             "type": "shell",
-            "command": "cd /opt/metixel && mypy src/metixel/",
+            "command": "cd /opt/metixel/live && mypy src/metixel/",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",

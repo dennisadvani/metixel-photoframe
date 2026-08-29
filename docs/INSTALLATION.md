@@ -149,7 +149,7 @@ and power. Log in as `pi` (or via SSH).
 ### 3. Run the setup script
 
 ```bash
-wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/v1.2.1/scripts/setup_trixie_metixel.sh
+wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/setup_trixie_metixel.sh
 sudo bash setup_trixie_metixel.sh
 ```
 
