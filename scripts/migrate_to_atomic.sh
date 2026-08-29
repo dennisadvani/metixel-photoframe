@@ -140,7 +140,7 @@ fi
 # user-created custom subfolders) is preserved. Only empty scaffolding dirs
 # that have no monolithic source are created now.
 echo "[3/8] Creating /data, /releases, /live…"
-mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/backups"
+mkdir -p "${DATA_DIR}/backups"
 mkdir -p "${RELEASES_DIR}"
 
 # ── Move persistent data → /data ────────────────────────────────────────────
@@ -251,10 +251,10 @@ PYEOF
 
 # ── Ensure the whole install root is pi-owned ──────────────────────────────
 # On a clean install /opt/metixel is often root-owned (setup ran via sudo).
-# The `pi` service must be able to create data subdirs (e.g. data/config via
+# The `pi` service must be able to create data subdirs (e.g. data/logs via
 # ensure_data_dirs) and write logs/media/cache — so chown the entire root
 # recursively at the end. This prevents the crash-loop:
-#   PermissionError: /opt/metixel/data/config (created by pi but data owned root).
+#   PermissionError: /opt/metixel/data/logs (created by pi but data owned root).
 chown -R pi:pi "${INSTALL_ROOT}" 2>/dev/null || true
 chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
 

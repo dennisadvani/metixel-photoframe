@@ -175,9 +175,12 @@ class TestInstallScript:
         content = mig.read_text(encoding="utf-8")
 
         # Step 3 must NOT pre-create media/cache/logs placeholders (they come
-        # from the move), so the top-level folder isn't orphaned.
-        assert 'mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/backups"' in content
+        # from the move), so the top-level folder isn't orphaned.  Only backups
+        # is scaffolded (no monolithic source); config files live directly in
+        # /data, so there is no data/config subdir.
+        assert 'mkdir -p "${DATA_DIR}/backups"' in content
         assert '"${DATA_DIR}/media" "${DATA_DIR}/cache" "${DATA_DIR}/logs"' not in content
+        assert '"${DATA_DIR}/config"' not in content
         # Step 4 moves the whole folder (mv) or copy-merges on re-entry.
         assert 'for item in media logs cache; do' in content
         assert 'mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"' in content

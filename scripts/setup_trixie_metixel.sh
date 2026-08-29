@@ -260,7 +260,7 @@ git config --system --add safe.directory /opt/metixel/releases 2>/dev/null || tr
 
 # -- Directory structure (atomic Blue/Green layout) --------------------------
 echo "[4/9] Creating directory structure (data / releases / live)..."
-mkdir -p /opt/metixel/data/config /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/backups /opt/metixel/releases /run/metixel
+mkdir -p /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/backups /opt/metixel/releases /run/metixel
 
 # Move the cloned app code into a versioned release folder, and put config in
 # /data (persistent). The app runs from the live symlink.
