@@ -7,4 +7,4 @@ Raspberry Pi 2/3/4/5 (Mesa EGL via pi3d + cage/XWayland)
 
 """
 
-__version__ = "1.2.2-beta.2"
+__version__ = "1.2.3-beta.3"
