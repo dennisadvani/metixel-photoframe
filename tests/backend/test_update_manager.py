@@ -197,6 +197,29 @@ class TestInstallScript:
         # Restarts smbd so the new path takes effect.
         assert "systemctl restart smbd" in content
 
+
+class TestSetupScript:
+    """The fresh-install setup script must build the atomic layout correctly."""
+
+    def test_setup_script_moves_code_into_release_not_self_copy(self) -> None:
+        """Step [4/9] must MOVE the repo contents into releases/<tag> rather
+        than `cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"` — RELEASE_DIR lives
+        INSIDE METIXEL_DIR (/opt/metixel/releases/<tag>), so a self-copy fails
+        with 'cannot copy a directory into itself'."""
+        setup = Path(__file__).resolve().parents[2] / "scripts" / "setup_trixie_metixel.sh"
+        content = setup.read_text(encoding="utf-8")
+
+        # The buggy self-copy must be gone.
+        assert 'cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"' not in content
+        # The code is moved entry-by-entry, excluding the data/releases layer.
+        assert 'for entry in "${METIXEL_DIR}"/.* "${METIXEL_DIR}"/*; do' in content
+        assert 'mv "$entry" "${RELEASE_DIR}/" 2>/dev/null || true' in content
+        # The data/releases/live/cache/logs/media/etc dirs are excluded.
+        assert '"data"|"releases"|"live"|"cache"|"logs"|"media"|"etc"' in content
+        # The git checkout is preserved inside the release.
+        assert 'mv "${METIXEL_DIR}/.git" "${RELEASE_DIR}/"' in content
+
+
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
 
