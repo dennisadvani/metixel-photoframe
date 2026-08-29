@@ -25,7 +25,9 @@
     rc, stable, minor, or major.
 
 .PARAMETER Finalize
-    Tag main with the given version and push the tag.  Run this AFTER the
+    Tag main with the given version and push the tag, then RE-ALIGN dev to
+    main (identical history) so the branches never drift apart (which causes
+    spurious merge conflicts on the next release PR).  Run this AFTER the
     release PR has been merged in GitHub:  .\scripts\release.ps1 -Finalize <version>
 
 .PARAMETER DryRun
@@ -142,7 +144,20 @@ if ($Finalize) {
     if ($LASTEXITCODE -ne 0) { throw "git tag failed" }
     git push origin $Tag
     if ($LASTEXITCODE -ne 0) { throw "git push tag failed" }
-    Write-Host "Switching back to dev..." -ForegroundColor Green
+
+    # -- Re-align dev to main ------------------------------------------------
+    # The release PR is a squash-merge, so even though main and dev now have
+    # IDENTICAL content, their commit histories differ.  Every release, this
+    # divergence grows and causes spurious merge conflicts on the next release
+    # PR.  Point dev at main's (just-released) commit so both branches are
+    # byte-identical — the next version bump starts fresh from the release.
+    Write-Host "Re-aligning dev to main (identical history)..." -ForegroundColor Green
+    git checkout -B dev main
+    if ($LASTEXITCODE -ne 0) { throw "Failed to land dev on main" }
+    git push origin dev --force
+    if ($LASTEXITCODE -ne 0) { throw "git push dev --force failed" }
+
+    Write-Host "Switching to dev..." -ForegroundColor Green
     git checkout dev
     Write-Host ""
     Write-Host "=== Release $Tag tagged on main ===" -ForegroundColor Green
