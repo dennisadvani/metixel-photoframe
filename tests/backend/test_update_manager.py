@@ -219,6 +219,20 @@ class TestSetupScript:
         # The git checkout is preserved inside the release.
         assert 'mv "${METIXEL_DIR}/.git" "${RELEASE_DIR}/"' in content
 
+    def test_setup_script_reads_moved_code_from_release_dir(self) -> None:
+        """After the code moves into RELEASE_DIR, later steps must read from
+        RELEASE_DIR (systemd units) — and etc/ stays at METIXEL_DIR (excluded
+        from the move), so config templates come from METIXEL_DIR/etc."""
+        setup = Path(__file__).resolve().parents[2] / "scripts" / "setup_trixie_metixel.sh"
+        content = setup.read_text(encoding="utf-8")
+
+        # systemd units are copied from the release (where the code moved).
+        assert 'cp "${RELEASE_DIR}/systemd/metixel-backend.service"' in content
+        assert 'cp "${RELEASE_DIR}/systemd/metixel-cage.service"' in content
+        # etc/ is excluded from the move, so config templates come from METIXEL_DIR.
+        assert 'cp "${METIXEL_DIR}/etc/config.example.json"' in content
+        assert 'cp -n "${METIXEL_DIR}/etc/logging.conf"' in content
+
 
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
