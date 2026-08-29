@@ -91,7 +91,10 @@ module = [
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["testing/unit_tests"]
 python_files = ["test_*.py"]
 pythonpath = ["src"]
 addopts = "-v --cov=metixel --cov-report=term-missing"
+markers = [
+    "functional: on-Pi hardware tests (Wi-Fi/AP/sudo) in testing/functional/ — run separately, not in CI",
+]

@@ -30,13 +30,13 @@ Closes #<!-- issue number -->
 - [ ] `ruff check src/metixel/` passes
 - [ ] `ruff format --check src/metixel/` passes
 - [ ] `mypy src/metixel/` passes (no errors)
-- [ ] `pytest tests/ -q --no-cov` passes
+- [ ] `pytest testing/unit_tests/ -q --no-cov` passes
 
 ## Required (not covered by CI)
 
 <!-- CI cannot verify these — the author must confirm them. -->
 
-- [ ] Web UI change? `cd web-tests && npx playwright test` passes against a live frame
+- [ ] Web UI change? `cd testing/web-tests && npx playwright test` passes against a live frame
 - [ ] `docs/CHANGELOG.md` updated under `[Unreleased]`
 - [ ] Docs updated if user-facing behaviour, URLs, or the API changed
 

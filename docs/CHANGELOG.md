@@ -126,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   passing the passphrase inline (`password <pw>` for one-shot connects,
   `wifi-sec.psk <pw>` for profile creation) when it's unsupported — so
   secured-network reconnects work on all builds, with a logged warning on
-  the less-secure fallback.  Guarded by new `tests/backend/test_network_manager.py`.
+  the less-secure fallback.  Guarded by new `testing/unit_tests/backend/test_network_manager.py`.
 
 ## [1.2.0]
 
@@ -142,9 +142,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   because the hardened backend service (`ProtectHome`/`ProtectSystem`) can
   neither write to `~/.local` nor the system packages — keeping deps in the
   same location the OTA uses.
-- **OTA regression tests** — `tests/backend/test_update_manager.py` (bootstrap
+- **OTA regression tests** — `testing/unit_tests/backend/test_update_manager.py` (bootstrap
   hand-off + `scripts/ota_install.sh` content) and
-  `tests/backend/test_dependencies.py` (self-heal detects missing deps and
+  `testing/unit_tests/backend/test_dependencies.py` (self-heal detects missing deps and
   installs as root/system-wide, never `--user`).
 - **Confirm dialog + accessibility improvements** — destructive actions use a
   confirmation dialog; browse buttons and modal controls gained accessible
@@ -210,7 +210,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Browse endpoint tests** — `tests/backend/web/test_routes_browse.py`
+- **Browse endpoint tests** — `testing/unit_tests/backend/web/test_routes_browse.py`
   (8 tests) covering subdirectory listing (files/hidden excluded, sorted),
   empty directories, parent-path reporting, 404/400 error cases, relative
   paths resolved against the install root, and the media-folder default.
@@ -564,7 +564,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `ruff format --check`, `mypy`, and `pytest` on Python 3.11 and 3.13 for
   every pull request and push to `main`/`dev`.
 - **Dependabot** — `.github/dependabot.yml` opens weekly dependency-update PRs
-  for `pip` and the `web-tests/` npm packages.
+  for `pip` and the `testing/web-tests/` npm packages.
 - **CI status badge** — README now shows the workflow status (and license).
 - **Widget base class** — `frontend/widgets/base.py` adds the documented
   `Widget` ABC (was missing, which left `clock.py` unimportable).
@@ -586,7 +586,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Playwright web UI test suite** — `web-tests/` runs headless Chromium from a
+- **Playwright web UI test suite** — `testing/web-tests/` runs headless Chromium from a
   workstation against a live frame's dashboard (nginx port 80 → Flask) to
   verify the routes, save buttons, controls, and fields; wired in as VS Code
   tasks. Destructive actions are opt-in (`npm run test:destructive`).
@@ -612,7 +612,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **Unit tests** for the new processing seams (`tests/backend/test_video_processing.py`), the shared system-stats module (`tests/shared/test_system_stats.py`), and the shared platform module (`tests/shared/test_platform.py`).
+- **Unit tests** for the new processing seams (`testing/unit_tests/backend/test_video_processing.py`), the shared system-stats module (`testing/unit_tests/shared/test_system_stats.py`), and the shared platform module (`testing/unit_tests/shared/test_platform.py`).
 
 ## [1.1.4-beta.4]
 

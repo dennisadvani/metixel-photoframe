@@ -16,14 +16,26 @@ WiFi hardware constraint (enforced by this controller):
 from __future__ import annotations
 
 import logging
+import os
 import random
-import subprocess
 import threading
 import time
 from enum import Enum
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+#: Ephemeral functional-test flag.  When set (``METIXEL_NETWORK_TEST_MODE=1``),
+#: the controller ignores Ethernet for connectivity decisions so WiFi/AP tests
+#: can run while the Pi is still controlled over Ethernet.  Ethernet stays up
+#: (reachable via SSH) — it is only excluded from *connectivity* checks.  This
+#: is test scaffolding: never set it in production config.
+_TEST_MODE_ENV = "METIXEL_NETWORK_TEST_MODE"
+
+
+def _test_mode_enabled() -> bool:
+    """Return whether the functional network test mode is active."""
+    return os.environ.get(_TEST_MODE_ENV) == "1"
 
 
 class NetworkState(Enum):
@@ -43,6 +55,7 @@ from metixel.backend.network_manager import (  # noqa: E402
     has_saved_wifi_networks,
     is_ap_mode_active,
     is_connected,
+    is_ethernet_connected,
     is_wifi_hardware_present,
     pre_scan_for_ap,
 )
@@ -75,6 +88,12 @@ class NetworkController:
     def __init__(self, config: dict[str, Any]) -> None:
         self._lock = threading.Lock()
         self._config = config
+
+        # ── Functional-test mode ───────────────────────────────────
+        # When METIXEL_NETWORK_TEST_MODE=1, Ethernet is ignored for
+        # connectivity decisions (see _is_ethernet_connected) so WiFi/AP
+        # tests can run while the Pi stays reachable over Ethernet.
+        self._test_mode = _test_mode_enabled()
 
         # ── State machine ──────────────────────────────────────────
         self._state: NetworkState = NetworkState.CLIENT_CONNECTED
@@ -269,26 +288,16 @@ class NetworkController:
             return is_connected()
         return False
 
-    @staticmethod
-    def _is_ethernet_connected() -> bool:
+    def _is_ethernet_connected(self) -> bool:
         """Check specifically for an active Ethernet connection.
 
         Uses nmcli but only queries Ethernet — safe alongside an AP.
+        In functional-test mode the result is forced to ``False`` so a
+        live Ethernet uplink doesn't mask a broken WiFi connection.
         """
-        try:
-            result = subprocess.run(
-                ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            for line in result.stdout.strip().splitlines():
-                parts = line.split(":")
-                if len(parts) >= 3 and parts[1] == "ethernet" and parts[2] == "connected":
-                    return True
+        if self._test_mode:
             return False
-        except Exception:
-            return False
+        return is_ethernet_connected()
 
     def _elapsed(self) -> float:
         """Seconds since the current state was entered."""

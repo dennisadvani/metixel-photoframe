@@ -309,11 +309,14 @@ metixel-photoframe/                           # Repository root
 │   ├── metixel-cage.service          # Frontend under cage (Trixie/KMS)
 │   └── metixel-frontend.service      # Frontend direct (legacy Bullseye)
 │
-├── tests/                             # Automated tests (mirrors src/metixel domains)
-│   ├── backend/
-│   ├── frontend/
-│   ├── display/
-│   └── shared/
+├── testing/                           # All test suites
+│   ├── unit_tests/                    # Automated unit tests (mirrors src/metixel domains)
+│   │   ├── backend/
+│   │   ├── frontend/
+│   │   ├── display/
+│   │   └── shared/
+│   ├── web-tests/                     # Playwright E2E suite (live frame)
+│   └── functional/                    # On-Pi hardware tests (Wi-Fi/AP/sudo)
 │
 ├── docs/                              # Documentation
 │   ├── CHANGELOG.md                   # Release notes
@@ -952,11 +955,11 @@ business logic and giving tests a single seam to inject fakes
   never a direct import in core.
 - `src/metixel/__main__.py` stays thin: CLI parsing + logging only, delegating to
   the `build_*` factories.
-- Unit tests mirror the package (`tests/backend|frontend|display|shared/`) and use
+- Unit tests mirror the package (`testing/unit_tests/backend|frontend|display|shared/`) and use
   fakes implementing the ports (the Protocols are `@runtime_checkable`, so
   `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use
   `pytest.importorskip`. Web tests use the shared fixtures in
-  `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
+  `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
 ---
 

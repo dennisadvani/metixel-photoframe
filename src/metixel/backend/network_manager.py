@@ -146,6 +146,29 @@ def is_connected() -> bool:
         return True
 
 
+def is_ethernet_connected() -> bool:
+    """Check specifically for an active Ethernet connection.
+
+    Uses nmcli but only queries Ethernet devices — safe to call
+    alongside an up AP (a different radio/bus), unlike WiFi checks
+    which are blocked while hostapd is broadcasting.
+    """
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[1] == "ethernet" and parts[2] == "connected":
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _interface_has_real_ip(device: str) -> bool:
     """Check whether *device* has an IP outside the AP captive-portal subnet."""
     try:

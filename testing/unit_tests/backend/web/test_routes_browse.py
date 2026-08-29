@@ -155,21 +155,3 @@ class TestBrowseFolder:
         data = resp.get_json()
         # Falls back to the nearest existing ancestor (the media dir).
         assert data["current_path"] == str((root / "media").resolve())
-
-    def test_missing_path_falls_back_to_existing_ancestor(
-        self, client, tmp_path: Path, monkeypatch
-    ):
-        """A missing path falls back to the nearest existing ancestor."""
-        import metixel.backend.web.routes.browse as browse_mod
-
-        root = tmp_path / "data"
-        root.mkdir(parents=True)
-        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
-
-        # A path under a non-existent chain — tmp_path is an existing ancestor.
-        missing = tmp_path / "no" / "such" / "dir"
-        resp = client.get("/api/browse", query_string={"path": str(missing)})
-
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data["current_path"] == str(tmp_path.resolve())

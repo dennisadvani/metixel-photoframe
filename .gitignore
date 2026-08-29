@@ -38,6 +38,9 @@ media/
 cache/
 logs/
 /run/
+
+# Functional-test credentials (never commit real WiFi passwords)
+testing/functional/.env
 *.log
 
 # Environment
@@ -60,5 +63,5 @@ htmlcov/
 etc/config.json
 
 # Test videos (large files, not source code)
-video_benchmark/source
-video_benchmark/out
+scripts/video_benchmark/source
+scripts/video_benchmark/out

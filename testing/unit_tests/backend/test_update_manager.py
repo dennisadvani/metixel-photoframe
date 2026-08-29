@@ -19,8 +19,8 @@ from pathlib import Path
 
 from metixel.backend.update_manager import UpdateManager
 
-# tests/backend/ -> repo root
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# testing/unit_tests/backend/ -> repo root
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _INSTALL_SCRIPT = _REPO_ROOT / "scripts" / "ota_install.sh"
 _UPDATE_SCRIPT = _REPO_ROOT / "scripts" / "update.sh"
 
@@ -81,7 +81,7 @@ class TestInstallScript:
         content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
 
         # Strict mode aborts on failure.
-        assert "_fail() { echo \"  ERROR: $* — aborting install\" >&2; exit 1; }" in content
+        assert '_fail() { echo "  ERROR: $* — aborting install" >&2; exit 1; }' in content
         assert "aborting" in content
 
     def test_install_script_supports_continue_on_error_flag(self) -> None:
@@ -115,7 +115,7 @@ class TestInstallScript:
         """logging.conf must move into /data/etc (not stay at /opt/metixel/etc) —
         __main__.py resolves it as data_dir()/etc/logging.conf, so all persistent
         config lives under /data."""
-        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
         # Both config.json and logging.conf move into /data.
@@ -129,11 +129,11 @@ class TestInstallScript:
         """The installed_packages.json recorder must read the requirements
         manifests from RELEASE_DIR (the code has already moved there), not from
         the now-empty INSTALL_ROOT."""
-        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
         assert 'python3 - "${RELEASE_DIR}" "${DATA_DIR}"' in content
-        assert 'release_dir, data_dir = sys.argv[1], sys.argv[2]' in content
+        assert "release_dir, data_dir = sys.argv[1], sys.argv[2]" in content
         assert 'os.path.join(release_dir, "requirements-system.txt")' in content
         assert 'root = "/opt/metixel"' not in content
 
@@ -141,7 +141,7 @@ class TestInstallScript:
         """Migration must COPY the shipped systemd units from the release rather
         than sed-mutating the old ones — the sed approach left some devices with
         a stale PYTHONPATH (crash-loop) when the installed value didn't match."""
-        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
         # Copies the canonical units from the release into /etc/systemd/system.
@@ -156,7 +156,7 @@ class TestInstallScript:
     def test_migrate_script_repairs_partial_state(self) -> None:
         """A partial/aborted migration (data/ present but no valid live symlink)
         must be REPAIRED on re-run, not treated as already-migrated."""
-        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
         # Only a VALID live symlink counts as migrated.
@@ -171,7 +171,7 @@ class TestInstallScript:
         file-by-file) so user-created custom watch folders are preserved, and
         it must NOT pre-create data/media etc as placeholders that would block
         the move."""
-        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
         # Step 3 must NOT pre-create media/cache/logs placeholders (they come
@@ -182,7 +182,7 @@ class TestInstallScript:
         assert '"${DATA_DIR}/media" "${DATA_DIR}/cache" "${DATA_DIR}/logs"' not in content
         assert '"${DATA_DIR}/config"' not in content
         # Step 4 moves the whole folder (mv) or copy-merges on re-entry.
-        assert 'for item in media logs cache; do' in content
+        assert "for item in media logs cache; do" in content
         assert 'mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"' in content
         assert 'cp -an "${INSTALL_ROOT}/${item}/." "${DATA_DIR}/${item}/"' in content
 
@@ -190,12 +190,12 @@ class TestInstallScript:
         """The migration moves media/ to /data/media, so any Samba share pointing
         at the old monolithic path must be rewritten to the new data location —
         otherwise the share breaks after migration."""
-        mig = Path(__file__).resolve().parents[2] / "scripts" / "migrate_to_atomic.sh"
+        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
         # Rewrites the old install-root media path to the data path.
-        assert 'path = ${INSTALL_ROOT}/media' in content
-        assert 'path = ${DATA_DIR}/media' in content
+        assert "path = ${INSTALL_ROOT}/media" in content
+        assert "path = ${DATA_DIR}/media" in content
         assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
         # Restarts smbd so the new path takes effect.
         assert "systemctl restart smbd" in content
@@ -209,7 +209,7 @@ class TestSetupScript:
         than `cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"` — RELEASE_DIR lives
         INSIDE METIXEL_DIR (/opt/metixel/releases/<tag>), so a self-copy fails
         with 'cannot copy a directory into itself'."""
-        setup = Path(__file__).resolve().parents[2] / "scripts" / "setup_trixie_metixel.sh"
+        setup = Path(__file__).resolve().parents[3] / "scripts" / "setup_trixie_metixel.sh"
         content = setup.read_text(encoding="utf-8")
 
         # The buggy self-copy must be gone.
@@ -226,7 +226,7 @@ class TestSetupScript:
         """After the code moves into RELEASE_DIR, later steps must read from
         RELEASE_DIR (systemd units) — and etc/ stays at METIXEL_DIR (excluded
         from the move), so config templates come from METIXEL_DIR/etc."""
-        setup = Path(__file__).resolve().parents[2] / "scripts" / "setup_trixie_metixel.sh"
+        setup = Path(__file__).resolve().parents[3] / "scripts" / "setup_trixie_metixel.sh"
         content = setup.read_text(encoding="utf-8")
 
         # systemd units are copied from the release (where the code moved).
@@ -241,7 +241,7 @@ class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
 
     def test_fixup_manifest_and_scripts_exist(self) -> None:
-        repo = Path(__file__).resolve().parents[2]
+        repo = Path(__file__).resolve().parents[3]
         manifest = repo / "scripts" / "fixups" / "manifest.txt"
         assert manifest.is_file()
         for line in manifest.read_text(encoding="utf-8").splitlines():
@@ -263,7 +263,7 @@ class TestFixups:
     def test_gpu_mem_fixup_handles_duplicate_lines(self) -> None:
         """The gpu-mem fixup must handle duplicate gpu_mem= lines (the last one
         wins in config.txt) by removing ALL of them and appending a single 128."""
-        repo = Path(__file__).resolve().parents[2]
+        repo = Path(__file__).resolve().parents[3]
         fixup = repo / "scripts" / "fixups" / "v1.3.0-gpu-mem.sh"
         content = fixup.read_text(encoding="utf-8")
 
@@ -271,8 +271,8 @@ class TestFixups:
         assert "sed -i '/^gpu_mem=/d'" in content
         assert 'echo "gpu_mem=128" >> "${BOOT}"' in content
         # Only corrects when there isn't exactly one gpu_mem=128.
-        assert 'COUNT' in content
-        assert 'HAS_128' in content
+        assert "COUNT" in content
+        assert "HAS_128" in content
 
 
 class TestUpdateScript:

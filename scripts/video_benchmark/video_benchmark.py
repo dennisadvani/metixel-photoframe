@@ -12,7 +12,7 @@ the transcode profile that plays smoothly on a given Pi — rather than building
 a huge matrix of test files.
 
 Usage:
-    python video_benchmark/video_benchmark.py --user pi --ip 192.168.222.230
+    python scripts/video_benchmark/video_benchmark.py --user pi --ip 192.168.222.230
 
 The target Pi is specified with ``--user`` and ``--ip`` (or ``--host``).
 """
@@ -373,7 +373,7 @@ def main() -> None:
         "--source",
         type=Path,
         default=None,
-        help="Source video (default: first file in video_benchmark/source/)",
+        help="Source video (default: first file in scripts/video_benchmark/source/)",
     )
     parser.add_argument(
         "--measure-seconds",

@@ -109,7 +109,7 @@
         {
             "label": "[Pi] Run Tests",
             "type": "shell",
-            "command": "cd /opt/metixel/live && python -m pytest tests/ -q --no-cov",
+            "command": "cd /opt/metixel/live && python -m pytest testing/unit_tests/ -q --no-cov",
             "options": {
                 "shell": {
                     "executable": "C:\\Windows\\System32\\OpenSSH\\ssh.exe",
@@ -284,7 +284,7 @@
             "type": "shell",
             "command": "npm install; npx playwright install chromium",
             "options": {
-                "cwd": "${workspaceFolder}/web-tests",
+                "cwd": "${workspaceFolder}/testing/web-tests",
                 "shell": {
                     "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                     "args": [
@@ -306,7 +306,7 @@
             "type": "shell",
             "command": "npx playwright test",
             "options": {
-                "cwd": "${workspaceFolder}/web-tests",
+                "cwd": "${workspaceFolder}/testing/web-tests",
                 "env": {
                     "METIXEL_URL": "http://${input:piHost}"
                 },
@@ -404,7 +404,7 @@
             "label": "[Local] Run Tests",
             "detail": "Runs the pytest suite on this PC using the .venv interpreter (no coverage).",
             "type": "shell",
-            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m pytest tests/ -q --no-cov",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m pytest testing/unit_tests/ -q --no-cov",
             "options": {
                 "cwd": "${workspaceFolder}",
                 "shell": {
