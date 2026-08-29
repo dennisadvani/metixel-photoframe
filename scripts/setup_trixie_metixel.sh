@@ -311,8 +311,10 @@ fi
 # resolves logging.conf as data_dir()/etc/logging.conf, so it lives at
 # /opt/metixel/data/etc/logging.conf alongside config.json.
 mkdir -p /opt/metixel/data/etc
-cp "${RELEASE_DIR}/etc/config.example.json" /opt/metixel/data/config.json 2>/dev/null || true
-cp -n "${RELEASE_DIR}/etc/logging.conf" /opt/metixel/data/etc/logging.conf 2>/dev/null || true
+# etc/ stays at METIXEL_DIR (excluded from the release move) — read the
+# default templates from there.
+cp "${METIXEL_DIR}/etc/config.example.json" /opt/metixel/data/config.json 2>/dev/null || true
+cp -n "${METIXEL_DIR}/etc/logging.conf" /opt/metixel/data/etc/logging.conf 2>/dev/null || true
 chown -R pi:pi "${RELEASE_DIR}" /opt/metixel/data /run/metixel 2>/dev/null || true
 
 # Create the live symlink → active release.
@@ -322,8 +324,9 @@ git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 
 # -- systemd services --------------------------------------------------------
 echo "[5/9] Installing systemd services..."
-cp "${METIXEL_DIR}/systemd/metixel-backend.service" /etc/systemd/system/
-cp "${METIXEL_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
+# The app code (including systemd/) now lives in the release dir.
+cp "${RELEASE_DIR}/systemd/metixel-backend.service" /etc/systemd/system/
+cp "${RELEASE_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable metixel-backend
 systemctl enable metixel-cage
