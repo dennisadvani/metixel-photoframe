@@ -273,8 +273,30 @@ RELEASE_TAG="${RELEASE_TAG%%-*}"
 RELEASE_TAG="v${RELEASE_TAG}"
 RELEASE_DIR="/opt/metixel/releases/${RELEASE_TAG}"
 mkdir -p "${RELEASE_DIR}"
-cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"
-rm -rf "${RELEASE_DIR}/media" "${RELEASE_DIR}/cache" "${RELEASE_DIR}/logs" 2>/dev/null || true
+# Move the app code into the release folder.  RELEASE_DIR lives INSIDE
+# METIXEL_DIR (/opt/metixel/releases/<tag>), so we cannot `cp -a
+# "${METIXEL_DIR}/." "${RELEASE_DIR}/"` — that would copy a directory into its
+# own subdirectory and fail.  Instead move each top-level entry EXCEPT the
+# dirs that belong to the data/releases layer (data, releases, live, cache,
+# logs, media, etc), which are created/kept separately.
+for entry in "${METIXEL_DIR}"/.* "${METIXEL_DIR}"/*; do
+    name="$(basename "$entry")"
+    case "$name" in
+        "."|".."|"data"|"releases"|"live"|"cache"|"logs"|"media"|"etc")
+            continue
+            ;;
+    esac
+    if [ -e "${RELEASE_DIR}/${name}" ]; then
+        continue
+    fi
+    mv "$entry" "${RELEASE_DIR}/" 2>/dev/null || true
+done
+# Keep the git checkout inside the release so future updates reference the repo.
+if [ -d "${METIXEL_DIR}/.git" ] && [ ! -d "${RELEASE_DIR}/.git" ]; then
+    mv "${METIXEL_DIR}/.git" "${RELEASE_DIR}/" 2>/dev/null || true
+fi
+# Recreate an empty 'etc' for any code-side default templates (config in /data).
+mkdir -p "${METIXEL_DIR}/etc"
 
 # Seed sample media into /data/media (persistent). The repo ships sample media
 # under data/media/sample_media/ (tracked in git); copy it into the device's
