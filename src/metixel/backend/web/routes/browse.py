@@ -50,7 +50,14 @@ def browse_folder():
     # Allow browsing anywhere readable — the user is configuring their
     # own system via the dashboard.  Just ensure the path exists.
     if not resolved.exists():
-        return jsonify({"error": f"Path not found: {resolved}"}), 404
+        # The requested path (e.g. a watch folder set in config that isn't on
+        # disk yet) doesn't exist.  Fall back to a safe, existing directory so
+        # the folder browser still opens instead of erroring out.
+        fallback = _safe_fallback(resolved, base)
+        if fallback is None:
+            return jsonify({"error": f"Path not found: {resolved}"}), 404
+        logger.warning("Browse path %s does not exist — falling back to %s", resolved, fallback)
+        resolved = fallback
     if not resolved.is_dir():
         return jsonify({"error": f"Not a directory: {resolved}"}), 400
 
@@ -81,3 +88,30 @@ def browse_folder():
             "entries": entries,
         }
     )
+
+
+def _safe_fallback(missing: Path, base: Path) -> Path | None:
+    """Return a safe, existing directory to browse when *missing* doesn't exist.
+
+    Walks up from the missing path toward the data dir, then the filesystem
+    root, returning the first existing directory.  Returns ``None`` only if
+    nothing up to the root exists (effectively impossible on a real system).
+    """
+    # Walk up from the missing path to the data dir, then to the root.
+    # Stop when the parent is the same as the current dir (the filesystem
+    # root) — on Windows ``Path("C:/").parent`` is ``C:/``, so comparing
+    # against ``anchor`` alone would loop forever.
+    candidates = [missing]
+    current = missing
+    while current != current.parent:
+        current = current.parent
+        candidates.append(current)
+    # Prefer the data dir if it exists, then any ancestor, then the root.
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+    # Last resort: the filesystem root.
+    root = Path(missing.anchor)
+    if root.exists() and root.is_dir():
+        return root
+    return None

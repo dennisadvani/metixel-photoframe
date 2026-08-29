@@ -5,6 +5,34 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.2-beta.2]
+
+### Added
+
+- **Fallback to nearest existing ancestor in the folder browser** — when a
+  configured watch path no longer exists, the browser now walks up to the
+  nearest existing ancestor and shows that instead of an empty/broken tree,
+  instead of just logging a warning.
+- **Updates page shows the installed version** — the update-status display now
+  surfaces the currently-installed version alongside the available release.
+
+### Changed
+
+- **Samba share path updated after migration** — the Samba config now points at
+  the new media location (`/opt/metixel/data/media/`) so shared folders keep
+  working after a device moves to the Blue/Green layout.
+- **Dev release folder named after the commit id** — OTA `dev` releases stage
+  into a folder keyed by the commit id to avoid overlapping with overlapping
+  dev builds.
+- **Package-removal logic corrected** — `update.sh` distinguishes managed vs
+  pre-existing packages more carefully and only removes obsolete
+  Metixel-managed ones.
+
+### Fixed
+
+- **Upload progress spinner direction** — the `sync` icon now spins clockwise,
+  matching Material design guidelines.
+
 ## [1.2.2-beta.1]
 
 ### Added

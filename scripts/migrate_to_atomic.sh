@@ -275,6 +275,27 @@ systemctl daemon-reload
 # Ensure the services are enabled so they survive reboot.
 systemctl enable metixel-backend.service metixel-cage.service 2>/dev/null || true
 
+# ── Update Samba share path → /data ─────────────────────────────────────────
+# The migration moved media/ from ${INSTALL_ROOT}/media to ${DATA_DIR}/media.
+# If a Samba share exists pointing at the OLD path, it would be broken after
+# migration.  Rewrite any metixel share path to the new data location.
+echo "[9/9] Updating Samba share path → ${DATA_DIR}/media…"
+SMB_CONF="/etc/samba/smb.conf"
+if [ -f "${SMB_CONF}" ]; then
+    # Rewrite the old monolithic media path to the new data path.  Only touch
+    # lines that reference the old install-root media location.
+    if grep -q "path = ${INSTALL_ROOT}/media" "${SMB_CONF}" 2>/dev/null; then
+        sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g" "${SMB_CONF}"
+        echo "  Updated Samba share path to ${DATA_DIR}/media"
+        # Restart smbd so the new path takes effect.
+        systemctl restart smbd 2>/dev/null || true
+    else
+        echo "  No Samba share referencing ${INSTALL_ROOT}/media — nothing to update."
+    fi
+else
+    echo "  No Samba config found (${SMB_CONF}) — skipping."
+fi
+
 # ── Finalise / restart ──────────────────────────────────────────────────────
 echo ""
 echo "Migration complete."

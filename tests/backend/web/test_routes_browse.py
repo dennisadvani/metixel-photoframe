@@ -56,11 +56,14 @@ class TestBrowseFolder:
         assert data["current_path"] == str(nested.resolve())
         assert data["parent_path"] == str(nested.resolve().parent)
 
-    def test_missing_path_returns_404(self, client, tmp_path: Path):
+    def test_missing_path_falls_back_to_existing_ancestor(self, client, tmp_path: Path):
+        """A missing path falls back to the nearest existing ancestor instead of 404."""
         resp = client.get("/api/browse", query_string={"path": str(tmp_path / "nope")})
 
-        assert resp.status_code == 404
-        assert "Path not found" in resp.get_json()["error"]
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # tmp_path exists, so the browser opens there instead of erroring.
+        assert data["current_path"] == str(tmp_path.resolve())
 
     def test_file_path_returns_400(self, client, tmp_path: Path):
         f = tmp_path / "file.txt"
@@ -115,3 +118,58 @@ class TestBrowseFolder:
         data = resp.get_json()
         assert data["current_path"] == str((root / "media").resolve())
         assert [e["name"] for e in data["entries"]] == ["my_photos/"]
+
+    def test_missing_default_media_falls_back_to_data_dir(
+        self, client, tmp_path: Path, monkeypatch
+    ):
+        """When the default media folder doesn't exist, fall back to the data dir."""
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        # No media folder on disk — the browser should open the data dir instead.
+        resp = client.get("/api/browse")
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["current_path"] == str(root.resolve())
+        assert data["entries"] == []
+
+    def test_missing_watch_path_falls_back_to_nearest_existing_ancestor(
+        self, client, tmp_path: Path, monkeypatch
+    ):
+        """A configured watch path that isn't on disk falls back to an existing ancestor."""
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        (root / "media").mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        # A watch path under media that doesn't exist yet.
+        missing = root / "media" / "not_created_yet"
+        resp = client.get("/api/browse", query_string={"path": str(missing)})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # Falls back to the nearest existing ancestor (the media dir).
+        assert data["current_path"] == str((root / "media").resolve())
+
+    def test_missing_path_falls_back_to_existing_ancestor(
+        self, client, tmp_path: Path, monkeypatch
+    ):
+        """A missing path falls back to the nearest existing ancestor."""
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        # A path under a non-existent chain — tmp_path is an existing ancestor.
+        missing = tmp_path / "no" / "such" / "dir"
+        resp = client.get("/api/browse", query_string={"path": str(missing)})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["current_path"] == str(tmp_path.resolve())

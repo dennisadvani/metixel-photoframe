@@ -9,7 +9,7 @@
 param(
     [string]$PiHost = "192.168.222.122",
     [string]$PiUser = "pi",
-    [string]$RemotePath = "/opt/metixel/src/"
+    [string]$RemotePath = "/opt/metixel/live/src/"
 )
 
 $ErrorActionPreference = "Stop"

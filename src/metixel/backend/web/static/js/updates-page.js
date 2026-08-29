@@ -38,36 +38,43 @@ import {
         var statusEl = document.getElementById("update-status");
         if (!statusEl) return;
 
+        // Always show the actually-installed version first, so the UI never
+        // misleads the user into thinking a different version is running.
+        var installed = status.installed_version || "unknown";
+        var statusHtml = '<span style="font-weight:600">Installed: '
+            + escapeHtml(installed) + '</span>';
+
         if (status.check_in_progress) {
-            statusEl.innerHTML = '<span class="update-status-checking">Checking for updates\u2026</span>';
+            statusHtml += ' <span class="update-status-checking">— Checking for updates\u2026</span>';
         } else if (status.update_in_progress) {
-            statusEl.innerHTML = '<span class="update-status-checking">Installing update\u2026</span>';
+            statusHtml += ' <span class="update-status-checking">— Installing update\u2026</span>';
         } else if (status.last_error) {
-            statusEl.innerHTML = '<span class="update-status-error">' + escapeHtml(status.last_error) + '</span>';
+            statusHtml += ' <span class="update-status-error">— ' + escapeHtml(status.last_error) + '</span>';
         } else {
             var ch = status.current_channel || "stable";
             var avail = (status.available && status.available[ch]) ? status.available[ch] : null;
             var installBtn = document.getElementById("btn-apply-update");
 
             if (avail && avail.is_newer) {
-                statusEl.innerHTML =
-                    '<span class="update-status-available">Update available: '
+                statusHtml +=
+                    ' <span class="update-status-available">— Update available: '
                     + escapeHtml(avail.version) + '</span>';
                 if (installBtn) {
                     installBtn.style.display = "";
                     installBtn.textContent = "Install " + escapeHtml(avail.version || "Update");
                 }
             } else {
-                statusEl.innerHTML = '<span class="update-status-uptodate">Up to date</span>';
+                statusHtml += ' <span class="update-status-uptodate">— Up to date</span>';
                 if (installBtn) installBtn.style.display = "none";
             }
 
             // Last check time
             if (status.last_check) {
                 var ago = timeAgo(status.last_check);
-                statusEl.innerHTML += ' <span style="font-size:0.75rem;color:var(--text-muted)">(checked ' + ago + ')</span>';
+                statusHtml += ' <span style="font-size:0.75rem;color:var(--text-muted)">(checked ' + ago + ')</span>';
             }
         }
+        statusEl.innerHTML = statusHtml;
 
         // ── Available versions list ─────────────────────────────────
         _renderAvailableVersions(status);
@@ -106,13 +113,15 @@ import {
         }
         var html = "";
         var channels = ["stable", "beta", "dev"];
-        var currentCh = status.current_channel || "stable";
+        var installed = status.installed_version || "";
 
         channels.forEach(function (ch) {
             var info = avail[ch];
             if (!info) return;
-            var isCurrent = ch === currentCh;
-            var badge = isCurrent ? ' <span style="font-size:0.7rem;background:var(--primary);color:#fff;padding:1px 5px;border-radius:3px;vertical-align:middle">current</span>' : '';
+            // "current" means this version is what's actually installed —
+            // compare against installed_version, not the selected channel.
+            var isInstalled = info.version === installed;
+            var badge = isInstalled ? ' <span style="font-size:0.7rem;background:var(--primary);color:#fff;padding:1px 5px;border-radius:3px;vertical-align:middle">installed</span>' : '';
             var newerBadge = info.is_newer ? ' <span style="font-size:0.7rem;background:#f0a030;color:#000;padding:1px 5px;border-radius:3px;vertical-align:middle">newer</span>' : '';
 
             html += '<div class="update-available-item">'

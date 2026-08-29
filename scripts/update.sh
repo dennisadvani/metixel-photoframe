@@ -105,6 +105,15 @@ echo ""
 echo "[1/7] Staging ${VERSION}…"
 rm -rf "${STAGING_DIR}"
 git clone --branch "${VERSION}" --depth 1 "${REPO_URL}" "${STAGING_DIR}"
+# For the dev branch there is no single tag, so name the release folder after
+# the checked-out commit id. Every dev upgrade then gets its own folder (no
+# overlap with a previous dev release), while stable/beta keep their tag names.
+if [ "${VERSION}" = "dev" ]; then
+    COMMIT="$(git -C "${STAGING_DIR}" rev-parse --short HEAD)"
+    STAGING_VERSION="${COMMIT}"
+    RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"
+    echo "  dev staging → release folder: ${STAGING_VERSION}"
+fi
 mv "${STAGING_DIR}" "${RELEASE_DIR}"
 git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 
@@ -159,12 +168,14 @@ new_sys = set(names(req_sys))
 new_pip = set(names(req_pip))
 
 # Only remove packages Metixel previously recorded as installing.
-for pkg in sorted(prev.get("apt", []) - new_sys):
+prev_sys = set(prev.get("apt", []) or [])
+prev_pip = set(prev.get("pip", []) or [])
+for pkg in sorted(prev_sys - new_sys):
     print(f"  removing system pkg: {pkg}")
     subprocess.run(["apt-get", "remove", "-y", "--purge", pkg],
                    check=False, capture_output=True)
 
-for pkg in sorted(prev.get("pip", []) - new_pip):
+for pkg in sorted(prev_pip - new_pip):
     print(f"  removing pip pkg: {pkg}")
     subprocess.run(["pip", "uninstall", "-y", pkg], check=False,
                    capture_output=True)
