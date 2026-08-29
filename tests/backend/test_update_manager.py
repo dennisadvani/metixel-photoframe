@@ -197,7 +197,6 @@ class TestInstallScript:
         # Restarts smbd so the new path takes effect.
         assert "systemctl restart smbd" in content
 
-
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
 
