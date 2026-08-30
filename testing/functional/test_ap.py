@@ -47,8 +47,9 @@ def test_ap_start_broadcasts() -> None:
     result = _run(["systemctl", "is-active", nm.HOSTAPD_UNIT])
     assert result.stdout.strip() == "active", "hostapd is not active"
 
-    # wlan0 must be in master (AP) mode.
-    result = _run(["iw", "dev", "wlan0", "info"])
+    # wlan0 must be in master (AP) mode.  iw lives in /usr/sbin, which is not
+    # on the pi user's PATH — use the full path (read-only query, no sudo).
+    result = _run(["/usr/sbin/iw", "dev", "wlan0", "info"])
     assert "type AP" in result.stdout or "type master" in result.stdout, (
         "wlan0 is not in AP/master mode"
     )

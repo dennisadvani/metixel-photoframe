@@ -105,6 +105,8 @@ run.
 | **[Pi] Follow Logs** | Tails both services' journal |
 | **[Local] Install Playwright (Web UI Test)** | One-time `npm install` + Chromium for the web tests |
 | **[Local] Run Web UI Tests (Web UI Test)** | Runs the Playwright suite against the Pi you pick |
+| **[Local] Run Functional Tests (Wi-Fi/AP/Sudo)** | Runs the on-Pi functional suite (smoke test, then Wi-Fi + sudo in test mode, then AP) against the Pi you pick |
+| **[Local] Run Functional Tests (Wi-Fi + Sudo only)** | Runs only the smoke + Wi-Fi + sudo functional tests (skips the AP test) |
 | **[Pi] Restart All / Backend / Frontend** | Quick service restarts without syncing |
 
 > **Note:** the sync task only mirrors `src/metixel/`. Test files under
@@ -125,6 +127,7 @@ passwordless sudo. They are deliberately excluded from the default
 **Prerequisites on the Pi:**
 - A Wi-Fi radio (`wlan0`) and an Ethernet uplink for control.
 - Passwordless sudo: `pi ALL=(ALL) NOPASSWD: ALL`.
+- The repo checked out at the live symlink (default `/opt/metixel/live`).
 - A `testing/functional/.env` file with the test network credentials (copy
   `testing/functional/.env.example` and fill in `METIXEL_TEST_WIFI_SSID` /
   `METIXEL_TEST_WIFI_PASSWORD`). The `.env` is gitignored — never commit
@@ -133,15 +136,18 @@ passwordless sudo. They are deliberately excluded from the default
 **Run them** (from this repo, against a Pi):
 
 ```bash
-scripts/run_functional_tests.sh <pi-host> [<pi-user>]
+scripts/run_functional_tests.sh <pi-host> [<pi-user>] [--wifi-only]
 ```
 
-This syncs `testing/functional/` to the Pi and runs the suite. The Wi-Fi
-tests run with `METIXEL_NETWORK_TEST_MODE=1`, which makes the controller
-**ignore Ethernet for connectivity decisions** — so the Pi stays reachable
-over SSH while the Wi-Fi radio is exercised. The AP test runs in a
-**separate invocation** because starting hostapd takes `wlan0` out of client
-mode.
+The functional tests are **not synced** — they run from the Pi's own git
+clone at the live symlink, so the code under test matches the installed
+release. The script only pushes a local `testing/functional/.env` if one
+exists (the credentials aren't part of the git clone). The Wi-Fi tests run
+with `METIXEL_NETWORK_TEST_MODE=1`, which makes the controller **ignore
+Ethernet for connectivity decisions** — so the Pi stays reachable over SSH
+while the Wi-Fi radio is exercised. The AP test runs in a **separate
+invocation** because starting hostapd takes `wlan0` out of client mode; pass
+`--wifi-only` to skip it.
 
 The suite skips itself (rather than failing) if the host isn't a Pi, has no
 `wlan0`, lacks passwordless sudo, or has no `.env` credentials.

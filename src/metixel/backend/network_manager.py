@@ -169,6 +169,30 @@ def is_ethernet_connected() -> bool:
         return False
 
 
+def is_wifi_connected() -> bool:
+    """Check specifically whether the Wi-Fi interface (wlan0) is connected.
+
+    Unlike :func:`is_connected` (which considers any interface, including
+    Ethernet), this only reports the Wi-Fi link.  Used by the controller in
+    functional-test mode so a live Ethernet uplink doesn't mask a broken
+    Wi-Fi connection.
+    """
+    try:
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[1] == "wifi" and parts[2] == "connected":
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _interface_has_real_ip(device: str) -> bool:
     """Check whether *device* has an IP outside the AP captive-portal subnet."""
     try:
@@ -717,7 +741,18 @@ def start_ap_mode() -> bool:
             timeout=5,
         )
 
-        # Start hostapd first — it creates the AP (sets interface to AP mode)
+        # Bring wlan0 UP before starting hostapd.  On the brcmfmac driver
+        # the interface must be up (with power-save off) for hostapd to
+        # actually switch it into AP mode — otherwise it stays in managed
+        # mode with NO-CARRIER even though hostapd reports AP-ENABLED.
+        subprocess.run(
+            ["sudo", "ip", "link", "set", "wlan0", "up"],
+            capture_output=True,
+            timeout=5,
+        )
+        time.sleep(0.5)
+
+        # Start hostapd — it creates the AP (sets interface to AP mode)
         subprocess.run(
             ["sudo", "systemctl", "start", HOSTAPD_UNIT],
             capture_output=True,

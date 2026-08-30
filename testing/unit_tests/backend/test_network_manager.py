@@ -146,3 +146,30 @@ class TestIsEthernetConnected:
 
         monkeypatch.setattr(nm.subprocess, "run", boom)
         assert nm.is_ethernet_connected() is False
+
+
+class TestIsWifiConnected:
+    def test_connected_when_wifi_device_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stdout = "eth0:ethernet:connected\nwlan0:wifi:connected\n"
+        run, _ = _fake_run(stdout=stdout)
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        assert nm.is_wifi_connected() is True
+
+    def test_disconnected_when_only_ethernet_up(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stdout = "eth0:ethernet:connected\n"
+        run, _ = _fake_run(stdout=stdout)
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        assert nm.is_wifi_connected() is False
+
+    def test_disconnected_when_wifi_down(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stdout = "wlan0:wifi:disconnected\n"
+        run, _ = _fake_run(stdout=stdout)
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        assert nm.is_wifi_connected() is False
+
+    def test_false_on_subprocess_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(*_: object, **__: object) -> None:
+            raise OSError("nmcli missing")
+
+        monkeypatch.setattr(nm.subprocess, "run", boom)
+        assert nm.is_wifi_connected() is False

@@ -56,7 +56,7 @@ class TestEthernetIgnoredInTestMode:
         monkeypatch.setenv(nc._TEST_MODE_ENV, "1")
         ctrl = NetworkController({})
         monkeypatch.setattr(nc, "is_ethernet_connected", lambda: True)
-        monkeypatch.setattr(nc, "is_connected", lambda: False)
+        monkeypatch.setattr(nc, "is_wifi_connected", lambda: False)
         # Ethernet alone must NOT count as connected in test mode.
         assert ctrl._is_any_connected() is False
 
@@ -64,7 +64,7 @@ class TestEthernetIgnoredInTestMode:
         monkeypatch.setenv(nc._TEST_MODE_ENV, "1")
         ctrl = NetworkController({})
         monkeypatch.setattr(nc, "is_ethernet_connected", lambda: True)
-        monkeypatch.setattr(nc, "is_connected", lambda: True)
+        monkeypatch.setattr(nc, "is_wifi_connected", lambda: True)
         assert ctrl._is_any_connected() is True
 
 
@@ -77,7 +77,7 @@ class TestStateMachineInTestMode:
         monkeypatch.setenv(nc._TEST_MODE_ENV, "1")
         monkeypatch.setattr(nc, "is_wifi_hardware_present", lambda: True)
         monkeypatch.setattr(nc, "is_ethernet_connected", lambda: True)
-        monkeypatch.setattr(nc, "is_connected", lambda: False)
+        monkeypatch.setattr(nc, "is_wifi_connected", lambda: False)
         monkeypatch.setattr(nc, "has_saved_wifi_networks", lambda: False)
         monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
         monkeypatch.setattr(nc, "_start_ap", lambda: True)
@@ -94,7 +94,7 @@ class TestStateMachineInTestMode:
         monkeypatch.setenv(nc._TEST_MODE_ENV, "1")
         monkeypatch.setattr(nc, "is_wifi_hardware_present", lambda: True)
         monkeypatch.setattr(nc, "is_ethernet_connected", lambda: True)
-        monkeypatch.setattr(nc, "is_connected", lambda: True)
+        monkeypatch.setattr(nc, "is_wifi_connected", lambda: True)
 
         ctrl = NetworkController({})
         state, _, _ = ctrl.tick()

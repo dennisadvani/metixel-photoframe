@@ -18,7 +18,10 @@ suite if the credentials are missing or the host is not a Pi.
 
 from __future__ import annotations
 
+import json
 import subprocess
+import time
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -28,6 +31,45 @@ pytestmark = pytest.mark.functional
 
 #: Path to the gitignored credentials file, relative to this conftest.
 _ENV_FILE = Path(__file__).resolve().parent / ".env"
+
+#: Backend HTTP port (Flask serves here; nginx proxies :80 → :8080).
+BACKEND_PORT = 8080
+BASE = f"http://127.0.0.1:{BACKEND_PORT}"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register the ``functional`` marker.
+
+    The functional suite is copied to a tmp dir on the Pi and run from there,
+    so there is no ``pyproject.toml`` to register the marker.  Registering it
+    here (instead of relying on the project config) silences the
+    ``PytestUnknownMarkWarning`` and enables ``-m functional`` selection.
+    """
+    config.addinivalue_line("markers", "functional: on-Pi hardware/integration tests")
+
+
+def wait_for_pipeline_idle(timeout: int = 300) -> bool:
+    """Wait until the media pipeline is idle (no active processing).
+
+    Polls ``/api/health/processing-status`` until ``active`` is ``"complete"``
+    (or the file reports no active phase).  This is the "boot screen is off"
+    check: the frontend keeps the boot screen up while the pipeline is
+    rebuilding, so tests that drop media or read the playlist should wait for
+    the pipeline to settle first (e.g. after a backend restart or a heavy
+    Immich sync).
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(f"{BASE}/api/health/processing-status", timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+            active = data.get("active", "")
+            if active == "complete" or not active:
+                return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
 
 
 def _load_env_file(path: Path) -> dict[str, str]:
@@ -96,6 +138,18 @@ def wifi_creds() -> dict[str, str]:
     return {
         "ssid": env.get("METIXEL_TEST_WIFI_SSID", ""),
         "password": env.get("METIXEL_TEST_WIFI_PASSWORD", ""),
+    }
+
+
+@pytest.fixture(scope="session")
+def immich_creds() -> dict[str, str]:
+    """The Immich sync-test credentials + album names from ``functional/.env``."""
+    env = _load_env_file(_ENV_FILE)
+    return {
+        "url": env.get("METIXEL_TEST_IMMICH_URL", "").rstrip("/"),
+        "api_key": env.get("METIXEL_TEST_IMMICH_API_KEY", ""),
+        "album_1": env.get("METIXEL_TEST_IMMICH_ALBUM_1", ""),
+        "album_2": env.get("METIXEL_TEST_IMMICH_ALBUM_2", ""),
     }
 
 

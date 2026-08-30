@@ -329,6 +329,52 @@
             "problemMatcher": []
         },
         {
+            "label": "[Local] Run Functional Tests (Wi-Fi/AP/Sudo)",
+            "detail": "Copies the latest local functional tests to a tmp dir on the selected Pi and runs them there: Wi-Fi + sudo (test mode), then AP in a separate invocation.",
+            "type": "shell",
+            "command": "scripts/run_functional_tests.sh ${input:piHost}",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Program Files\\Git\\bin\\bash.exe",
+                    "args": [
+                        "-lc"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "test"
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Run Functional Tests (Wi-Fi + Sudo only)",
+            "detail": "Copies the latest local functional tests to a tmp dir on the selected Pi and runs only the Wi-Fi + sudo tests (test mode) — skips the AP test.",
+            "type": "shell",
+            "command": "scripts/run_functional_tests.sh ${input:piHost} --wifi-only",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Program Files\\Git\\bin\\bash.exe",
+                    "args": [
+                        "-lc"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "test"
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
             "label": "[Local] Run Backend",
             "detail": "Runs the metixel backend daemon on this PC (scans media, builds the playlist, serves the web UI on :8080).",
             "type": "shell",

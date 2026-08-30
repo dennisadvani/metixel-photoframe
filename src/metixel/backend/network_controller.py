@@ -56,6 +56,7 @@ from metixel.backend.network_manager import (  # noqa: E402
     is_ap_mode_active,
     is_connected,
     is_ethernet_connected,
+    is_wifi_connected,
     is_wifi_hardware_present,
     pre_scan_for_ap,
 )
@@ -285,6 +286,13 @@ class NetworkController:
         if self._is_ethernet_connected():
             return True
         if self._state != NetworkState.AP_ACTIVE:
+            # In functional-test mode, Ethernet is ignored for connectivity
+            # (see _is_ethernet_connected) — but is_connected() checks ALL
+            # interfaces, so it would still see the Ethernet uplink.  Only
+            # trust is_connected() when NOT in test mode; in test mode the
+            # WiFi link is the only thing that counts.
+            if self._test_mode:
+                return is_wifi_connected()
             return is_connected()
         return False
 
