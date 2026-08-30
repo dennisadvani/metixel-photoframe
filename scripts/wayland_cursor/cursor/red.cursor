@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: Apache-2.0
+# xcursorgen source for a RED cursor — used to verify the theme mechanism
+# actually works. If a red cursor appears, the theme IS being read and the
+# issue is transparency. If the default arrow appears, the theme is NOT read.
+24 0 0 red.png
+32 0 0 red.png
+48 0 0 red.png
+64 0 0 red.png

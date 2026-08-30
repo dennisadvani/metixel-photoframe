@@ -1,0 +1,422 @@
+[
+  {
+    "t": 1.0,
+    "cpu_percent": 3.3,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 873440,
+    "mem_free_kb": 218912
+  },
+  {
+    "t": 2.0,
+    "cpu_percent": 3.3,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 887008,
+    "mem_free_kb": 232304
+  },
+  {
+    "t": 3.0,
+    "cpu_percent": 8.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 934048,
+    "mem_free_kb": 278304
+  },
+  {
+    "t": 4.0,
+    "cpu_percent": 19.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 917920,
+    "mem_free_kb": 248672
+  },
+  {
+    "t": 5.0,
+    "cpu_percent": 1.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 919184,
+    "mem_free_kb": 249840
+  },
+  {
+    "t": 6.0,
+    "cpu_percent": 0.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 926448,
+    "mem_free_kb": 257104
+  },
+  {
+    "t": 7.0,
+    "cpu_percent": 3.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 933280,
+    "mem_free_kb": 260944
+  },
+  {
+    "t": 8.0,
+    "cpu_percent": 11.3,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 917712,
+    "mem_free_kb": 240784
+  },
+  {
+    "t": 9.0,
+    "cpu_percent": 4.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 921664,
+    "mem_free_kb": 244736
+  },
+  {
+    "t": 10.0,
+    "cpu_percent": 10.3,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 897360,
+    "mem_free_kb": 215136
+  },
+  {
+    "t": 11.0,
+    "cpu_percent": 0.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 900320,
+    "mem_free_kb": 218096
+  },
+  {
+    "t": 12.0,
+    "cpu_percent": 1.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 903920,
+    "mem_free_kb": 221600
+  },
+  {
+    "t": 13.0,
+    "cpu_percent": 6.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 947216,
+    "mem_free_kb": 264512
+  },
+  {
+    "t": 14.0,
+    "cpu_percent": 5.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 953664,
+    "mem_free_kb": 270080
+  },
+  {
+    "t": 15.01,
+    "cpu_percent": 0.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 959360,
+    "mem_free_kb": 275776
+  },
+  {
+    "t": 16.01,
+    "cpu_percent": 1.3,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 991392,
+    "mem_free_kb": 307648
+  },
+  {
+    "t": 17.01,
+    "cpu_percent": 1.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 997392,
+    "mem_free_kb": 313648
+  },
+  {
+    "t": 18.01,
+    "cpu_percent": 19.9,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 911888,
+    "mem_free_kb": 228000
+  },
+  {
+    "t": 19.01,
+    "cpu_percent": 16.7,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 913376,
+    "mem_free_kb": 229488
+  },
+  {
+    "t": 20.01,
+    "cpu_percent": 13.1,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 913264,
+    "mem_free_kb": 229376
+  },
+  {
+    "t": 21.01,
+    "cpu_percent": 13.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 913376,
+    "mem_free_kb": 229488
+  },
+  {
+    "t": 22.01,
+    "cpu_percent": 15.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 913056,
+    "mem_free_kb": 229152
+  },
+  {
+    "t": 23.01,
+    "cpu_percent": 14.6,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 913360,
+    "mem_free_kb": 229456
+  },
+  {
+    "t": 24.01,
+    "cpu_percent": 15.6,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 913760,
+    "mem_free_kb": 229856
+  },
+  {
+    "t": 25.01,
+    "cpu_percent": 17.6,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 914928,
+    "mem_free_kb": 231024
+  },
+  {
+    "t": 26.01,
+    "cpu_percent": 24.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 913680,
+    "mem_free_kb": 145760
+  },
+  {
+    "t": 27.01,
+    "cpu_percent": 17.1,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 915952,
+    "mem_free_kb": 148032
+  },
+  {
+    "t": 28.01,
+    "cpu_percent": 13.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 915696,
+    "mem_free_kb": 147776
+  },
+  {
+    "t": 29.01,
+    "cpu_percent": 11.4,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 917040,
+    "mem_free_kb": 149120
+  },
+  {
+    "t": 30.01,
+    "cpu_percent": 10.9,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 922704,
+    "mem_free_kb": 154784
+  },
+  {
+    "t": 31.01,
+    "cpu_percent": 11.9,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 922144,
+    "mem_free_kb": 153648
+  },
+  {
+    "t": 32.01,
+    "cpu_percent": 4.3,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 924512,
+    "mem_free_kb": 155552
+  },
+  {
+    "t": 33.01,
+    "cpu_percent": 1.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 959344,
+    "mem_free_kb": 190384
+  },
+  {
+    "t": 34.01,
+    "cpu_percent": 1.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 965584,
+    "mem_free_kb": 196624
+  },
+  {
+    "t": 35.01,
+    "cpu_percent": 0.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 1012032,
+    "mem_free_kb": 243072
+  },
+  {
+    "t": 36.01,
+    "cpu_percent": 5.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 962272,
+    "mem_free_kb": 192896
+  },
+  {
+    "t": 37.01,
+    "cpu_percent": 5.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 962880,
+    "mem_free_kb": 193504
+  },
+  {
+    "t": 38.01,
+    "cpu_percent": 1.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 963264,
+    "mem_free_kb": 193888
+  },
+  {
+    "t": 39.01,
+    "cpu_percent": 0.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 964256,
+    "mem_free_kb": 194880
+  },
+  {
+    "t": 40.01,
+    "cpu_percent": 3.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 964128,
+    "mem_free_kb": 194832
+  },
+  {
+    "t": 41.02,
+    "cpu_percent": 6.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 895360,
+    "mem_free_kb": 148096
+  },
+  {
+    "t": 42.02,
+    "cpu_percent": 5.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 894608,
+    "mem_free_kb": 147328
+  },
+  {
+    "t": 43.02,
+    "cpu_percent": 1.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 895200,
+    "mem_free_kb": 147920
+  },
+  {
+    "t": 44.02,
+    "cpu_percent": 0.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 914128,
+    "mem_free_kb": 166816
+  },
+  {
+    "t": 45.02,
+    "cpu_percent": 1.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 914464,
+    "mem_free_kb": 167152
+  },
+  {
+    "t": 46.02,
+    "cpu_percent": 6.1,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 951040,
+    "mem_free_kb": 203808
+  },
+  {
+    "t": 47.02,
+    "cpu_percent": 3.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 953840,
+    "mem_free_kb": 206512
+  },
+  {
+    "t": 48.02,
+    "cpu_percent": 1.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 958912,
+    "mem_free_kb": 211584
+  },
+  {
+    "t": 49.02,
+    "cpu_percent": 0.7,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 1016368,
+    "mem_free_kb": 269040
+  },
+  {
+    "t": 50.02,
+    "cpu_percent": 0.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 1019392,
+    "mem_free_kb": 272064
+  },
+  {
+    "t": 51.02,
+    "cpu_percent": 8.6,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 899632,
+    "mem_free_kb": 186384
+  },
+  {
+    "t": 52.02,
+    "cpu_percent": 7.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 912528,
+    "mem_free_kb": 199264
+  },
+  {
+    "t": 53.02,
+    "cpu_percent": 1.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 912976,
+    "mem_free_kb": 199712
+  },
+  {
+    "t": 54.02,
+    "cpu_percent": 0.5,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 915280,
+    "mem_free_kb": 202016
+  },
+  {
+    "t": 55.02,
+    "cpu_percent": 3.0,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 917504,
+    "mem_free_kb": 204224
+  },
+  {
+    "t": 56.02,
+    "cpu_percent": 5.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 905936,
+    "mem_free_kb": 192656
+  },
+  {
+    "t": 57.02,
+    "cpu_percent": 4.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 905008,
+    "mem_free_kb": 191728
+  },
+  {
+    "t": 58.02,
+    "cpu_percent": 0.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 907184,
+    "mem_free_kb": 193904
+  },
+  {
+    "t": 59.02,
+    "cpu_percent": 1.2,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 943200,
+    "mem_free_kb": 229920
+  },
+  {
+    "t": 60.02,
+    "cpu_percent": 0.8,
+    "mem_total_kb": 2054336,
+    "mem_available_kb": 949296,
+    "mem_free_kb": 236016
+  }
+]

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Metixel Chromium Kiosk Prototype</title>
+    <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+    <!--
+        Kiosk layout:
+        - #stage is the full-screen black matte container.
+        - #media-current / #media-next are the two crossfade layers.
+          Each holds either an <img> or a <video>, both using
+          object-fit: contain so the virtual matte is identical for
+          images and videos.
+        - #ui is the screen-based UI overlay layer.
+        - #toast is the notification layer.
+        - #fps is the benchmark readout.
+    -->
+    <div id="stage">
+        <div id="media-current" class="media-layer"></div>
+        <div id="media-next" class="media-layer"></div>
+    </div>
+
+    <!-- Screen-based UI overlay -->
+    <div id="ui" class="ui-layer">
+        <div id="ui-clock" class="ui-clock"></div>
+        <div id="ui-caption" class="ui-caption"></div>
+    </div>
+
+    <!-- Notification / toast layer -->
+    <div id="toast" class="toast" hidden></div>
+
+    <!-- Benchmark readout -->
+    <div id="fps" class="fps">-- fps</div>
+
+    <script type="module" src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# PySide6 + mpv slideshow prototype dependencies.
+#
+# PySide6 provides the Qt6 window, UI overlay, and image rendering.
+# python-mpv provides the libmpv render API (MpvRenderContext) for video.
+#
+# On the Raspberry Pi, mpv itself must be installed as a system package:
+#   sudo apt install mpv libmpv2 cage
+#
+# Note: python-mpv's MpvRenderContext embeds mpv video into a QOpenGLWidget
+# via the libmpv OpenGL render API. This works natively on Wayland (cage) —
+# no X11/wid embedding needed.
+
+PySide6>=6.6
+python-mpv>=1.0.6

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+# xcursorgen source for a transparent cursor.
+#
+# Format: <size> <xhot> <yhot> <filename>
+# A fully-transparent PNG makes the cursor invisible.
+#
+# The image is 24x24 (matching cage's default XCURSOR_SIZE=24) with a valid
+# hotspot at (0,0). Provide multiple sizes so wlroots finds a match at any
+# requested XCURSOR_SIZE. If the requested size has no matching image,
+# wlroots falls back to the built-in visible default cursor.
+24 0 0 transparent.png
+32 0 0 transparent.png
+48 0 0 transparent.png
+64 0 0 transparent.png

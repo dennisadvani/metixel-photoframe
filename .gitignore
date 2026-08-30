@@ -33,6 +33,7 @@ build/
 
 # Media files — user content, not source code
 media/
+scripts/pyside6_mpv_prototype/test_videos
 
 # Cache and runtime
 cache/
