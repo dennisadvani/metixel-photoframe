@@ -136,10 +136,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "update": {
         "channel": "stable",
         "auto_check": True,
+        "auto_update": True,
+        "auto_update_day": 0,
+        "auto_update_time": "04:30",
         "check_interval_hours": 6,
         "github_repo": "dennisadvani/metixel-photoframe",
         "last_check": None,
         "last_update": None,
+        "last_auto_update": None,
     },
     "timeouts": {
         # ── ffprobe / metadata ──────────────────────────────────────
@@ -340,13 +344,40 @@ class Config:
             u = {
                 "channel": "stable",
                 "auto_check": True,
+                "auto_update": True,
+                "auto_update_day": 0,
+                "auto_update_time": "04:30",
                 "check_interval_hours": 6,
                 "github_repo": "dennisadvani/metixel-photoframe",
                 "last_check": None,
                 "last_update": None,
+                "last_auto_update": None,
             }
             self._data["update"] = u
         return cast(dict[str, Any], u)
+
+    def _randomise_auto_update_schedule(self) -> None:
+        """Pick a randomised weekly auto-update schedule on first boot.
+
+        Chooses a random day of the week (0=Monday … 6=Sunday) and a random
+        time within the 03:00–06:00 local window.  Called only when a fresh
+        config is created so every device updates at a different moment,
+        avoiding thundering-herd load on the GitHub API / release mirrors.
+
+        Note: the 03:00–06:00 restriction applies ONLY to the first-boot
+        randomisation.  Users may later pick any time/day in the Web UI.
+        """
+        import random
+
+        day = random.randint(0, 6)
+        # Random minute within 03:00–05:59 (the 3a–6a window).
+        minute = random.randint(0, 179)
+        hour, minute_of_hour = divmod(minute, 60)
+        time_str = f"{3 + hour:02d}:{minute_of_hour:02d}"
+        u = self._data.setdefault("update", {})
+        u["auto_update_day"] = day
+        u["auto_update_time"] = time_str
+        logger.info("Randomised auto-update schedule: day=%d time=%s", day, time_str)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a top-level config value."""
@@ -406,6 +437,7 @@ class Config:
                 path,
             )
             config = cls()
+            config._randomise_auto_update_schedule()
             config.save(path)
             return config
 

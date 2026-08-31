@@ -316,3 +316,98 @@ class TestUpdateScript:
 
         # The rename into releases/ still happens after the commit resolution.
         assert 'mv "${STAGING_DIR}" "${RELEASE_DIR}"' in content
+
+
+class TestAutoUpdateSchedule:
+    """Weekly auto-update schedule parsing logic."""
+
+    def test_parse_time_valid(self) -> None:
+        assert UpdateManager._parse_time("00:00") == (0, 0)
+        assert UpdateManager._parse_time("03:00") == (3, 0)
+        assert UpdateManager._parse_time("04:30") == (4, 30)
+        assert UpdateManager._parse_time("12:00") == (12, 0)
+        assert UpdateManager._parse_time("23:59") == (23, 59)
+
+    def test_parse_time_rejects_garbage(self) -> None:
+        assert UpdateManager._parse_time("") is None
+        assert UpdateManager._parse_time("not-a-time") is None
+        assert UpdateManager._parse_time("25:00") is None
+        assert UpdateManager._parse_time("04:99") is None
+        assert UpdateManager._parse_time("24:00") is None
+
+    def test_build_release_list_filters_atomic_era(self) -> None:
+        """Only releases >= 1.2.3 are installable via the Blue/Green dirs."""
+        mgr = UpdateManager.__new__(UpdateManager)  # skip __init__
+        releases = [
+            {"tag_name": "v1.2.2", "prerelease": False, "html_url": "u"},
+            {"tag_name": "v1.2.3", "prerelease": False, "html_url": "u"},
+            {"tag_name": "v2.0.0", "prerelease": False, "html_url": "u"},
+            {"tag_name": "v2.1.0-beta.1", "prerelease": True, "html_url": "u"},
+            {"tag_name": "not-a-version", "prerelease": False, "html_url": "u"},
+        ]
+        out = mgr._build_release_list(releases)
+        versions = [r["version"] for r in out]
+        # 1.2.2 and the non-version are filtered out; newest-first ordering.
+        assert "1.2.2" not in versions
+        assert "not-a-version" not in versions
+        assert versions == ["2.1.0-beta.1", "2.0.0", "1.2.3"]
+        # Prerelease flag is preserved.
+        assert out[0]["prerelease"] is True
+
+
+class TestReleaseManagement:
+    """Local release listing and ref→folder mapping."""
+
+    def test_release_dir_for_ref_maps_tags(self) -> None:
+        mgr = UpdateManager.__new__(UpdateManager)
+        # refs/tags/v1.2.3 → 1.2.3
+        assert mgr._ref_to_release_name("refs/tags/v1.2.3") == "1.2.3"
+        # origin/main → main
+        assert mgr._ref_to_release_name("origin/main") == "main"
+        # bare version
+        assert mgr._ref_to_release_name("v2.0.0") == "2.0.0"
+
+    def test_set_auto_update_validates_day(self) -> None:
+        mgr = UpdateManager.__new__(UpdateManager)
+        result = mgr.set_auto_update(day=7)
+        assert result["status"] == "error"
+        result = mgr.set_auto_update(day=-1)
+        assert result["status"] == "error"
+
+    def test_set_auto_update_validates_time(self) -> None:
+        mgr = UpdateManager.__new__(UpdateManager)
+        result = mgr.set_auto_update(time_str="25:00")
+        assert result["status"] == "error"
+        result = mgr.set_auto_update(time_str="not-a-time")
+        assert result["status"] == "error"
+
+    def test_set_auto_update_accepts_any_time(self) -> None:
+        """Users may pick any time of day, not just the 03:00–06:00 window."""
+        class _FakeState:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, dict]] = []
+
+            def update_config(self, section: str, values: dict) -> None:
+                self.calls.append((section, values))
+
+        mgr = UpdateManager.__new__(UpdateManager)
+        mgr._state = _FakeState()
+        result = mgr.set_auto_update(time_str="12:00")
+        assert result["status"] == "ok"
+        assert mgr._state.calls == [("update", {"auto_update_time": "12:00"})]
+
+    def test_set_auto_update_persists_valid_values(self) -> None:
+        class _FakeState:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, dict]] = []
+
+            def update_config(self, section: str, values: dict) -> None:
+                self.calls.append((section, values))
+
+        mgr = UpdateManager.__new__(UpdateManager)
+        mgr._state = _FakeState()
+        result = mgr.set_auto_update(enabled=False, day=3, time_str="04:30")
+        assert result["status"] == "ok"
+        assert mgr._state.calls == [
+            ("update", {"auto_update": False, "auto_update_day": 3, "auto_update_time": "04:30"})
+        ]

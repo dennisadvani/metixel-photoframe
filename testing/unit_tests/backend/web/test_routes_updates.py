@@ -36,3 +36,69 @@ class TestUpdateCheck:
         data = json.loads(resp.data)
         assert data["status"] == "ok"
         mock_update_manager.check_for_updates_async.assert_called_once_with(force=True)
+
+
+class TestUpdateApply:
+    def test_apply_passes_keep_existing(self, client, mock_update_manager):
+        mock_update_manager.apply_update.return_value = {"status": "ok"}
+        resp = client.post(
+            "/api/updates/apply",
+            json={"version": "2.0.0", "keep_existing": True},
+        )
+        assert resp.status_code == 200
+        mock_update_manager.apply_update.assert_called_once_with(
+            channel=None, version="2.0.0", keep_existing=True
+        )
+
+    def test_apply_defaults_keep_existing_false(self, client, mock_update_manager):
+        mock_update_manager.apply_update.return_value = {"status": "ok"}
+        resp = client.post("/api/updates/apply", json={"version": "2.0.0"})
+        assert resp.status_code == 200
+        mock_update_manager.apply_update.assert_called_once_with(
+            channel=None, version="2.0.0", keep_existing=False
+        )
+
+
+class TestUpdateReleases:
+    def test_list_releases(self, client, mock_update_manager):
+        mock_update_manager.list_releases.return_value = [
+            {"version": "2.0.0", "prerelease": False}
+        ]
+        resp = client.get("/api/updates/releases")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["status"] == "ok"
+        assert data["releases"][0]["version"] == "2.0.0"
+
+
+class TestUpdateRollback:
+    def test_rollback_requires_version(self, client):
+        resp = client.post("/api/updates/rollback", json={})
+        assert resp.status_code == 400
+
+    def test_rollback_calls_manager(self, client, mock_update_manager):
+        mock_update_manager.rollback.return_value = {"status": "ok"}
+        resp = client.post("/api/updates/rollback", json={"version": "1.2.3"})
+        assert resp.status_code == 200
+        mock_update_manager.rollback.assert_called_once_with("1.2.3")
+
+
+class TestUpdateAptUpgrade:
+    def test_apt_upgrade_calls_manager(self, client, mock_update_manager):
+        mock_update_manager.apt_upgrade.return_value = {"status": "ok"}
+        resp = client.post("/api/updates/apt-upgrade")
+        assert resp.status_code == 200
+        mock_update_manager.apt_upgrade.assert_called_once()
+
+
+class TestUpdateAutoUpdate:
+    def test_auto_update_calls_manager(self, client, mock_update_manager):
+        mock_update_manager.set_auto_update.return_value = {"status": "ok"}
+        resp = client.put(
+            "/api/updates/auto-update",
+            json={"enabled": False, "day": 3, "time": "04:30"},
+        )
+        assert resp.status_code == 200
+        mock_update_manager.set_auto_update.assert_called_once_with(
+            enabled=False, day=3, time_str="04:30"
+        )

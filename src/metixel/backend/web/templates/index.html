@@ -657,7 +657,7 @@
                                 <select id="cfg-update-channel">
                                     <option value="stable">Stable (recommended)</option>
                                     <option value="beta">Beta</option>
-                                    <option value="dev">Dev (latest commits)</option>
+                                    <option value="main">Main (latest commits)</option>
                                 </select>
                             </div>
                             <p class="hint" id="update-channel-desc">Stable releases are thoroughly tested and recommended for most users.</p>
@@ -681,6 +681,34 @@
                                 </div>
                             </div>
 
+                            <!-- Auto-update schedule -->
+                            <div style="margin-top:0.8rem">
+                                <label class="checkbox-row">
+                                    <input type="checkbox" id="cfg-update-auto-update"> Automatically install updates
+                                </label>
+                                <p class="hint">Metixel will install the latest update on the selected channel once per week at the chosen time.</p>
+                                <div id="auto-update-schedule-fields" style="display:flex;gap:0.8rem;flex-wrap:wrap;margin-top:0.4rem">
+                                    <div class="form-group" style="flex:1;min-width:140px">
+                                        <span class="form-label">Day of week</span>
+                                        <select id="cfg-update-auto-day">
+                                            <option value="0">Monday</option>
+                                            <option value="1">Tuesday</option>
+                                            <option value="2">Wednesday</option>
+                                            <option value="3">Thursday</option>
+                                            <option value="4">Friday</option>
+                                            <option value="5">Saturday</option>
+                                            <option value="6">Sunday</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group" style="flex:1;min-width:140px">
+                                        <span class="form-label">Time</span>
+                                        <input type="time" id="cfg-update-auto-time">
+                                    </div>
+                                </div>
+                                <button id="btn-save-auto-update" class="btn--sm btn--primary" style="margin-top:0.4rem">Save Schedule</button>
+                                <p class="hint" id="update-auto-update-hint" style="margin-top:0.3rem"></p>
+                            </div>
+
                             <!-- Auto-check toggle -->
                             <label class="checkbox-row" style="margin-top:0.8rem">
                                 <input type="checkbox" id="cfg-update-auto-check"> Automatically check for updates
@@ -695,6 +723,37 @@
                                 <div id="update-available-list">
                                     <span style="color:var(--text-muted);font-size:0.82rem">Check for updates to see versions</span>
                                 </div>
+                            </div>
+
+                            <!-- Release selector -->
+                            <div id="update-release-section" style="margin-top:1rem">
+                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Install a Specific Release</div>
+                                <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
+                                    <select id="cfg-update-release" style="flex:1;min-width:160px">
+                                        <option value="">— Select a release —</option>
+                                    </select>
+                                    <button id="btn-install-release" class="btn--sm btn--primary">Install</button>
+                                </div>
+                                <p class="hint" style="margin-top:0.3rem">Choose any release (v1.2.3 or newer) to install. If it's already present locally, you'll be asked to delete it first.</p>
+                            </div>
+
+                            <!-- Rollback -->
+                            <div id="update-rollback-section" style="margin-top:1rem">
+                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Roll Back to a Previous Version</div>
+                                <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
+                                    <select id="cfg-update-rollback" style="flex:1;min-width:160px">
+                                        <option value="">— Select an installed version —</option>
+                                    </select>
+                                    <button id="btn-rollback" class="btn--sm btn--secondary">Roll Back</button>
+                                </div>
+                                <p class="hint" style="margin-top:0.3rem">Switches the live symlink to a previously installed release and restarts services.</p>
+                            </div>
+
+                            <!-- Full OS upgrade -->
+                            <div id="update-apt-section" style="margin-top:1rem">
+                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Full OS Upgrade</div>
+                                <button id="btn-apt-upgrade" class="btn--sm btn--danger">Upgrade OS &amp; Reboot</button>
+                                <p class="hint" style="margin-top:0.3rem">Runs <code>apt update &amp;&amp; apt upgrade</code> and reboots the system when complete.</p>
                             </div>
                         </div>
                     </div>
@@ -929,6 +988,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=37"></script>
+    <script type="module" src="/static/js/main.js?v=39"></script>
 </body>
 </html>

@@ -51,6 +51,36 @@ def test_config_missing_file_uses_defaults(tmp_path):
     assert config.display["width"] == 0
 
 
+def test_first_boot_randomises_auto_update_schedule(tmp_path):
+    """A fresh config gets a randomised weekly auto-update window.
+
+    The day must be 0–6 and the time must fall within the 03:00–06:00 window.
+    """
+    from metixel.shared.config import Config
+
+    path = tmp_path / "fresh.json"
+    config = Config.load(path)
+    day = config.updates["auto_update_day"]
+    time_str = config.updates["auto_update_time"]
+    assert 0 <= day <= 6
+    hour = int(time_str.split(":")[0])
+    assert 3 <= hour < 6
+
+
+def test_existing_config_keeps_auto_update_schedule(tmp_path):
+    """Loading an existing config must NOT re-randomise the schedule."""
+    from metixel.shared.config import Config
+
+    path = tmp_path / "existing.json"
+    config = Config.load(path)
+    config.update("update", {"auto_update_day": 2, "auto_update_time": "05:00"})
+    config.save(path)
+
+    loaded = Config.load(path)
+    assert loaded.updates["auto_update_day"] == 2
+    assert loaded.updates["auto_update_time"] == "05:00"
+
+
 def test_video_playback_enabled_persists(tmp_path):
     """Verify video_playback_enabled saves and loads back correctly.
 
@@ -314,10 +344,14 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     # update
     ("update.channel", "stable"),
     ("update.auto_check", True),
+    ("update.auto_update", True),
+    ("update.auto_update_day", 0),
+    ("update.auto_update_time", "04:30"),
     ("update.check_interval_hours", 6),
     ("update.github_repo", "dennisadvani/metixel-photoframe"),
     ("update.last_check", None),
     ("update.last_update", None),
+    ("update.last_auto_update", None),
     # timeouts
     ("timeouts.ffprobe_probe", 120),
     ("timeouts.ffprobe_validate", 60),
