@@ -252,6 +252,12 @@ pip3 install ${PIP_IGNORE} pi3d 2>/dev/null || \
 pip3 install ${PIP_IGNORE} -r requirements-pip.txt 2>/dev/null || \
     pip3 install ${PIP_IGNORE} -r requirements-pip.txt
 
+# Dev & testing tools (pytest, pytest-cov, ruff, mypy) — installed as part of
+# the base install so no separate dev-env script is needed. These mirror the
+# [dev] extra in pyproject.toml.
+pip3 install ${PIP_IGNORE} ruff mypy pytest pytest-cov 2>/dev/null || \
+    pip3 install ${PIP_IGNORE} ruff mypy pytest pytest-cov
+
 # -- Git safe.directory (OTA updates run as root via systemd-run) ------------
 # Marks the canonical install location AND the release dir (added in step 4).
 echo "[3b/9] Marking repository as safe for git..."
@@ -427,8 +433,10 @@ systemctl unmask hostapd dnsmasq 2>/dev/null || true
 
 # -- Samba share (media only) ------------------------------------------------
 # Only shares /opt/metixel/data/media so users can add/remove photos/videos.
-# For full-project access during development, run setup_trixie_dev_env.sh
-# which adds a separate [metixel] share pointing to /opt/metixel.
+# Dev & testing tools (pytest, ruff, mypy) are installed as part of the base
+# install (see the Python packages step above), so no separate dev-env script
+# is needed. For full-project Samba access during development, add a [metixel]
+# share pointing to /opt/metixel manually.
 echo "[8/9] Configuring Samba share (/opt/metixel/data/media as 'metixel-media')..."
 
 # Add 'invalid users = nobody' to the [homes] section so the system

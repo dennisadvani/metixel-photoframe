@@ -107,6 +107,13 @@ if [ -f "$REPO/requirements-pip.txt" ]; then
         || _fail "pip dependency install failed"
 fi
 
+# ── Install dev & testing tools (pytest, pytest-cov, ruff, mypy) ──────────
+# Installed as part of the base install so no separate dev-env script is
+# needed. Mirrors the [dev] extra in pyproject.toml.
+echo "Installing dev & testing tools…"
+pip install --break-system-packages ruff mypy pytest pytest-cov \
+    || _fail "pip dev-tools install failed"
+
 # ── Run versioned device fixups (exactly once per device) ──────────────────
 # Fixups repair device-level issues that aren't packages or config files
 # (e.g. gpu_mem in /boot/firmware/config.txt). They are warn-and-continue:

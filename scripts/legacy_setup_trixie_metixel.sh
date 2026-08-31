@@ -157,6 +157,11 @@ pip3 install ${PIP_IGNORE} pi3d 2>/dev/null || \
 pip3 install ${PIP_IGNORE} -r requirements-pip.txt 2>/dev/null || \
     pip3 install ${PIP_IGNORE} -r requirements-pip.txt
 
+# Dev & testing tools (pytest, pytest-cov, ruff, mypy) — installed as part of
+# the base install so no separate dev-env script is needed.
+pip3 install ${PIP_IGNORE} ruff mypy pytest pytest-cov 2>/dev/null || \
+    pip3 install ${PIP_IGNORE} ruff mypy pytest pytest-cov
+
 # -- Git safe.directory ------------------------------------------------------
 echo "[3b/9] Marking repository as safe for git..."
 git config --system --add safe.directory /opt/metixel 2>/dev/null || true
