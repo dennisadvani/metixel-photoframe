@@ -420,17 +420,15 @@ import {
                     return;
                 }
 
-                // Save the timeout first (always), then the password if provided.
+                // Save the timeout first (always), then set/clear the password.
                 var timeoutResult = await apiPut("/config/web", { session_timeout_minutes: timeout });
-                if (pw) {
-                    var pwResult = await apiPost("/auth/password", { password: pw });
-                    if (pwResult && pwResult.status === "ok") {
-                        showToast("Web password set", "success");
-                    } else {
-                        showToast("Failed to set web password: " + ((pwResult && pwResult.message) || "Unknown error"), "error");
-                    }
-                } else if (timeoutResult) {
-                    showToast("Web password cleared / session timeout saved", "success");
+                // Always call /auth/password — with a value it sets/changes the
+                // password; with an empty value it clears it (auth disabled).
+                var pwResult = await apiPost("/auth/password", { password: pw });
+                if (pwResult && pwResult.status === "ok") {
+                    showToast(pw ? "Web password set" : "Web password cleared", "success");
+                } else {
+                    showToast("Failed to update web password: " + ((pwResult && pwResult.message) || "Unknown error"), "error");
                 }
                 document.getElementById("cfg-web-password").value = "";
                 document.getElementById("cfg-web-password-confirm").value = "";

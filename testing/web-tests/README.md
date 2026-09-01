@@ -33,7 +33,26 @@ Or from VS Code (**Terminal → Run Task**):
 | `network.spec.js` | Live network status loads; Wi-Fi country field present (no scan / AP toggle) |
 | `media.spec.js` | Media library loads and the filters are present |
 | `advanced.spec.js` | System info, server clock, timezone list, display save+restore, updates + keyboard sections |
+| `security.spec.js` | Web-password login gate (set → gate → wrong/correct → clear), device-password validation, screen-PIN set/clear + length validation |
 - `destructive.spec.js` | **Opt-in only** (`npm run test:destructive`) — restart-services button (accepts the confirm dialog, waits for reconnect) |
+
+## Auth / SSH requirement
+
+The suite's **global setup** (`global-setup.js`) guarantees the frame starts
+with **no web password set** (auth disabled). If a password is already set
+(e.g. from a previous interrupted run), it is cleared **out-of-band over SSH**
+and the backend is restarted, so the dashboard is reachable without a login.
+
+This requires **passwordless SSH** from this workstation to the frame:
+
+```powershell
+$env:METIXEL_HOST = "192.168.222.122"   # SSH host (defaults to the METIXEL_URL host)
+$env:METIXEL_SSH_USER = "pi"            # SSH user (default "pi")
+```
+
+The `security.spec.js` tests are destructive — they set and clear the web
+password, device password, and screen PIN — and restore the frame to a clean
+state afterwards.
 
 ## Safety notes
 
@@ -48,5 +67,7 @@ Or from VS Code (**Terminal → Run Task**):
 ## Options
 
 - `METIXEL_URL` — the frame's dashboard URL (default `http://192.168.222.122` — nginx on port 80 proxies to Flask).
+- `METIXEL_HOST` — the frame's SSH host for the auth global setup (defaults to the `METIXEL_URL` host).
+- `METIXEL_SSH_USER` — SSH user for the auth global setup (default `pi`).
 - `npx playwright test tests/walk.spec.js` — just the regression net.
 - `npx playwright test --headed` — watch the browser.

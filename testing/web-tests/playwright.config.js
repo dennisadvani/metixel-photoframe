@@ -17,6 +17,7 @@ module.exports = defineConfig({
     workers: 1,
     retries: 0,
     reporter: [["list"]],
+    globalSetup: require.resolve("./global-setup.js"),
     use: {
         baseURL: process.env.METIXEL_URL || "http://192.168.222.122",
         headless: true,
