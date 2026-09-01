@@ -329,7 +329,17 @@ class Config:
 
     @property
     def web(self) -> dict[str, Any]:
-        return self._section("web")
+        """Web server + auth settings with backward-compatible defaults.
+
+        Fills in any missing keys (e.g. the optional ``password``,
+        ``screen_pin``, ``auth_secret`` and timeout keys on an older config
+        file) from the global defaults so callers never get KeyError.
+        """
+        w = self._data.setdefault("web", {})
+        defaults = DEFAULT_CONFIG.get("web", {})
+        for key, val in defaults.items():
+            w.setdefault(key, val)
+        return cast(dict[str, Any], w)
 
     @property
     def mqtt(self) -> dict[str, Any]:

@@ -26,6 +26,7 @@ def run_cmd(
     timeout: float | None = None,
     check: bool = False,
     env: dict[str, str] | None = None,
+    input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a command, returning a text ``CompletedProcess``.
 
@@ -33,6 +34,8 @@ def run_cmd(
     ``check`` is True a non-zero exit raises ``subprocess.CalledProcessError``
     (with ``output``/``stderr`` populated for diagnostics); otherwise a
     non-zero exit is returned normally and callers inspect ``returncode``.
+    ``input`` is written to the child's stdin (e.g. for ``chpasswd`` /
+    ``smbpasswd -s`` which read the new password from stdin).
     """
     return subprocess.run(
         list(cmd),
@@ -41,6 +44,7 @@ def run_cmd(
         timeout=timeout,
         check=check,
         env=env,
+        input=input,
     )
 
 
@@ -49,12 +53,14 @@ def run_sudo(
     *,
     timeout: float | None = None,
     check: bool = False,
+    input: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run ``sudo -n <cmd>`` with the same contract as :func:`run_cmd`.
 
     Requires a NOPASSWD sudoers entry (the default for the Pi ``pi`` user).
+    ``input`` is forwarded to :func:`run_cmd`.
     """
-    return run_cmd(["sudo", "-n", *cmd], timeout=timeout, check=check)
+    return run_cmd(["sudo", "-n", *cmd], timeout=timeout, check=check, input=input)
 
 
 def schedule_sudo(

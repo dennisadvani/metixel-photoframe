@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     sanitizeInt,
     setChecked,
@@ -224,6 +225,13 @@ import {
         setValue("cfg-image-max-height", imgCfg.optimise_max_height || 0);
         _toggleImageOptSettings(imgCfg.optimisation_enabled !== false);
 
+        // Security — web password + session timeout + screen PIN timeout.
+        // The password/PIN fields are always left empty (they are write-only);
+        // only the timeout dropdowns reflect the current config.
+        const webCfg = config.web || {};
+        setValue("cfg-web-session-timeout", webCfg.session_timeout_minutes != null ? webCfg.session_timeout_minutes : 30);
+        setValue("cfg-screen-pin-timeout", webCfg.screen_pin_timeout_minutes != null ? webCfg.screen_pin_timeout_minutes : 60);
+
         // Event listeners — bind once
         if (!_settingsBound) {
             _settingsBound = true;
@@ -393,6 +401,95 @@ import {
                 } else {
                     showToast("Failed to set timezone: " + ((result && result.message) || "Unknown error"), "error");
                 }
+            });
+
+            // ── Security card ──────────────────────────────────────────
+
+            // Web dashboard password (set/change/clear) + session timeout.
+            document.getElementById("btn-save-web-password")?.addEventListener("click", async () => {
+                var pw = document.getElementById("cfg-web-password").value;
+                var confirm = document.getElementById("cfg-web-password-confirm").value;
+                var timeout = sanitizeInt(document.getElementById("cfg-web-session-timeout").value, 30);
+
+                if (pw !== confirm) {
+                    showToast("Web passwords do not match", "error");
+                    return;
+                }
+                if (pw && pw.length < 8) {
+                    showToast("Web password must be at least 8 characters", "error");
+                    return;
+                }
+
+                // Save the timeout first (always), then the password if provided.
+                var timeoutResult = await apiPut("/config/web", { session_timeout_minutes: timeout });
+                if (pw) {
+                    var pwResult = await apiPost("/auth/password", { password: pw });
+                    if (pwResult && pwResult.status === "ok") {
+                        showToast("Web password set", "success");
+                    } else {
+                        showToast("Failed to set web password: " + ((pwResult && pwResult.message) || "Unknown error"), "error");
+                    }
+                } else if (timeoutResult) {
+                    showToast("Web password cleared / session timeout saved", "success");
+                }
+                document.getElementById("cfg-web-password").value = "";
+                document.getElementById("cfg-web-password-confirm").value = "";
+            });
+
+            // Device password (SSH + Samba, synced) — confirmation dialog.
+            document.getElementById("btn-save-device-password")?.addEventListener("click", async () => {
+                var pw = document.getElementById("cfg-device-password").value;
+                var confirm = document.getElementById("cfg-device-password-confirm").value;
+                if (!pw) { showToast("Enter a new device password", "error"); return; }
+                if (pw !== confirm) { showToast("Device passwords do not match", "error"); return; }
+                if (pw.length < 8) { showToast("Device password must be at least 8 characters", "error"); return; }
+
+                var ok = await confirmDialog(
+                    "This changes the password for SSH login AND the Samba share. Existing sessions stay active; new logins use the new password. Continue?",
+                    { title: "Change device password?", okText: "Change password", danger: true }
+                );
+                if (!ok) return;
+
+                var result = await apiPost("/system/device-password", {
+                    new_password: pw,
+                    confirm_password: confirm,
+                });
+                if (result && result.status === "ok") {
+                    showToast("Device password changed (SSH + Samba)", "success");
+                } else if (result && result.status === "partial") {
+                    showToast("Console password changed, but Samba failed — stores out of sync", "error");
+                } else {
+                    showToast("Failed to change device password: " + ((result && result.message) || "Unknown error"), "error");
+                }
+                document.getElementById("cfg-device-password").value = "";
+                document.getElementById("cfg-device-password-confirm").value = "";
+            });
+
+            // Screen PIN (set/change/clear) + PIN timeout.
+            document.getElementById("btn-save-screen-pin")?.addEventListener("click", async () => {
+                var pin = document.getElementById("cfg-screen-pin").value;
+                var confirm = document.getElementById("cfg-screen-pin-confirm").value;
+                var timeout = sanitizeInt(document.getElementById("cfg-screen-pin-timeout").value, 60);
+
+                var timeoutResult = await apiPut("/config/web", { screen_pin_timeout_minutes: timeout });
+
+                if (pin) {
+                    if (!/^[0-9]{4,6}$/.test(pin)) {
+                        showToast("Screen PIN must be 4-6 digits", "error");
+                        return;
+                    }
+                    if (pin !== confirm) { showToast("Screen PINs do not match", "error"); return; }
+                    var pinResult = await apiPost("/auth/screen-pin", { pin: pin, confirm: confirm });
+                    if (pinResult && pinResult.status === "ok") {
+                        showToast("Screen PIN set", "success");
+                    } else {
+                        showToast("Failed to set screen PIN: " + ((pinResult && pinResult.message) || "Unknown error"), "error");
+                    }
+                } else if (timeoutResult) {
+                    showToast("Screen PIN cleared / timeout saved", "success");
+                }
+                document.getElementById("cfg-screen-pin").value = "";
+                document.getElementById("cfg-screen-pin-confirm").value = "";
             });
         }
     }

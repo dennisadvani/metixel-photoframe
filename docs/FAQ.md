@@ -212,8 +212,32 @@ Both SSH and the Samba (network share) use the same default account:
 | Samba (`metixel-media`) | `pi` | `raspberry` |
 
 > **Security tip:** change these from the defaults once your frame is set up,
-> especially if it can be reached beyond your home network. (The dashboard
-> itself has no password — it's only reachable on your local network.)
+> especially if it can be reached beyond your home network.
+
+### What is the "device password"?
+
+SSH and the Samba share share a single **device password**. Changing it from
+**Settings → Security → Device Password** updates **both** the console password
+(`chpasswd`) and the Samba password (`smbpasswd`) together, so the two stores
+never drift apart. It is a **separate** credential from the web dashboard
+password and the screen PIN.
+
+If you forget it, recover via the physical console (`sudo passwd pi`) or SSH.
+
+### Can I password-protect the web dashboard?
+
+Yes. Set a **Web Dashboard Password** from **Settings → Security**. Once set,
+the dashboard and its API require a login (a session cookie, valid for the
+configured idle timeout — default 30 minutes, or "forever"). The login screen
+appears automatically on the next visit.
+
+If you forget the web password, clear it by editing `web.password` in
+`config.json` and restarting the backend, or run
+`python -m metixel --clear-web-password --config <path>`.
+
+> **Note:** the web dashboard password is separate from the device password
+> (SSH + Samba) and the screen PIN. There is no TLS on the LAN by default —
+> the password is the access boundary.
 
 ### How do I update the software?
 

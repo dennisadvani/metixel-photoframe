@@ -1667,3 +1667,85 @@ footer {
 }
 
 /* Update progress bar (reuses existing progress bar pattern) */
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Login gate + nav drawer footer
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#login-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    padding: 1rem;
+}
+
+.login-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    width: 100%;
+    max-width: 360px;
+    text-align: center;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+
+.login-logo {
+    margin-bottom: 0.75rem;
+}
+
+.login-card h2 {
+    margin: 0 0 0.25rem 0;
+    color: var(--text);
+    font-size: 1.25rem;
+}
+
+.login-subtitle {
+    margin: 0 0 1.25rem 0;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+}
+
+.login-card .form-group {
+    text-align: left;
+    margin-bottom: 0.75rem;
+}
+
+.login-card .form-input {
+    width: 100%;
+}
+
+.login-error {
+    color: var(--danger);
+    font-size: 0.82rem;
+    margin: 0.5rem 0;
+    text-align: left;
+}
+
+.btn--block {
+    width: 100%;
+}
+
+.nav-drawer-footer {
+    margin-top: auto;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--border);
+}
+
+.nav-drawer-footer a {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 0.5rem 0.25rem;
+    font-size: 0.9rem;
+}
+
+.nav-drawer-footer a:hover {
+    color: var(--text);
+}

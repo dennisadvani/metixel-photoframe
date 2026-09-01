@@ -184,6 +184,17 @@ There are **no login credentials** by default — if you're on your home network
 the dashboard just opens. (This keeps setup simple; the dashboard is only
 reachable on your local network.)
 
+You can optionally set a **web dashboard password** from **Settings → Security**.
+Once set, the dashboard and its API require a login (a session cookie, valid for
+the configured idle timeout — default 30 minutes, or "forever" if you choose it).
+The login screen appears automatically on the next visit. If you forget the
+password, clear it by editing `web.password` in `config.json` and restarting the
+backend, or run `python -m metixel --clear-web-password --config <path>`.
+
+> **Note:** the web dashboard password is a **separate** credential from the
+> device password (SSH + Samba) and the screen PIN. Setting one does not affect
+> the others.
+
 ![Screenshot: the Metixel web dashboard, dashboard page](images/dashboard-home.png)
 
 ---
@@ -217,6 +228,13 @@ them up.
 > **Default login:** SSH and the Samba share both use the account `pi` with the
 > default password `raspberry`. Change it once your frame is set up, especially
 > if it's reachable beyond your home network.
+>
+> **Device password:** SSH and the Samba share share a single **device password**.
+> Change it from **Settings → Security → Device Password** — it updates both the
+> console password (`chpasswd`) and the Samba password (`smbpasswd`) together, so
+> they never drift apart. This is separate from the web dashboard password and
+> the screen PIN. If you forget it, recover via the physical console
+> (`sudo passwd pi`) or SSH.
 
 ### Option C — Immich sync
 
@@ -286,6 +304,14 @@ The dashboard gives you a live overview:
 - **Image** — whether to auto-optimise/resize photos, and size limits.
 - **Local Folders** — which folders the frame watches.
 - **Timezone & Clock** — set your timezone (used by the clock and sleep schedule).
+- **Security** — three independent, optional credentials:
+  - **Web Dashboard Password** — protects the dashboard + API. Empty = no
+    login. Also sets the **session timeout** (forever, or 15 min – 2 h).
+  - **Device Password** — the SSH + Samba password, kept in sync. Changing it
+    updates both stores. Separate from the web password.
+  - **Screen PIN** — an optional PIN for the future on-screen UI on the frame
+    (4–6 digits, unlock timeout up to 24 h). Separate from the web password
+    and device password.
 
 ### Network page
 

@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=21">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=22">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -47,6 +47,11 @@
                 <span class="nav-icon material-symbols-outlined">tune</span> Advanced
             </a>
         </nav>
+        <div class="nav-drawer-footer">
+            <a href="#" id="btn-logout" style="display:none">
+                <span class="nav-icon material-symbols-outlined">logout</span> Log out
+            </a>
+        </div>
     </aside>
 
     <div id="app">
@@ -63,6 +68,26 @@
             <div class="conn-overlay-card">
                 <div class="conn-spinner"></div>
                 <p>Reconnecting…</p>
+            </div>
+        </div>
+
+        <!-- Login gate (shown when a web password is set and the session
+             is not authenticated). Hidden by default; main.js reveals it. -->
+        <div id="login-overlay" style="display:none">
+            <div class="login-card">
+                <img class="login-logo" src="/static/metixel_logo_red_white.png" alt="Metixel" height="48">
+                <h2>Metixel Photoframe</h2>
+                <p class="login-subtitle">Enter your password to access the dashboard</p>
+                <form id="login-form">
+                    <div class="form-group">
+                        <label class="form-label" for="login-password">Password</label>
+                        <input type="password" id="login-password" class="form-input" autocomplete="current-password" placeholder="Password" required>
+                    </div>
+                    <div id="login-error" class="login-error" style="display:none"></div>
+                    <button type="submit" id="btn-login" class="btn--primary btn--block">
+                        <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">lock</span> Unlock
+                    </button>
+                </form>
             </div>
         </div>
 
@@ -464,6 +489,73 @@
                         </div>
                     </div>
                     <button id="btn-save-transcode">Save Video Optimisation</button>
+                </div>
+
+                <div class="card">
+                    <h2>Security</h2>
+                    <p class="hint">Three independent credentials. Setting any of them is optional.</p>
+
+                    <!-- Web dashboard password -->
+                    <div class="form-group">
+                        <span class="form-label">Web Dashboard Password</span>
+                        <input type="password" id="cfg-web-password" autocomplete="new-password" placeholder="Leave empty to disable">
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Confirm Web Password</span>
+                        <input type="password" id="cfg-web-password-confirm" autocomplete="new-password" placeholder="Repeat password">
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Session Timeout</span>
+                        <select id="cfg-web-session-timeout">
+                            <option value="0">Forever (no timeout)</option>
+                            <option value="15">15 minutes</option>
+                            <option value="30">30 minutes</option>
+                            <option value="60">1 hour</option>
+                            <option value="120">2 hours</option>
+                        </select>
+                    </div>
+                    <p class="hint">Protects the web dashboard and its API. Empty = no login required.</p>
+                    <button id="btn-save-web-password">Save Web Password</button>
+
+                    <hr style="border:none;border-top:1px solid var(--border);margin:1.25rem 0">
+
+                    <!-- Device password (SSH + Samba, synced) -->
+                    <div class="form-group">
+                        <span class="form-label">Device Password</span>
+                        <input type="password" id="cfg-device-password" autocomplete="new-password" placeholder="New device password">
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Confirm Device Password</span>
+                        <input type="password" id="cfg-device-password-confirm" autocomplete="new-password" placeholder="Repeat device password">
+                    </div>
+                    <p class="hint">Used for SSH login <strong>and</strong> the Samba share — changing it updates both. This is separate from the web dashboard password.</p>
+                    <button id="btn-save-device-password">Change Device Password</button>
+
+                    <hr style="border:none;border-top:1px solid var(--border);margin:1.25rem 0">
+
+                    <!-- Screen PIN (future on-screen UI) -->
+                    <div class="form-group">
+                        <span class="form-label">Screen PIN</span>
+                        <input type="password" id="cfg-screen-pin" autocomplete="new-password" placeholder="4-6 digits" inputmode="numeric" pattern="[0-9]{4,6}">
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">Confirm Screen PIN</span>
+                        <input type="password" id="cfg-screen-pin-confirm" autocomplete="new-password" placeholder="Repeat PIN" inputmode="numeric" pattern="[0-9]{4,6}">
+                    </div>
+                    <div class="form-group">
+                        <span class="form-label">PIN Unlock Timeout</span>
+                        <select id="cfg-screen-pin-timeout">
+                            <option value="5">5 minutes</option>
+                            <option value="15">15 minutes</option>
+                            <option value="30">30 minutes</option>
+                            <option value="60">1 hour</option>
+                            <option value="180">3 hours</option>
+                            <option value="720">12 hours</option>
+                            <option value="1440">24 hours</option>
+                        </select>
+                    </div>
+                    <p class="hint">Protects the future on-screen UI on the frame. Independent of the web password and device password. Max 24 hours.</p>
+                    <button id="btn-save-screen-pin">Save Screen PIN</button>
                 </div>
             </section>
 
@@ -988,6 +1080,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=39"></script>
+    <script type="module" src="/static/js/main.js?v=40"></script>
 </body>
 </html>

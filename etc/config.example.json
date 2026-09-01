@@ -58,7 +58,12 @@
   "web": {
     "host": "0.0.0.0",
     "port": 8080,
-    "debug": false
+    "debug": false,
+    "password": "",
+    "screen_pin": "",
+    "auth_secret": "",
+    "session_timeout_minutes": 30,
+    "screen_pin_timeout_minutes": 60
   },
   "mqtt": {
     "enabled": false,
