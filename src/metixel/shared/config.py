@@ -86,6 +86,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "host": "0.0.0.0",
         "port": 8080,
         "debug": False,
+        # Optional web-dashboard password.  Empty string = auth disabled
+        # (default, so first boot and existing installs are unaffected).
+        # When set, the dashboard and all /api/* routes (except the exempt
+        # set) require a login.  Stored as a salted hash, never plaintext.
+        "password": "",
+        # Optional on-screen UI PIN (future).  Empty string = disabled.
+        # Independent of the web password and the device password.  Stored
+        # as a salted hash.  Default 6 digits, accepted range 4-6.
+        "screen_pin": "",
+        # Random secret used to sign the Flask session cookie.  Generated
+        # and persisted on first need so logins survive a backend restart.
+        # Empty string = not yet generated.
+        "auth_secret": "",
+        # Web session idle timeout in minutes.  0 = no timeout (forever) —
+        # the user's PC has its own OS/browser protections.  Default 30.
+        "session_timeout_minutes": 30,
+        # On-screen PIN unlock timeout in minutes.  Capped at 1440 (24h) —
+        # anything higher defeats the PIN's purpose.  Default 60.
+        "screen_pin_timeout_minutes": 60,
     },
     "mqtt": {
         "enabled": False,
