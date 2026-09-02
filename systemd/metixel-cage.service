@@ -34,6 +34,12 @@ ExecStartPre=+/bin/chmod 0700 /run/user/1000
 # the frontend connects to XWayland, so the frame renders at the real
 # monitor's native resolution (fixes aspect-ratio distortion on Pi 5 with
 # an empty second HDMI port).
+#
+# Fire the cursor-hide trigger BEFORE cage starts so the cursor-hider service
+# parks the cursor off-screen before the compositor draws it.  The '+' prefix
+# runs as root (needed to write the socket).  Best-effort — if the hider
+# isn't running, this is a harmless no-op.
+ExecStartPre=+/usr/bin/env python3 /opt/metixel/live/scripts/cursor_hiding/trigger_cursor_hider.py
 ExecStart=/usr/bin/cage -d -- /opt/metixel/live/scripts/cage_launch.sh
 
 # Restart on failure or exit

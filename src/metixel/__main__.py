@@ -135,8 +135,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--mode",
-        choices=["backend", "frontend"],
-        help="Run mode: backend (daemon + web) or frontend (display renderer)",
+        choices=["backend", "frontend", "cursor-hider"],
+        help=(
+            "Run mode: backend (daemon + web), frontend (display renderer), "
+            "or cursor-hider (hide the cage cursor via a virtual mouse)"
+        ),
     )
     parser.add_argument(
         "--config",
@@ -198,6 +201,11 @@ def main() -> None:
         from metixel.frontend.renderer import build_renderer
 
         build_renderer(config_path=args.config).run()
+    elif args.mode == "cursor-hider":
+        # Composition root: start the cursor-hiding daemon (runs as root).
+        from metixel.display.cursor_hider import build_cursor_hider
+
+        build_cursor_hider().run()
 
 
 if __name__ == "__main__":

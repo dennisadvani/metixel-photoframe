@@ -154,7 +154,7 @@ graph TB
 
 ### 2.1 Process Architecture
 
-The system runs as **two systemd services**:
+The system runs as **three systemd services**:
 
 1. **`metixel-backend.service`** — The long-running backend daemon:
    - Sync engine (Immich polling, folder watching)
@@ -171,7 +171,13 @@ The system runs as **two systemd services**:
    - Runs the main render loop
    - Connects to `/run/metixel/control.sock` for immediate commands
 
-**Why two processes?** The frontend renderer must own the GPU context (EGL context is bound to one process). The backend handles I/O-heavy operations that could cause frame drops if run in the same thread.
+3. **`metixel-cursor-hider.service`** — Hides the cage/Wayland cursor:
+   - Runs as root (for `/dev/uinput` access)
+   - Starts BEFORE `metixel-cage.service`
+   - Creates a persistent virtual absolute mouse and parks it off-screen
+   - Pure Python (evdev), no daemon/socket — see `display/cursor_hider.py`
+
+**Why two processes?** The frontend renderer must own the GPU context (EGL context is bound to one process). The backend handles I/O-heavy operations that could cause frame drops if run in the same thread. The cursor hider is a separate root service because it needs `/dev/uinput` access that the hardened backend/cage units (running as `pi`) do not have.
 
 ---
 

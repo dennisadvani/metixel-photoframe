@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
+
+[Unit]
+Description=Metixel Photoframe — Cursor Hider (cage/Wayland)
+Documentation=https://github.com/dennisadvani/metixel-photoframe
+# Start before cage so the virtual mouse device exists when cage boots.
+After=seatd.service
+Before=metixel-cage.service
+Wants=seatd.service
+
+[Service]
+Type=simple
+# Runs as root for /dev/uinput access (creating the virtual mouse device).
+User=root
+Group=root
+WorkingDirectory=/opt/metixel/live
+Environment=PYTHONPATH=/opt/metixel/live/src
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/env python3 -m metixel --mode cursor-hider
+
+# Restart on failure or exit
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

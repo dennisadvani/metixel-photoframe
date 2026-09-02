@@ -61,7 +61,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 8. **Configuration is atomic.** Never write `config.json` directly. Always write to a temp file and use `os.replace()` to atomically swap. The frontend watches for `inotify IN_MODIFY` events.
 
-9. **Systemd is the process manager.** Two services: `metixel-backend.service` and `metixel-cage.service` (on Trixie, the frontend runs under cage). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
+9. **Systemd is the process manager.** Three services: `metixel-backend.service`, `metixel-cage.service` (on Trixie, the frontend runs under cage), and `metixel-cursor-hider.service` (hides the cage cursor via a persistent virtual mouse). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
 
 10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks; keep the total bundle under 200KB. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
 
@@ -238,6 +238,7 @@ mypy src/metixel/
 | `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
 | `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
 | `src/metixel/display/tk_backend.py` | Desktop dev: tkinter-based software renderer |
+| `src/metixel/display/cursor_hider.py` | Hides the cage/Wayland cursor via a persistent virtual absolute mouse (evdev) |
 | `src/metixel/display/__init__.py` | Backend auto-detection factory |
 | `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue + startup dependency self-heal |

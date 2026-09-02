@@ -45,6 +45,7 @@ def park_cursor(
     bursts: int = 10,
     burst_interval: float = 0.1,
     absolute: bool = False,
+    delays: tuple[float, ...] = (),
 ) -> None:
     """Move the compositor cursor off-screen via a virtual uinput mouse.
 
@@ -57,6 +58,11 @@ def park_cursor(
     absolute axes (EV_ABS / ABS_X / ABS_Y) and writes coordinates BEYOND the
     output extents, so the pointer is genuinely off-screen.  This is the
     behaviour that actually hides the cursor.
+
+    If ``delays`` is non-empty, the move is fired once at each of those
+    (seconds-after-creation) times instead of the fixed ``burst_interval``
+    loop.  Staggering the delays covers the unpredictable libinput/udev
+    discovery window — at least one fire lands after the device is attached.
 
     ``step``/``interval`` are ignored when ``instant`` is True.
     """
@@ -116,17 +122,32 @@ def park_cursor(
             # Optional pre-delay before the burst loop (rarely needed).
             time.sleep(max(0.0, warmup))
 
-            # Fire the full move repeatedly — drops during discovery, but the
-            # first delivered burst parks the cursor as early as possible.
-            for _ in range(max(1, bursts)):
-                _fire(ui)
-                time.sleep(burst_interval)
+            if delays:
+                # Fire once at each staggered delay (seconds after creation).
+                # Covers the unpredictable discovery window.
+                last = 0.0
+                for d in sorted(delays):
+                    if d > last:
+                        time.sleep(d - last)
+                        last = d
+                    _fire(ui)
+                # Keep the device alive for the rest of the hold window.
+                remaining = hold - last
+                if remaining > 0:
+                    time.sleep(remaining + 0.2)
+            else:
+                # Fire the full move repeatedly — drops during discovery, but
+                # the first delivered burst parks the cursor as early as
+                # possible.
+                for _ in range(max(1, bursts)):
+                    _fire(ui)
+                    time.sleep(burst_interval)
 
-            # Keep the device alive for the rest of the hold window so the
-            # compositor has time to process the last burst.
-            remaining = hold - (bursts * burst_interval + warmup)
-            if remaining > 0:
-                time.sleep(remaining + 0.2)
+                # Keep the device alive for the rest of the hold window so
+                # the compositor has time to process the last burst.
+                remaining = hold - (bursts * burst_interval + warmup)
+                if remaining > 0:
+                    time.sleep(remaining + 0.2)
     except PermissionError:
         print(
             "Warning: Insufficient permissions to access /dev/uinput. "
@@ -209,6 +230,15 @@ def main() -> int:
         "pointer at (--x, --y), replicating ydotool. This genuinely moves "
         "the pointer beyond the screen (relative motion clamps at the edge).",
     )
+    parser.add_argument(
+        "--delays",
+        type=float,
+        nargs="+",
+        default=None,
+        help="Fire the move once at each of these seconds-after-creation "
+        "times (e.g. --delays 0.2 0.5 1.0 1.5 2.0). Staggering covers the "
+        "unpredictable libinput/udev discovery window.",
+    )
     args = parser.parse_args()
 
     if args.delay:
@@ -225,6 +255,7 @@ def main() -> int:
         bursts=args.bursts,
         burst_interval=args.burst_interval,
         absolute=args.absolute,
+        delays=tuple(args.delays) if args.delays else (),
     )
     return 0
 

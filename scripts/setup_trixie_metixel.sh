@@ -333,9 +333,11 @@ echo "[5/9] Installing systemd services..."
 # The app code (including systemd/) now lives in the release dir.
 cp "${RELEASE_DIR}/systemd/metixel-backend.service" /etc/systemd/system/
 cp "${RELEASE_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
+cp "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable metixel-backend
 systemctl enable metixel-cage
+systemctl enable metixel-cursor-hider
 
 # Enable linger for the pi user so systemd-logind creates
 # /run/user/1000 at boot even without a user login.
