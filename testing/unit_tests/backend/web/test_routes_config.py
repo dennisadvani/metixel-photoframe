@@ -144,6 +144,83 @@ class TestGetConfigSection:
 
 
 # ---------------------------------------------------------------------------
+# PUT /api/config/display — refresh rate + rotation
+# ---------------------------------------------------------------------------
+
+
+class TestPutDisplayConfig:
+    """PUT /api/config/display persists refresh_rate and rotation."""
+
+    def test_put_display_persists_new_keys(self, client, mock_state):
+        resp = client.put(
+            "/api/config/display",
+            json={
+                "width": 1920,
+                "height": 1080,
+                "fps_limit": 30,
+                "refresh_rate": 60,
+                "rotation": 90,
+            },
+        )
+        assert resp.status_code == 200
+        d = mock_state.config.display
+        assert d["refresh_rate"] == 60
+        assert d["rotation"] == 90
+
+    def test_put_display_defaults_when_omitted(self, client, mock_state):
+        resp = client.put(
+            "/api/config/display",
+            json={"fps_limit": 30},
+        )
+        assert resp.status_code == 200
+        d = mock_state.config.display
+        # Keys not sent keep their defaults
+        assert d["refresh_rate"] == 0
+        assert d["rotation"] == 0
+
+    def test_get_display_includes_new_keys(self, client):
+        resp = client.get("/api/config/display")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["refresh_rate"] == 0
+        assert data["rotation"] == 0
+
+    def test_display_mode_change_schedules_frontend_restart(self, client, monkeypatch):
+        """Changing rotation/refresh schedules a metixel-cage restart."""
+        import metixel.backend.web.routes.config as config_mod
+
+        scheduled: list[list[str]] = []
+
+        def fake_schedule_sudo(cmd, **kwargs):
+            scheduled.append(cmd)
+
+        monkeypatch.setattr(config_mod, "schedule_sudo", fake_schedule_sudo)
+        resp = client.put(
+            "/api/config/display",
+            json={"rotation": 180, "refresh_rate": 60},
+        )
+        assert resp.status_code == 200
+        assert scheduled == [["systemctl", "restart", "metixel-cage"]]
+
+    def test_display_non_mode_change_no_restart(self, client, monkeypatch):
+        """Changing only fps_limit/schedule does NOT restart the frontend."""
+        import metixel.backend.web.routes.config as config_mod
+
+        scheduled: list[list[str]] = []
+
+        def fake_schedule_sudo(cmd, **kwargs):
+            scheduled.append(cmd)
+
+        monkeypatch.setattr(config_mod, "schedule_sudo", fake_schedule_sudo)
+        resp = client.put(
+            "/api/config/display",
+            json={"fps_limit": 24},
+        )
+        assert resp.status_code == 200
+        assert scheduled == []
+
+
+# ---------------------------------------------------------------------------
 # GET /api/config/video/profiles
 # ---------------------------------------------------------------------------
 

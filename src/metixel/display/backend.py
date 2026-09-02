@@ -57,6 +57,8 @@ class DisplayBackend(ABC):
         fullscreen: bool = True,
         hide_cursor: bool = True,
         fps_limit: int = 30,
+        refresh_rate: int = 0,
+        rotation: int = 0,
         **kwargs: Any,
     ) -> None:
         """Initialize the display and create the rendering surface.
@@ -67,6 +69,8 @@ class DisplayBackend(ABC):
             fullscreen: Whether to use fullscreen mode.
             hide_cursor: Whether to hide the mouse cursor.
             fps_limit: Maximum frames per second.
+            refresh_rate: Desired refresh rate in Hz (0 = auto/native).
+            rotation: Screen rotation in degrees clockwise (0, 90, 180, 270).
         """
         ...
 

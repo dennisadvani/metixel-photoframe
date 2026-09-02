@@ -176,16 +176,21 @@ class FrontendRenderer:
             fullscreen=display_cfg.get("fullscreen", True),
             hide_cursor=display_cfg.get("hide_cursor", True),
             fps_limit=display_cfg.get("fps_limit", 30),
+            refresh_rate=display_cfg.get("refresh_rate", 0),
+            rotation=display_cfg.get("rotation", 0),
         )
 
         logger.info(
-            "Display: config=%dx%d, backend=%dx%d, fullscreen=%s, fps_limit=%d",
+            "Display: config=%dx%d, backend=%dx%d, fullscreen=%s, fps_limit=%d, "
+            "refresh_rate=%d, rotation=%d",
             display_cfg["width"],
             display_cfg["height"],
             self._backend.width,
             self._backend.height,
             display_cfg.get("fullscreen", True),
             display_cfg.get("fps_limit", 30),
+            display_cfg.get("refresh_rate", 0),
+            display_cfg.get("rotation", 0),
         )
 
         # Write detected resolution to a status file so the web UI
@@ -200,6 +205,13 @@ class FrontendRenderer:
                 # The connected Wayland output (e.g. "HDMI-A-2") so the
                 # Web UI can show which HDMI port the monitor is on.
                 "output": getattr(self._backend, "connected_output", lambda: None)(),
+                # The requested refresh rate / rotation (0 = auto/native).
+                "refresh_rate": display_cfg.get("refresh_rate", 0),
+                "rotation": display_cfg.get("rotation", 0),
+                # The monitor's supported modes (via wlr-randr).  The frontend
+                # has Wayland access; the sandboxed backend does not, so it
+                # reads these from this file to populate the resolution dropdown.
+                "modes": getattr(self._backend, "list_modes", lambda: [])(),
             }
             atomic_write_json(info_path, info)
             logger.debug("Display info written to %s", info_path)

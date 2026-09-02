@@ -25,6 +25,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "height": 0,
         "fullscreen": True,
         "fps_limit": 30,
+        "refresh_rate": 0,  # 0 = auto/native; otherwise Hz (e.g. 60, 50, 30)
+        "rotation": 0,  # screen rotation in degrees clockwise: 0, 90, 180, 270
         "hide_cursor": True,
         "schedule_enabled": False,
         "schedule_on_time": "07:00",

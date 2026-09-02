@@ -271,3 +271,137 @@ def test_disable_empty_outputs_skipped_with_override(monkeypatch):
 
     Pi3dBackend()._disable_empty_outputs()  # must return early
     monkeypatch.delenv("METIXEL_WLR_OUTPUT")
+
+
+# ---------------------------------------------------------------------------
+# wlr-randr set_mode (resolution / refresh rate / rotation)
+# ---------------------------------------------------------------------------
+
+
+def test_wlr_transform_mapping():
+    """Clockwise rotations map to wlr-randr --transform values."""
+    from metixel.display.hardware import _wlr_transform
+
+    assert _wlr_transform(0) == "normal"
+    assert _wlr_transform(90) == "90"
+    assert _wlr_transform(180) == "180"
+    assert _wlr_transform(270) == "270"
+    # Unsupported values fall back to normal
+    assert _wlr_transform(45) == "normal"
+
+
+def test_set_mode_applies_refresh_and_rotation(wlr_available):
+    """set_mode combines refresh rate into the mode string + rotation."""
+    backend = Pi3dBackend()
+    assert (
+        backend._wlr_output_mgr.set_mode(width=1920, height=1080, refresh_rate=60, rotation=90)
+        is True
+    )
+    # First call is auto-detection (--json); the mode-set is the last call.
+    assert wlr_available[-1] == [
+        "/usr/bin/wlr-randr",
+        "--output",
+        "HDMI-A-2",
+        "--mode",
+        "1920x1080@60Hz",
+        "--transform",
+        "90",
+    ]
+
+
+def test_set_mode_applies_resolution(wlr_available):
+    """set_mode builds the correct command for a resolution override."""
+    backend = Pi3dBackend()
+    assert backend._wlr_output_mgr.set_mode(width=1920, height=1080) is True
+    assert wlr_available[-1] == [
+        "/usr/bin/wlr-randr",
+        "--output",
+        "HDMI-A-2",
+        "--mode",
+        "1920x1080",
+    ]
+
+
+def test_set_mode_refresh_without_resolution_skips_mode(wlr_available):
+    """A refresh rate without width/height cannot be expressed — no --mode."""
+    backend = Pi3dBackend()
+    assert backend._wlr_output_mgr.set_mode(refresh_rate=60) is True
+    assert wlr_available[-1] == ["/usr/bin/wlr-randr", "--output", "HDMI-A-2"]
+
+
+def test_list_modes_returns_real_monitor_modes(wlr_available):
+    """list_modes returns the resolved output's supported modes."""
+    backend = Pi3dBackend()
+    modes = backend._wlr_output_mgr.list_modes()
+    # The fake outputs have HDMI-A-2 (real monitor) with 2 modes.
+    assert len(modes) == 2
+    assert modes[0]["width"] == 1920
+    assert modes[0]["height"] == 1200
+    assert modes[0]["preferred"] is True
+
+
+def test_list_modes_empty_when_no_binary(monkeypatch):
+    """list_modes returns [] when wlr-randr is not installed."""
+    monkeypatch.setattr(
+        "metixel.display.hardware.os.path.exists",
+        lambda p: False,
+    )
+    backend = Pi3dBackend()
+    assert backend._wlr_output_mgr.list_modes() == []
+
+
+def test_set_mode_noop_when_nothing_requested(wlr_available):
+    """set_mode with all defaults still targets the output (no mode flags)."""
+    backend = Pi3dBackend()
+    assert backend._wlr_output_mgr.set_mode() is True
+    assert wlr_available[-1] == ["/usr/bin/wlr-randr", "--output", "HDMI-A-2"]
+
+
+def test_set_mode_missing_binary(monkeypatch):
+    """Gracefully returns False when wlr-randr is not installed."""
+    monkeypatch.setattr(
+        "metixel.display.hardware.os.path.exists",
+        lambda p: False,
+    )
+    backend = Pi3dBackend()
+    assert backend._wlr_output_mgr.set_mode(refresh_rate=60, rotation=90) is False
+
+
+def test_apply_output_mode_skips_when_defaults(monkeypatch):
+    """_apply_output_mode does nothing when all args are defaults."""
+    backend = Pi3dBackend()
+    monkeypatch.setattr(
+        backend._wlr_output_mgr,
+        "set_mode",
+        lambda **k: (_ for _ in ()).throw(AssertionError("should not be called")),
+    )
+    backend._apply_output_mode(0, 0, 0, 0)  # must return early
+
+
+def test_apply_output_mode_forwards_resolution(monkeypatch):
+    """_apply_output_mode passes width/height/refresh/rotation to set_mode."""
+    backend = Pi3dBackend()
+    captured: dict = {}
+
+    def fake_set_mode(**kwargs):
+        captured.update(kwargs)
+        return True
+
+    monkeypatch.setattr(backend._wlr_output_mgr, "set_mode", fake_set_mode)
+    backend._apply_output_mode(1280, 720, 60, 0)
+    assert captured == {"width": 1280, "height": 720, "refresh_rate": 60, "rotation": 0}
+
+
+def test_apply_output_mode_warns_on_failure(monkeypatch, caplog):
+    """Graceful degradation: logs a warning when wlr-randr fails."""
+    import logging
+
+    backend = Pi3dBackend()
+    monkeypatch.setattr(
+        backend._wlr_output_mgr,
+        "set_mode",
+        lambda **k: False,
+    )
+    with caplog.at_level(logging.WARNING):
+        backend._apply_output_mode(1280, 720, 60, 90)
+    assert any("Could not apply display mode" in r.message for r in caplog.records)

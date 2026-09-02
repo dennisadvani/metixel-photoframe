@@ -31,9 +31,9 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
     function toggleResolutionFields(isAuto) {
         var fields = document.getElementById("display-resolution-fields");
         if (fields) {
-            var inputs = fields.querySelectorAll("input");
-            inputs.forEach(function (input) {
-                input.disabled = isAuto;
+            var controls = fields.querySelectorAll("select, input");
+            controls.forEach(function (control) {
+                control.disabled = isAuto;
             });
             if (isAuto) {
                 fields.classList.add("is-disabled");
@@ -276,14 +276,36 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         const d = config.display || {};
         const isAuto = (d.width === 0 && d.height === 0);
         setChecked("cfg-display-auto", isAuto);
-        setValue("cfg-display-width", d.width || 0);
-        setValue("cfg-display-height", d.height || 0);
         setValue("cfg-fps-limit", d.fps_limit || 30);
+        setValue("cfg-display-rotation", d.rotation || 0);
         setChecked("cfg-schedule-enabled", d.schedule_enabled === true);
         setValue("cfg-schedule-on", d.schedule_on_time || "07:00");
         setValue("cfg-schedule-off", d.schedule_off_time || "22:00");
         toggleScheduleFields(d.schedule_enabled === true);
         toggleResolutionFields(isAuto);
+
+        // Populate the resolution+refresh dropdown from the supported-modes
+        // endpoint (only modes the monitor and Pi mutually support).
+        apiGet("/health/display/modes").then(function (data) {
+            var sel = document.getElementById("cfg-display-resolution");
+            if (!sel) return;
+            var modes = (data && data.modes) || [];
+            modes.forEach(function (m) {
+                var opt = document.createElement("option");
+                opt.value = m.width + "x" + m.height + "@" + (m.refresh || 0);
+                var label = m.width + " × " + m.height;
+                if (m.refresh) label += " @ " + m.refresh + " Hz";
+                if (m.preferred) label += " (native)";
+                opt.textContent = label;
+                sel.appendChild(opt);
+            });
+            // Select the configured resolution+refresh (or auto).
+            var current = "0x0@0";
+            if (d.width > 0 && d.height > 0) {
+                current = d.width + "x" + d.height + "@" + (d.refresh_rate || 0);
+            }
+            setValue("cfg-display-resolution", current);
+        });
 
         // MQTT / Home Assistant Settings
         const m = config.mqtt || {};
@@ -315,6 +337,8 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 var el = document.getElementById("display-detected-res");
                 if (el) {
                     var text = "Detected: " + info.width + " × " + info.height;
+                    if (info.refresh_rate) text += " @ " + info.refresh_rate + " Hz";
+                    if (info.rotation) text += " · rotated " + info.rotation + "°";
                     if (info.output) text += " · connected via " + info.output;
                     el.textContent = text;
                     el.style.color = "var(--text-muted)";
@@ -373,13 +397,22 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
 
             document.getElementById("btn-save-display")?.addEventListener("click", async () => {
                 const isAutoSave = document.getElementById("cfg-display-auto").checked;
+                // Parse "WxH@R" from the resolution+refresh dropdown (0x0@0 = auto).
+                var val = document.getElementById("cfg-display-resolution").value || "0x0@0";
+                var parts = val.split("@");
+                var res = (parts[0] || "0x0").split("x");
+                var width = isAutoSave ? 0 : sanitizeInt(res[0], 0);
+                var height = isAutoSave ? 0 : sanitizeInt(res[1], 0);
+                var refresh = isAutoSave ? 0 : sanitizeInt(parts[1], 0);
                 var result = await apiPut("/config/display", {
-                    width: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-width").value, 0),
-                    height: isAutoSave ? 0 : sanitizeInt(document.getElementById("cfg-display-height").value, 0),
+                    width: width,
+                    height: height,
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
+                    refresh_rate: refresh,
+                    rotation: sanitizeInt(document.getElementById("cfg-display-rotation").value, 0),
                 });
                 if (result) {
-                    showToast("Display settings saved!", "success");
+                    showToast("Display settings saved — frontend restarting to apply", "success", 5000);
                 } else {
                     showToast("Failed to save display settings", "error");
                 }

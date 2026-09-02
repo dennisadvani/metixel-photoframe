@@ -62,6 +62,61 @@ def get_display_info():
     return jsonify(info)
 
 
+@health_bp.route("/display/modes", methods=["GET"])
+def get_display_modes():
+    """Return the display modes the monitor and Pi mutually support.
+
+    The frontend (which has Wayland access) enumerates the real monitor's
+    modes via wlr-randr and writes them to ``display_info.json``.  This
+    endpoint reads that file first.  If it's absent (e.g. frontend not yet
+    started), falls back to querying wlr-randr directly, then to a static
+    list of common HDMI resolutions.  The web UI uses this to populate the
+    resolution dropdown when auto-detect is disabled.
+    """
+    info = _read_display_info()
+    modes = (info or {}).get("modes") or []
+    if modes:
+        return jsonify({"modes": _dedupe_modes(modes), "source": "monitor"})
+
+    # Fallback: query wlr-randr directly (works when the backend is not
+    # sandboxed away from the Wayland socket).
+    from metixel.display.hardware import WlrOutput
+
+    modes = WlrOutput().list_modes()
+    if modes:
+        return jsonify({"modes": _dedupe_modes(modes), "source": "monitor"})
+
+    # Final fallback: common HDMI resolutions supported by RPi 2–5.
+    fallback = [
+        {"width": 1920, "height": 1080, "refresh": 60, "label": "1920 × 1080 (1080p)"},
+        {"width": 1280, "height": 720, "refresh": 60, "label": "1280 × 720 (720p)"},
+        {"width": 1024, "height": 768, "refresh": 60, "label": "1024 × 768 (XGA)"},
+        {"width": 800, "height": 600, "refresh": 60, "label": "800 × 600 (SVGA)"},
+        {"width": 640, "height": 480, "refresh": 60, "label": "640 × 480 (VGA)"},
+    ]
+    return jsonify({"modes": fallback, "source": "fallback"})
+
+
+def _dedupe_modes(modes: list) -> list[dict]:
+    """Deduplicate modes by (width, height), keeping the highest refresh."""
+    by_res: dict[tuple[int, int], dict] = {}
+    for m in modes:
+        key = (int(m.get("width", 0)), int(m.get("height", 0)))
+        if key[0] <= 0 or key[1] <= 0:
+            continue
+        refresh = int(round(float(m.get("refresh", 0))))
+        existing = by_res.get(key)
+        if existing is None or refresh > existing.get("refresh", 0):
+            by_res[key] = {
+                "width": key[0],
+                "height": key[1],
+                "refresh": refresh,
+                "preferred": bool(m.get("preferred")),
+                "current": bool(m.get("current")),
+            }
+    return sorted(by_res.values(), key=lambda r: (-r["width"], -r["height"]))
+
+
 @health_bp.route("/processing", methods=["GET"])
 def get_processing_status():
     """Return the current background processing status.

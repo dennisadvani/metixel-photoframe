@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=22">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=23">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -981,20 +981,26 @@
                     <p class="hint" id="display-detected-res" style="margin-bottom:0.6rem">Detected: —</p>
                     <div class="field-group" id="display-resolution-fields">
                         <div class="form-group">
-                            <span class="form-label">Width</span>
-                            <input type="number" id="cfg-display-width" min="320" max="7680" value="0" placeholder="1920">
-                            <span style="font-size:0.8rem;color:var(--text-muted)">px</span>
-                        </div>
-                        <div class="form-group">
-                            <span class="form-label">Height</span>
-                            <input type="number" id="cfg-display-height" min="200" max="4320" value="0" placeholder="1080">
-                            <span style="font-size:0.8rem;color:var(--text-muted)">px</span>
+                            <span class="form-label">Resolution &amp; Refresh Rate</span>
+                            <select id="cfg-display-resolution">
+                                <option value="0x0@0">Auto (native)</option>
+                            </select>
                         </div>
                     </div>
                     <div class="form-group">
                         <span class="form-label">FPS Limit</span>
                         <input type="number" id="cfg-fps-limit" min="10" max="60" value="30">
                     </div>
+                    <div class="form-group">
+                        <span class="form-label">Screen Rotation</span>
+                        <select id="cfg-display-rotation">
+                            <option value="0">0° (landscape)</option>
+                            <option value="90">90°</option>
+                            <option value="180">180° (upside down)</option>
+                            <option value="270">270°</option>
+                        </select>
+                    </div>
+                    <p class="hint">Resolution, refresh rate and rotation are applied on the next frontend restart.</p>
                     <button id="btn-save-display">Save Display Settings</button>
                 </div>
 
@@ -1080,6 +1086,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=40"></script>
+    <script type="module" src="/static/js/main.js?v=44"></script>
 </body>
 </html>

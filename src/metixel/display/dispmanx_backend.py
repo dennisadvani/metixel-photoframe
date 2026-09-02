@@ -137,6 +137,8 @@ class Pi3dBackend(DisplayBackend):
         fullscreen: bool = True,
         hide_cursor: bool = True,
         fps_limit: int = 30,
+        refresh_rate: int = 0,
+        rotation: int = 0,
         **kwargs: Any,
     ) -> None:
         """Initialize pi3d and create the rendering surface.
@@ -146,6 +148,13 @@ class Pi3dBackend(DisplayBackend):
 
         If *width* or *height* is 0 (the default), pi3d auto-detects the
         native display resolution via DRM/KMS.
+
+        *refresh_rate* (0 = auto/native) and *rotation* (0/90/180/270) are
+        applied at the compositor level via ``wlr-randr`` (under cage on
+        Trixie) before the pi3d surface is created, so the requested mode
+        is active before rendering begins.  If wlr-randr is unavailable or
+        the mode is unsupported, a warning is logged and the native mode is
+        used (graceful degradation — never crash).
         """
         import pi3d
 
@@ -153,6 +162,13 @@ class Pi3dBackend(DisplayBackend):
         self._fps_limit = fps_limit
         self._frame_period = 1.0 / max(fps_limit, 1)
         self._last_frame_time = 0.0
+        self._refresh_rate = refresh_rate
+        self._rotation = rotation
+
+        # Apply the requested resolution / refresh rate / rotation at the
+        # compositor level (wlr-randr) BEFORE creating the pi3d surface, so
+        # the auto-detected resolution reflects the chosen mode.
+        self._apply_output_mode(width, height, refresh_rate, rotation)
 
         # Disable Wayland outputs with no real monitor attached BEFORE
         # creating the pi3d display, so the auto-detected resolution is
@@ -768,6 +784,31 @@ class Pi3dBackend(DisplayBackend):
         """
         self._wlr_output_mgr.disable_empty_outputs()
 
+    def _apply_output_mode(self, width: int, height: int, refresh_rate: int, rotation: int) -> None:
+        """Apply the requested resolution / refresh rate / rotation via wlr-randr.
+
+        Called before the pi3d surface is created so the compositor is
+        already in the requested mode.  Graceful degradation: if wlr-randr
+        is missing or the mode is unsupported, log a warning and continue
+        with the native mode — never crash.
+        """
+        if width <= 0 and height <= 0 and refresh_rate <= 0 and rotation == 0:
+            return  # nothing to apply
+        if not self._wlr_output_mgr.set_mode(
+            width=width,
+            height=height,
+            refresh_rate=refresh_rate,
+            rotation=rotation,
+        ):
+            logger.warning(
+                "Could not apply display mode via wlr-randr "
+                "(%dx%d @ %dHz rot=%d) — using native mode",
+                width,
+                height,
+                refresh_rate,
+                rotation,
+            )
+
     def connected_output(self) -> str | None:
         """Return the Wayland output the frame is actually shown on.
 
@@ -780,6 +821,16 @@ class Pi3dBackend(DisplayBackend):
             return override
         detected = self._wlr_output_mgr.resolve(fallback=False)
         return None if detected == "HDMI-A-1" else detected
+
+    def list_modes(self) -> list[dict]:
+        """Return the real monitor's supported modes (via wlr-randr).
+
+        Delegates to ``WlrOutput.list_modes``.  The frontend calls this to
+        write the supported modes into ``display_info.json`` so the web UI
+        (served by the sandboxed backend, which cannot reach the Wayland
+        socket) can populate the resolution dropdown.
+        """
+        return self._wlr_output_mgr.list_modes()
 
     def _resolve_wlr_output(self, fallback: bool = True) -> str:
         """Return the output name to target with wlr-randr.
