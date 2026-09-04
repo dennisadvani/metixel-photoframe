@@ -6,8 +6,9 @@
 #
 # Reverts a Raspberry Pi back to its pre-setup state (before running
 # setup_trixie_metixel.sh). This:
-#   1. Reverts all quiet-boot settings (restores factory boot defaults)
-#   2. Stops & removes the Metixel systemd services
+#   1. Stops & removes the Metixel systemd services (stopped FIRST so nothing
+#      reactivates while we tear down the rest)
+#   2. Reverts all quiet-boot settings (restores factory boot defaults)
 #   3. Removes the iptables port 80 → 8080 redirect
 #   4. Removes the Samba [metixel-media] share and related smb.conf changes
 #   5. Removes the Wi-Fi captive-portal (hostapd/dnsmasq) config
@@ -54,9 +55,32 @@ fi
 echo ""
 
 # ============================================================================
-# 1. Revert quiet boot settings
+# 1. Stop & remove Metixel systemd services (before touching anything else)
 # ============================================================================
-echo "[1/9] Reverting quiet boot settings..."
+echo "[1/9] Stopping and removing Metixel systemd services..."
+for svc in metixel-backend metixel-cage metixel-frontend metixel-cursor-hider metixel-enable-wifi; do
+    if systemctl list-unit-files | grep -q "^${svc}\.service"; then
+        # Disable BEFORE stop: for Restart=always units, stopping alone can
+        # race a queued auto-restart. Disabling first + reset-failed clears
+        # the restart state so the unit stays down.
+        systemctl disable "${svc}.service" 2>/dev/null || true
+        systemctl stop "${svc}.service" 2>/dev/null || true
+        systemctl reset-failed "${svc}.service" 2>/dev/null || true
+        echo "  + Stopped & disabled ${svc}.service"
+    fi
+    if [ -f "/etc/systemd/system/${svc}.service" ]; then
+        rm -f "/etc/systemd/system/${svc}.service"
+        echo "  + Removed /etc/systemd/system/${svc}.service"
+    fi
+done
+# Stop any Metixel Python processes that a service wrapper may not have caught.
+pkill -f "/opt/metixel" 2>/dev/null && echo "  + Killed lingering Metixel processes" || true
+systemctl daemon-reload
+
+# ============================================================================
+# 2. Revert quiet boot settings
+# ============================================================================
+echo "[2/9] Reverting quiet boot settings..."
 if [ -f "${METIXEL_DIR}/scripts/quiet_boot.sh" ]; then
     bash "${METIXEL_DIR}/scripts/quiet_boot.sh" --revert / || \
         echo "  WARNING: quiet_boot revert reported an error (continuing)"
@@ -81,23 +105,6 @@ else
     rmdir /etc/systemd/system.conf.d 2>/dev/null || true
     rmdir /etc/systemd/journald.conf.d 2>/dev/null || true
 fi
-
-# ============================================================================
-# 2. Stop & remove Metixel systemd services
-# ============================================================================
-echo "[2/9] Stopping and removing Metixel systemd services..."
-for svc in metixel-backend metixel-cage metixel-frontend; do
-    if systemctl list-unit-files | grep -q "^${svc}\.service"; then
-        systemctl stop "${svc}.service" 2>/dev/null || true
-        systemctl disable "${svc}.service" 2>/dev/null || true
-        echo "  + Stopped & disabled ${svc}.service"
-    fi
-    if [ -f "/etc/systemd/system/${svc}.service" ]; then
-        rm -f "/etc/systemd/system/${svc}.service"
-        echo "  + Removed /etc/systemd/system/${svc}.service"
-    fi
-done
-systemctl daemon-reload
 
 # ============================================================================
 # 3. Remove iptables port 80 → 8080 redirect

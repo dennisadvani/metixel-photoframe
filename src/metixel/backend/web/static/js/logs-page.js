@@ -309,4 +309,4 @@ import {
         _updateLogPagination();
     }
 
-export { loadLogs, refreshLogs };
+export { refreshLogs };

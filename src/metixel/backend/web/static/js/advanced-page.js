@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * Advanced page module. Display/schedule/NTP/timezone settings, keyboard mapping, system info and the system power/restart actions.
+ * Advanced page module. Display/schedule/timezone settings, keyboard mapping, system info and the system power/restart actions.
  */
 
 import {

@@ -28,6 +28,7 @@ A single module-scoped controller is shared so state carries across tests.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import time
@@ -36,6 +37,8 @@ import pytest
 
 from metixel.backend import network_manager as nm
 from metixel.backend.network_controller import NetworkController, NetworkState
+
+logger = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.functional
 
@@ -79,6 +82,11 @@ def _ensure_no_wifi_connected() -> None:
     Establishes the "no network" precondition the message tests need.  A
     previous run (or a real frame) may have left WiFi connected or saved —
     the no-network → AP test must start from a clean slate.
+
+    The disconnect isn't instantaneous: NetworkManager may take a moment
+    to fully drop the link after ``nmcli disconnect``.  Instead of a fixed
+    sleep, poll ``is_wifi_connected()`` until it reports down so the first
+    controller tick sees a genuinely disconnected state.
     """
     # Disconnect wlan0 (no-op if already disconnected).
     _run(["sudo", "nmcli", "device", "disconnect", "wlan0"])
@@ -89,7 +97,15 @@ def _ensure_no_wifi_connected() -> None:
         parts = line.split(":")
         if len(parts) >= 2 and parts[1] == "wifi":
             _run(["sudo", "nmcli", "connection", "delete", parts[0]])
-    time.sleep(2)
+    # Wait for the Wi-Fi link to actually drop (bounded wait — don't hang).
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if not nm.is_wifi_connected():
+            return
+        time.sleep(0.5)
+    # Link still up after the bound — proceed anyway; the controller's own
+    # first tick will re-evaluate and the subsequent polls will catch up.
+    logger.warning("Wi-Fi did not fully disconnect within 15s — continuing")
 
 
 @pytest.fixture(scope="module")

@@ -57,43 +57,14 @@
 @layer components {
   @import "./custom.css";
 
-  /* ── Tab bar (for grouped pages / sub-sections) ─────────────────────── */
-  .tab-bar {
-    display: flex;
-    gap: 0.25rem;
-    padding: 0.25rem;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid #2a2f45;
-    border-radius: 8px;
-    margin-bottom: 1rem;
-    overflow-x: auto;
-  }
-  .tab-btn {
-    all: unset;
-    flex: 1;
-    white-space: nowrap;
-    text-align: center;
-    padding: 0.45rem 0.75rem;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    font-weight: 500;
-    color: #9a9db5;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
-  }
-  .tab-btn:hover {
-    color: #e2e4ed;
-    background: rgba(255, 255, 255, 0.04);
-  }
-  .tab-btn.active {
-    background: rgba(139, 26, 43, 0.35);
-    color: #e2e4ed;
-  }
-  .tab-panel {
-    display: none;
-  }
-  .tab-panel.active {
-    display: block;
+  /* ── Card header divider spacing ──────────────────────────────────────
+   * Every card's header row uses `flex items-center gap-2.5` and is
+   * immediately followed by the `mt-5 border-t border-border/60` divider.
+   * The divider had no bottom margin, so content sat tight against the
+   * line.  Add breathing room below it once here instead of in every card.
+   */
+  .flex.items-center.gap-2\.5 + div.border-t {
+    margin-bottom: 1rem; /* mb-4 */
   }
 
   /* ── Premium controls (Slideshow Settings proof-of-concept) ──────────── */

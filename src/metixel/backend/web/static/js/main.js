@@ -21,11 +21,9 @@ import { loadNetwork } from "./network-page.js";
 import { loadSync } from "./sync-page.js";
 import { loadMedia } from "./media-page.js";
 import { loadAdvanced } from "./advanced-page.js";
-import { showLogin, hideLogin } from "./login.js";
+import { showLogin } from "./login.js";
 
 (function () {
-    "use strict";
-
     // -- Page Navigation ----------------------------------------------------
 
     document.querySelectorAll("nav a[data-page]").forEach((link) => {
