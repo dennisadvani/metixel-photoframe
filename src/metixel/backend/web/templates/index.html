@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=23">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=24">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -1004,6 +1004,32 @@
                     <button id="btn-save-display">Save Display Settings</button>
                 </div>
 
+                <!-- DDC/CI Monitor Control -->
+                <div class="card">
+                    <h2>Monitor Control (DDC/CI)</h2>
+                    <p class="hint">Adjust the monitor’s own picture settings (brightness, contrast, input, …) over HDMI DDC/CI. Controls appear only for features your display reports.</p>
+                    <label class="checkbox-row">
+                        <input type="checkbox" id="cfg-ddc-enabled">
+                        <span>Enable DDC/CI</span>
+                    </label>
+                    <div id="ddc-fields" style="margin-top:0.5rem;display:none">
+                        <div class="form-group">
+                            <span class="form-label">Display number</span>
+                            <input type="number" id="cfg-ddc-display" min="1" max="8" value="1" style="max-width:6rem">
+                        </div>
+                        <p class="hint">Usually <code>1</code> (first detected). Change only if you have multiple DDC displays.</p>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin:0.6rem 0;align-items:center">
+                        <button id="btn-save-ddc" class="btn--primary">Save DDC Settings</button>
+                        <button id="btn-ddc-refresh" class="btn--sm btn--secondary" type="button">
+                            <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">refresh</span> Refresh
+                        </button>
+                    </div>
+                    <p id="ddc-status" class="hint" style="margin-bottom:0.5rem">—</p>
+                    <p id="ddc-empty" class="hint" style="display:none;color:var(--text-muted)">Monitor DDC/CI not available</p>
+                    <div id="ddc-controls" style="display:none"></div>
+                </div>
+
                 <!-- Web Server card hidden — uncomment to re-enable
                 <div class="card">
                     <h2>Web Server</h2>
@@ -1086,6 +1112,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=44"></script>
+    <script type="module" src="/static/js/main.js?v=47"></script>
 </body>
 </html>

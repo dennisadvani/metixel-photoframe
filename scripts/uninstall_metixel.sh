@@ -185,6 +185,12 @@ if [ -f "${BOOT_CONFIG}" ]; then
     fi
 fi
 
+# Remove the Metixel I²C module-load entry (ddcutil)
+if [ -f /etc/modules-load.d/metixel-i2c.conf ]; then
+    rm -f /etc/modules-load.d/metixel-i2c.conf
+    echo "  + Removed /etc/modules-load.d/metixel-i2c.conf (i2c-dev)"
+fi
+
 # ============================================================================
 # 8. Disable loginctl linger for pi
 # ============================================================================

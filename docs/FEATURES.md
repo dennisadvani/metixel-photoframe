@@ -14,6 +14,7 @@ A comprehensive list of every feature in Metixel Photoframe, organized by subsys
 - **Boot screen** — animated Metixel logo with rotating spinner; smooth 0.8s ease-out fade to first slide
 - **Display sleep scheduler** — configurable on/off times (e.g. off at 22:00, on at 07:00)
 - **Display power control** — DRM DPMS via sysfs on KMS, or `vcgencmd display_power` on legacy
+- **DDC/CI monitor control** — optional brightness / contrast / input / other VCP controls via `ddcutil`; the web UI probes capabilities and shows only what the attached monitor supports
 
 ---
 
@@ -72,7 +73,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 ## Web Dashboard (port 8080)
 
-- **Vanilla JS SPA** — under 200 KB, no React/Angular dependency
+- **Vanilla JS SPA** — no React/Angular dependency
 - **Configuration** — all settings exposed with per-section save buttons
 - **Media library** — thumbnail grid browser with video duration badges and transcode status
 - **Media upload** — upload photos/videos from any browser (phone gallery picker on iOS/Android, drag & drop on desktop); files land in `media/my_media/` and reach the slideshow within ~30s

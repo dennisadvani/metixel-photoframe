@@ -110,6 +110,10 @@ def create_app(
     app.config["METIXEL_OPT_QUEUE"] = opt_queue
     app.config["METIXEL_UPDATE_MGR"] = update_mgr
     app.config["METIXEL_DAEMON"] = daemon
+    if daemon is not None:
+        ddc_svc = getattr(daemon, "_ddc_service", None)
+        if ddc_svc is not None:
+            app.config["METIXEL_DDC"] = ddc_svc
 
     # Hard cap on the request body size.  Media uploads are streamed to disk,
     # but a pathological request must not be allowed to fill tmpfs (RAM) with
@@ -166,6 +170,7 @@ def create_app(
     from metixel.backend.web.routes.browse import browse_bp
     from metixel.backend.web.routes.config import config_bp
     from metixel.backend.web.routes.control import control_bp
+    from metixel.backend.web.routes.ddc import ddc_bp
     from metixel.backend.web.routes.health import health_bp
     from metixel.backend.web.routes.immich import immich_bp
     from metixel.backend.web.routes.input import input_bp
@@ -187,6 +192,7 @@ def create_app(
     app.register_blueprint(time_bp, url_prefix="/api/time")
     app.register_blueprint(input_bp, url_prefix="/api/input")
     app.register_blueprint(control_bp, url_prefix="/api/control")
+    app.register_blueprint(ddc_bp, url_prefix="/api/ddc")
     app.register_blueprint(health_bp, url_prefix="/api/health")
     app.register_blueprint(browse_bp, url_prefix="/api/browse")
     app.register_blueprint(media_bp, url_prefix="/api/media")

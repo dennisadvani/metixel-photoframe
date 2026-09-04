@@ -28,6 +28,7 @@ __all__ = [
     "CecController",
     "IrSocket",
     "DisplayDriver",
+    "DdcController",
     "Ports",
 ]
 
@@ -185,6 +186,38 @@ class DisplayDriver(Protocol):
     def display_power(self, on: bool) -> None: ...
 
 
+# ── DDC/CI monitor control ──────────────────────────────────────────────────
+
+
+@runtime_checkable
+class DdcController(Protocol):
+    """DDC/CI monitor control port — typically backed by ``ddcutil``."""
+
+    def available(self) -> bool:
+        """Return True when the underlying tool / bus is usable."""
+        ...
+
+    def detect(self) -> list[Any]:
+        """Return detected monitors (``DdcMonitor`` instances)."""
+        ...
+
+    def capabilities(self, display: int) -> Any:
+        """Probe VCP features for *display* (``DdcCapabilities``)."""
+        ...
+
+    def get_vcp(self, display: int, code: int) -> Any:
+        """Read one VCP feature (``DdcVcpValue``)."""
+        ...
+
+    def set_vcp(self, display: int, code: int, value: int) -> None:
+        """Write one VCP feature."""
+        ...
+
+    def reset_factory(self, display: int) -> None:
+        """Restore the monitor to factory defaults (VCP 0x04)."""
+        ...
+
+
 # ── Injected dependency bundle ──────────────────────────────────────────────
 
 
@@ -201,3 +234,4 @@ class Ports:
     cec: CecController | None = None
     ir: IrSocket | None = None
     display: DisplayDriver | None = None
+    ddc: DdcController | None = None

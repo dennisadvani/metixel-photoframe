@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **DDC/CI monitor control** — opt-in Advanced-page controls for brightness,
+  contrast, input source, and other VCP features. Metixel probes the monitor
+  with `ddcutil` and only shows features the display reports.
 - **Fallback to nearest existing ancestor in the folder browser** — when a
   configured watch path no longer exists, the browser now walks up to the
   nearest existing ancestor and shows that instead of an empty/broken tree,

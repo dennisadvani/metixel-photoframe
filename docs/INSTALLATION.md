@@ -69,6 +69,7 @@ slow.
 - 5V power supply (3A for Pi 5, 2.5A for Pi 2/3/4, 1.2A for Zero 2 W)
 - HDMI cable + display (1080p recommended)
 - Optional: IR receiver (TSOP38238 + GPIO), HDMI-CEC capable TV
+- Optional: DDC/CI-capable monitor + `ddcutil` (installed with system packages) for picture controls from the Advanced page — needs a full HDMI cable (some cheap adapters/KVMs strip DDC) and I²C access (`i2c` group / `/dev/i2c-*`)
 
 **Tested on:** Raspberry Pi 2 (1GB), Pi 3 (1GB), and Pi 5 (2GB) running Debian
 Trixie (13) Lite.

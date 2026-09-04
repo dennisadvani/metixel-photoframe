@@ -121,6 +121,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "discovery_enabled": True,  # Home Assistant MQTT Discovery
         "discovery_prefix": "homeassistant",  # HA discovery base topic
     },
+    "ddc": {
+        # DDC/CI monitor control: needs ddcutil (apt), I²C access, and a
+        # DDC-capable display.  Enabled by default; the UI degrades gracefully
+        # if ddcutil or a capable monitor is absent.
+        "enabled": True,
+        "display": 1,  # ddcutil display number (1 = first detected)
+        "poll_seconds": 0,  # 0 = refresh only on load / after set / manual
+    },
     "input": {
         # HDMI-CEC is opt-in: it needs the Debian python3-libcec bindings
         # (apt) and a CEC-capable TV.  Leave off unless you use a TV remote.
@@ -346,6 +354,15 @@ class Config:
     @property
     def mqtt(self) -> dict[str, Any]:
         return self._section("mqtt")
+
+    @property
+    def ddc(self) -> dict[str, Any]:
+        """DDC/CI settings with backward-compatible defaults."""
+        d = self._data.setdefault("ddc", {})
+        defaults = DEFAULT_CONFIG.get("ddc", {})
+        for key, val in defaults.items():
+            d.setdefault(key, val)
+        return cast(dict[str, Any], d)
 
     @property
     def input(self) -> dict[str, Any]:

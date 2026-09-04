@@ -63,7 +63,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 9. **Systemd is the process manager.** Three services: `metixel-backend.service`, `metixel-cage.service` (on Trixie, the frontend runs under cage), and `metixel-cursor-hider.service` (hides the cage cursor via a persistent virtual mouse). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
 
-10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks; keep the total bundle under 200KB. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
+10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
 
 11. **Test on desktop first.** The `tk_backend.py` (tkinter-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
 
@@ -194,7 +194,7 @@ When editing `dashboard.css` or any file under `static/js/` (SPA entry point is 
 
 ### General
 
-- Keep the bundle under 200KB, no frameworks.
+- No frameworks.
 - Settings live in `.card` blocks with an `<h2>` title; fields use `.form-group` + `.form-label`; primary save buttons are `.btn--primary`.
 - The sync task mirrors only `src/metixel/` — UI files under `src/metixel/backend/web/` ARE included, but `testing/` are not (copy separately).
 

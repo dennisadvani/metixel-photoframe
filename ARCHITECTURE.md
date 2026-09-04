@@ -939,6 +939,7 @@ the composition root (`BackendDaemon(..., ports=Ports(...))`).
 | `CecController` | `LibCecAdapter` | HDMI-CEC (TV remote) |
 | `IrSocket` | `LircSocketAdapter` | LIRC IR remote |
 | `DisplayDriver` | display factory (`detect_backend`) | pi3d / PyOpenGL / tkinter |
+| `DdcController` | `DdcutilAdapter` | DDC/CI monitor control (`ddcutil`) |
 
 Every service constructor accepts its port with a **real default**, so existing
 behaviour is unchanged when no ports are injected; tests inject lightweight

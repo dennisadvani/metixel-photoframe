@@ -323,6 +323,10 @@ networks, or forget a saved network.
 - **System** — Pi model, OS, kernel, Python, GPU memory, and hostname.
 - **Updates** — check for and install updates (see [section 8](#8-ota-updates)).
 - **Display Settings** — sleep schedule and clock.
+- **Monitor Control (DDC/CI)** — optional. Enable to probe the attached
+  monitor and adjust picture settings it supports (brightness, contrast,
+  input source, etc.). Only reported features appear as controls. Needs
+  `ddcutil`, I²C access, and a DDC-capable display (full HDMI cable).
 - **Keyboard / Remote Control** — map a remote (see [section 7](#7-keyboard--remote-control)).
 - **MQTT / Home Assistant** — connect the frame to your smart-home hub (see [section 6](#6-mqtt--home-assistant-detailed)).
 - **Reboot / Shutdown** — restart or power off the frame cleanly.

@@ -212,6 +212,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     libopenblas0 \
     cec-utils \
     libcec-dev \
+    ddcutil \
+    i2c-tools \
     cage \
     xwayland \
     wlr-randr \
@@ -516,6 +518,15 @@ if [ -f "${BOOT_CONFIG}" ]; then
         echo "gpu_mem=${GPU_MEM}" | tee -a "${BOOT_CONFIG}"
     fi
 fi
+
+# -- I²C (ddcutil) -----------------------------------------------------------
+# ddcutil talks DDC/CI to the monitor over the I²C bus.  The i2c-dev kernel
+# module must be loaded.  Persist it via modules-load.d so it loads on every
+# boot, and load it now so ddcutil works without a reboot.
+echo "Configuring I²C (ddcutil)…"
+echo "i2c-dev" > /etc/modules-load.d/metixel-i2c.conf
+modprobe i2c-dev 2>/dev/null || true
+echo "  + Enabled i2c-dev module (persistent via /etc/modules-load.d/metixel-i2c.conf)"
 
 # ============================================================================
 # SETUP COMPLETE — Reboot

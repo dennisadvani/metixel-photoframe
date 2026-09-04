@@ -47,6 +47,12 @@ class TestAdapterConformance:
 
         assert isinstance(LircSocketAdapter(), IrSocket)
 
+    def test_ddcutil_adapter(self) -> None:
+        from metixel.shared.adapters import DdcutilAdapter
+        from metixel.shared.ports import DdcController
+
+        assert isinstance(DdcutilAdapter(), DdcController)
+
     def test_structural_fake_satisfies_http_port(self) -> None:
         """A duck-typed fake satisfies the port without subclassing."""
         from metixel.shared.ports import HttpGateway
@@ -71,6 +77,7 @@ class TestPortsBundle:
         assert ports.cec is None
         assert ports.ir is None
         assert ports.display is None
+        assert ports.ddc is None
 
     def test_fields_are_injectable(self) -> None:
         from metixel.shared.adapters import RequestsHttpGateway

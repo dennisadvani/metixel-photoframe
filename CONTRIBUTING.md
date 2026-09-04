@@ -284,9 +284,8 @@ Full details in [`testing/web-tests/README.md`](testing/web-tests/README.md).
   or editing files.
 - **Web JS:** native ES6 modules, **no bundler, no build step, no frameworks**
   — one module per page under `src/metixel/backend/web/static/js/`, shared
-  infra in `core.js`, entry point `main.js`. Keep the bundle under 200KB and
-  bump the `?v=` cache-buster on `index.html` when editing `static/js/` or the
-  stylesheet.
+  infra in `core.js`, entry point `main.js`. Bump the `?v=` cache-buster on
+  `index.html` when editing `static/js/` or the stylesheet.
 - **Web UI design:** burgundy-on-white design system — use the CSS design tokens
   (`var(--primary)`, `var(--text)`, …), Material Symbols icons (never emoji),
   and green only for backgrounds/accents. See the Web UI Style Guide in

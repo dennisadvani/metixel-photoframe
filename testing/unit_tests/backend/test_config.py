@@ -314,6 +314,10 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("mqtt.port", 1883),
     ("mqtt.username", ""),
     ("mqtt.password", ""),
+    # ddc
+    ("ddc.enabled", True),
+    ("ddc.display", 1),
+    ("ddc.poll_seconds", 0),
     # input
     ("input.cec_enabled", False),
     ("input.ir_enabled", False),

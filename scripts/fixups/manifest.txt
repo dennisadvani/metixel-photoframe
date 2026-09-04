@@ -2,3 +2,4 @@
 # Each fixup runs exactly once per device (tracked in data/installed_fixups.json).
 # Add new fixups here as they are introduced.
 v1.3.0-gpu-mem.sh
+v1.4.0-i2c-dev.sh

@@ -21,6 +21,7 @@ import {
 
 import { refreshLogs } from "./logs-page.js";
 import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
+import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
 
     // -- UI Helpers ---------------------------------------------------------
 
@@ -640,7 +641,12 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
 
             // ── Update Controls ──────────────────────────────────────
             bindUpdateControls();
+
+            // ── DDC/CI Monitor Control ───────────────────────────────
+            bindDdcControls();
         }
+
+        await loadDdcControls();
     }
 
 export { loadAdvanced };
