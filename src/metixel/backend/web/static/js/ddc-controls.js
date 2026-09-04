@@ -31,9 +31,9 @@ function _setUnavailable(reason) {
     }
     if (controls) {
         controls.innerHTML = "";
-        controls.style.display = "none";
+        controls.classList.add("hidden");
     }
-    if (empty) empty.style.display = "";
+    if (empty) empty.classList.remove("hidden");
 }
 
 function _setAvailable(model) {
@@ -43,7 +43,7 @@ function _setAvailable(model) {
         status.textContent = model ? ("Connected: " + model) : "Monitor DDC/CI available";
         status.style.color = "var(--text)";
     }
-    if (empty) empty.style.display = "none";
+    if (empty) empty.classList.add("hidden");
 }
 
 function _renderFeature(feat) {
@@ -183,15 +183,15 @@ function _renderControls(data) {
     controls.innerHTML = "";
     var features = data.features || [];
     if (!features.length) {
-        controls.style.display = "none";
+        controls.classList.add("hidden");
         var empty = document.getElementById("ddc-empty");
         if (empty) {
-            empty.style.display = "";
+            empty.classList.remove("hidden");
             empty.textContent = "Monitor reported no adjustable DDC features.";
         }
         return;
     }
-    controls.style.display = "";
+    controls.classList.remove("hidden");
     features.forEach(function (feat) {
         controls.appendChild(_renderFeature(feat));
     });
@@ -206,7 +206,7 @@ async function loadDdcControls() {
     var ddc = (config && config.ddc) || {};
     if (enabledEl) enabledEl.checked = !!ddc.enabled;
     if (displayEl) displayEl.value = ddc.display != null ? ddc.display : 1;
-    if (fields) fields.style.display = ddc.enabled ? "" : "none";
+    if (fields) fields.classList.toggle("hidden", !ddc.enabled);
 
     if (!ddc.enabled) {
         _setUnavailable("DDC/CI is disabled — enable it above and save to probe the monitor.");
@@ -238,7 +238,7 @@ function bindDdcControls() {
 
     document.getElementById("cfg-ddc-enabled")?.addEventListener("change", function () {
         var fields = document.getElementById("ddc-fields");
-        if (fields) fields.style.display = this.checked ? "" : "none";
+        if (fields) fields.classList.toggle("hidden", !this.checked);
     });
 
     document.getElementById("btn-save-ddc")?.addEventListener("click", async function () {

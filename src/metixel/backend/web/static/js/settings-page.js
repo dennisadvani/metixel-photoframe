@@ -150,6 +150,86 @@ import {
         }
     }
 
+    function toggleNtpFields(enabled) {
+        var group = document.getElementById("ntp-servers-group");
+        if (group) group.classList.toggle("hidden", !enabled);
+    }
+
+    // -- NTP Servers (dynamic row list, mirrors watch paths) ----------------
+
+    /**
+     * Render all NTP server rows from the config array.
+     * @param {Array} servers - Array of server hostname strings.
+     */
+    function renderNtpServers(servers) {
+        var list = document.getElementById("ntp-servers-list");
+        if (!list) return;
+        list.innerHTML = "";
+        var values = (servers && servers.length) ? servers : [""];
+        values.forEach(function (value) {
+            addNtpServerRow(value || "");
+        });
+    }
+
+    /**
+     * Add a single NTP server row to the DOM.
+     * @param {string} value - The server hostname.
+     * @param {boolean} focus - Whether to focus the input (for new rows).
+     */
+    function addNtpServerRow(value, focus) {
+        var list = document.getElementById("ntp-servers-list");
+        if (!list) return;
+
+        var row = document.createElement("div");
+        row.className = "ntp-server-row";
+        row.style.cssText = "display:flex;gap:0.35rem;align-items:center;margin-bottom:0.35rem";
+
+        // Server input
+        var input = document.createElement("input");
+        input.type = "text";
+        input.value = value;
+        input.placeholder = "0.debian.pool.ntp.org";
+        input.className = "input-premium";
+        input.style.cssText = "flex:1;min-width:140px";
+
+        // Remove button
+        var removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">close</span>';
+        removeBtn.title = "Remove this NTP server";
+        removeBtn.className = "btn--danger";
+        removeBtn.style.cssText = "flex-shrink:0;padding:0.3rem 0.5rem;font-size:0.82rem";
+        removeBtn.addEventListener("click", function () {
+            row.remove();
+        });
+
+        row.appendChild(input);
+        row.appendChild(removeBtn);
+        list.appendChild(row);
+
+        if (focus) {
+            input.focus();
+            input.select();
+        }
+    }
+
+    /**
+     * Collect all NTP server rows into the config array format.
+     * @returns {Array} Array of non-empty server hostname strings.
+     */
+    function collectNtpServers() {
+        var rows = document.querySelectorAll("#ntp-servers-list .ntp-server-row");
+        var servers = [];
+        rows.forEach(function (row) {
+            var input = row.querySelector("input");
+            if (input) {
+                var value = input.value.trim();
+                if (value) servers.push(value);
+            }
+        });
+        return servers;
+    }
+
     // -- Settings -----------------------------------------------------------
 
     var _settingsBound = false;
@@ -217,6 +297,12 @@ import {
         setChecked("cfg-local-enabled", local.enabled !== false);
         setValue("cfg-local-interval", local.poll_interval_seconds || 30);
         renderWatchPaths(local.watch_paths || []);
+
+        // Time / NTP (Playback page)
+        const sysCfg = config.system || {};
+        setChecked("cfg-ntp-enabled", sysCfg.ntp_enabled !== false);
+        renderNtpServers(sysCfg.ntp_servers || [""]);
+        toggleNtpFields(sysCfg.ntp_enabled !== false);
 
         // Image optimisation (moved from Sync page)
         const imgCfg = config.image || {};
@@ -388,6 +474,33 @@ import {
             // NTP toggle
             document.getElementById("cfg-ntp-enabled")?.addEventListener("change", function () {
                 toggleNtpFields(this.checked);
+            });
+
+            // Add NTP server button
+            document.getElementById("btn-add-ntp-server")?.addEventListener("click", function () {
+                addNtpServerRow("", true);
+            });
+
+            // Save Time Settings (NTP + timezone are saved immediately; NTP
+            // servers are saved here together so the user can edit all at once.)
+            document.getElementById("btn-save-time")?.addEventListener("click", async function () {
+                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
+                var ntpServers = collectNtpServers();
+                // Persist config
+                await apiPut("/config/system", {
+                    ntp_enabled: ntpEnabled,
+                    ntp_servers: ntpServers,
+                });
+                // Apply NTP settings via systemd-timesyncd
+                if (ntpEnabled) {
+                    await apiPost("/time/ntp", {
+                        enabled: true,
+                        servers: ntpServers,
+                    });
+                } else {
+                    await apiPost("/time/ntp", { enabled: false });
+                }
+                showToast("Time settings saved" + (ntpEnabled ? " — NTP enabled" : ""), "success");
             });
 
             // Timezone set button

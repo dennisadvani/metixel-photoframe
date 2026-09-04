@@ -228,7 +228,7 @@ import {
         if (!list) return;
 
         list.innerHTML = '<span style="color:var(--text-muted);font-size:0.85rem">Scanning…</span>';
-        if (statusEl) { statusEl.style.display = "none"; }
+        if (statusEl) { statusEl.classList.add("hidden"); }
 
         // Get current connection to mark the active network
         var netStatus = await apiGet("/network/status");

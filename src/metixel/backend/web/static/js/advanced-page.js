@@ -45,13 +45,18 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
     }
 
     function toggleScheduleFields(enabled) {
-        // Always visible — the checkbox only controls whether the scheduler runs.
-        // The fields are always shown so the user can see and edit the times.
+        var fields = document.getElementById("schedule-fields");
+        if (fields) fields.classList.toggle("hidden", !enabled);
     }
 
-    function toggleNtpFields(enabled) {
-        var group = document.getElementById("ntp-servers-group");
-        if (group) group.style.display = enabled ? "block" : "none";
+    /**
+     * Show the SD card wear warning only when file logging is enabled
+     * (any level other than NONE).
+     * @param {string} logLevel - The selected file log level.
+     */
+    function toggleSdCardWarning(logLevel) {
+        var warning = document.getElementById("sd-card-warning");
+        if (warning) warning.classList.toggle("hidden", (logLevel || "NONE").toUpperCase() === "NONE");
     }
 
     function toggleMqttFields(enabled) {
@@ -263,7 +268,7 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
         await refreshLogs();
         function _scheduleLogPoll() {
             _advancedLogTimer = setTimeout(async function () {
-                if (document.getElementById("page-advanced").classList.contains("active")) {
+                if (document.getElementById("page-system").classList.contains("active")) {
                     await refreshLogs();
                     _scheduleLogPoll();
                 } else {
@@ -324,7 +329,7 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
         _refreshMqttStatus();
         if (_mqttStatusTimer) clearInterval(_mqttStatusTimer);
         _mqttStatusTimer = setInterval(function () {
-            if (document.getElementById("page-advanced").classList.contains("active")) {
+            if (document.getElementById("page-system").classList.contains("active")) {
                 _refreshMqttStatus();
             } else {
                 clearInterval(_mqttStatusTimer);
@@ -350,14 +355,9 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
         // System
         var sys = config.system || {};
         setValue("cfg-log-level", sys.log_level || "NONE");
+        toggleSdCardWarning(sys.log_level || "NONE");
         setValue("cfg-cache-dir", sys.cache_dir || "cache/");
         setChecked("cfg-quiet-boot", sys.quiet_boot === true);
-        setChecked("cfg-ntp-enabled", sys.ntp_enabled !== false);
-        var ntpServers = sys.ntp_servers || [""];
-        setValue("cfg-ntp-server-1", ntpServers[0] || "");
-        setValue("cfg-ntp-server-2", ntpServers[1] || "");
-        setValue("cfg-ntp-server-3", ntpServers[2] || "");
-        toggleNtpFields(sys.ntp_enabled !== false);
 
         // Load timezone dropdown
         loadTimezoneList(sys.timezone || "");
@@ -420,6 +420,9 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
             });
 
             // Display Power Save Schedule — saves only the schedule keys.
+            document.getElementById("cfg-schedule-enabled")?.addEventListener("change", function () {
+                toggleScheduleFields(this.checked);
+            });
             document.getElementById("btn-save-schedule")?.addEventListener("click", async () => {
                 var result = await apiPut("/config/display", {
                     schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
@@ -484,6 +487,10 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
                 }
             });
 
+            document.getElementById("cfg-log-level")?.addEventListener("change", function () {
+                toggleSdCardWarning(this.value);
+            });
+
             document.getElementById("btn-save-system")?.addEventListener("click", async () => {
                 var logLevel = document.getElementById("cfg-log-level").value;
                 var quietBoot = document.getElementById("cfg-quiet-boot").checked;
@@ -520,32 +527,6 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
                 } else {
                     showToast("Failed to save system settings", "error");
                 }
-            });
-
-            // Time settings (NTP + timezone are saved immediately; NTP servers
-            // are saved here together so the user can edit all three at once.)
-            document.getElementById("btn-save-time")?.addEventListener("click", async () => {
-                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
-                var ntpServers = [
-                    document.getElementById("cfg-ntp-server-1").value.trim(),
-                    document.getElementById("cfg-ntp-server-2").value.trim(),
-                    document.getElementById("cfg-ntp-server-3").value.trim(),
-                ].filter(function(s) { return s !== ""; });
-                // Persist config
-                await apiPut("/config/system", {
-                    ntp_enabled: ntpEnabled,
-                    ntp_servers: ntpServers,
-                });
-                // Apply NTP settings via systemd-timesyncd
-                if (ntpEnabled) {
-                    await apiPost("/time/ntp", {
-                        enabled: true,
-                        servers: ntpServers,
-                    });
-                } else {
-                    await apiPost("/time/ntp", { enabled: false });
-                }
-                showToast("Time settings saved" + (ntpEnabled ? " — NTP enabled" : ""), "success");
             });
 
             document.getElementById("btn-save-web")?.addEventListener("click", async () => {

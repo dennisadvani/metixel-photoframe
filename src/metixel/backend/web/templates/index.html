@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors -->
 <html lang="en">
@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=24">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=35">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -34,17 +34,20 @@
             <a href="#" data-page="media">
                 <span class="nav-icon material-symbols-outlined">photo_library</span> Media Library
             </a>
-            <a href="#" data-page="settings">
-                <span class="nav-icon material-symbols-outlined">settings</span> Settings
+            <a href="#" data-page="sources">
+                <span class="nav-icon material-symbols-outlined">folder_shared</span> Sources
             </a>
-            <a href="#" data-page="sync">
-                <span class="nav-icon material-symbols-outlined">cloud_sync</span> Image Sync
+            <a href="#" data-page="playback">
+                <span class="nav-icon material-symbols-outlined">play_circle</span> Playback
+            </a>
+            <a href="#" data-page="optimisation">
+                <span class="nav-icon material-symbols-outlined">auto_fix</span> Optimisation
             </a>
             <a href="#" data-page="network">
                 <span class="nav-icon material-symbols-outlined">wifi</span> Network
             </a>
-            <a href="#" data-page="advanced">
-                <span class="nav-icon material-symbols-outlined">tune</span> Advanced
+            <a href="#" data-page="system">
+                <span class="nav-icon material-symbols-outlined">tune</span> System
             </a>
         </nav>
         <div class="nav-drawer-footer">
@@ -92,7 +95,7 @@
         </div>
 
         <main>
-            <!-- ═══════════════ Dashboard Page ═══════════════ -->
+            <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Dashboard Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
             <section id="page-dashboard" class="page active">
                 <div id="welcome-banner" class="card card--welcome" style="display:none">
                     <button class="card-close" id="btn-welcome-dismiss" aria-label="Dismiss" title="Dismiss">&times;</button>
@@ -119,8 +122,13 @@
                     </div>
                     <p style="margin-top:0.75rem;color:var(--text-muted);font-size:0.82rem">Dismiss this welcome banner to remove the welcome pop-up message on the screen.</p>
                 </div>
-                <div class="card">
-                    <h2>System Status</h2>
+                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">System Status</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Health</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
                     <div class="stat-grid" id="system-health">
                         <div class="stat-item" id="stat-uptime">
                             <div class="stat-label">Uptime</div>
@@ -169,21 +177,28 @@
                     </div>
                 </div>
 
-                <div class="card">
-                    <h2>Now Playing</h2>
-                    <div id="current-media">No media playing</div>
-                </div>
-                <div class="card">
-                    <h2>Controls</h2>
-                    <div class="controls-row">
-                        <button id="btn-prev">◀</button>
-                        <button id="btn-pause-toggle"><span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause</button>
-                        <button id="btn-next">▶</button>
+                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Now Playing</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Live</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div id="current-media" class="text-text-secondary text-[0.9rem]">No media playing</div>
+                    <div class="controls-row mt-4">
+                        <button id="btn-prev" class="btn--secondary" aria-label="Previous">◀</button>
+                        <button id="btn-pause-toggle" class="btn--primary"><span class="material-symbols-outlined" style="font-size:1.2rem;vertical-align:middle">pause</span> Pause</button>
+                        <button id="btn-next" class="btn--secondary" aria-label="Next">▶</button>
                     </div>
                 </div>
 
-                <div class="card">
-                    <h2>Background Processing</h2>
+                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Background Processing</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Activity</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
                     <div id="processing-phases">
                         <div class="proc-phase" data-phase="scanning" style="margin-bottom:0.6rem">
                             <div style="display:flex;justify-content:space-between;margin-bottom:0.15rem;font-size:0.82rem">
@@ -231,32 +246,42 @@
                     </div>
                 </div>
 
-                <div class="card">
-                    <h2>Sync Status</h2>
-                    <div id="dash-sync-progress" style="display:none">
-                        <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem;font-size:0.82rem">
+                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Sync Status</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Sources</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div id="dash-sync-progress" class="hidden">
+                        <div class="flex justify-between mb-1 text-[0.82rem]">
                             <span id="dash-sync-phase">Syncing…</span>
                             <span id="dash-sync-count"></span>
                         </div>
-                        <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
-                            <div id="dash-sync-bar" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
+                        <div class="bg-border rounded h-1.5 overflow-hidden">
+                            <div id="dash-sync-bar" class="bg-primary h-full transition-[width] duration-300" style="width:0%"></div>
                         </div>
-                        <div id="dash-sync-file" style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem;word-break:break-all"></div>
+                        <div id="dash-sync-file" class="text-[0.75rem] text-text-muted mt-1.5 break-all"></div>
                     </div>
-                    <div id="dash-sync-status" style="font-size:0.82rem">
-                        <strong>Last Sync:</strong> <span id="dash-sync-text">—</span>
-                        <div id="dash-sync-detail" style="margin-top:0.3rem;color:var(--text-muted)"></div>
+                    <div id="dash-sync-status" class="text-[0.82rem] text-text-secondary mt-3 pt-3 border-t border-border/60">
+                        <strong class="text-text">Last Sync:</strong> <span id="dash-sync-text">—</span>
+                        <div id="dash-sync-detail" class="mt-1 text-text-muted"></div>
                     </div>
                 </div>
 
-                <div class="card" id="persistent-messages-card" style="display:none">
-                    <h2>On-Screen Messages</h2>
-                    <p class="hint">These messages are shown on the photo frame display. Dismiss them here to remove them permanently.</p>
+                <div id="persistent-messages-card" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light hidden">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">On-Screen Messages</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Frame</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">These messages are shown on the photo frame display. Dismiss them here to remove them permanently.</p>
                     <div id="persistent-messages-list"></div>
                 </div>
             </section>
 
-            <!-- ═══════════════ Media Page ═══════════════ -->
+            <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Media Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
             <section id="page-media" class="page">
                 <div class="card">
                     <h2>Media Library</h2>
@@ -289,441 +314,845 @@
                 </div>
             </section>
 
-            <!-- ═══════════════ Settings Page ═══════════════ -->
-            <section id="page-settings" class="page">
-                <div class="card">
-                    <h2>Local Folders</h2>
-                    <p class="hint">Watch local folders for new media files. Each path can be individually enabled or disabled.</p>
-                    <div style="display:none">
-                        <input type="checkbox" id="cfg-local-enabled" checked>
+            <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Sources Page (Local Folders + Sync) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+            <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Sync Page (Immich only) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+            <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Network Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+            <section id="page-network" class="page">
+                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Network Status</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Connect</span>
                     </div>
-                    <div style="margin-top:0.8rem">
-                        <span class="form-label" style="margin-bottom:0.3rem;display:block">Watch Paths</span>
-                        <div id="watch-paths-list" style="margin-bottom:0.5rem"></div>
-                        <button id="btn-add-watch-path" class="btn--secondary" style="font-size:0.82rem">+ Add Path</button>
-                    </div>
-                    <div class="form-group" style="margin-top:0.8rem">
-                        <span class="form-label">Poll Interval</span>
-                        <input type="number" id="cfg-local-interval" min="10" max="600" value="30">
-                        <span style="font-size:0.8rem;color:var(--text-muted)">seconds</span>
-                    </div>
-                    <button id="btn-save-local-sync">Save Local Sync Settings</button>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div id="network-status" class="text-[0.92rem] text-text-secondary">Loading…</div>
                 </div>
 
-                <div class="card">
-                    <h2>Slideshow Settings</h2>
-                    <div class="form-group">
-                        <span class="form-label">Image Duration</span>
-                        <input type="number" id="cfg-duration" min="5" max="300" value="30">
+                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Available Networks</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Wi-Fi</span>
                     </div>
-                    <p class="hint">seconds</p>
-                    <div class="form-group">
-                        <span class="form-label">Transition Duration</span>
-                        <input type="range" id="cfg-transition-duration" min="200" max="5000" step="100" value="1500">
-                        <span class="range-value" id="cfg-transition-duration-label">1500 ms</span>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <button class="btn--primary" id="btn-network-scan"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">wifi_find</span> Scan for Networks</button>
+                    <div id="network-scan-list" class="mt-3"></div>
+                    <div id="network-scan-status" class="status-msg hidden mt-2 p-2 rounded text-[0.85rem]"></div>
+                </div>
+
+                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Access Point</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Captive Portal</span>
                     </div>
-                    <div class="form-group">
-                        <span class="form-label">Transition Style</span>
-                        <select id="cfg-transition">
-                            <option value="crossfade">Crossfade</option>
-                            <option value="fade_through_black">Fade Through Black</option>
-                            <option value="none">No Transition (Cut)</option>
-                        </select>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">When no Wi-Fi is available, the frame creates its own hotspot "Metixel-Setup" so you can connect with your phone and configure Wi-Fi.</p>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">WiFi Country Code</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Two-letter ISO 3166-1 code (AU, US, GB, DE, etc.). Sets the regulatory domain for correct channel availability. Requires reboot to take full effect.</span>
+                        </div>
+                        <div class="setting-control">
+                            <div class="flex gap-2 items-center">
+                                <input type="text" id="cfg-wifi-country" class="input-premium w-20 uppercase" placeholder="AU" maxlength="2" autocomplete="off">
+                                <button id="btn-save-wifi-country" class="btn--sm btn--primary">Save</button>
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <span class="form-label">Fit Mode</span>
-                        <select id="cfg-fit">
-                            <option value="contain">Contain (letterbox)</option>
-                            <option value="cover">Cover (crop)</option>
-                            <option value="fill">Fill (stretch)</option>
-                        </select>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable AP fallback</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-ap-enabled" class="checkbox-premium" checked>
+                        </div>
                     </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-smart-cover" checked> Smart Cover
-                    </label>
-                    <p class="hint">Use contain for square / opposite-orientation images</p>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-shuffle" checked> Shuffle Playback
-                    </label>
-                    <div style="display:none">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Suppress network popups</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Hide network popups on the frame display</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-suppress-popups" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div id="network-ap-status" class="text-[0.9rem] text-text-secondary mt-2">Checking…</div>
+                    <div class="flex justify-end mt-3">
+                        <button id="btn-network-ap-toggle" class="btn--secondary">Start AP Mode</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Advanced Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+            <!-- Datasection -->
+            <section id="page-sources" class="page">
+                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Local Folders</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Sources</span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Watch local folders for new media files. Each path can be individually enabled or disabled.</p>
+
+                    <div class="hidden">
+                        <input type="checkbox" id="cfg-local-enabled" checked>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Watch Paths</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Folders scanned for new media</span>
+                        </div>
+                        <div class="setting-control">
+                            <div id="watch-paths-list"></div>
+                        </div>
+                    </div>
+                    <div class="flex justify-end mt-2">
+                        <button id="btn-add-watch-path" class="btn--secondary btn--sm">+ Add Path</button>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Poll Interval</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">How often folders are rescanned</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="number" id="cfg-local-interval" min="10" max="600" value="30"
+                                   class="input-premium w-24 text-right">
+                            <span class="text-[0.72rem] text-text-muted">sec</span>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 pt-3 border-t border-border/60 flex justify-end">
+                        <button id="btn-save-local-sync" class="btn--primary">Save Local Sync Settings</button>
+                    </div>
+                </div>
+
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Immich Sync</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Sources</span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Immich Server Connection</div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Connect Metixel Photoframe to your Immich server to automatically sync photos from an album.</p>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Server URL</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Do NOT include <code>/api</code> — just the base URL with a trailing slash.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="url" id="cfg-immich-url" class="input-premium w-56" placeholder="http://immich-server:2283">
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">API Key</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" id="cfg-immich-key" class="input-premium w-56" placeholder="••••••••">
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 mt-2">
+                        <button id="btn-test-immich" class="btn--secondary btn--sm">Test Connection</button>
+                        <span id="immich-test-result" class="text-[0.82rem] text-text-muted"></span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Sync Settings</div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Albums</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Fetch the album list, then select one and click Add Selected. Each album syncs into its own <code>album_&lt;id&gt;</code> folder.</span>
+                        </div>
+                        <div class="setting-control">
+                            <div class="flex flex-col gap-2">
+                                <div class="flex gap-2 items-center">
+                                    <input type="text" id="album-search" class="input-premium w-40" placeholder="Filter albums…">
+                                    <button id="btn-fetch-albums" class="btn--sm btn--secondary">Fetch Albums</button>
+                                </div>
+                                <select id="album-picker" size="8" class="input-premium w-56">
+                                    <option value="">— Fetch albums to populate —</option>
+                                </select>
+                                <div class="flex items-center gap-2">
+                                    <button id="btn-add-album" class="btn--sm btn--primary" disabled>+ Add Selected</button>
+                                    <span id="album-picker-count" class="text-[0.75rem] text-text-muted"></span>
+                                </div>
+                                <div>
+                                    <span class="text-[0.72rem] text-text-muted">Synced Albums</span>
+                                    <ul id="synced-albums-list" class="list-none p-0 m-0"></ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Sync Directory</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Where downloaded assets are stored. Relative paths are under <code>/opt/metixel/</code>.</span>
+                        </div>
+                        <div class="setting-control">
+                            <div class="flex gap-2 items-center">
+                                <input type="text" id="cfg-immich-sync-dir" class="input-premium w-56" placeholder="media/sync/immich/">
+                                <button class="btn--sm btn--secondary btn-browse" data-target="cfg-immich-sync-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable Scheduled Sync</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-immich-enabled" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div class="setting-row" id="immich-interval-group">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Poll Interval</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="number" id="cfg-immich-interval" min="0.5" max="24" step="0.5" value="1"
+                                   class="input-premium w-24 text-right">
+                            <span class="text-[0.72rem] text-text-muted">hours</span>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Strict Sync</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">When enabled, local files not in the album are deleted (mirror mode). When disabled, only new assets are downloaded — existing local files are preserved.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-immich-strict" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 mt-4 justify-end">
+                        <button id="btn-sync-now" class="btn--secondary">Sync Now</button>
+                        <button id="btn-cancel-sync" class="btn--danger hidden">Cancel Sync</button>
+                        <button id="btn-save-immich" class="btn--primary">Save Immich Settings</button>
+                    </div>
+                    <!-- Live progress bar -->
+                    <div id="immich-progress" class="hidden mt-4">
+                        <div class="flex justify-between mb-1 text-[0.82rem]">
+                            <span id="sync-progress-phase">Syncing…</span>
+                            <span id="sync-progress-count"></span>
+                        </div>
+                        <div class="bg-border rounded h-1.5 overflow-hidden">
+                            <div id="sync-progress-bar" class="bg-primary h-full w-0 transition-[width] duration-300"></div>
+                        </div>
+                        <div id="sync-current-file" class="text-[0.75rem] text-text-muted mt-1 break-all"></div>
+                    </div>
+                    <!-- Sync status -->
+                    <div id="immich-sync-status" class="hidden mt-4 p-3 bg-bg rounded text-[0.82rem]">
+                        <strong>Last Sync:</strong> <span id="sync-status-text">—</span>
+                        <div id="sync-status-detail" class="mt-1 text-text-muted"></div>
+                        <div id="sync-albums" class="mt-1"></div>
+                        <ul id="sync-errors" class="m-1 ml-4 p-0 text-[0.78rem] text-danger hidden"></ul>
+                    </div>
+                </div>
+            </section>
+        
+            <!-- Datasection -->
+            <section id="page-playback" class="page">
+                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Slideshow Settings</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Playback</span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <!-- Image Duration -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Image Duration</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">How long each photo stays on screen</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="number" id="cfg-duration" min="5" max="300" value="30"
+                                   class="input-premium w-24 text-right">
+                            <span class="text-[0.72rem] text-text-muted">sec</span>
+                        </div>
+                    </div>
+
+                    <!-- Transition Duration -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Transition Duration</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Length of the crossfade between photos</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="range" id="cfg-transition-duration" min="200" max="5000" step="100" value="1500"
+                                   class="range-premium w-40">
+                            <span class="range-value text-[0.72rem] font-semibold text-primary" id="cfg-transition-duration-label">1500 ms</span>
+                        </div>
+                    </div>
+
+                    <!-- Transition Style -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Transition Style</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">How one photo gives way to the next</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-transition" class="select-premium input-premium w-44">
+                                <option value="crossfade">Crossfade</option>
+                                <option value="fade_through_black">Fade Through Black</option>
+                                <option value="none">No Transition (Cut)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Fit Mode -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Fit Mode</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">How photos fill the frame</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-fit" class="select-premium input-premium w-44">
+                                <option value="contain">Contain (letterbox)</option>
+                                <option value="cover">Cover (crop)</option>
+                                <option value="fill">Fill (stretch)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <!-- Smart Cover -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Smart Cover</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Use contain for square / opposite-orientation images</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-smart-cover" class="checkbox-premium" checked>
+                        </div>
+                    </div>
+
+                    <!-- Shuffle -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Shuffle Playback</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Play photos in a random order</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-shuffle" class="checkbox-premium" checked>
+                        </div>
+                    </div>
+
+                    <div class="hidden">
                         <span class="form-label">Matte Color</span>
                         <input type="color" id="cfg-matte-color" value="#141414">
                         <input type="text" id="cfg-matte-color-hex" value="#141414">
                     </div>
-                    <button id="btn-save-slideshow">Save Slideshow Settings</button>
+
+                    <div class="mt-5 pt-3 border-t border-border/60 flex justify-end">
+                        <button id="btn-save-slideshow" class="btn--primary">Save Slideshow Settings</button>
+                    </div>
                 </div>
 
-                <div class="card">
-                    <h2>Video Settings</h2>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-video-enabled"> Video Playback
-                    </label>
-                    <div class="form-group">
-                        <span class="form-label">Max Video Duration</span>
-                        <input type="number" id="cfg-video-max-duration" min="0" max="3600" value="120">
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Video Settings</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Playback</span>
                     </div>
-                    <p class="hint">seconds (0 = unlimited)</p>
-                    <select id="cfg-video-player-backend" style="display:none">
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Video Playback</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Allow videos in the slideshow</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-video-enabled" class="checkbox-premium">
+                        </div>
+                    </div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Max Video Duration</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Longest video allowed (0 = unlimited)</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="number" id="cfg-video-max-duration" min="0" max="3600" value="120"
+                                   class="input-premium w-24 text-right">
+                            <span class="text-[0.72rem] text-text-muted">sec</span>
+                        </div>
+                    </div>
+
+                    <select id="cfg-video-player-backend" class="hidden">
                         <option value="auto">Auto (VLC preferred)</option>
                     </select>
-                    <button id="btn-save-video">Save Video Settings</button>
-                </div>
 
-                <div class="card">
-                    <h2>Image Optimisation</h2>
-                    <p class="hint">Control when images are resized. Images at or below the threshold are used as-is (faster startup).</p>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-image-opt-enabled" checked> Enable Image Optimisation
-                    </label>
-                    <div id="image-opt-settings" style="margin-left:1.5rem;padding-left:0.5rem;border-left:3px solid var(--border)">
-                        <div class="form-group">
-                            <span class="form-label">Max Width</span>
-                            <input type="number" id="cfg-image-max-width" min="0" max="7680" value="0" placeholder="1920">
-                        </div>
-                        <p class="hint">px (0 = use display width)</p>
-                        <div class="form-group">
-                            <span class="form-label">Max Height</span>
-                            <input type="number" id="cfg-image-max-height" min="0" max="4320" value="0" placeholder="1080">
-                        </div>
-                        <p class="hint">px (0 = use display height)</p>
+                    <div class="mt-5 pt-3 border-t border-border/60 flex justify-end">
+                        <button id="btn-save-video" class="btn--primary">Save Video Settings</button>
                     </div>
-                    <button id="btn-save-image-opt">Save Image Optimisation</button>
                 </div>
 
-                <div class="card">
-                    <h2>Video Optimisation</h2>
-                    <p class="hint">Convert videos to an optimised format for smooth playback on the Pi.</p>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-transcode-enabled" checked> Enable Transcoding
-                    </label>
-                    <div id="transcode-settings" style="margin-left:1.5rem;padding-left:0.5rem;border-left:3px solid var(--border)">
-                        <div class="form-group">
-                            <span class="form-label">Transcoding Profile</span>
-                            <select id="cfg-transcoding-profile">
-                                <option value="">Auto-detect</option>
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Display Settings</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Hardware</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Auto-detect resolution</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-display-auto" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <p class="text-text-muted text-[0.76rem] mb-3" id="display-detected-res">Detected: —</p>
+                    <div class="field-group" id="display-resolution-fields">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Resolution &amp; Refresh Rate</span>
+                            </div>
+                            <div class="setting-control">
+                                <select id="cfg-display-resolution" class="select-premium input-premium w-56">
+                                    <option value="0x0@0">Auto (native)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">FPS Limit</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="number" id="cfg-fps-limit" min="10" max="60" value="30" class="input-premium w-24 text-right">
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Screen Rotation</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-display-rotation" class="select-premium input-premium w-44">
+                                <option value="0">0° (landscape)</option>
+                                <option value="90">90°</option>
+                                <option value="180">180° (upside down)</option>
+                                <option value="270">270°</option>
                             </select>
                         </div>
-                        <p class="hint" id="profile-hint">Automatically selected for your Pi model. Change to Custom to override individual settings.</p>
+                    </div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mt-2">Resolution, refresh rate and rotation are applied on the next frontend restart.</p>
+                    <div class="flex justify-end mt-3">
+                        <button id="btn-save-display" class="btn--primary">Save Display Settings</button>
+                    </div>
+                </div>
+
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Time</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Clock</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div class="flex items-center gap-2 mb-3">
+                        <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
+                        <span class="font-semibold text-[0.9rem] text-text-secondary">Server Time</span>
+                        <span id="server-clock" class="font-mono text-[1.05rem] ml-1 text-text">--:--:--</span>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Timezone</span>
+                        </div>
+                        <div class="setting-control">
+                            <div class="flex gap-2 items-center">
+                                <select id="cfg-timezone" class="select-premium input-premium w-56">
+                                    <option value="">Auto-detect</option>
+                                </select>
+                                <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">NTP Time Sync</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-ntp-enabled" class="checkbox-premium" checked>
+                        </div>
+                    </div>
+                    <div class="setting-row" id="ntp-servers-group">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">NTP Servers</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Time servers used to keep the clock accurate. Leave blank to use defaults.</span>
+                        </div>
+                        <div class="setting-control">
+                            <div id="ntp-servers-list"></div>
+                        </div>
+                    </div>
+                    <div class="flex justify-end mt-2">
+                        <button id="btn-add-ntp-server" class="btn--secondary btn--sm">+ Add Server</button>
+                    </div>
+                    <div class="flex justify-end mt-2">
+                        <button id="btn-save-time" class="btn--primary">Save Time Settings</button>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Screen Power Save Schedule</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">The display turns off at the "Screen Off" time and on at the "Screen On" time each day. Times may wrap past midnight (e.g. Off 21:00 and On 07:00).</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-schedule-enabled" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div id="schedule-fields" class="mt-2">
+                        <div class="flex gap-4 flex-wrap">
+                            <div class="setting-row flex-1 min-w-[120px]">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Screen Off At</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="time" id="cfg-schedule-off" class="input-premium" value="22:00">
+                                </div>
+                            </div>
+                            <div class="setting-row flex-1 min-w-[120px]">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Screen On At</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="time" id="cfg-schedule-on" class="input-premium" value="07:00">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex justify-end gap-2 mt-3">
+                        <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
+                        <button id="btn-save-schedule" class="btn--primary">Save Display Power Schedule</button>
+                    </div>
+                </div>
+            </section>
+        
+            <!-- Datasection -->
+            <section id="page-optimisation" class="page">
+                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Image Optimisation</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Optimise</span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Control when images are resized. Images at or below the threshold are used as-is (faster startup).</p>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable Image Optimisation</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Resize oversized images for the display</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-image-opt-enabled" class="checkbox-premium" checked>
+                        </div>
+                    </div>
+
+                    <div id="image-opt-settings" class="border-l border-border/60 pl-4">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Max Width</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">px (0 = use display width)</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="cfg-image-max-width" min="0" max="7680" value="0" placeholder="1920"
+                                       class="input-premium w-24 text-right">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Max Height</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">px (0 = use display height)</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="cfg-image-max-height" min="0" max="4320" value="0" placeholder="1080"
+                                       class="input-premium w-24 text-right">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 pt-3 border-t border-border/60 flex justify-end">
+                        <button id="btn-save-image-opt" class="btn--primary">Save Image Optimisation</button>
+                    </div>
+                </div>
+
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Video Optimisation</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Optimise</span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Convert videos to an optimised format for smooth playback on the Pi.</p>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable Transcoding</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Convert videos to an optimised format</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-transcode-enabled" class="checkbox-premium" checked>
+                        </div>
+                    </div>
+
+                    <div id="transcode-settings" class="border-l border-border/60 pl-4">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Transcoding Profile</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug" id="profile-hint">Automatically selected for your Pi model. Change to Custom to override individual settings.</span>
+                            </div>
+                            <div class="setting-control">
+                                <select id="cfg-transcoding-profile" class="select-premium input-premium w-44">
+                                    <option value="">Auto-detect</option>
+                                </select>
+                            </div>
+                        </div>
 
                         <!-- Profile fields — always visible, editable only in Custom mode -->
-                        <div id="profile-fields" style="margin-top:0.5rem">
-                            <div class="form-group">
-                                <span class="form-label">Max Width</span>
-                                <input type="number" id="cfg-transcode-max-width" min="0" max="7680" value="0" disabled>
+                        <div id="profile-fields">
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Max Width</span>
+                                    <span class="text-[0.72rem] text-text-muted leading-snug">px (0 = use display width)</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="number" id="cfg-transcode-max-width" min="0" max="7680" value="0" disabled
+                                           class="input-premium w-24 text-right">
+                                </div>
                             </div>
-                            <p class="hint">px (0 = use display width)</p>
-                            <div class="form-group">
-                                <span class="form-label">Max Height</span>
-                                <input type="number" id="cfg-transcode-max-height" min="0" max="4320" value="0" disabled>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Max Height</span>
+                                    <span class="text-[0.72rem] text-text-muted leading-snug">px (0 = use display height)</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="number" id="cfg-transcode-max-height" min="0" max="4320" value="0" disabled
+                                           class="input-premium w-24 text-right">
+                                </div>
                             </div>
-                            <p class="hint">px (0 = use display height)</p>
-                            <div class="form-group">
-                                <span class="form-label">Max Framerate</span>
-                                <input type="number" id="cfg-transcode-max-fps" min="0" max="120" value="30" disabled>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Max Framerate</span>
+                                    <span class="text-[0.72rem] text-text-muted leading-snug">fps (0 = no limit)</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="number" id="cfg-transcode-max-fps" min="0" max="120" value="30" disabled
+                                           class="input-premium w-24 text-right">
+                                </div>
                             </div>
-                            <p class="hint">fps (0 = no limit)</p>
-                            <div class="form-group">
-                                <span class="form-label">Max Bitrate</span>
-                                <input type="number" id="cfg-transcode-max-bitrate" min="1" max="200" value="20" disabled>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Max Bitrate</span>
+                                    <span class="text-[0.72rem] text-text-muted leading-snug">Mbps</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="number" id="cfg-transcode-max-bitrate" min="1" max="200" value="20" disabled
+                                           class="input-premium w-24 text-right">
+                                </div>
                             </div>
-                            <p class="hint">Mbps</p>
-                            <div class="form-group">
-                                <span class="form-label">Quality (CRF)</span>
-                                <input type="number" id="cfg-transcode-crf" min="0" max="51" value="23" disabled>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Quality (CRF)</span>
+                                    <span class="text-[0.72rem] text-text-muted leading-snug">Lower = better quality / larger files. 18 = near-lossless, 23 = good balance, 28 = smaller files.</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="number" id="cfg-transcode-crf" min="0" max="51" value="23" disabled
+                                           class="input-premium w-24 text-right">
+                                </div>
                             </div>
-                            <p class="hint">Lower = better quality / larger files. 18 = near-lossless, 23 = good balance, 28 = smaller files.</p>
-                            <div class="form-group">
-                                <span class="form-label">Target Codec</span>
-                                <select id="cfg-transcode-codec" disabled>
-                                    <option value="h264">H.264 (AVC)</option>
-                                    <option value="h265">H.265 (HEVC)</option>
-                                </select>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Target Codec</span>
+                                </div>
+                                <div class="setting-control">
+                                    <select id="cfg-transcode-codec" class="select-premium input-premium w-44" disabled>
+                                        <option value="h264">H.264 (AVC)</option>
+                                        <option value="h265">H.265 (HEVC)</option>
+                                    </select>
+                                </div>
                             </div>
-                            <div class="form-group">
-                                <span class="form-label">H.264 Profile</span>
-                                <select id="cfg-transcode-h264-profile" disabled>
-                                    <option value="baseline">Baseline</option>
-                                    <option value="main">Main</option>
-                                    <option value="high">High</option>
-                                </select>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">H.264 Profile</span>
+                                </div>
+                                <div class="setting-control">
+                                    <select id="cfg-transcode-h264-profile" class="select-premium input-premium w-44" disabled>
+                                        <option value="baseline">Baseline</option>
+                                        <option value="main">Main</option>
+                                        <option value="high">High</option>
+                                    </select>
+                                </div>
                             </div>
-                            <div class="form-group">
-                                <span class="form-label">H.264 Level</span>
-                                <input type="text" id="cfg-transcode-h264-level" value="4.2" style="width:5rem" disabled>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">H.264 Level</span>
+                                    <span class="text-[0.72rem] text-text-muted leading-snug">e.g. 4.0, 4.1, 4.2, 5.1, 5.2</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="text" id="cfg-transcode-h264-level" value="4.2" disabled
+                                           class="input-premium w-24 text-right">
+                                </div>
                             </div>
-                            <p class="hint">e.g. 4.0, 4.1, 4.2, 5.1, 5.2</p>
-                            <div class="form-group">
-                                <span class="form-label">Color Depth</span>
-                                <select id="cfg-transcode-color-depth" disabled>
-                                    <option value="8">8-bit (yuv420p)</option>
-                                    <option value="10">10-bit (yuv420p10le)</option>
-                                </select>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">Color Depth</span>
+                                </div>
+                                <div class="setting-control">
+                                    <select id="cfg-transcode-color-depth" class="select-premium input-premium w-44" disabled>
+                                        <option value="8">8-bit (yuv420p)</option>
+                                        <option value="10">10-bit (yuv420p10le)</option>
+                                    </select>
+                                </div>
                             </div>
-                            <label class="checkbox-row">
-                                <input type="checkbox" id="cfg-transcode-hdr" disabled> HDR Support
-                            </label>
+                            <div class="setting-row">
+                                <div class="setting-label">
+                                    <span class="text-[0.85rem] font-medium text-text-secondary">HDR Support</span>
+                                </div>
+                                <div class="setting-control">
+                                    <input type="checkbox" id="cfg-transcode-hdr" class="checkbox-premium" disabled>
+                                </div>
+                            </div>
                         </div>
+
+                        <div class="mt-5 border-t border-border/60"></div>
 
                         <!-- Global settings -->
-                        <label class="checkbox-row" style="margin-top:0.75rem">
-                            <input type="checkbox" id="cfg-keep-audio"> Keep Audio Track
-                        </label>
-                        <p class="hint">When off, audio is stripped to reduce file size (photo frames don't need sound).</p>
-                        <label class="checkbox-row">
-                            <input type="checkbox" id="cfg-transcode-software-encoder" checked> Use Software Encoder (libx264 / libx265)
-                        </label>
-                        <p class="hint">Best quality — uses CPU instead of Pi hardware encoder. Disable for faster (but lower quality) hardware encoding.</p>
-                        <div class="form-group">
-                            <span class="form-label">Transcode Timeout</span>
-                            <input type="number" id="cfg-transcode-timeout" min="60" max="86400" step="60" value="7200">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Keep Audio Track</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">When off, audio is stripped to reduce file size (photo frames don't need sound).</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="checkbox" id="cfg-keep-audio" class="checkbox-premium">
+                            </div>
                         </div>
-                        <p class="hint">seconds (default: 7200 = 2 hours)</p>
-                        <label class="checkbox-row">
-                            <input type="checkbox" id="cfg-cpu-throttle-enabled" checked> Hard CPU Cap (cpulimit)
-                        </label>
-                        <p class="hint">Limits ffmpeg to a fixed % of CPU. Safe to disable — the kernel always prioritises the slideshow over transcoding via nice.</p>
-                        <div class="form-group" id="cpu-throttle-group">
-                            <span class="form-label">CPU Limit</span>
-                            <input type="range" id="cfg-cpu-throttle-pct" min="10" max="400" step="10" value="100">
-                            <span class="range-value" id="cfg-cpu-throttle-pct-label">100%</span>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Use Software Encoder</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">Best quality — uses CPU instead of Pi hardware encoder. Disable for faster (but lower quality) hardware encoding.</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="checkbox" id="cfg-transcode-software-encoder" class="checkbox-premium" checked>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Transcode Timeout</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">seconds (default: 7200 = 2 hours)</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="cfg-transcode-timeout" min="60" max="86400" step="60" value="7200"
+                                       class="input-premium w-28 text-right">
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Hard CPU Cap (cpulimit)</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">Limits ffmpeg to a fixed % of CPU. Safe to disable — the kernel always prioritises the slideshow over transcoding via nice.</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="checkbox" id="cfg-cpu-throttle-enabled" class="checkbox-premium" checked>
+                            </div>
+                        </div>
+                        <div class="setting-row" id="cpu-throttle-group">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">CPU Limit</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="range" id="cfg-cpu-throttle-pct" min="10" max="400" step="10" value="100"
+                                       class="range-premium w-40">
+                                <span class="range-value text-[0.72rem] font-semibold text-primary" id="cfg-cpu-throttle-pct-label">100%</span>
+                            </div>
                         </div>
                     </div>
-                    <button id="btn-save-transcode">Save Video Optimisation</button>
-                </div>
 
-                <div class="card">
-                    <h2>Security</h2>
-                    <p class="hint">Three independent credentials. Setting any of them is optional.</p>
-
-                    <!-- Web dashboard password -->
-                    <div class="form-group">
-                        <span class="form-label">Web Dashboard Password</span>
-                        <input type="password" id="cfg-web-password" autocomplete="new-password" placeholder="Leave empty to disable">
+                    <div class="mt-5 pt-3 border-t border-border/60 flex justify-end">
+                        <button id="btn-save-transcode" class="btn--primary">Save Video Optimisation</button>
                     </div>
-                    <div class="form-group">
-                        <span class="form-label">Confirm Web Password</span>
-                        <input type="password" id="cfg-web-password-confirm" autocomplete="new-password" placeholder="Repeat password">
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Session Timeout</span>
-                        <select id="cfg-web-session-timeout">
-                            <option value="0">Forever (no timeout)</option>
-                            <option value="15">15 minutes</option>
-                            <option value="30">30 minutes</option>
-                            <option value="60">1 hour</option>
-                            <option value="120">2 hours</option>
-                        </select>
-                    </div>
-                    <p class="hint">Protects the web dashboard and its API. Empty = no login required.</p>
-                    <button id="btn-save-web-password">Save Web Password</button>
-
-                    <hr style="border:none;border-top:1px solid var(--border);margin:1.25rem 0">
-
-                    <!-- Device password (SSH + Samba, synced) -->
-                    <div class="form-group">
-                        <span class="form-label">Device Password</span>
-                        <input type="password" id="cfg-device-password" autocomplete="new-password" placeholder="New device password">
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Confirm Device Password</span>
-                        <input type="password" id="cfg-device-password-confirm" autocomplete="new-password" placeholder="Repeat device password">
-                    </div>
-                    <p class="hint">Used for SSH login <strong>and</strong> the Samba share — changing it updates both. This is separate from the web dashboard password.</p>
-                    <button id="btn-save-device-password">Change Device Password</button>
-
-                    <hr style="border:none;border-top:1px solid var(--border);margin:1.25rem 0">
-
-                    <!-- Screen PIN (future on-screen UI) -->
-                    <div class="form-group">
-                        <span class="form-label">Screen PIN</span>
-                        <input type="password" id="cfg-screen-pin" autocomplete="new-password" placeholder="4-6 digits" inputmode="numeric" pattern="[0-9]{4,6}">
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Confirm Screen PIN</span>
-                        <input type="password" id="cfg-screen-pin-confirm" autocomplete="new-password" placeholder="Repeat PIN" inputmode="numeric" pattern="[0-9]{4,6}">
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">PIN Unlock Timeout</span>
-                        <select id="cfg-screen-pin-timeout">
-                            <option value="5">5 minutes</option>
-                            <option value="15">15 minutes</option>
-                            <option value="30">30 minutes</option>
-                            <option value="60">1 hour</option>
-                            <option value="180">3 hours</option>
-                            <option value="720">12 hours</option>
-                            <option value="1440">24 hours</option>
-                        </select>
-                    </div>
-                    <p class="hint">Protects the future on-screen UI on the frame. Independent of the web password and device password. Max 24 hours.</p>
-                    <button id="btn-save-screen-pin">Save Screen PIN</button>
                 </div>
             </section>
-
-            <!-- ═══════════════ Sync Page (Immich only) ═══════════════ -->
-            <section id="page-sync" class="page">
-                <div class="card">
-                    <h2>Immich Sync</h2>
-
-                    <h3 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin:0 0 0.6rem 0;text-transform:uppercase;letter-spacing:0.04em">Immich Server Connection</h3>
-                    <p class="hint">Connect Metixel Photoframe to your Immich server to automatically sync photos from an album.</p>
-                    <div class="form-group">
-                        <span class="form-label">Server URL</span>
-                        <input type="url" id="cfg-immich-url" placeholder="http://immich-server:2283">
+        
+            <!-- Datasection -->
+            <section id="page-system" class="page">
+                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">System</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Maintenance</span>
                     </div>
-                    <p class="hint">Do NOT include <code>/api</code> — just the base URL with a trailing slash (e.g. <code>http://192.168.1.50:2283/</code>).</p>
-                    <div class="form-group">
-                        <span class="form-label">API Key</span>
-                        <input type="password" id="cfg-immich-key" placeholder="••••••••">
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Quiet Boot</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Hides kernel messages and console text during startup.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-quiet-boot" class="checkbox-premium">
+                        </div>
                     </div>
-                    <button id="btn-test-immich" class="btn--secondary" style="margin-bottom:0.8rem">Test Connection</button>
-                    <span id="immich-test-result" style="font-size:0.82rem;margin-left:0.5rem"></span>
-
-                    <hr style="border-color:var(--border);margin:1rem 0">
-
-                    <h3 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin:0 0 0.6rem 0;text-transform:uppercase;letter-spacing:0.04em">Sync Settings</h3>
-                    <div class="form-group">
-                        <span class="form-label" style="align-self:flex-start">Albums</span>
-                        <div style="flex:1">
-                            <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.35rem">
-                                <input type="text" id="album-search" placeholder="Filter albums…" style="flex:1;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
-                                <button id="btn-fetch-albums" class="btn--sm btn--secondary" style="white-space:nowrap;margin-top:0">Fetch Albums</button>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Cache Dir</span>
+                        </div>
+                        <div class="setting-control">
+                            <div class="flex gap-2 items-center">
+                                <input type="text" id="cfg-cache-dir" class="input-premium w-56" placeholder="cache/">
+                                <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
                             </div>
-                            <select id="album-picker" size="8" style="width:100%;max-width:440px;padding:0.3rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
-                                <option value="">— Fetch albums to populate —</option>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">File Log Level</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-log-level" class="select-premium input-premium w-44">
+                                <option value="DEBUG">Debug</option>
+                                <option value="INFO">Info</option>
+                                <option value="WARNING">Warning</option>
+                                <option value="ERROR">Error</option>
+                                <option value="NONE" selected>None</option>
                             </select>
-                            <div style="margin-top:0.35rem">
-                                <button id="btn-add-album" class="btn--sm btn--primary" style="margin-top:0" disabled>+ Add Selected</button>
-                                <span id="album-picker-count" style="font-size:0.75rem;color:var(--text-muted);margin-left:0.4rem"></span>
-                            </div>
-                            <p class="hint" style="margin-top:0.35rem">Fetch the album list, then select one and click <strong>Add Selected</strong>. Each album syncs into its own <code>album_&lt;id&gt;</code> folder.</p>
-                            <div style="margin-top:0.6rem">
-                                <span class="form-label" style="display:block;margin-bottom:0.3rem">Synced Albums</span>
-                                <ul id="synced-albums-list" style="list-style:none;padding:0;margin:0"></ul>
-                            </div>
                         </div>
                     </div>
-                    <div class="form-group">
-                        <span class="form-label">Sync Directory</span>
-                        <div style="display:flex;gap:0.4rem;align-items:center">
-                            <input type="text" id="cfg-immich-sync-dir" placeholder="media/sync/immich/" style="flex:1">
-                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-immich-sync-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
-                        </div>
-                    </div>
-                    <p class="hint">Where downloaded assets are stored. Relative paths are under <code>/opt/metixel/</code>.</p>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-immich-enabled"> Enable Scheduled Sync
-                    </label>
-                    <div class="form-group" id="immich-interval-group">
-                        <span class="form-label">Poll Interval</span>
-                        <input type="number" id="cfg-immich-interval" min="0.5" max="24" step="0.5" value="1">
-                        <span style="font-size:0.8rem;color:var(--text-muted)">hours</span>
-                    </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-immich-strict"> Strict Sync
-                    </label>
-                    <p class="hint">When enabled, local files not in the album are deleted (mirror mode). When disabled, only new assets are downloaded — existing local files are preserved.</p>
-                    <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.8rem">
-                        <button id="btn-save-immich">Save Immich Settings</button>
-                        <button id="btn-sync-now" class="btn--secondary">Sync Now</button>
-                        <button id="btn-cancel-sync" class="btn--danger" style="display:none">Cancel Sync</button>
-                    </div>
-                    <!-- Live progress bar -->
-                    <div id="immich-progress" style="margin-top:0.8rem;display:none">
-                        <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem;font-size:0.82rem">
-                            <span id="sync-progress-phase">Syncing…</span>
-                            <span id="sync-progress-count"></span>
-                        </div>
-                        <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
-                            <div id="sync-progress-bar" style="background:var(--primary);height:100%;width:0%;transition:width 0.3s"></div>
-                        </div>
-                        <div id="sync-current-file" style="font-size:0.75rem;color:var(--text-muted);margin-top:0.2rem;word-break:break-all"></div>
-                    </div>
-                    <!-- Sync status -->
-                    <div id="immich-sync-status" style="margin-top:0.8rem;padding:0.6rem;background:var(--bg);border-radius:4px;font-size:0.82rem;display:none">
-                        <strong>Last Sync:</strong> <span id="sync-status-text">—</span>
-                        <div id="sync-status-detail" style="margin-top:0.3rem;color:var(--text-muted)"></div>
-                        <div id="sync-albums" style="margin-top:0.4rem"></div>
-                        <ul id="sync-errors" style="margin:0.3rem 0 0 1.2rem;padding:0;font-size:0.78rem;color:var(--danger);display:none"></ul>
+                    <p id="sd-card-warning" class="text-[0.76rem] leading-relaxed text-[#f0a030] mt-2"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span> <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
+                    <div class="mt-5 pt-3 border-t border-border/60 flex flex-wrap gap-2 justify-end">
+                        <button id="btn-restart-services" class="btn--secondary">Restart Services</button>
+                        <button id="btn-clear-cache" class="btn--danger">Clear Image Cache</button>
+                        <button id="btn-reboot-system" class="btn--danger"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Reboot System</button>
+                        <button id="btn-shutdown-system" class="btn--danger"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Shutdown</button>
+                        <button id="btn-save-system" class="btn--primary">Save System Settings</button>
                     </div>
                 </div>
-            </section>
 
-            <!-- ═══════════════ Network Page ═══════════════ -->
-            <section id="page-network" class="page">
-                <div class="card">
-                    <h2>Network Status</h2>
-                    <div id="network-status" style="font-size:0.92rem">Loading…</div>
-                </div>
-
-                <div class="card">
-                    <h2>Available Networks</h2>
-                    <button class="btn--primary" id="btn-network-scan" style="margin-bottom:12px"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">wifi_find</span> Scan for Networks</button>
-                    <div id="network-scan-list"></div>
-                    <div id="network-scan-status" class="status-msg" style="display:none;margin-top:8px;padding:8px 12px;border-radius:6px;font-size:0.85rem"></div>
-                </div>
-
-                <div class="card">
-                    <h2>Access Point (Captive Portal)</h2>
-                    <p class="hint">When no Wi-Fi is available, the frame creates its own hotspot "Metixel-Setup" so you can connect with your phone and configure Wi-Fi.</p>
-                    <div class="form-group form-group--stack">
-                        <span class="form-label">WiFi Country Code</span>
-                        <div style="display:flex;gap:0.4rem;align-items:center">
-                            <input type="text" id="cfg-wifi-country" placeholder="AU" maxlength="2" style="width:80px;text-transform:uppercase" autocomplete="off">
-                            <button id="btn-save-wifi-country" class="btn--sm btn--primary" style="font-size:0.78rem;padding:3px 8px">Save</button>
-                        </div>
-                        <p class="hint" style="margin-top:0.15rem">Two-letter ISO 3166-1 code (AU, US, GB, DE, etc.). Sets the regulatory domain for correct channel availability. Requires reboot to take full effect.</p>
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Updates</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">System</span>
                     </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-ap-enabled" checked> Enable AP fallback
-                    </label>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-suppress-popups"> Suppress network popups on frame display
-                    </label>
-                    <div id="network-ap-status" style="margin:8px 0;font-size:0.9rem">Checking…</div>
-                    <button id="btn-network-ap-toggle" class="btn--secondary">Start AP Mode</button>
-                </div>
-            </section>
-
-            <!-- ═══════════════ Advanced Page ═══════════════ -->
-            <section id="page-advanced" class="page">
-                <div class="card">
-                    <h2>System</h2>
-                    <div class="form-group">
-                        <label class="checkbox-row">
-                            <input type="checkbox" id="cfg-quiet-boot">
-                            <span>Quiet Boot</span>
-                        </label>
-                        <p class="hint" style="margin-top:0.2rem">Hides kernel messages and console text during startup.</p>
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Cache Dir</span>
-                        <div style="display:flex;gap:0.4rem">
-                            <input type="text" id="cfg-cache-dir" placeholder="cache/" style="flex:1">
-                            <button class="btn--sm btn--secondary btn-browse" data-target="cfg-cache-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">File Log Level</span>
-                        <select id="cfg-log-level">
-                            <option value="DEBUG">Debug</option>
-                            <option value="INFO">Info</option>
-                            <option value="WARNING">Warning</option>
-                            <option value="ERROR">Error</option>
-                            <option value="NONE" selected>None</option>
-                        </select>
-                    </div>
-                    <p class="hint">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</p>
-                    <p class="hint" style="color:var(--warning,#e6a817)"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span> <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
-                    <button id="btn-save-system">Save System Settings</button>
-                    <button id="btn-restart-services" class="btn--secondary" style="margin-left:0.5rem">Restart Services</button>
-                    <button id="btn-clear-cache" class="btn--danger" style="margin-left:0.5rem">Clear Image Cache</button>
-                    <button id="btn-reboot-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Reboot System</button>
-                    <button id="btn-shutdown-system" class="btn--danger" style="margin-left:0.5rem"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Shutdown</button>
-                </div>
-
-                <div class="card">
-                    <h2>Updates</h2>
-                    <p class="hint">System and version information. Use this to verify what's running before applying updates.</p>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">System and version information. Use this to verify what's running before applying updates.</p>
                     <div class="info-grid" id="updates-info">
                         <div class="info-row"><span class="info-label">Metixel</span><span class="info-value" id="info-app-version">--</span></div>
                         <div class="info-row"><span class="info-label">Hardware</span><span class="info-value" id="info-pi-model">--</span></div>
@@ -736,125 +1165,147 @@
                         <div class="info-row"><span class="info-label">Hostname</span><span class="info-value" id="info-hostname">--</span></div>
                     </div>
 
-                    <!-- OTA Update Controls -->
-                    <hr style="border-color:var(--border);margin:1rem 0">
-                    <h3 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin:0 0 0.8rem 0;text-transform:uppercase;letter-spacing:0.04em">Over-the-Air Updates</h3>
+                    <div class="mt-5 border-t border-border/60"></div>
 
-                    <div class="update-layout">
-                        <!-- Left column: settings & controls -->
-                        <div class="update-left">
-                            <!-- Channel selector -->
-                            <div class="form-group">
-                                <span class="form-label">Update Channel</span>
-                                <select id="cfg-update-channel">
-                                    <option value="stable">Stable (recommended)</option>
-                                    <option value="beta">Beta</option>
-                                    <option value="main">Main (latest commits)</option>
+                    <!-- ── Update Channel ─────────────────────────────── -->
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Update Channel</div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Update Channel</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug" id="update-channel-desc">Stable releases are thoroughly tested and recommended for most users.</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-update-channel" class="select-premium input-premium w-44">
+                                <option value="stable">Stable (recommended)</option>
+                                <option value="beta">Beta</option>
+                                <option value="main">Main (latest commits)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-2 mt-3 flex-wrap">
+                        <button id="btn-check-updates" class="btn--primary">Check for Updates</button>
+                        <button id="btn-apply-update" class="btn--primary hidden">Install Update</button>
+                    </div>
+
+                    <div id="update-status" class="mt-2 text-[0.82rem] text-text-muted"></div>
+
+                    <div id="update-progress" class="hidden mt-2">
+                        <div class="flex justify-between mb-1 text-[0.78rem]">
+                            <span id="update-progress-phase">Installing…</span>
+                        </div>
+                        <div class="bg-border rounded h-1.5 overflow-hidden">
+                            <div id="update-progress-bar" class="bg-primary h-full transition-[width] duration-500" style="width:0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- ── Available Updates ───────────────────────────── -->
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Available Updates</div>
+
+                    <div id="update-available-section">
+                        <div id="update-available-list">
+                            <span class="text-text-muted text-[0.82rem]">Check for updates to see versions</span>
+                        </div>
+                    </div>
+
+                    <!-- ── Automatic Updates ───────────────────────────── -->
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Automatic Updates</div>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Automatically install updates</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Metixel will install the latest update on the selected channel once per week at the chosen time.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-update-auto-update" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div id="auto-update-schedule-fields" class="flex gap-4 flex-wrap mt-2">
+                        <div class="setting-row flex-1 min-w-[140px]">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Day of week</span>
+                            </div>
+                            <div class="setting-control">
+                                <select id="cfg-update-auto-day" class="select-premium input-premium w-40">
+                                    <option value="0">Monday</option>
+                                    <option value="1">Tuesday</option>
+                                    <option value="2">Wednesday</option>
+                                    <option value="3">Thursday</option>
+                                    <option value="4">Friday</option>
+                                    <option value="5">Saturday</option>
+                                    <option value="6">Sunday</option>
                                 </select>
                             </div>
-                            <p class="hint" id="update-channel-desc">Stable releases are thoroughly tested and recommended for most users.</p>
-
-                            <!-- Actions -->
-                            <div style="display:flex;gap:0.5rem;align-items:center;margin-top:0.8rem;flex-wrap:wrap">
-                                <button id="btn-check-updates" class="btn--primary">Check for Updates</button>
-                                <button id="btn-apply-update" class="btn--primary" style="display:none">Install Update</button>
-                            </div>
-
-                            <!-- Status -->
-                            <div id="update-status" style="margin-top:0.5rem;font-size:0.82rem;color:var(--text-muted)"></div>
-
-                            <!-- Progress bar (shown during install) -->
-                            <div id="update-progress" style="display:none;margin-top:0.5rem">
-                                <div style="display:flex;justify-content:space-between;margin-bottom:0.2rem;font-size:0.78rem">
-                                    <span id="update-progress-phase">Installing…</span>
-                                </div>
-                                <div style="background:var(--border);border-radius:4px;height:6px;overflow:hidden">
-                                    <div id="update-progress-bar" style="background:var(--primary);height:100%;width:0%;transition:width 0.5s"></div>
-                                </div>
-                            </div>
-
-                            <!-- Auto-update schedule -->
-                            <div style="margin-top:0.8rem">
-                                <label class="checkbox-row">
-                                    <input type="checkbox" id="cfg-update-auto-update"> Automatically install updates
-                                </label>
-                                <p class="hint">Metixel will install the latest update on the selected channel once per week at the chosen time.</p>
-                                <div id="auto-update-schedule-fields" style="display:flex;gap:0.8rem;flex-wrap:wrap;margin-top:0.4rem">
-                                    <div class="form-group" style="flex:1;min-width:140px">
-                                        <span class="form-label">Day of week</span>
-                                        <select id="cfg-update-auto-day">
-                                            <option value="0">Monday</option>
-                                            <option value="1">Tuesday</option>
-                                            <option value="2">Wednesday</option>
-                                            <option value="3">Thursday</option>
-                                            <option value="4">Friday</option>
-                                            <option value="5">Saturday</option>
-                                            <option value="6">Sunday</option>
-                                        </select>
-                                    </div>
-                                    <div class="form-group" style="flex:1;min-width:140px">
-                                        <span class="form-label">Time</span>
-                                        <input type="time" id="cfg-update-auto-time">
-                                    </div>
-                                </div>
-                                <button id="btn-save-auto-update" class="btn--sm btn--primary" style="margin-top:0.4rem">Save Schedule</button>
-                                <p class="hint" id="update-auto-update-hint" style="margin-top:0.3rem"></p>
-                            </div>
-
-                            <!-- Auto-check toggle -->
-                            <label class="checkbox-row" style="margin-top:0.8rem">
-                                <input type="checkbox" id="cfg-update-auto-check"> Automatically check for updates
-                            </label>
-                            <p class="hint" id="update-check-interval-hint">Checks every 6 hours</p>
                         </div>
-
-                        <!-- Right column: available versions -->
-                        <div class="update-right">
-                            <div id="update-available-section">
-                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Available Versions</div>
-                                <div id="update-available-list">
-                                    <span style="color:var(--text-muted);font-size:0.82rem">Check for updates to see versions</span>
-                                </div>
+                        <div class="setting-row flex-1 min-w-[140px]">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Time</span>
                             </div>
-
-                            <!-- Release selector -->
-                            <div id="update-release-section" style="margin-top:1rem">
-                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Install a Specific Release</div>
-                                <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
-                                    <select id="cfg-update-release" style="flex:1;min-width:160px">
-                                        <option value="">— Select a release —</option>
-                                    </select>
-                                    <button id="btn-install-release" class="btn--sm btn--primary">Install</button>
-                                </div>
-                                <p class="hint" style="margin-top:0.3rem">Choose any release (v1.2.3 or newer) to install. If it's already present locally, you'll be asked to delete it first.</p>
-                            </div>
-
-                            <!-- Rollback -->
-                            <div id="update-rollback-section" style="margin-top:1rem">
-                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Roll Back to a Previous Version</div>
-                                <div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap">
-                                    <select id="cfg-update-rollback" style="flex:1;min-width:160px">
-                                        <option value="">— Select an installed version —</option>
-                                    </select>
-                                    <button id="btn-rollback" class="btn--sm btn--secondary">Roll Back</button>
-                                </div>
-                                <p class="hint" style="margin-top:0.3rem">Switches the live symlink to a previously installed release and restarts services.</p>
-                            </div>
-
-                            <!-- Full OS upgrade -->
-                            <div id="update-apt-section" style="margin-top:1rem">
-                                <div style="font-weight:600;font-size:0.85rem;margin-bottom:0.3rem">Full OS Upgrade</div>
-                                <button id="btn-apt-upgrade" class="btn--sm btn--danger">Upgrade OS &amp; Reboot</button>
-                                <p class="hint" style="margin-top:0.3rem">Runs <code>apt update &amp;&amp; apt upgrade</code> and reboots the system when complete.</p>
+                            <div class="setting-control">
+                                <input type="time" id="cfg-update-auto-time" class="input-premium">
                             </div>
                         </div>
                     </div>
+                    <div class="flex justify-end mt-2">
+                        <button id="btn-save-auto-update" class="btn--sm btn--primary">Save Schedule</button>
+                    </div>
+                    <p class="text-text-muted text-[0.72rem] leading-snug mt-1" id="update-auto-update-hint"></p>
+
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Automatically check for updates</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug" id="update-check-interval-hint">Checks every 6 hours</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-update-auto-check" class="checkbox-premium">
+                        </div>
+                    </div>
+
+                    <!-- ── Advanced ────────────────────────────────────── -->
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Advanced</div>
+
+                    <div id="update-release-section">
+                        <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-2">Install a Specific Release</div>
+                        <div class="flex gap-2 items-center flex-wrap">
+                            <select id="cfg-update-release" class="select-premium input-premium flex-1 min-w-[160px]">
+                                <option value="">— Select a release —</option>
+                            </select>
+                            <button id="btn-install-release" class="btn--sm btn--primary">Install</button>
+                        </div>
+                        <p class="text-text-muted text-[0.72rem] leading-snug mt-2">Choose any release (v1.2.3 or newer) to install. If it's already present locally, you'll be asked to delete it first.</p>
+                    </div>
+
+                    <div id="update-rollback-section" class="mt-4">
+                        <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-2">Roll Back to a Previous Version</div>
+                        <div class="flex gap-2 items-center flex-wrap">
+                            <select id="cfg-update-rollback" class="select-premium input-premium flex-1 min-w-[160px]">
+                                <option value="">— Select an installed version —</option>
+                            </select>
+                            <button id="btn-rollback" class="btn--sm btn--secondary">Roll Back</button>
+                        </div>
+                        <p class="text-text-muted text-[0.72rem] leading-snug mt-2">Switches the live symlink to a previously installed release and restarts services.</p>
+                    </div>
+
+                    <div id="update-apt-section" class="mt-4">
+                        <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-2">Full OS Upgrade</div>
+                        <button id="btn-apt-upgrade" class="btn--sm btn--danger">Upgrade OS &amp; Reboot</button>
+                        <p class="text-text-muted text-[0.72rem] leading-snug mt-2">Runs <code>apt update &amp;&amp; apt upgrade</code> and reboots the system when complete.</p>
+                    </div>
                 </div>
 
-                <div class="card">
-                    <h2>Keyboard / Remote Control</h2>
-                    <p class="hint">Map keys from a USB wireless remote or keyboard to Metixel controls. Click <strong>Learn</strong>, then press the desired key on your remote.</p>
-                    <table id="kbd-map-table" style="width:100%;border-collapse:collapse;margin-top:0.5rem">
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Keyboard / Remote Control</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Input</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Map keys from a USB wireless remote or keyboard to Metixel controls. Click <strong>Learn</strong>, then press the desired key on your remote.</p>
+                    <table id="kbd-map-table" class="w-full border-collapse mt-2">
                         <thead>
                             <tr style="text-align:left;border-bottom:1px solid var(--border)">
                                 <th style="padding:0.35rem 0.5rem;font-size:0.85rem;color:var(--text-muted)">Function</th>
@@ -869,186 +1320,252 @@
                     <div id="kbd-learn-status" style="margin-top:0.5rem;padding:0.4rem 0.6rem;border-radius:4px;display:none;font-size:0.85rem"></div>
                 </div>
 
-                <div class="card">
-                    <h2>Time</h2>
-                    <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.6rem">
-                        <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
-                        <span style="font-weight:600;font-size:0.9rem">Server Time</span>
-                        <span id="server-clock" style="font-family:monospace;font-size:1.05rem;margin-left:0.3rem">--:--:--</span>
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Security</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Access</span>
                     </div>
-                    <div class="form-group">
-                        <span class="form-label">Timezone</span>
-                        <div style="display:flex;gap:0.4rem;align-items:center">
-                            <select id="cfg-timezone" style="flex:1">
-                                <option value="">Auto-detect</option>
-                            </select>
-                            <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
-                        </div>
-                    </div>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-ntp-enabled" checked>
-                        <span>NTP Time Sync</span>
-                    </label>
-                    <div class="form-group" id="ntp-servers-group" style="margin-top:0.3rem">
-                        <span class="form-label">NTP Servers</span>
-                        <div style="display:flex;flex-direction:column;gap:0.25rem">
-                            <input type="text" id="cfg-ntp-server-1" placeholder="0.debian.pool.ntp.org">
-                            <input type="text" id="cfg-ntp-server-2" placeholder="1.debian.pool.ntp.org">
-                            <input type="text" id="cfg-ntp-server-3" placeholder="2.debian.pool.ntp.org">
-                        </div>
-                        <p class="hint" style="margin-top:0.2rem">Up to 3 servers. Leave blank to use defaults.</p>
-                    </div>
-                    <button id="btn-save-time">Save Time Settings</button>
 
-                    <hr style="border-color:var(--border);margin:0.8rem 0">
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-schedule-enabled">
-                        <span>Screen Power Save Schedule</span>
-                    </label>
-                    <p class="hint">The display turns off at the "Screen Off" time and on at the "Screen On" time each day. Times may wrap past midnight (e.g. Off 21:00 and On 07:00).</p>
-                    <div id="schedule-fields" style="margin-top:0.5rem">
-                        <div style="display:flex;gap:0.8rem;flex-wrap:wrap">
-                            <div class="form-group" style="flex:1;min-width:120px">
-                                <span class="form-label">Screen Off At</span>
-                                <input type="time" id="cfg-schedule-off" value="22:00">
-                            </div>
-                            <div class="form-group" style="flex:1;min-width:120px">
-                                <span class="form-label">Screen On At</span>
-                                <input type="time" id="cfg-schedule-on" value="07:00">
-                            </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Three independent credentials. Setting any of them is optional.</p>
+
+                    <!-- Web dashboard password -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Web Dashboard Password</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Protects the web dashboard and its API. Empty = no login required.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" id="cfg-web-password" class="input-premium w-40" autocomplete="new-password" placeholder="Leave empty to disable">
                         </div>
                     </div>
-                    <button id="btn-save-schedule">Save Display Power Schedule</button>
-                    <button id="btn-display-power" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">power_settings_new</span> Turn Display Off</button>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Confirm Web Password</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" id="cfg-web-password-confirm" class="input-premium w-40" autocomplete="new-password" placeholder="Repeat password">
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Session Timeout</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-web-session-timeout" class="select-premium input-premium w-44">
+                                <option value="0">Forever (no timeout)</option>
+                                <option value="15">15 minutes</option>
+                                <option value="30">30 minutes</option>
+                                <option value="60">1 hour</option>
+                                <option value="120">2 hours</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex justify-end mt-2">
+                        <button id="btn-save-web-password" class="btn--primary">Save Web Password</button>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <!-- Device password (SSH + Samba, synced) -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Device Password</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Used for SSH login and the Samba share — changing it updates both. This is separate from the web dashboard password.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" id="cfg-device-password" class="input-premium w-40" autocomplete="new-password" placeholder="New device password">
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Confirm Device Password</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" id="cfg-device-password-confirm" class="input-premium w-40" autocomplete="new-password" placeholder="Repeat device password">
+                        </div>
+                    </div>
+                    <div class="flex justify-end mt-2">
+                        <button id="btn-save-device-password" class="btn--primary">Change Device Password</button>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <!-- Screen PIN (future on-screen UI) -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Screen PIN</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Protects the future on-screen UI on the frame. Independent of the web password and device password. Max 24 hours.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" id="cfg-screen-pin" class="input-premium w-40" autocomplete="new-password" placeholder="4-6 digits" inputmode="numeric" pattern="[0-9]{4,6}">
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Confirm Screen PIN</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="password" id="cfg-screen-pin-confirm" class="input-premium w-40" autocomplete="new-password" placeholder="Repeat PIN" inputmode="numeric" pattern="[0-9]{4,6}">
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">PIN Unlock Timeout</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-screen-pin-timeout" class="select-premium input-premium w-44">
+                                <option value="5">5 minutes</option>
+                                <option value="15">15 minutes</option>
+                                <option value="30">30 minutes</option>
+                                <option value="60">1 hour</option>
+                                <option value="180">3 hours</option>
+                                <option value="720">12 hours</option>
+                                <option value="1440">24 hours</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="flex justify-end mt-2">
+                        <button id="btn-save-screen-pin" class="btn--primary">Save Screen PIN</button>
+                    </div>
                 </div>
 
-                <!-- MQTT / Home Assistant Settings -->
-                <div class="card">
-                    <h2>MQTT / Home Assistant</h2>
-                    <p class="hint">Connect to an MQTT broker so Home Assistant can control the frame and read its state.</p>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-mqtt-enabled"> Enable MQTT
-                    </label>
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">MQTT / Home Assistant</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Integrations</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Connect to an MQTT broker so Home Assistant can control the frame and read its state.</p>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable MQTT</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-mqtt-enabled" class="checkbox-premium">
+                        </div>
+                    </div>
                     <p id="mqtt-status" class="mqtt-status">
                         <span id="mqtt-status-pill" class="mqtt-status-pill mqtt-status--disabled">—</span>
                         <span id="mqtt-status-detail" class="mqtt-status-detail"></span>
                     </p>
-                    <div id="mqtt-fields" style="margin-top:0.6rem">
-                        <div class="form-group">
-                            <span class="form-label">Device ID</span>
-                            <input type="text" id="cfg-mqtt-device-id" placeholder="(auto: hardware id)">
+                    <div id="mqtt-fields" class="mt-3">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Device ID</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">Unique per frame. Leave empty to auto-derive from the hardware (Pi serial → MAC → machine-id), so Home Assistant treats each frame as a separate device and every frame's MQTT topics are isolated automatically.</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="text" id="cfg-mqtt-device-id" class="input-premium w-56" placeholder="(auto: hardware id)">
+                            </div>
                         </div>
-                        <p class="hint">Unique per frame. Leave empty to auto-derive from the hardware (Pi serial → MAC → machine-id), so Home Assistant treats each frame as a separate device and every frame's MQTT topics are isolated automatically.</p>
-                        <div class="form-group">
-                            <span class="form-label">Broker</span>
-                            <input type="text" id="cfg-mqtt-broker" placeholder="localhost">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Broker</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="text" id="cfg-mqtt-broker" class="input-premium w-56" placeholder="localhost">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <span class="form-label">Port</span>
-                            <input type="number" id="cfg-mqtt-port" min="1" max="65535" value="1883">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Port</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="cfg-mqtt-port" min="1" max="65535" value="1883" class="input-premium w-24 text-right">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <span class="form-label">Username</span>
-                            <input type="text" id="cfg-mqtt-username" placeholder="(optional)" autocomplete="off">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Username</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="text" id="cfg-mqtt-username" class="input-premium w-56" placeholder="(optional)" autocomplete="off">
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <span class="form-label">Password</span>
-                            <input type="password" id="cfg-mqtt-password" placeholder="(optional)" autocomplete="new-password">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Password</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="password" id="cfg-mqtt-password" class="input-premium w-56" placeholder="(optional)" autocomplete="new-password">
+                            </div>
                         </div>
-                        <hr style="border-color:var(--border);margin:0.7rem 0">
-                        <label class="checkbox-row">
-                            <input type="checkbox" id="cfg-mqtt-discovery" checked> Home Assistant Discovery
-                        </label>
-                        <p class="hint">Publishes entity configs to <code>homeassistant/</code> so HA auto-discovers the frame (buttons, screen-power switch, sensors).</p>
-                        <div class="form-group">
-                            <span class="form-label">Discovery Prefix</span>
-                            <input type="text" id="cfg-mqtt-discovery-prefix" placeholder="homeassistant">
+                        <div class="mt-5 border-t border-border/60"></div>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Home Assistant Discovery</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">Publishes entity configs to <code>homeassistant/</code> so HA auto-discovers the frame (buttons, screen-power switch, sensors).</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="checkbox" id="cfg-mqtt-discovery" class="checkbox-premium" checked>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Discovery Prefix</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="text" id="cfg-mqtt-discovery-prefix" class="input-premium w-56" placeholder="homeassistant">
+                            </div>
                         </div>
                     </div>
-                    <p class="hint">MQTT connects on backend start — restart services after saving to apply changes.</p>
-                    <div class="mqtt-actions">
-                        <button id="btn-save-mqtt">Save MQTT Settings</button>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mt-2">MQTT connects on backend start — restart services after saving to apply changes.</p>
+                    <div class="flex justify-end gap-2 mt-3">
                         <button id="btn-restart-mqtt" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">restart_alt</span> Restart Services</button>
+                        <button id="btn-save-mqtt" class="btn--primary">Save MQTT Settings</button>
                     </div>
                 </div>
 
-                <!-- Display Settings (moved under MQTT) -->
-                <div class="card">
-                    <h2>Display Settings</h2>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-display-auto"> Auto-detect resolution
-                    </label>
-                    <p class="hint" id="display-detected-res" style="margin-bottom:0.6rem">Detected: —</p>
-                    <div class="field-group" id="display-resolution-fields">
-                        <div class="form-group">
-                            <span class="form-label">Resolution &amp; Refresh Rate</span>
-                            <select id="cfg-display-resolution">
-                                <option value="0x0@0">Auto (native)</option>
-                            </select>
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Monitor Control (DDC/CI)</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Hardware</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Adjust the monitor’s own picture settings (brightness, contrast, input, …) over HDMI DDC/CI. Controls appear only for features your display reports.</p>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable DDC/CI</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-ddc-enabled" class="checkbox-premium">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <span class="form-label">FPS Limit</span>
-                        <input type="number" id="cfg-fps-limit" min="10" max="60" value="30">
-                    </div>
-                    <div class="form-group">
-                        <span class="form-label">Screen Rotation</span>
-                        <select id="cfg-display-rotation">
-                            <option value="0">0° (landscape)</option>
-                            <option value="90">90°</option>
-                            <option value="180">180° (upside down)</option>
-                            <option value="270">270°</option>
-                        </select>
-                    </div>
-                    <p class="hint">Resolution, refresh rate and rotation are applied on the next frontend restart.</p>
-                    <button id="btn-save-display">Save Display Settings</button>
-                </div>
-
-                <!-- DDC/CI Monitor Control -->
-                <div class="card">
-                    <h2>Monitor Control (DDC/CI)</h2>
-                    <p class="hint">Adjust the monitor’s own picture settings (brightness, contrast, input, …) over HDMI DDC/CI. Controls appear only for features your display reports.</p>
-                    <label class="checkbox-row">
-                        <input type="checkbox" id="cfg-ddc-enabled">
-                        <span>Enable DDC/CI</span>
-                    </label>
-                    <div id="ddc-fields" style="margin-top:0.5rem;display:none">
-                        <div class="form-group">
-                            <span class="form-label">Display number</span>
-                            <input type="number" id="cfg-ddc-display" min="1" max="8" value="1" style="max-width:6rem">
+                    <div id="ddc-fields" class="hidden mt-2">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Display number</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">Usually <code>1</code> (first detected). Change only if you have multiple DDC displays.</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="cfg-ddc-display" min="1" max="8" value="1" class="input-premium w-20 text-right">
+                            </div>
                         </div>
-                        <p class="hint">Usually <code>1</code> (first detected). Change only if you have multiple DDC displays.</p>
                     </div>
-                    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin:0.6rem 0;align-items:center">
-                        <button id="btn-save-ddc" class="btn--primary">Save DDC Settings</button>
+                    <div class="flex gap-2 flex-wrap items-center mt-3 justify-end">
                         <button id="btn-ddc-refresh" class="btn--sm btn--secondary" type="button">
                             <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">refresh</span> Refresh
                         </button>
+                        <button id="btn-save-ddc" class="btn--primary">Save DDC Settings</button>
                     </div>
-                    <p id="ddc-status" class="hint" style="margin-bottom:0.5rem">—</p>
-                    <p id="ddc-empty" class="hint" style="display:none;color:var(--text-muted)">Monitor DDC/CI not available</p>
-                    <div id="ddc-controls" style="display:none"></div>
+                    <p id="ddc-status" class="text-text-muted text-[0.76rem] mb-2">—</p>
+                    <p id="ddc-empty" class="text-text-muted text-[0.76rem] hidden">Monitor DDC/CI not available</p>
+                    <div id="ddc-controls" class="hidden"></div>
                 </div>
 
-                <!-- Web Server card hidden — uncomment to re-enable
-                <div class="card">
-                    <h2>Web Server</h2>
-                    <p class="hint">Changing these requires a backend restart.</p>
-                    <div class="form-group">
-                        <span class="form-label">Host</span>
-                        <input type="text" id="cfg-web-host" placeholder="0.0.0.0">
+ <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">System Logs</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Diagnostics</span>
                     </div>
-                    <div class="form-group">
-                        <span class="form-label">Port</span>
-                        <input type="number" id="cfg-web-port" min="80" max="65535" value="8080">
-                    </div>
-                    <button id="btn-save-web">Save Web Settings</button>
-                </div>
-                -->
-
-                <div class="card">
-                    <h2>System Logs</h2>
-                    <p class="hint">Log file: <code>/opt/metixel/logs/metixel.log</code> — file level controlled above in System.</p>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Log file: <code>/opt/metixel/logs/metixel.log</code> — file level controlled above in System.</p>
                     <div id="log-viewer">
                         <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;flex-wrap:wrap;align-items:center">
                             <input id="log-search" class="search log-search" type="text" placeholder="Search logs…" style="flex:1;min-width:140px;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
@@ -1112,6 +1629,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=47"></script>
+    <script type="module" src="/static/js/main.js?v=52"></script>
 </body>
 </html>

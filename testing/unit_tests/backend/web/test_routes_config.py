@@ -318,6 +318,57 @@ class TestSystemCommands:
         assert resp.status_code == 200
         assert json.loads(resp.data)["ntp"] == "enabled"
 
+    def test_ntp_enable_defaults_when_empty(self, client, monkeypatch):
+        """Empty/blank server list falls back to the Debian pool defaults."""
+        import tempfile
+
+        import metixel.backend.web.routes.time as time_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(time_mod.subprocess, "run", fake)
+
+        # Capture the timesyncd.conf written to the temp file.
+        written_conf = {}
+
+        class _FakeTempFile:
+            def __init__(self, mode="w", suffix=".conf", delete=False):
+                self.name = "fake_timesyncd.conf"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def write(self, s):
+                written_conf["conf"] = s
+
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", _FakeTempFile)
+        monkeypatch.setattr(time_mod.os, "unlink", mock.MagicMock())
+
+        resp = client.post("/api/time/ntp", json={"enabled": True, "servers": []})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["ntp"] == "enabled"
+        assert data["servers"] == time_mod.DEFAULT_NTP_SERVERS
+
+        # The timesyncd.conf written must contain the default NTP= lines.
+        conf = written_conf.get("conf", "")
+        assert "NTP=0.debian.pool.ntp.org" in conf
+        assert "NTP=1.debian.pool.ntp.org" in conf
+        assert "NTP=2.debian.pool.ntp.org" in conf
+
+    def test_ntp_enable_defaults_when_blank(self, client, monkeypatch):
+        """A list of blank strings also falls back to the defaults."""
+        import metixel.backend.web.routes.time as time_mod
+
+        fake = mock.MagicMock(return_value=self._ok_result())
+        monkeypatch.setattr(time_mod.subprocess, "run", fake)
+        resp = client.post("/api/time/ntp", json={"enabled": True, "servers": ["", "  ", ""]})
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["servers"] == time_mod.DEFAULT_NTP_SERVERS
+
     def test_ntp_missing_enabled(self, client):
         resp = client.post("/api/time/ntp", json={})
         assert resp.status_code == 400

@@ -98,14 +98,15 @@ import { showLogin, hideLogin } from "./login.js";
 
     // Register page loaders with the shared router (core.js).
     registerPage("dashboard", loadDashboard);
-    registerPage("settings", loadSettings);
-    registerPage("sync", loadSync);
     registerPage("media", loadMedia);
+    registerPage("sources", loadSync);
+    registerPage("playback", loadSettings);
+    registerPage("optimisation", loadSettings);
     registerPage("network", loadNetwork);
-    registerPage("advanced", loadAdvanced);
+    registerPage("system", loadAdvanced);
 
     var hash = location.hash.substring(1);
-    var validPages = ["dashboard", "media", "settings", "sync", "network", "advanced"];
+    var validPages = ["dashboard", "media", "sources", "playback", "optimisation", "network", "system"];
     var startPage = validPages.indexOf(hash) >= 0 ? hash : "dashboard";
     navigateTo(startPage);
 

@@ -13,6 +13,9 @@ build/
 venv/
 env/
 
+# Node / npm (dev-machine Tailwind tooling; never ships to the Pi)
+node_modules/
+
 # IDE
 .vscode/*
 !.vscode/sync-to-pi.ps1

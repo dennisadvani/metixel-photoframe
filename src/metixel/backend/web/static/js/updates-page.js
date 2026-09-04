@@ -69,12 +69,12 @@ async function loadUpdateStatus() {
                 ' <span class="update-status-available">— Update available: '
                 + escapeHtml(avail.version) + '</span>';
             if (installBtn) {
-                installBtn.style.display = "";
+                installBtn.classList.remove("hidden");
                 installBtn.textContent = "Install " + escapeHtml(avail.version || "Update");
             }
         } else {
             statusHtml += ' <span class="update-status-uptodate">— Up to date</span>';
-            if (installBtn) installBtn.style.display = "none";
+            if (installBtn) installBtn.classList.add("hidden");
         }
 
         // Last check time
@@ -265,7 +265,7 @@ function bindUpdateControls() {
         var progressDiv = document.getElementById("update-progress");
         var progressBar = document.getElementById("update-progress-bar");
         var progressPhase = document.getElementById("update-progress-phase");
-        if (progressDiv) progressDiv.style.display = "";
+        if (progressDiv) progressDiv.classList.remove("hidden");
         if (progressBar) progressBar.style.width = "30%";
         if (progressPhase) progressPhase.textContent = "Stopping services\u2026";
 
@@ -297,14 +297,14 @@ function bindUpdateControls() {
                 if (progressPhase) progressPhase.textContent = "Complete — reconnecting\u2026";
                 showToast("Update applied! Services are restarting.", "success", 8000);
             } else {
-                if (progressDiv) progressDiv.style.display = "none";
+                if (progressDiv) progressDiv.classList.add("hidden");
                 showToast((result && result.message) || "Update failed", "error", 5000);
                 restoreInstall();
             }
         } catch (_) {
             clearInterval(progressTimer);
             // Expected during restart — the request will fail
-            if (progressDiv) progressDiv.style.display = "none";
+            if (progressDiv) progressDiv.classList.add("hidden");
             showToast("Services restarting — the page will reconnect shortly.", "info", 8000);
         }
     });

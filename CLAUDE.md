@@ -192,6 +192,47 @@ The mobile block forces `button { width: 100% }`. Small inline buttons must keep
 
 When editing `dashboard.css` or any file under `static/js/` (SPA entry point is `main.js`), **bump the `?v=` query** on both the stylesheet `<link>` and the `<script src>` in `index.html` (e.g. `main.js?v=15` → `v=16`). Otherwise browsers serve stale assets.
 
+### Tailwind CSS build (dev machine only)
+
+The dashboard uses **Tailwind CSS v4** for styling, but the Pi **never runs Tailwind**. CSS is built on the dev machine and the compiled output is committed.
+
+- **Source:** `src/metixel/backend/web/static/css/input.css` — the Tailwind entry point. It imports `tailwindcss`, defines the design tokens in `@theme`, and imports the hand-written styles.
+- **Hand-written styles:** `src/metixel/backend/web/static/css/custom.css` — the legacy design system, preserved verbatim. It is imported **inside `@layer components`** so Tailwind utilities (in `@layer utilities`, a higher-priority layer) can override it. **Do not move it out of the layer** — the un-layered universal reset `*, ::before, ::after { margin:0; padding:0 }` would otherwise beat every Tailwind utility and they'd all compute to 0.
+- **Build:** `npm run build:css` (one-shot) or `npm run watch:css` (watch). Output goes to `dashboard.css` (minified), which is what the Pi serves.
+- **Workflow:** edit `input.css` / `custom.css` / `index.html` → run `npm run build:css` → bump `?v=` in `index.html` → sync via the existing `scp` task. **Never build on the Pi.**
+- **Config:** `tailwind.config.js` scans `templates/**/*.html` and `static/js/**/*.js` for class names.
+
+### Premium design system (Slideshow Settings pattern)
+
+The dashboard uses a premium, cinematic design language — Apple-like restraint, Sonos/consumer-electronics feel, art-gallery aesthetic. **Avoid** generic admin-dashboard styling, excessive cards, gradients everywhere, neon colours, glassmorphism, huge headings, or pill-shaped everything.
+
+**Card anatomy** (every card follows this):
+- Container: `bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light`
+- Header: `flex items-center gap-2.5` with a `w-1 h-[1.1em] bg-primary rounded-sm` accent bar (vertically centered against the title via `items-center`, not `items-baseline`) + an uppercase `tracking-[0.14em]` eyebrow label on the right
+- Section dividers: `border-t border-border/60` — used only at **semantic boundaries** (header→content, control-group→toggle-group, content→action), never between every row
+- Action footer: `mt-5 pt-3 border-t border-border/60 flex justify-end`
+
+**Setting rows** (label left, control right, hint below label):
+```html
+<div class="setting-row">
+  <div class="setting-label">
+    <span class="text-[0.85rem] font-medium text-text-secondary">Label</span>
+    <span class="text-[0.72rem] text-text-muted leading-snug">Hint</span>
+  </div>
+  <div class="setting-control">
+    <input ... class="input-premium">
+  </div>
+</div>
+```
+
+**Premium controls** (defined in `input.css` under `@layer components`):
+- `.input-premium` — near-black fill `rgba(0,0,0,0.35)`, hairline `#2a2f45` border, soft burgundy focus ring
+- `.range-premium` — thin 2px track, tactile 14px thumb with burgundy-tinted border
+- `.checkbox-premium` — custom 18px square, burgundy fill + **SVG background-image checkmark** (NOT `::after` — pseudo-elements don't render on `<input>` elements)
+- `.select-premium` — `appearance:none` with a custom SVG chevron
+
+**Grouping rule:** group settings by **interaction type** (value controls vs on/off toggles) or by semantic concern, and separate groups with a single divider. Don't put a divider between every row.
+
 ### General
 
 - No frameworks.

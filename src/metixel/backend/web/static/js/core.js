@@ -167,6 +167,35 @@ export function navigateTo(page) {
     }
 }
 
+/**
+ * Switch between tab panels within a page (the .tab-btn / .tab-panel pattern).
+ * The tab buttons are elements with `data-tab` matching the panel id.
+ * @param {Element|string} container - The element containing .tab-btn buttons, or its id.
+ * @param {string} tabName - The name to activate (matches a panel id.
+ */
+export function switchTab(container, tabName) {
+    const root = typeof container === "string" ? document.getElementById(container) : container;
+    if (!root) return;
+
+    // Update active tab button
+    const tabNameStr = String(tabName);
+    root.querySelectorAll(".tab-btn").forEach((btn) => {
+        const match = btn.dataset.tab === tabNameStr || btn.getAttribute("data-tab") === tabNameStr;
+        btn.classList.toggle("active", match);
+    });
+
+    // Show the matching panel(s)
+    const group = root.querySelector("[data-tabs]") || root;
+    group.querySelectorAll(".tab-panel").forEach((panel) => {
+        const match = panel.id === tabNameStr;
+        panel.classList.toggle("active", match);
+        // Scoped panels: [data-tab-panel="NAME"] or id
+        if (panel.dataset.tabPanel !== undefined) {
+            panel.classList.toggle("active", panel.dataset.tabPanel === tabNameStr);
+        }
+    });
+}
+
 // -- UI Helpers ------------------------------------------------------------
 
 /**

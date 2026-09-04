@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 time_bp = Blueprint("time", __name__)
 
+# Default NTP servers used when the user leaves the server list blank.
+# Mirrors the placeholders shown in the web dashboard.
+DEFAULT_NTP_SERVERS = [
+    "0.debian.pool.ntp.org",
+    "1.debian.pool.ntp.org",
+    "2.debian.pool.ntp.org",
+]
+
 
 @time_bp.route("", methods=["GET"])
 def get_server_time():
@@ -153,6 +161,9 @@ def configure_ntp():
     When enabled, writes NTP server list to ``/etc/systemd/timesyncd.conf``
     and restarts ``systemd-timesyncd``.  When disabled, stops the service.
 
+    If ``servers`` is empty or all blank, the Debian pool defaults are used
+    (``0/1/2.debian.pool.ntp.org``) so NTP still works out of the box.
+
     Requires a NOPASSWD sudoers entry for systemctl and tee.
     """
     data = get_body()
@@ -166,6 +177,9 @@ def configure_ntp():
 
     try:
         if enabled:
+            # Fall back to the Debian pool defaults when no servers given.
+            if not servers or not any(s.strip() for s in servers):
+                servers = list(DEFAULT_NTP_SERVERS)
             # Write timesyncd.conf with custom NTP servers
             ntp_lines = "\n".join(f"NTP={s}" for s in servers if s.strip())
             conf = f"[Time]\n{ntp_lines}\n" if ntp_lines else "[Time]\n"
