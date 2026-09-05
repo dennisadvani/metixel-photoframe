@@ -25,7 +25,7 @@ from metixel.backend.web.auth import (
 )
 from metixel.backend.web.helpers import get_body, jsonify_error
 from metixel.shared.platform import is_raspberry_pi
-from metixel.shared.subprocess import run_sudo
+from metixel.shared.subprocess import run_cmd
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,28 @@ security_bp = Blueprint("security", __name__)
 DEVICE_PASSWORD_MIN_LENGTH = 8
 #: The system user whose console + Samba passwords are kept in sync.
 DEVICE_USER = "pi"
+
+
+def _run_privileged(cmd: list[str], input: str | None = None):
+    """Run a password command as root in a fresh, non-hardened namespace.
+
+    The backend service is hardened (`ProtectHome=yes` + `ProtectSystem=full`),
+    so a plain ``sudo -n`` child inherits the read-only mounts and cannot write
+    ``/etc/shadow`` (chpasswd/PAM) or Samba's passdb.  This escapes the
+    hardened mount namespace by launching a transient root unit via
+    ``sudo -n systemd-run`` — the same mechanism the OTA / dependency self-heal
+    use.  ``--pipe`` connects the unit's stdio to ours so ``chpasswd`` /
+    ``smbpasswd`` can read the password from stdin.
+    """
+    return run_cmd(
+        [
+            "sudo", "-n", "systemd-run", "--wait", "--collect", "--pipe",
+            "--unit=metixel-passwd",
+            *cmd,
+        ],
+        input=input,
+        timeout=30,
+    )
 
 
 def _get_screen_pin_service() -> ScreenPinService:
@@ -72,22 +94,26 @@ def change_device_password():
     if new_password != confirm:
         return jsonify_error("Passwords do not match", 400)
 
-    # 1. Console password via chpasswd (reads "user:password" from stdin).
-    console_result = run_sudo(
+    # 1. Console password via chpasswd (reads "user:password" from stdin) and
+    # 2. Samba password via smbpasswd -a -s (reads "new\nnew" from stdin).
+    #
+    # The backend service is hardened (ProtectHome=yes + ProtectSystem=full),
+    # so a plain sudo child inherits the read-only '/' and cannot write
+    # /etc/shadow or Samba's passdb.  Run the password commands in a fresh,
+    # non-hardened transient unit via systemd-run (same mechanism the OTA and
+    # dependency self-heal use) so they can actually apply.
+    console_result = _run_privileged(
         ["chpasswd"],
         input=f"{DEVICE_USER}:{new_password}\n",
-        timeout=30,
     )
     if console_result.returncode != 0:
         tail = (console_result.stderr or console_result.stdout or "").strip()[-300:]
         logger.error("chpasswd failed (rc=%d): %s", console_result.returncode, tail)
         return jsonify_error("Failed to change console password", 500)
 
-    # 2. Samba password via smbpasswd -a -s (reads "new\\nnew" from stdin).
-    samba_result = run_sudo(
+    samba_result = _run_privileged(
         ["smbpasswd", "-a", "-s", DEVICE_USER],
         input=f"{new_password}\n{new_password}\n",
-        timeout=30,
     )
     if samba_result.returncode != 0:
         tail = (samba_result.stderr or samba_result.stdout or "").strip()[-300:]

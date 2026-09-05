@@ -236,12 +236,22 @@ class DdcService:
             caps = self._controller.capabilities(display)
         except Exception:
             logger.warning("DDC capabilities failed for display %s", display, exc_info=True)
+            # Do NOT cache a transient failure — let the caller see the empty
+            # result this call, but the next call retries the probe instead of
+            # serving a poisoned empty feature list for the whole TTL (a busy
+            # backend can make `ddcutil capabilities` exceed its 5s timeout,
+            # e.g. right after the Immich download saturates the pipeline).
             caps = DdcCapabilities(display=display)
         if not isinstance(caps, DdcCapabilities):
             # Tolerate duck-typed fakes returning dicts / simple objects.
             caps = _coerce_capabilities(caps, display)
         with self._lock:
-            self._caps[display] = (time.monotonic(), caps)
+            # Only cache a non-empty result.  A monitor that genuinely reports
+            # no features is indistinguishable from a transient failure at the
+            # service level, but exposing empty features is a softer failure
+            # than pinning the absence of brightness/contrast for 60s.
+            if caps.features:
+                self._caps[display] = (time.monotonic(), caps)
         return caps
 
 

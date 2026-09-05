@@ -34,6 +34,7 @@ Or from VS Code (**Terminal → Run Task**):
 | `media.spec.js` | Media library loads and the filters are present |
 | `advanced.spec.js` | Split across new routes: **system** page (system info, updates + keyboard sections) and **playback** page (server clock, timezone list, display save+restore) |
 | `security.spec.js` | Web-password login gate (set → gate → wrong/correct → clear), device-password validation, screen-PIN set/clear + length validation |
+| `samba.spec.js` | Device-password & SMB share: set a throwaway device password, verify the Samba share is reachable from the workstation with it, then restore the original password and re-verify |
 - `destructive.spec.js` | **Opt-in only** (`npm run test:destructive`) — restart-services button (accepts the confirm dialog, waits for reconnect) |
 
 ## Auth / SSH requirement

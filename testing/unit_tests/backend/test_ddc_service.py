@@ -154,3 +154,44 @@ class TestDdcService:
         from metixel.shared.ports import DdcController
 
         assert isinstance(FakeDdcController(), DdcController)
+
+
+class _RecoveringController(FakeDdcController):
+    """FakeController that returns empty capabilities N times, then recovers."""
+
+    def __init__(self, *, fail_times: int = 1) -> None:
+        super().__init__()
+        self._remaining_failures = fail_times
+        self._calls = 0
+
+    def capabilities(self, display: int) -> DdcCapabilities:
+        self._calls += 1
+        if self._remaining_failures > 0:
+            self._remaining_failures -= 1
+            # Simulate the production controller raising on a busy backend.
+            return DdcCapabilities(display=display)
+        return super().capabilities(display)
+
+
+class TestTransientCapabilityFailure:
+    def test_empty_capabilities_not_cached_and_retried(self) -> None:
+        """A transient empty probe must not be cached; the next call retries."""
+        fake = _RecoveringController(fail_times=1)
+        # Small TTL so a stale poisoned cache would otherwise mask the retry.
+        svc = DdcService(
+            fake,
+            get_config=lambda: {"enabled": True, "display": 1},
+            cache_ttl_seconds=600.0,
+        )
+
+        # First call: probe fails → empty features, NOT cached.
+        caps = svc.capabilities()
+        assert caps["available"] is True
+        assert caps["features"] == []
+
+        # Second call: must re-probe (transient failure wasn't cached) and
+        # now see the real monitor's brightness feature.
+        caps2 = svc.capabilities()
+        codes = {f["code"] for f in caps2["features"]}
+        assert 0x10 in codes
+        assert fake._calls == 2, "expected the second call to re-run the probe"
