@@ -218,17 +218,15 @@ $NewVersion = if ($BumpText -match 'version:\s*(\S+)') {
     ($BumpText -split "`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1).Trim()
 }
 
-# If the requested version matches the current version, __init__.py is
-# unchanged and `git commit` would find nothing to commit.  Fail fast with a
-# clear message instead of a confusing "git commit failed".
+# If the requested version already matches the current version, __init__.py
+# is unchanged — there's no bump commit to make.  This is the legitimate
+# case where the version is already present on dev, so we continue (skip the
+# commit) rather than abort.
 $IniPath = Join-Path $RepoRoot "src\metixel\__init__.py"
 $CurrentVersion = (Select-String -Path $IniPath -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
-if ($NewVersion -eq $CurrentVersion) {
-    Write-Output ""
-    Write-Output "ERROR: Version $NewVersion is already the current version."
-    Write-Output "Nothing changed. Pick a higher version (e.g. the next beta number),"
-    Write-Output "or use the automated bump types: minor-beta, beta, rc, stable, etc."
-    exit 1
+$VersionChanged = ($NewVersion -ne $CurrentVersion)
+if (-not $VersionChanged) {
+    Write-Host "Version $NewVersion is already current on dev — no bump needed." -ForegroundColor Yellow
 }
 
 Write-Host "New version: " -ForegroundColor Green -NoNewline
@@ -248,12 +246,16 @@ if ($DryRun) {
     exit 0
 }
 
-# -- Commit version bump on dev ---------------------------------------------
+# -- Commit version bump on dev (skipped if the version was already current) --
 
-git add src/metixel/__init__.py
-git commit -m "Bump version to $NewVersion"
-if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
-Write-Host "Version bump committed on dev." -ForegroundColor Green
+if ($VersionChanged) {
+    git add src/metixel/__init__.py
+    git commit -m "Bump version to $NewVersion"
+    if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
+    Write-Host "Version bump committed on dev." -ForegroundColor Green
+} else {
+    Write-Host "Version already current on dev — skipping bump commit." -ForegroundColor Cyan
+}
 
 # -- Push dev ----------------------------------------------------------------
 
