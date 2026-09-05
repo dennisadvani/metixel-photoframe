@@ -218,6 +218,19 @@ $NewVersion = if ($BumpText -match 'version:\s*(\S+)') {
     ($BumpText -split "`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1).Trim()
 }
 
+# If the requested version matches the current version, __init__.py is
+# unchanged and `git commit` would find nothing to commit.  Fail fast with a
+# clear message instead of a confusing "git commit failed".
+$IniPath = Join-Path $RepoRoot "src\metixel\__init__.py"
+$CurrentVersion = (Select-String -Path $IniPath -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+if ($NewVersion -eq $CurrentVersion) {
+    Write-Output ""
+    Write-Output "ERROR: Version $NewVersion is already the current version."
+    Write-Output "Nothing changed. Pick a higher version (e.g. the next beta number),"
+    Write-Output "or use the automated bump types: minor-beta, beta, rc, stable, etc."
+    exit 1
+}
+
 Write-Host "New version: " -ForegroundColor Green -NoNewline
 Write-Host $NewVersion -ForegroundColor Yellow
 
