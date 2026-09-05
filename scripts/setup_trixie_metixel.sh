@@ -201,7 +201,12 @@ if [ -n "${LATEST_TAG}" ]; then
     git checkout "${LATEST_TAG}" 2>/dev/null || true
     echo "  → Pinned to ${LATEST_TAG} (${RELEASE_CHANNEL})"
 elif [ "${RELEASE_CHANNEL}" = "dev" ]; then
-    git checkout dev 2>/dev/null || true
+    # Switch to the dev branch deterministically.  `git checkout dev` can
+    # silently fail (and, with `|| true`, leave the repo on main) when no
+    # local dev branch tracks origin/dev yet — so use --track explicitly.
+    git checkout --track origin/dev 2>/dev/null \
+        || git checkout dev 2>/dev/null \
+        || git checkout -B dev origin/dev
     git pull --ff-only 2>/dev/null || true
     echo "  → Using dev branch HEAD (${RELEASE_CHANNEL})"
 else

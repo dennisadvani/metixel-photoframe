@@ -24,6 +24,10 @@
     Release type: minor-beta (bump minor + beta), beta (beta only),
     rc, stable, minor, or major.
 
+.PARAMETER Version
+    Set an exact version string instead of deriving it from a release type
+    (e.g. -Version 0.2.0-beta.2).  Mutually exclusive with Type.
+
 .PARAMETER Finalize
     Tag main with the given version and push the tag, then RE-ALIGN dev to
     main (identical history) so the branches never drift apart (which causes
@@ -35,7 +39,7 @@
 
 .EXAMPLE
     .\scripts\release.ps1 minor-beta
-    .\scripts\release.ps1 beta
+    .\scripts\release.ps1 -Version 0.2.0-beta.2
     .\scripts\release.ps1 stable
     .\scripts\release.ps1 minor
     .\scripts\release.ps1 -DryRun beta
@@ -45,6 +49,9 @@ param(
     [Parameter(Mandatory=$false, Position=0)]
     [ValidateSet("minor-beta", "beta", "rc", "stable", "minor", "major")]
     [string]$Type,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Version,
 
     [Parameter(Mandatory=$false)]
     [string]$Finalize,
@@ -58,19 +65,17 @@ $RepoRoot = Resolve-Path "$ScriptDir\.."
 
 # -- Validate ---------------------------------------------------------------
 
-if (-not $Type -and -not $Finalize) {
-    Write-Host "ERROR: No release type or -Finalize specified." -ForegroundColor Red
+if (-not $Type -and -not $Version -and -not $Finalize) {
+    Write-Host "ERROR: No release type, version, or -Finalize specified." -ForegroundColor Red
     Write-Host ""
     Write-Host "Usage: .\scripts\release.ps1 [-DryRun] <minor-beta|beta|rc|stable|minor|major>"
+    Write-Host "       .\scripts\release.ps1 -Version <version>       (set an exact version)"
     Write-Host "       .\scripts\release.ps1 -Finalize <version>   (after the PR is merged)"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\scripts\release.ps1 minor-beta # bump number + beta (1.1.9-beta.9 → 1.1.10-beta.10)"
-    Write-Host "  .\scripts\release.ps1 beta       # bump beta only (1.1.9-beta.9 → 1.1.9-beta.10)"
-    Write-Host "  .\scripts\release.ps1 rc         # bump rc number"
-    Write-Host "  .\scripts\release.ps1 stable     # strip pre-release -> stable"
-    Write-Host "  .\scripts\release.ps1 minor      # bump minor -> 0.3.0"
-    Write-Host "  .\scripts\release.ps1 major      # bump major -> 1.0.0"
+    Write-Host "  .\scripts\release.ps1 -Version 0.2.0-beta.2"
+    Write-Host "  .\scripts\release.ps1 -Finalize 0.2.0-beta.2   (after the PR is merged)"
     Write-Host "  .\scripts\release.ps1 -DryRun beta"
     exit 1
 }
@@ -170,9 +175,30 @@ if ($Finalize) {
 
 # -- Bump version -----------------------------------------------------------
 
-Write-Host "Bumping version: $Type" -ForegroundColor Green
+# When given an explicit -Version, set it exactly; otherwise bump from the
+# current version using the release-type flag.
+if ($Version) {
+    Write-Host "Setting version: $Version" -ForegroundColor Green
+} else {
+    Write-Host "Bumping version: $Type" -ForegroundColor Green
+}
+
 $BumpScript = Join-Path $RepoRoot "scripts\bump_version.py"
-$BumpOutput = & python $BumpScript $BumpFlag 2>&1
+# Validate the version (dry-run) BEFORE making any changes, so an invalid
+# version never leaves the tree dirty or commits anything.
+$ValidateArgs = @($BumpFlag, "--dry-run")
+if ($Version) { $ValidateArgs = @("--set", $Version, "--dry-run") }
+$ValidateOutput = & python $BumpScript @ValidateArgs 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Version validation failed:" -ForegroundColor Red
+    Write-Host ($ValidateOutput -join "`n")
+    exit 1
+}
+
+# Run the real bump (writes src/metixel/__init__.py).
+# Without --dry-run, bump_version.py writes the file.
+$BumpArgs = if ($Version) { @("--set", $Version) } else { @($BumpFlag) }
+$BumpOutput = & python $BumpScript @BumpArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Version bump failed:" -ForegroundColor Red
     Write-Host ($BumpOutput -join "`n")
@@ -185,7 +211,7 @@ if ($LASTEXITCODE -ne 0) {
 # PowerShell may capture this as a string array; join first, then
 # extract just the version number from the first line.
 $BumpText = if ($BumpOutput -is [array]) { $BumpOutput -join "`n" } else { "$BumpOutput" }
-$NewVersion = if ($BumpText -match 'Bumped version:\s*(\S+)') {
+$NewVersion = if ($BumpText -match 'version:\s*(\S+)') {
     $Matches[1]
 } else {
     # Fallback: take the first non-empty line

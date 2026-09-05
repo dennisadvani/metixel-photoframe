@@ -158,8 +158,9 @@
         },
         {
             "label": "[Local] Release",
+            "detail": "Cuts a release from the dev branch with the exact version you enter (e.g. 0.2.0-beta.2).",
             "type": "shell",
-            "command": ".\\scripts\\release.ps1 ${input:releaseType}",
+            "command": ".\\scripts\\release.ps1 -Version ${input:releaseVersion}",
             "options": {
                 "cwd": "${workspaceFolder}",
                 "shell": {
@@ -500,16 +501,9 @@
             "default": "192.168.222.122"
         },
         {
-            "id": "releaseType",
-            "type": "pickString",
-            "description": "Release type",
-            "options": ["minor-beta", "beta", "rc", "stable", "minor", "major"],
-            "default": "minor-beta"
-        },
-        {
             "id": "releaseVersion",
             "type": "promptString",
-            "description": "Version to tag on main (after the PR is merged), e.g. 0.2.0-beta.2"
+            "description": "Version to release, e.g. 0.2.0-beta.2 (cuts the release from dev), or the version to tag on main after the PR is merged"
         }
     ]
 }
