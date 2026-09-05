@@ -10,6 +10,7 @@ import subprocess
 from flask import Blueprint, current_app, jsonify, request
 
 from metixel.backend.web.helpers import get_body, jsonify_error
+from metixel.backend.web.media_service import clear_cache
 from metixel.shared.subprocess import schedule_sudo
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,11 @@ config_bp = Blueprint("config", __name__)
 #: Display-mode keys that require a frontend (cage) restart to take effect,
 #: because the display backend's ``create()`` runs once at startup.
 _DISPLAY_MODE_KEYS = ("width", "height", "refresh_rate", "rotation")
+
+#: Display keys that change the on-screen canvas *size* (so media must be
+#: re-optimised).  Changing only ``refresh_rate`` doesn't affect dimensions,
+#: so it must not invalidate the processed-media cache.
+_DISPLAY_SIZE_KEYS = ("width", "height", "rotation")
 
 
 @config_bp.route("", methods=["GET"])
@@ -157,6 +163,25 @@ def update_config_section(section: str):
         # frontend runs under the metixel-cage service, so restart it after a
         # short delay so the HTTP response is sent first.
         if section == "display" and any(k in data for k in _DISPLAY_MODE_KEYS):
+            # Changing the canvas *size* (width/height/rotation) means any
+            # previously-optimised images/videos were scaled for the old
+            # dimensions, so they must be re-processed at the new size.  Clear
+            # the processed-media cache so the next scan re-optimises from the
+            # source (the pipeline reset below re-discovers and re-queues).
+            if any(k in data for k in _DISPLAY_SIZE_KEYS):
+                try:
+                    deleted, freed = clear_cache(state)
+                    logger.info(
+                        "Canvas size changed (width/height/rotation) — cleared %d "
+                        "processed cache file(s), freed %.1f MB",
+                        deleted,
+                        freed / (1024 * 1024),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to clear processed cache after canvas-size change",
+                        exc_info=True,
+                    )
             schedule_sudo(
                 ["systemctl", "restart", "metixel-cage"],
                 ok_message="Frontend restarted to apply display mode",

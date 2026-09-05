@@ -78,6 +78,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "enabled": True,
             "watch_paths": [
                 {"path": "media/sample_media/landscape/", "enabled": True},
+                {"path": "media/sample_media/portrait/", "enabled": False},
                 {"path": "media/sync/immich/", "enabled": True},
                 {"path": "media/my_media/", "enabled": True},
             ],

@@ -228,6 +228,74 @@ class TestEngineVideoIntegration:
         engine.set_queue(items)
         assert len(engine._queue) == 2
 
+    def test_set_queue_blocks_videos_in_portrait(self, mock_backend, config):
+        """Videos should be excluded from the queue at 90/270° rotation even
+        when playback is otherwise enabled (backend guard)."""
+        from metixel.frontend.presentation.engine import PresentationEngine
+
+        config.update("video", {"playback_enabled": True})
+        config.update("display", {"rotation": 90})
+        engine = PresentationEngine(config, mock_backend)
+
+        video = MediaItem(
+            id="v1",
+            original_path=Path("/t/v.mp4"),
+            cached_path=Path("/t/v.mp4"),
+            media_type=MediaType.VIDEO,
+            width=1920,
+            height=1080,
+            duration_seconds=5.0,
+            transcode_status=TranscodeStatus.TRANSCODED,
+            first_frame_path=Path("/t/v.1.frame.jpg"),
+            last_frame_path=Path("/t/v.2.frame.jpg"),
+        )
+        image = MediaItem(
+            id="img1",
+            original_path=Path("/t/1.jpg"),
+            cached_path=Path("/t/1.jpg"),
+            media_type=MediaType.IMAGE,
+            width=1920,
+            height=1080,
+        )
+
+        # At 90° the video is filtered out even though playback is enabled;
+        # the image remains.
+        engine.set_queue([video, image])
+        assert [i.id for i in engine._queue] == ["img1"]
+
+    def test_set_queue_keeps_videos_at_landscape(self, mock_backend, config):
+        """Videos should remain in the queue at 0/180° rotation."""
+        from metixel.frontend.presentation.engine import PresentationEngine
+
+        config.update("video", {"playback_enabled": True})
+        config.update("display", {"rotation": 0})
+        engine = PresentationEngine(config, mock_backend)
+
+        video = MediaItem(
+            id="v1",
+            original_path=Path("/t/v.mp4"),
+            cached_path=Path("/t/v.mp4"),
+            media_type=MediaType.VIDEO,
+            width=1920,
+            height=1080,
+            duration_seconds=5.0,
+            transcode_status=TranscodeStatus.TRANSCODED,
+            first_frame_path=Path("/t/v.1.frame.jpg"),
+            last_frame_path=Path("/t/v.2.frame.jpg"),
+        )
+        image = MediaItem(
+            id="img1",
+            original_path=Path("/t/1.jpg"),
+            cached_path=Path("/t/1.jpg"),
+            media_type=MediaType.IMAGE,
+            width=1920,
+            height=1080,
+        )
+
+        # Both remain at 0°.
+        engine.set_queue([video, image])
+        assert len(engine._queue) == 2
+
 
 class TestEngineVlcIntegration:
     """Tests for VLC-based video playback in PresentationEngine."""

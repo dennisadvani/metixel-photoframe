@@ -405,15 +405,22 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
                 var width = isAutoSave ? 0 : sanitizeInt(res[0], 0);
                 var height = isAutoSave ? 0 : sanitizeInt(res[1], 0);
                 var refresh = isAutoSave ? 0 : sanitizeInt(parts[1], 0);
+                var newRotation = sanitizeInt(document.getElementById("cfg-display-rotation").value, 0) % 360;
                 var result = await apiPut("/config/display", {
                     width: width,
                     height: height,
                     fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
                     refresh_rate: refresh,
-                    rotation: sanitizeInt(document.getElementById("cfg-display-rotation").value, 0),
+                    rotation: newRotation,
                 });
                 if (result) {
                     showToast("Display settings saved — frontend restarting to apply", "success", 5000);
+                    // Inform the user that video playback will be unavailable
+                    // in portrait — the current player cannot display rotated
+                    // video (see Settings → Video Playback).
+                    if (newRotation === 90 || newRotation === 270) {
+                        showToast("Video playback is disabled in portrait mode (90°/270°)", "info", 6000);
+                    }
                 } else {
                     showToast("Failed to save display settings", "error");
                 }

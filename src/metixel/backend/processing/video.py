@@ -251,8 +251,8 @@ class VideoProcessor:
 
         Called by the ``OptimisationQueue`` when the user changes video
         settings via the web UI.  Only the config-derived fields are
-        updated — the cache directories and screen dimensions are
-        immutable after construction.
+        updated — the cache directories are immutable after construction.
+        Screen dimensions are updated via :meth:`update_screen_size`.
         """
         self._cfg = video_config
         self._transcoding_enabled = self._cfg.get("transcoding_enabled", True)
@@ -274,6 +274,30 @@ class VideoProcessor:
             self._cpu_throttle_enabled,
             self._cpu_throttle_pct,
         )
+
+    def update_screen_size(self, screen_width: int, screen_height: int) -> None:
+        """Update the resize/transcode target after runtime screen-size changes.
+
+        The effective (post-rotation) screen size is only known once the
+        frontend has written ``display_info.json`` during boot, which can
+        arrive *after* this processor is constructed.  Call this when the
+        resolved size changes so transcode targets the correct dims.
+        """
+        if screen_width <= 0 or screen_height <= 0:
+            return
+        if (screen_width, screen_height) == (self._screen_w, self._screen_h):
+            return
+        logger.info(
+            "VideoProcessor screen target updated %dx%d → %dx%d",
+            self._screen_w,
+            self._screen_h,
+            screen_width,
+            screen_height,
+        )
+        self._screen_w = screen_width
+        self._screen_h = screen_height
+        self._transcode_max_w = self._cfg.get("transcode_max_width", 0) or self._screen_w
+        self._transcode_max_h = self._cfg.get("transcode_max_height", 0) or self._screen_h
 
     @staticmethod
     def needs_optimisation(

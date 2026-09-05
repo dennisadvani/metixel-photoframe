@@ -37,6 +37,13 @@ class PlaylistControllerMixin(BaseEngineState):
             "max_duration_seconds",
             self._config.slideshow.get("video_max_duration_seconds", 0),
         )
+        # Portrait (90/270°) — the current VLC subprocess player cannot
+        # display videos on a rotated output (its X11 window pops blank
+        # over the poster before the first frame).  This is a backend
+        # guard so portrait mode can never have video playback available
+        # regardless of how `playback_enabled` was set (config, API, file).
+        rotation = int(self._config.display.get("rotation", 0) or 0) % 360
+        rotation_blocks_video = rotation in (90, 270)
 
         filtered: list[MediaItem] = []
         skipped_playback: int = 0
@@ -44,29 +51,35 @@ class PlaylistControllerMixin(BaseEngineState):
         skipped_transcode: int = 0
         skipped_duration: int = 0
         skipped_ready: int = 0
+        skipped_rotation: int = 0
 
         for item in self._queue:
             if item.media_type != MediaType.VIDEO:
                 filtered.append(item)
                 continue
 
-            # 0. Backend capability — software renderers (tkinter) can't
+            # 0. Portrait rotation — videos cannot play at 90/270°.
+            if rotation_blocks_video:
+                skipped_rotation += 1
+                continue
+
+            # 1. Backend capability — software renderers (tkinter) can't
             #    play videos; skip them so they don't error every cycle.
             if not self._backend.supports_video:
                 skipped_backend += 1
                 continue
 
-            # 1. Video playback master switch
+            # 2. Video playback master switch
             if not playback_enabled:
                 skipped_playback += 1
                 continue
 
-            # 2. Max duration filter
+            # 3. Max duration filter
             if max_duration > 0 and item.duration_seconds > max_duration:
                 skipped_duration += 1
                 continue
 
-            # 3. Transcoding guardrails
+            # 4. Transcoding guardrails
             if transcoding_enabled:
                 # Only play transcoded videos (or failed ones that
                 # will be played as original)
@@ -86,6 +99,13 @@ class PlaylistControllerMixin(BaseEngineState):
 
             filtered.append(item)
 
+        if skipped_rotation:
+            logger.info(
+                "Video playback unavailable at %d° rotation — filtered %d videos "
+                "(portrait: current player cannot display rotated video)",
+                rotation,
+                skipped_rotation,
+            )
         if skipped_playback:
             logger.info(
                 "Video playback disabled — filtered %d videos",
@@ -186,11 +206,17 @@ class PlaylistControllerMixin(BaseEngineState):
             "max_duration_seconds",
             self._config.slideshow.get("video_max_duration_seconds", 0),
         )
+        # Portrait (90/270°) — block videos (see set_queue for rationale).
+        rotation = int(self._config.display.get("rotation", 0) or 0) % 360
+        rotation_blocks_video = rotation in (90, 270)
 
         filtered: list[MediaItem] = []
         for item in new_items:
             if item.media_type != MediaType.VIDEO:
                 filtered.append(item)
+                continue
+            # Portrait rotation — block videos entirely
+            if rotation_blocks_video:
                 continue
             # Backend capability — software renderers can't play videos
             if not self._backend.supports_video:

@@ -678,6 +678,10 @@
                             <input type="checkbox" id="cfg-video-enabled" class="checkbox-premium">
                         </div>
                     </div>
+                    <div id="cfg-video-rotation-warning" class="hidden flex items-center gap-2 mt-1 text-[0.72rem] leading-snug text-text-muted">
+                        <span class="material-symbols-outlined" style="font-size:1em;color:#f0a030;vertical-align:middle">warning</span>
+                        <span>Videos cannot play in portrait mode (90°/270°). Set the rotation to 0° or 180° to enable video playback.</span>
+                    </div>
 
                     <div class="setting-row">
                         <div class="setting-label">
@@ -749,7 +753,7 @@
                             </select>
                         </div>
                     </div>
-                    <p class="text-text-muted text-[0.76rem] leading-relaxed mt-2">Resolution, refresh rate and rotation are applied on the next frontend restart.</p>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mt-2">Resolution, refresh rate and rotation are applied on the next frontend restart. Changing the resolution or rotation clears the media cache so new photos/videos are re-optimised at the new screen size.</p>
                     <div class="flex justify-end mt-3">
                         <button id="btn-save-display" class="btn--primary">Save Display Settings</button>
                     </div>
@@ -1629,6 +1633,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=53"></script>
+    <script type="module" src="/static/js/main.js?v=58"></script>
 </body>
 </html>

@@ -275,6 +275,22 @@ import {
             };
         }
         setChecked("cfg-video-enabled", v.playback_enabled === true);
+        // Portrait (90/270°) — the current player cannot display rotated
+        // video, so force the toggle off and inform the user.  This is a
+        // GUI companion to the backend guard in queue.py which excludes
+        // videos from the playlist regardless of playback_enabled.
+        var rotNum = Number(((config.display || {}).rotation) || 0) % 360;
+        var portrait = (rotNum === 90 || rotNum === 270);
+        var vidEnabled = document.getElementById("cfg-video-enabled");
+        var vidWarn = document.getElementById("cfg-video-rotation-warning");
+        if (portrait) {
+            setChecked("cfg-video-enabled", false);
+            if (vidEnabled) vidEnabled.disabled = true;
+            if (vidWarn) vidWarn.classList.remove("hidden");
+        } else {
+            if (vidEnabled) vidEnabled.disabled = false;
+            if (vidWarn) vidWarn.classList.add("hidden");
+        }
         setValue("cfg-video-player-backend", v.player_backend || "auto");
         setValue("cfg-video-max-duration", v.max_duration_seconds || 0);
         setChecked("cfg-transcode-enabled", v.transcoding_enabled !== false);
@@ -292,12 +308,6 @@ import {
         _toggleTranscodeSettings(v.transcoding_enabled !== false);
         _toggleCpuThrottleGroup(v.cpu_throttle_enabled !== false);
 
-        // Local folders (moved from Sync page)
-        const local = config.sync?.local || {};
-        setChecked("cfg-local-enabled", local.enabled !== false);
-        setValue("cfg-local-interval", local.poll_interval_seconds || 30);
-        renderWatchPaths(local.watch_paths || []);
-
         // Time / NTP (Playback page)
         const sysCfg = config.system || {};
         setChecked("cfg-ntp-enabled", sysCfg.ntp_enabled !== false);
@@ -310,6 +320,37 @@ import {
         setValue("cfg-image-max-width", imgCfg.optimise_max_width || 0);
         setValue("cfg-image-max-height", imgCfg.optimise_max_height || 0);
         _toggleImageOptSettings(imgCfg.optimisation_enabled !== false);
+
+        // Display Settings (the card lives on the Playback page).  The frontend
+        // writes display_info.json with the effective (rotated) resolution; the
+        // rotation dropdown must reflect it so the UI isn't stuck at 0°.
+        const disp = config.display || {};
+        setChecked("cfg-display-auto", (disp.width === 0 && disp.height === 0));
+        setValue("cfg-fps-limit", disp.fps_limit || 30);
+        setValue("cfg-display-rotation", disp.rotation || 0);
+
+        // Populate the resolution+refresh dropdown from supported modes so the
+        // Playback page's Display card is fully functional when shown there.
+        apiGet("/health/display/modes").then(function (data) {
+            var sel = document.getElementById("cfg-display-resolution");
+            if (!sel) return;
+            sel.innerHTML = '<option value="0x0@0">Auto (native)</option>';
+            var modes = (data && data.modes) || [];
+            modes.forEach(function (m) {
+                var opt = document.createElement("option");
+                opt.value = m.width + "x" + m.height + "@" + (m.refresh || 0);
+                var label = m.width + " × " + m.height;
+                if (m.refresh) label += " @ " + m.refresh + " Hz";
+                if (m.preferred) label += " (native)";
+                opt.textContent = label;
+                sel.appendChild(opt);
+            });
+            var current = "0x0@0";
+            if (disp.width > 0 && disp.height > 0) {
+                current = disp.width + "x" + disp.height + "@" + (disp.refresh_rate || 0);
+            }
+            setValue("cfg-display-resolution", current);
+        });
 
         // Security — web password + session timeout + screen PIN timeout.
         // The password/PIN fields are always left empty (they are write-only);
@@ -324,6 +365,48 @@ import {
 
             document.getElementById("cfg-transition-duration")?.addEventListener("input", function () {
                 document.getElementById("cfg-transition-duration-label").textContent = this.value + " ms";
+            });
+
+            // Populate the "Detected:" line from the frontend's display info
+            // (effective rotated resolution), as the Playback page's Display
+            // card is shown there but populated here.
+            apiGet("/health/display/info").then(function (info) {
+                var el = document.getElementById("display-detected-res");
+                if (el && info && info.width > 0 && info.height > 0) {
+                    var text = "Detected: " + info.width + " × " + info.height;
+                    if (info.refresh_rate) text += " @ " + info.refresh_rate + " Hz";
+                    if (info.rotation) text += " · rotated " + info.rotation + "°";
+                    if (info.output) text += " · connected via " + info.output;
+                    el.textContent = text;
+                    el.style.color = "var(--text-muted)";
+                }
+            });
+
+            // Save Display Settings (Playback page's Display card).
+            document.getElementById("btn-save-display")?.addEventListener("click", async () => {
+                const isAutoSave = document.getElementById("cfg-display-auto").checked;
+                var val = document.getElementById("cfg-display-resolution").value || "0x0@0";
+                var parts = val.split("@");
+                var res = (parts[0] || "0x0").split("x");
+                var width = isAutoSave ? 0 : sanitizeInt(res[0], 0);
+                var height = isAutoSave ? 0 : sanitizeInt(res[1], 0);
+                var refresh = isAutoSave ? 0 : sanitizeInt(parts[1], 0);
+                var newRotation = sanitizeInt(document.getElementById("cfg-display-rotation").value, 0) % 360;
+                var result = await apiPut("/config/display", {
+                    width: width,
+                    height: height,
+                    fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
+                    refresh_rate: refresh,
+                    rotation: newRotation,
+                });
+                if (result) {
+                    showToast("Display settings saved — frontend restarting to apply", "success", 5000);
+                    if (newRotation === 90 || newRotation === 270) {
+                        showToast("Video playback is disabled in portrait mode (90°/270°)", "info", 6000);
+                    }
+                } else {
+                    showToast("Failed to save display settings", "error");
+                }
             });
 
             document.getElementById("btn-save-slideshow")?.addEventListener("click", async () => {
@@ -373,6 +456,16 @@ import {
             });
 
             document.getElementById("btn-save-video")?.addEventListener("click", async () => {
+                // Portrait guard — videos cannot play at 90/270°, so never
+                // save playback_enabled=true while rotating.  The toggle is
+                // disabled by loadSettings in portrait; guard again in case
+                // the state changed before the user clicked save.
+                var vidEnabled = document.getElementById("cfg-video-enabled");
+                if (vidEnabled && vidEnabled.disabled && vidEnabled.checked) {
+                    showToast("Video playback is unavailable in portrait mode (90°/270°)", "error", 5000);
+                    vidEnabled.checked = false;
+                    return;
+                }
                 var result = await apiPut("/config/video", {
                     playback_enabled: document.getElementById("cfg-video-enabled").checked,
                     player_backend: document.getElementById("cfg-video-player-backend").value,
@@ -426,22 +519,6 @@ import {
                 }
             });
 
-            // ── Local Sync save ────────────────────────────────────────
-            document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/sync", {
-                    local: {
-                        enabled: document.getElementById("cfg-local-enabled").checked,
-                        watch_paths: collectWatchPaths(),
-                        poll_interval_seconds: sanitizeInt(document.getElementById("cfg-local-interval").value, 30),
-                    },
-                });
-                if (result) {
-                    showToast("Local sync settings saved!", "success");
-                } else {
-                    showToast("Failed to save local sync settings", "error");
-                }
-            });
-
             // ── Image Optimisation save ─────────────────────────────────
             document.getElementById("btn-save-image-opt")?.addEventListener("click", async () => {
                 var result = await apiPut("/config/image", {
@@ -459,11 +536,6 @@ import {
             // Image optimisation toggle
             document.getElementById("cfg-image-opt-enabled")?.addEventListener("change", function () {
                 _toggleImageOptSettings(this.checked);
-            });
-
-            // Add Watch Path button
-            document.getElementById("btn-add-watch-path")?.addEventListener("click", function () {
-                addWatchPathRow("", true, true);
             });
 
             // Schedule toggle
@@ -621,6 +693,7 @@ import {
         if (!paths || paths.length === 0) {
             paths = [
                 { path: "media/sample_media/landscape/", enabled: true },
+                { path: "media/sample_media/portrait/", enabled: false },
                 { path: "media/sync/immich/", enabled: true },
                 { path: "media/my_media/", enabled: true }
             ];
@@ -856,4 +929,4 @@ document.addEventListener("keydown", function (e) {
     }
 });
 
-export { loadSettings };
+export { loadSettings, renderWatchPaths, collectWatchPaths, addWatchPathRow };
