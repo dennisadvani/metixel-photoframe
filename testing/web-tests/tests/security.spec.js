@@ -23,8 +23,8 @@ test.describe("security", () => {
     test("login gate appears when web password is set", async ({ page }) => {
         const errors = collectErrors(page);
 
-        // Set a web password via the Settings Security card.
-        await goToPage(page, "settings");
+        // Set a web password via the System Security card.
+        await goToPage(page, "system");
         await page.locator("#cfg-web-password").fill(WEB_PW);
         await page.locator("#cfg-web-password-confirm").fill(WEB_PW);
         await page.locator("#btn-save-web-password").click();
@@ -42,16 +42,16 @@ test.describe("security", () => {
 
         // Correct password → dashboard unlocks.  main.js reloads the page after a
         // successful login (to re-boot the SPA with a valid session).  The URL
-        // hash is still #settings (from the initial goToPage), so after the
-        // reload the SPA re-boots to the settings page — assert the login
+        // hash is still #system (from the initial goToPage), so after the
+        // reload the SPA re-boots to the system page — assert the login
         // overlay is gone and the SPA is usable.
         await page.locator("#login-password").fill(WEB_PW);
         await page.locator("#btn-login").click();
         await expect(page.locator("#login-overlay")).toBeHidden();
-        await expect(page.locator("#page-settings")).toHaveClass(/active/, { timeout: 20000 });
+        await expect(page.locator("#page-system")).toHaveClass(/active/, { timeout: 20000 });
 
         // Cleanup: clear the web password (requires auth, which we have).
-        await goToPage(page, "settings");
+        await goToPage(page, "system");
         await page.locator("#cfg-web-password").fill("");
         await page.locator("#cfg-web-password-confirm").fill("");
         await page.locator("#btn-save-web-password").click();
@@ -65,7 +65,7 @@ test.describe("security", () => {
     });
 
     test("device password mismatch is rejected", async ({ page }) => {
-        await goToPage(page, "settings");
+        await goToPage(page, "system");
         await page.locator("#cfg-device-password").fill(DEVICE_PW);
         await page.locator("#cfg-device-password-confirm").fill("different");
         await page.locator("#btn-save-device-password").click();
@@ -75,7 +75,7 @@ test.describe("security", () => {
     });
 
     test("device password empty is rejected", async ({ page }) => {
-        await goToPage(page, "settings");
+        await goToPage(page, "system");
         await page.locator("#cfg-device-password").fill("");
         await page.locator("#cfg-device-password-confirm").fill("");
         await page.locator("#btn-save-device-password").click();
@@ -84,7 +84,7 @@ test.describe("security", () => {
 
     test("screen PIN set + clear", async ({ page }) => {
         const errors = collectErrors(page);
-        await goToPage(page, "settings");
+        await goToPage(page, "system");
 
         // Set a screen PIN.
         await page.locator("#cfg-screen-pin").fill(PIN);
@@ -101,7 +101,7 @@ test.describe("security", () => {
     });
 
     test("screen PIN invalid length is rejected", async ({ page }) => {
-        await goToPage(page, "settings");
+        await goToPage(page, "system");
         await page.locator("#cfg-screen-pin").fill("123");
         await page.locator("#cfg-screen-pin-confirm").fill("123");
         await page.locator("#btn-save-screen-pin").click();

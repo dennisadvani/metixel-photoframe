@@ -28,11 +28,11 @@ Or from VS Code (**Terminal → Run Task**):
 |---|---|
 | `walk.spec.js` | Every top-level route loads with **no console/page/network errors** (the regression net — catches wrong API paths, broken imports, page-module failures) |
 | `dashboard.spec.js` | Live stats populate, current media + playlist shown, prev/next/pause controls fire over IPC |
-| `settings.spec.js` | All five save buttons work; slideshow/local-sync/video fields **save → persist → restore** |
+| `settings.spec.js` | Playback + optimisation routes: slideshow/video/display save buttons; slideshow/video/local-sync fields **save → persist → restore**; image + transcode save fire |
 | `sync.spec.js` | Immich fields load; Test Connection reports a result (Sync Now / Fetch Albums are not auto-triggered) |
 | `network.spec.js` | Live network status loads; Wi-Fi country field present (no scan / AP toggle) |
 | `media.spec.js` | Media library loads and the filters are present |
-| `advanced.spec.js` | System info, server clock, timezone list, display save+restore, updates + keyboard sections |
+| `advanced.spec.js` | Split across new routes: **system** page (system info, updates + keyboard sections) and **playback** page (server clock, timezone list, display save+restore) |
 | `security.spec.js` | Web-password login gate (set → gate → wrong/correct → clear), device-password validation, screen-PIN set/clear + length validation |
 - `destructive.spec.js` | **Opt-in only** (`npm run test:destructive`) — restart-services button (accepts the confirm dialog, waits for reconnect) |
 

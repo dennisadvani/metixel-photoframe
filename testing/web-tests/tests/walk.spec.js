@@ -5,8 +5,8 @@
 const { test } = require("@playwright/test");
 const { goToPage, collectErrors, expectNoErrors } = require("./helpers");
 
-// The 6 top-level SPA routes (logs + updates are embedded in Advanced).
-const PAGES = ["dashboard", "media", "settings", "sync", "network", "advanced"];
+// The 7 top-level SPA routes (logs + updates are embedded in System).
+const PAGES = ["dashboard", "media", "sources", "playback", "optimisation", "network", "system"];
 
 for (const name of PAGES) {
     test(`navigates to ${name} with no console/network errors`, async ({ page }) => {

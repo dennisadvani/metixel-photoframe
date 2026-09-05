@@ -15,8 +15,7 @@ import {
     setChecked,
     setStat,
     setValue,
-    showToast,
-    updatePowerButton
+    showToast
 } from "./core.js";
 
 import { refreshLogs } from "./logs-page.js";
@@ -24,30 +23,6 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
 import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
 
     // -- UI Helpers ---------------------------------------------------------
-
-    /**
-     * Enable or disable the resolution override fields based on auto-detect.
-     * @param {boolean} isAuto - Whether auto-detect is enabled.
-     */
-    function toggleResolutionFields(isAuto) {
-        var fields = document.getElementById("display-resolution-fields");
-        if (fields) {
-            var controls = fields.querySelectorAll("select, input");
-            controls.forEach(function (control) {
-                control.disabled = isAuto;
-            });
-            if (isAuto) {
-                fields.classList.add("is-disabled");
-            } else {
-                fields.classList.remove("is-disabled");
-            }
-        }
-    }
-
-    function toggleScheduleFields(enabled) {
-        var fields = document.getElementById("schedule-fields");
-        if (fields) fields.classList.toggle("hidden", !enabled);
-    }
 
     /**
      * Show the SD card wear warning only when file logging is enabled
@@ -109,54 +84,7 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
     }
 
     /** @type {number|null} */
-
-    var _clockTimer = null;
     var _mqttStatusTimer = null;
-
-    async function _refreshServerClock() {
-        var el = document.getElementById("server-clock");
-        if (!el) return;
-        try {
-            var data = await apiGet("/time");
-            if (data && data.time) {
-                el.textContent = data.time;
-                el.title = data.date + " " + data.timezone + " (UTC" + (data.utc_offset || "") + ")";
-            }
-        } catch (_) {
-            // Clock is non-critical — silently ignore errors
-        }
-    }
-
-    async function loadTimezoneList(currentTz) {
-        var sel = document.getElementById("cfg-timezone");
-        if (!sel) return;
-        sel.innerHTML = '<option value="">Auto-detect</option>';
-        try {
-            var data = await apiGet("/time/timezones");
-            if (data && data.timezones) {
-                data.timezones.forEach(function (tz) {
-                    var opt = document.createElement("option");
-                    opt.value = tz;
-                    opt.textContent = tz;
-                    if (tz === currentTz) opt.selected = true;
-                    sel.appendChild(opt);
-                });
-            }
-        } catch (_) {}
-        // If currentTz is not in the list, add it
-        if (currentTz && !Array.from(sel.options).some(function (o) { return o.value === currentTz; })) {
-            var opt = document.createElement("option");
-            opt.value = currentTz;
-            opt.textContent = currentTz + " (current)";
-            opt.selected = true;
-            sel.appendChild(opt);
-        }
-    }
-
-    /**
-     * Show or hide the transcode sub-settings based on the main toggle.
-     * @param {boolean} enabled - Whether transcoding is enabled.
-     */
 
     // -- Keyboard Input Mapping ----------------------------------------------
 
@@ -278,41 +206,6 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
         }
         _scheduleLogPoll();
 
-        // Display Settings (moved from Settings page)
-        const d = config.display || {};
-        const isAuto = (d.width === 0 && d.height === 0);
-        setChecked("cfg-display-auto", isAuto);
-        setValue("cfg-fps-limit", d.fps_limit || 30);
-        setValue("cfg-display-rotation", d.rotation || 0);
-        setChecked("cfg-schedule-enabled", d.schedule_enabled === true);
-        setValue("cfg-schedule-on", d.schedule_on_time || "07:00");
-        setValue("cfg-schedule-off", d.schedule_off_time || "22:00");
-        toggleScheduleFields(d.schedule_enabled === true);
-        toggleResolutionFields(isAuto);
-
-        // Populate the resolution+refresh dropdown from the supported-modes
-        // endpoint (only modes the monitor and Pi mutually support).
-        apiGet("/health/display/modes").then(function (data) {
-            var sel = document.getElementById("cfg-display-resolution");
-            if (!sel) return;
-            var modes = (data && data.modes) || [];
-            modes.forEach(function (m) {
-                var opt = document.createElement("option");
-                opt.value = m.width + "x" + m.height + "@" + (m.refresh || 0);
-                var label = m.width + " × " + m.height;
-                if (m.refresh) label += " @ " + m.refresh + " Hz";
-                if (m.preferred) label += " (native)";
-                opt.textContent = label;
-                sel.appendChild(opt);
-            });
-            // Select the configured resolution+refresh (or auto).
-            var current = "0x0@0";
-            if (d.width > 0 && d.height > 0) {
-                current = d.width + "x" + d.height + "@" + (d.refresh_rate || 0);
-            }
-            setValue("cfg-display-resolution", current);
-        });
-
         // MQTT / Home Assistant Settings
         const m = config.mqtt || {};
         setChecked("cfg-mqtt-enabled", m.enabled === true);
@@ -359,14 +252,6 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
         setValue("cfg-cache-dir", sys.cache_dir || "cache/");
         setChecked("cfg-quiet-boot", sys.quiet_boot === true);
 
-        // Load timezone dropdown
-        loadTimezoneList(sys.timezone || "");
-
-        // Start server clock
-        _refreshServerClock();
-        if (_clockTimer) clearInterval(_clockTimer);
-        _clockTimer = setInterval(_refreshServerClock, 10000);
-
         // Updates / System Info
         apiGet("/system/info").then(function (info) {
             if (!info) return;
@@ -388,76 +273,12 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
         var web = config.web || {};
         setValue("cfg-web-host", web.host || "0.0.0.0");
         setValue("cfg-web-port", web.port || 8080);
+
+        // Security — web session timeout + screen PIN timeout (System page).
+        setValue("cfg-web-session-timeout", web.session_timeout_minutes != null ? web.session_timeout_minutes : 30);
+        setValue("cfg-screen-pin-timeout", web.screen_pin_timeout_minutes != null ? web.screen_pin_timeout_minutes : 60);
         if (!_advancedBound) {
             _advancedBound = true;
-
-            // Display settings
-            document.getElementById("cfg-display-auto")?.addEventListener("change", function () {
-                toggleResolutionFields(this.checked);
-            });
-
-            document.getElementById("btn-save-display")?.addEventListener("click", async () => {
-                const isAutoSave = document.getElementById("cfg-display-auto").checked;
-                // Parse "WxH@R" from the resolution+refresh dropdown (0x0@0 = auto).
-                var val = document.getElementById("cfg-display-resolution").value || "0x0@0";
-                var parts = val.split("@");
-                var res = (parts[0] || "0x0").split("x");
-                var width = isAutoSave ? 0 : sanitizeInt(res[0], 0);
-                var height = isAutoSave ? 0 : sanitizeInt(res[1], 0);
-                var refresh = isAutoSave ? 0 : sanitizeInt(parts[1], 0);
-                var newRotation = sanitizeInt(document.getElementById("cfg-display-rotation").value, 0) % 360;
-                var result = await apiPut("/config/display", {
-                    width: width,
-                    height: height,
-                    fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
-                    refresh_rate: refresh,
-                    rotation: newRotation,
-                });
-                if (result) {
-                    showToast("Display settings saved — frontend restarting to apply", "success", 5000);
-                    // Inform the user that video playback will be unavailable
-                    // in portrait — the current player cannot display rotated
-                    // video (see Settings → Video Playback).
-                    if (newRotation === 90 || newRotation === 270) {
-                        showToast("Video playback is disabled in portrait mode (90°/270°)", "info", 6000);
-                    }
-                } else {
-                    showToast("Failed to save display settings", "error");
-                }
-            });
-
-            // Display Power Save Schedule — saves only the schedule keys.
-            document.getElementById("cfg-schedule-enabled")?.addEventListener("change", function () {
-                toggleScheduleFields(this.checked);
-            });
-            document.getElementById("btn-save-schedule")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/display", {
-                    schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
-                    schedule_on_time: document.getElementById("cfg-schedule-on").value,
-                    schedule_off_time: document.getElementById("cfg-schedule-off").value,
-                });
-                if (result) {
-                    showToast("Display power schedule saved!", "success");
-                } else {
-                    showToast("Failed to save display power schedule", "error");
-                }
-            });
-
-            // Display power toggle — reads actual state from health endpoint
-            var powerBtn = document.getElementById("btn-display-power");
-            powerBtn?.addEventListener("click", async () => {
-                var health = await apiGet("/health");
-                var currentlyOn = health ? health.display_on !== false : true;
-                var newState = !currentlyOn;
-                await apiPost("/control", { cmd: newState ? "screen_on" : "screen_off" });
-                updatePowerButton(newState);
-                showToast(newState ? "Display turned on" : "Display turned off", "info");
-            });
-            // Initial state from health poll
-            (async function _initPowerBtn() {
-                var health = await apiGet("/health");
-                updatePowerButton(health ? health.display_on !== false : true);
-            })();
 
             // MQTT / Home Assistant settings
             document.getElementById("cfg-mqtt-enabled")?.addEventListener("change", function () {
@@ -546,6 +367,93 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
                 } else {
                     showToast("Failed to save web settings", "error");
                 }
+            });
+
+            // ── Security card (System page) ────────────────────────────────
+
+            // Web dashboard password (set/change/clear) + session timeout.
+            document.getElementById("btn-save-web-password")?.addEventListener("click", async () => {
+                var pw = document.getElementById("cfg-web-password").value;
+                var confirm = document.getElementById("cfg-web-password-confirm").value;
+                var timeout = sanitizeInt(document.getElementById("cfg-web-session-timeout").value, 30);
+
+                if (pw !== confirm) {
+                    showToast("Web passwords do not match", "error");
+                    return;
+                }
+                if (pw && pw.length < 8) {
+                    showToast("Web password must be at least 8 characters", "error");
+                    return;
+                }
+
+                // Save the timeout first (always), then set/clear the password.
+                await apiPut("/config/web", { session_timeout_minutes: timeout });
+                // Always call /auth/password — with a value it sets/changes the
+                // password; with an empty value it clears it (auth disabled).
+                var pwResult = await apiPost("/auth/password", { password: pw });
+                if (pwResult && pwResult.status === "ok") {
+                    showToast(pw ? "Web password set" : "Web password cleared", "success");
+                } else {
+                    showToast("Failed to update web password: " + ((pwResult && pwResult.message) || "Unknown error"), "error");
+                }
+                document.getElementById("cfg-web-password").value = "";
+                document.getElementById("cfg-web-password-confirm").value = "";
+            });
+
+            // Device password (SSH + Samba, synced) — confirmation dialog.
+            document.getElementById("btn-save-device-password")?.addEventListener("click", async () => {
+                var pw = document.getElementById("cfg-device-password").value;
+                var confirm = document.getElementById("cfg-device-password-confirm").value;
+                if (!pw) { showToast("Enter a new device password", "error"); return; }
+                if (pw !== confirm) { showToast("Device passwords do not match", "error"); return; }
+                if (pw.length < 8) { showToast("Device password must be at least 8 characters", "error"); return; }
+
+                var ok = await confirmDialog(
+                    "This changes the password for SSH login AND the Samba share. Existing sessions stay active; new logins use the new password. Continue?",
+                    { title: "Change device password?", okText: "Change password", danger: true }
+                );
+                if (!ok) return;
+
+                var result = await apiPost("/system/device-password", {
+                    new_password: pw,
+                    confirm_password: confirm,
+                });
+                if (result && result.status === "ok") {
+                    showToast("Device password changed (SSH + Samba)", "success");
+                } else if (result && result.status === "partial") {
+                    showToast("Console password changed, but Samba failed — stores out of sync", "error");
+                } else {
+                    showToast("Failed to change device password: " + ((result && result.message) || "Unknown error"), "error");
+                }
+                document.getElementById("cfg-device-password").value = "";
+                document.getElementById("cfg-device-password-confirm").value = "";
+            });
+
+            // Screen PIN (set/change/clear) + PIN timeout.
+            document.getElementById("btn-save-screen-pin")?.addEventListener("click", async () => {
+                var pin = document.getElementById("cfg-screen-pin").value;
+                var confirm = document.getElementById("cfg-screen-pin-confirm").value;
+                var timeout = sanitizeInt(document.getElementById("cfg-screen-pin-timeout").value, 60);
+
+                await apiPut("/config/web", { screen_pin_timeout_minutes: timeout });
+
+                if (pin) {
+                    if (!/^[0-9]{4,6}$/.test(pin)) {
+                        showToast("Screen PIN must be 4-6 digits", "error");
+                        return;
+                    }
+                    if (pin !== confirm) { showToast("Screen PINs do not match", "error"); return; }
+                    var pinResult = await apiPost("/auth/screen-pin", { pin: pin, confirm: confirm });
+                    if (pinResult && pinResult.status === "ok") {
+                        showToast("Screen PIN set", "success");
+                    } else {
+                        showToast("Failed to set screen PIN: " + ((pinResult && pinResult.message) || "Unknown error"), "error");
+                    }
+                } else {
+                    showToast("Screen PIN cleared / timeout saved", "success");
+                }
+                document.getElementById("cfg-screen-pin").value = "";
+                document.getElementById("cfg-screen-pin-confirm").value = "";
             });
 
             // Clear image cache

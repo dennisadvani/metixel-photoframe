@@ -7,7 +7,7 @@ const { goToPage, collectErrors, expectNoErrors } = require("./helpers");
 test.describe("sync", () => {
     test("page loads with immich fields", async ({ page }) => {
         const errors = collectErrors(page);
-        await goToPage(page, "sync");
+        await goToPage(page, "sources");
         for (const id of [
             "cfg-immich-url",
             "cfg-immich-key",

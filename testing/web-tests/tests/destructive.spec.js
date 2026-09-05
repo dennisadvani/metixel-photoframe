@@ -13,7 +13,7 @@ const runDestructive = process.env.RUN_DESTRUCTIVE === "1";
 test.describe("destructive (opt-in)", () => {
     test.skip(!runDestructive, "opt-in — set RUN_DESTRUCTIVE=1 to run");
     test("restart services button works", async ({ page }) => {
-        await goToPage(page, "advanced");
+        await goToPage(page, "system");
         page.on("dialog", (dialog) => dialog.accept()); // dismiss the confirm()
         await page.locator("#btn-restart-services").click();
         // The backend restarts: the connection overlay appears, then clears
