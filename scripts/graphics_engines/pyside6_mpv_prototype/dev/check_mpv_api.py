@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Check libmpv render API symbol availability."""
+
 import ctypes
 
 lib = ctypes.CDLL("libmpv.so.2")

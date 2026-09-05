@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Minimal repro: does mpv_set_property_string crash after render API use?"""
+
 import ctypes
 import ctypes.util
 import time

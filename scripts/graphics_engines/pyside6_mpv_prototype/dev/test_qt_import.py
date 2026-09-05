@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Test mpv_create after importing QtCore but WITHOUT creating an app."""
+
 import ctypes
 import ctypes.util
 import locale
-locale.setlocale(locale.LC_NUMERIC, 'C')
+
+locale.setlocale(locale.LC_NUMERIC, "C")
 
 name = ctypes.util.find_library("mpv") or "libmpv.so.2"
 lib = ctypes.CDLL(name)
@@ -21,7 +23,6 @@ if mpv:
     print("destroyed OK", flush=True)
 
 # Test 2: import QtCore, then mpv_create
-import PySide6.QtCore
 print("imported PySide6.QtCore", flush=True)
 mpv2 = lib.mpv_create()
 print("mpv_create (after QtCore import):", mpv2, flush=True)

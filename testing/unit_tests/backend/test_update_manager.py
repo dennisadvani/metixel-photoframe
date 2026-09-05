@@ -146,7 +146,11 @@ class TestInstallScript:
 
         # Copies the canonical units from the release into /etc/systemd/system.
         assert 'cp "${RELEASE_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"' in content
-        assert "metixel-backend.service metixel-cage.service metixel-frontend.service" in content
+        assert "metixel-backend.service metixel-cage.service" in content
+        # The obsolete pre-cage metixel-frontend unit is no longer shipped; the
+        # migration stops/removes a stale copy from aging devices.
+        assert "metixel-frontend.service" not in content.split("for unit in")[1].split(";")[0]
+        assert "rm -f /etc/systemd/system/metixel-frontend.service" in content
         # The fragile per-value sed rewrite is gone (it left PYTHONPATH stale).
         assert "PYTHONPATH=/opt/metixel$|PYTHONPATH" not in content
         # The systemd units are copied, not sed-mutated (the only sed -i left is

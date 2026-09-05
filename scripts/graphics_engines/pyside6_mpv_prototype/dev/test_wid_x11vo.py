@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Test wid-embedding with vo=x11 instead of vo=gpu."""
+
 import faulthandler
 import locale
 import sys
+
 faulthandler.enable()
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 import mpv
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
+
 
 class MetixelPlayer(QMainWindow):
     def __init__(self):
@@ -18,22 +21,24 @@ class MetixelPlayer(QMainWindow):
         print("container winId:", self.container.winId(), flush=True)
         self.player = mpv.MPV(
             wid=str(int(self.container.winId())),
-            vo='x11',
-            hwdec='auto',
+            vo="x11",
+            hwdec="auto",
             log_handler=print,
         )
         print("MPV created OK", flush=True)
-        self.player.play('/opt/metixel/data/media/sample_media/13131508_1920_1080_24fps.mp4')
+        self.player.play("/opt/metixel/data/media/sample_media/13131508_1920_1080_24fps.mp4")
         print("play() called", flush=True)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     print("QApplication created", flush=True)
-    locale.setlocale(locale.LC_NUMERIC, 'C')
+    locale.setlocale(locale.LC_NUMERIC, "C")
     print("LC_NUMERIC reset to C after app", flush=True)
     window = MetixelPlayer()
     window.show()
     print("window shown, entering event loop", flush=True)
     from PySide6.QtCore import QTimer
+
     QTimer.singleShot(10000, app.quit)
     sys.exit(app.exec())

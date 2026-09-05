@@ -26,8 +26,7 @@ import mimetypes
 import os
 import sys
 import threading
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote
@@ -123,7 +122,7 @@ class KioskHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/media/"):
-            name = unquote(path[len("/media/"):])
+            name = unquote(path[len("/media/") :])
             # Guard against path traversal.
             target = (MEDIA_DIR / name).resolve()
             if not str(target).startswith(str(MEDIA_DIR.resolve())):
@@ -138,7 +137,7 @@ class KioskHandler(BaseHTTPRequestHandler):
 
         # Static assets (style.css, app.js, benchmark.js).
         if path.startswith("/static/"):
-            name = unquote(path[len("/static/"):])
+            name = unquote(path[len("/static/") :])
             target = (STATIC_DIR / name).resolve()
             if not str(target).startswith(str(STATIC_DIR.resolve())):
                 self._send_json({"error": "forbidden"}, 403)
@@ -161,7 +160,7 @@ class KioskHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "invalid JSON"}, 400)
             return
 
-        payload["received_at"] = datetime.now(timezone.utc).isoformat()
+        payload["received_at"] = datetime.now(UTC).isoformat()
         with RESULTS_LOCK:
             RESULTS.append(payload)
             _persist_results()

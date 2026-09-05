@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Test mpv_create inside QApplication with LC_NUMERIC=C."""
+
 import ctypes
 import ctypes.util
 import locale
 import sys
+
 from PySide6.QtWidgets import QApplication
 
 # Set LC_NUMERIC to C before Qt/mpv init

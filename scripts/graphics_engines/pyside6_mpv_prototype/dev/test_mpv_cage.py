@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Test mpv_create under cage/Wayland."""
+
 import ctypes
 import ctypes.util
 

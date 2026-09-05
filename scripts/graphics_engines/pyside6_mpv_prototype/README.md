@@ -166,7 +166,9 @@ def paintGL(self):
     self._ctx.render(
         opengl_fbo={
             "fbo": self.defaultFramebufferObject(),
-            "w": w, "h": h, "internal_format": 0,
+            "w": w,
+            "h": h,
+            "internal_format": 0,
         },
         flip_y=True,
     )
@@ -174,9 +176,9 @@ def paintGL(self):
 
     # Paint the blue matte border, leaving only the centred 70% rect.
     painter = QPainter(self)
-    painter.fillRect(0, 0, w, dy, ImageWidget.MATTE_COLOR)          # top
+    painter.fillRect(0, 0, w, dy, ImageWidget.MATTE_COLOR)  # top
     painter.fillRect(0, dy + dh, w, h - dy - dh, ImageWidget.MATTE_COLOR)  # bottom
-    painter.fillRect(0, dy, dx, dh, ImageWidget.MATTE_COLOR)        # left
+    painter.fillRect(0, dy, dx, dh, ImageWidget.MATTE_COLOR)  # left
     painter.fillRect(dx + dw, dy, w - dx - dw, dh, ImageWidget.MATTE_COLOR)  # right
     painter.end()
 ```

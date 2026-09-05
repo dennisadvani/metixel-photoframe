@@ -164,12 +164,14 @@ The system runs as **three systemd services**:
    - CEC/IR input handlers
    - Writes `config.json` on settings change
 
-2. **`metixel-frontend.service`** — The display renderer:
+2. **`metixel-cage.service`** — The frontend display renderer, launched under the cage Wayland compositor:
    - Starts AFTER `metixel-backend.service`
+   - Runs `cage` → `cage_launch.sh` → `python3 -m metixel --mode frontend`
    - Opens the display backend
    - Reads `config.json` at startup, watches for `inotify IN_MODIFY` events
    - Runs the main render loop
    - Connects to `/run/metixel/control.sock` for immediate commands
+   - Note: the obsolete pre-cage `metixel-frontend.service` (legacy Bullseye direct launch) was removed — cage is the only frontend launcher.
 
 3. **`metixel-cursor-hider.service`** — Hides the cage/Wayland cursor:
    - Runs as root (for `/dev/uinput` access)
@@ -312,8 +314,7 @@ metixel-photoframe/                           # Repository root
 │
 ├── systemd/                           # systemd unit files
 │   ├── metixel-backend.service       # Backend daemon (all platforms)
-│   ├── metixel-cage.service          # Frontend under cage (Trixie/KMS)
-│   └── metixel-frontend.service      # Frontend direct (legacy Bullseye)
+│   └── metixel-cage.service          # Frontend under cage (Trixie/KMS)
 │
 ├── testing/                           # All test suites
 │   ├── unit_tests/                    # Automated unit tests (mirrors src/metixel domains)

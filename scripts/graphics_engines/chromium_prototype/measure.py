@@ -57,9 +57,7 @@ def _summarise_cpu_mem(samples: list) -> dict:
         "cpu_percent_max": round(max(cpu), 1),
         "mem_available_kb_mean": round(statistics.mean(avail)),
         "mem_total_kb": max(total) if total else 0,
-        "mem_used_percent_mean": round(
-            100.0 * (1.0 - statistics.mean(avail) / max(total)), 1
-        )
+        "mem_used_percent_mean": round(100.0 * (1.0 - statistics.mean(avail) / max(total)), 1)
         if total and max(total) > 0
         else 0.0,
     }

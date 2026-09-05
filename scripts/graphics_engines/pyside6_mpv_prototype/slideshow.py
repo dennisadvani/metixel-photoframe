@@ -29,11 +29,12 @@ import sys
 import time
 from pathlib import Path
 
+import mpv as mpvlib
 from PySide6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
-    QTimer,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QPainter, QPixmap
@@ -47,8 +48,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import mpv as mpvlib
-
 # ── Defaults ──────────────────────────────────────────────────────────────
 
 DEFAULT_MEDIA = Path(__file__).resolve().parent.parent.parent / "data" / "media" / "sample_media"
@@ -59,6 +58,7 @@ VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi", ".m4v"}
 # ══════════════════════════════════════════════════════════════════════════
 #  System stats (Linux /proc)
 # ══════════════════════════════════════════════════════════════════════════
+
 
 def _read_cpu_times() -> list[int]:
     try:
@@ -101,6 +101,7 @@ def _mem_info() -> dict:
 #  Media widgets
 # ══════════════════════════════════════════════════════════════════════════
 
+
 class ImageWidget(QWidget):
     """Renders an image with a virtual matte (object-fit: contain).
 
@@ -119,7 +120,10 @@ class ImageWidget(QWidget):
 
     def set_image(self, path: Path) -> None:
         self._pixmap = QPixmap(str(path))
-        self._fit_rect = self._compute_fit_rect(self._pixmap.size()) if not self._pixmap.isNull() else None
+        if not self._pixmap.isNull():
+            self._fit_rect = self._compute_fit_rect(self._pixmap.size())
+        else:
+            self._fit_rect = None
         self.update()
 
     def clear(self) -> None:
@@ -164,8 +168,13 @@ class MpvRenderWidget(QOpenGLWidget):
 
     _frame_ready = Signal()  # mpv thread -> main thread repaint trigger
 
-    def __init__(self, parent: QWidget | None = None, hwdec: str = "auto",
-                 fast: bool = False, display_fps: float = 60.0) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        hwdec: str = "auto",
+        fast: bool = False,
+        display_fps: float = 60.0,
+    ) -> None:
         super().__init__(parent)
         self._mpv: mpvlib.MPV | None = None
         self._ctx: mpvlib.MpvRenderContext | None = None
@@ -196,37 +205,39 @@ class MpvRenderWidget(QOpenGLWidget):
             # The default spline36 scaler + ordered dithering are very
             # expensive on the VC4. These trade a little quality for a lot
             # of GPU headroom.
-            opts.update({
-                "scale": "bilinear",        # cheap upscale (default spline36 is costly)
-                "dscale": "bilinear",       # cheap downscale
-                "cscale": "bilinear",       # cheap chroma upscale
-                "dither-depth": "no",       # disable dithering entirely
-                "correct-downscaling": False,
-                "linear-downscaling": False,
-                "video-unscaled": False,
-                "vd-lavc-threads": 2,       # cap decode threads (4-core Pi 3)
-                "audio": False,             # no audio needed for a photo frame
-                "ao": "null",               # don't touch the sound card at all
-                "demuxer-readahead-secs": 2,
-                "cache": "no",
-                "vd-lavc-fast": True,       # skip some decoder checks
-                "vd-lavc-skiploopfilter": "nonref",  # skip loop filter on non-ref frames
-                "deband": False,
-                "hdr-compute-peak": False,
-                "target-colorspace-hint": False,
-                "video-output-levels": "auto",
-                "gpu-api": "opengl",
-                "opengl-rectangle-textures": False,
-                "opengl-pbo": True,
-                # Pace video to the display refresh rate. Without this, mpv
-                # renders as fast as it can and the VC4 (no swap control)
-                # delivers frames unevenly -> choppy playback.
-                "video-sync": "display-resample",
-                # The libmpv render API doesn't auto-detect the display
-                # refresh rate (no swap control on VC4). Tell mpv explicitly
-                # so display-resample can pace frames to the real refresh.
-                "display-fps-override": display_fps,
-            })
+            opts.update(
+                {
+                    "scale": "bilinear",  # cheap upscale (default spline36 is costly)
+                    "dscale": "bilinear",  # cheap downscale
+                    "cscale": "bilinear",  # cheap chroma upscale
+                    "dither-depth": "no",  # disable dithering entirely
+                    "correct-downscaling": False,
+                    "linear-downscaling": False,
+                    "video-unscaled": False,
+                    "vd-lavc-threads": 2,  # cap decode threads (4-core Pi 3)
+                    "audio": False,  # no audio needed for a photo frame
+                    "ao": "null",  # don't touch the sound card at all
+                    "demuxer-readahead-secs": 2,
+                    "cache": "no",
+                    "vd-lavc-fast": True,  # skip some decoder checks
+                    "vd-lavc-skiploopfilter": "nonref",  # skip loop filter on non-ref frames
+                    "deband": False,
+                    "hdr-compute-peak": False,
+                    "target-colorspace-hint": False,
+                    "video-output-levels": "auto",
+                    "gpu-api": "opengl",
+                    "opengl-rectangle-textures": False,
+                    "opengl-pbo": True,
+                    # Pace video to the display refresh rate. Without this, mpv
+                    # renders as fast as it can and the VC4 (no swap control)
+                    # delivers frames unevenly -> choppy playback.
+                    "video-sync": "display-resample",
+                    # The libmpv render API doesn't auto-detect the display
+                    # refresh rate (no swap control on VC4). Tell mpv explicitly
+                    # so display-resample can pace frames to the real refresh.
+                    "display-fps-override": display_fps,
+                }
+            )
         self._mpv = mpvlib.MPV(**opts)
         self._mpv.observe_property("eof-reached", self._on_eof_reached)
         self._mpv.observe_property("estimated-vf-fps", self._on_fps_changed)
@@ -281,15 +292,13 @@ class MpvRenderWidget(QOpenGLWidget):
         if self._gl_inited or self._mpv is None:
             return
         from PySide6.QtGui import QOpenGLContext
+
         ctx = QOpenGLContext.currentContext()
         if not ctx:
             return
 
         def _get_proc_address(_ctx, name):
-            if isinstance(name, bytes):
-                name_str = name
-            else:
-                name_str = name.encode("utf-8")
+            name_str = name if isinstance(name, bytes) else name.encode("utf-8")
             addr = ctx.getProcAddress(name_str)
             if addr is not None:
                 return int(addr)
@@ -297,7 +306,8 @@ class MpvRenderWidget(QOpenGLWidget):
 
         self._proc_addr_fn = mpvlib.MpvGlGetProcAddressFn(_get_proc_address)
         self._ctx = mpvlib.MpvRenderContext(
-            self._mpv, "opengl",
+            self._mpv,
+            "opengl",
             opengl_init_params={"get_proc_address": self._proc_addr_fn},
         )
         self._ctx.update_cb = self._on_mpv_frame
@@ -359,9 +369,9 @@ class MpvRenderWidget(QOpenGLWidget):
         # centred 70% rect showing the video. This avoids the fragile
         # FBO-blit approach entirely.
         painter = QPainter(self)
-        painter.fillRect(0, 0, w, dy, ImageWidget.MATTE_COLOR)          # top
+        painter.fillRect(0, 0, w, dy, ImageWidget.MATTE_COLOR)  # top
         painter.fillRect(0, dy + dh, w, h - dy - dh, ImageWidget.MATTE_COLOR)  # bottom
-        painter.fillRect(0, dy, dx, dh, ImageWidget.MATTE_COLOR)        # left
+        painter.fillRect(0, dy, dx, dh, ImageWidget.MATTE_COLOR)  # left
         painter.fillRect(dx + dw, dy, w - dx - dw, dh, ImageWidget.MATTE_COLOR)  # right
         painter.end()
 
@@ -369,6 +379,7 @@ class MpvRenderWidget(QOpenGLWidget):
 # ══════════════════════════════════════════════════════════════════════════
 #  Main window
 # ══════════════════════════════════════════════════════════════════════════
+
 
 class SlideshowWindow(QMainWindow):
     def __init__(self, args: argparse.Namespace) -> None:
@@ -396,8 +407,9 @@ class SlideshowWindow(QMainWindow):
 
         # Image widget + mpv render widget (stacked).
         self.image_widget = ImageWidget(central)
-        self.mpv_widget = MpvRenderWidget(central, hwdec=args.hwdec, fast=args.fast,
-                                          display_fps=args.display_fps)
+        self.mpv_widget = MpvRenderWidget(
+            central, hwdec=args.hwdec, fast=args.fast, display_fps=args.display_fps
+        )
         layout.addWidget(self.image_widget)
         layout.addWidget(self.mpv_widget)
         self.image_widget.raise_()
@@ -630,17 +642,30 @@ class SlideshowWindow(QMainWindow):
 
 # ── Entry point ───────────────────────────────────────────────────────────
 
+
 def main() -> int:
     faulthandler.enable()
     parser = argparse.ArgumentParser(description="PySide6 + mpv slideshow prototype (cage/Wayland)")
     parser.add_argument("--media", type=Path, default=DEFAULT_MEDIA)
-    parser.add_argument("--hwdec", type=str, default="auto",
-                        help="mpv hardware decode backend (e.g. auto, v4l2m2m, no)")
-    parser.add_argument("--fast", action="store_true", default=False,
-                        help="Apply aggressive low-power mpv optimisations "
-                             "(bilinear scaling, no dithering, no audio) for weak GPUs")
-    parser.add_argument("--display-fps", type=float, default=60.0,
-                        help="Display refresh rate for video-sync pacing (default 60)")
+    parser.add_argument(
+        "--hwdec",
+        type=str,
+        default="auto",
+        help="mpv hardware decode backend (e.g. auto, v4l2m2m, no)",
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        default=False,
+        help="Apply aggressive low-power mpv optimisations "
+        "(bilinear scaling, no dithering, no audio) for weak GPUs",
+    )
+    parser.add_argument(
+        "--display-fps",
+        type=float,
+        default=60.0,
+        help="Display refresh rate for video-sync pacing (default 60)",
+    )
     parser.add_argument("--image-duration", type=float, default=5.0)
     parser.add_argument("--video-max", type=float, default=15.0)
     parser.add_argument("--crossfade", type=float, default=1.0)
@@ -649,10 +674,15 @@ def main() -> int:
     parser.add_argument("--hide-cursor", action="store_true", default=True)
     parser.add_argument("--no-hide-cursor", dest="hide_cursor", action="store_false")
     parser.add_argument("--out", type=Path, default=Path("benchmark.json"))
-    parser.add_argument("--duration", type=float, default=0.0,
-                        help="Auto-quit after N seconds (0 = run forever)")
-    parser.add_argument("--screenshot", type=Path, default=None,
-                        help="Capture the window to a PNG after 3s, then quit")
+    parser.add_argument(
+        "--duration", type=float, default=0.0, help="Auto-quit after N seconds (0 = run forever)"
+    )
+    parser.add_argument(
+        "--screenshot",
+        type=Path,
+        default=None,
+        help="Capture the window to a PNG after 3s, then quit",
+    )
     args = parser.parse_args()
 
     if os.environ.get("QT_QPA_PLATFORM", "") != "eglfs":
@@ -672,7 +702,7 @@ def main() -> int:
     return app.exec()
 
 
-def _capture_and_quit(window: "SlideshowWindow", out: Path) -> None:
+def _capture_and_quit(window: SlideshowWindow, out: Path) -> None:
     """Capture the window to a PNG and quit."""
     try:
         pix = window.grab()

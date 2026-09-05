@@ -620,7 +620,7 @@ import {
         // Ensure we have at least the defaults if config is empty
         if (!paths || paths.length === 0) {
             paths = [
-                { path: "media/sample_media/", enabled: true },
+                { path: "media/sample_media/landscape/", enabled: true },
                 { path: "media/sync/immich/", enabled: true },
                 { path: "media/my_media/", enabled: true }
             ];

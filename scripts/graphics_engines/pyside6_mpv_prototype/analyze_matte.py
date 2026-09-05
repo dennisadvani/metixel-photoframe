@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Analyze screenshots to verify the virtual matte (letterbox/pillarbox)."""
+
 from PIL import Image
+
 
 def analyze(path):
     im = Image.open(path).convert("RGB")
@@ -9,14 +11,14 @@ def analyze(path):
     # Sample corners, edges, and center
     samples = {
         "top-left": (5, 5),
-        "top-right": (w-6, 5),
-        "bottom-left": (5, h-6),
-        "bottom-right": (w-6, h-6),
-        "top-center": (w//2, 5),
-        "bottom-center": (w//2, h-6),
-        "left-center": (5, h//2),
-        "right-center": (w-6, h//2),
-        "center": (w//2, h//2),
+        "top-right": (w - 6, 5),
+        "bottom-left": (5, h - 6),
+        "bottom-right": (w - 6, h - 6),
+        "top-center": (w // 2, 5),
+        "bottom-center": (w // 2, h - 6),
+        "left-center": (5, h // 2),
+        "right-center": (w - 6, h // 2),
+        "center": (w // 2, h // 2),
     }
     for name, (x, y) in samples.items():
         print(f"  {name:14s} ({x:4d},{y:4d}): {im.getpixel((x, y))}")
@@ -34,7 +36,7 @@ def analyze(path):
         else:
             break
     bot_black = 0
-    for y in range(h-1, -1, -1):
+    for y in range(h - 1, -1, -1):
         if is_black(im.getpixel((cx, y))):
             bot_black += 1
         else:
@@ -48,14 +50,23 @@ def analyze(path):
         else:
             break
     right_black = 0
-    for x in range(w-1, -1, -1):
+    for x in range(w - 1, -1, -1):
         if is_black(im.getpixel((x, cy))):
             right_black += 1
         else:
             break
     print(f"  top bar: {top_black}px, bottom bar: {bot_black}px")
     print(f"  left bar: {left_black}px, right bar: {right_black}px")
-    print(f"  => {'LETTERBOX (top/bottom bars)' if top_black > 20 and left_black < 20 else 'PILLARBOX (left/right bars)' if left_black > 20 and top_black < 20 else 'FULLSCREEN or mixed'}")
+    letterbox = top_black > 20 and left_black < 20
+    pillarbox = left_black > 20 and top_black < 20
+    if letterbox:
+        mode = "LETTERBOX (top/bottom bars)"
+    elif pillarbox:
+        mode = "PILLARBOX (left/right bars)"
+    else:
+        mode = "FULLSCREEN or mixed"
+    print(f"  => {mode}")
+
 
 for p in ["shot_video.png", "shot_32.png", "shot_169.png"]:
     analyze(p)

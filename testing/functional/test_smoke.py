@@ -79,10 +79,7 @@ def test_backend_service_active() -> None:
 
 def test_frontend_service_active() -> None:
     """The frontend (cage) must be running."""
-    # Either cage (Trixie) or the legacy frontend unit may be present.
-    assert _service_active("metixel-cage") or _service_active("metixel-frontend"), (
-        "neither metixel-cage nor metixel-frontend is active"
-    )
+    assert _service_active("metixel-cage"), "metixel-cage is not active"
 
 
 def test_health_endpoint_serves() -> None:

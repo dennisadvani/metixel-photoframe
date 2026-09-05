@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Test python-mpv inside QApplication under cage with faulthandler."""
+
 import faulthandler
 import sys
+
 faulthandler.enable()
-from PySide6.QtWidgets import QApplication
 import mpv
+from PySide6.QtWidgets import QApplication
 
 print("creating QApplication...", flush=True)
 app = QApplication(sys.argv)

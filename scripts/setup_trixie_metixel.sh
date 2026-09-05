@@ -56,10 +56,11 @@ if [ "${INSIDE_REPO}" = false ]; then
     echo "Release channel:"
     echo "  stable = Latest stable release (recommended)"
     echo "  beta   = Pre-release with latest features"
+    echo "  dev    = Development branch (latest commits, unstable)"
     read -p "  Channel [stable]: " RELEASE_CHANNEL
     RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
     case "$RELEASE_CHANNEL" in
-        stable|beta) ;;
+        stable|beta|dev) ;;
         *)
             echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
             RELEASE_CHANNEL="stable"
@@ -144,10 +145,11 @@ if [ -z "${RELEASE_CHANNEL}" ]; then
     echo "Release channel:"
     echo "  stable = Latest stable release (recommended)"
     echo "  beta   = Pre-release with latest features"
+    echo "  dev    = Development branch (latest commits, unstable)"
     read -p "  Channel [stable]: " RELEASE_CHANNEL
     RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
     case "$RELEASE_CHANNEL" in
-        stable|beta) ;;
+        stable|beta|dev) ;;
         *)
             echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
             RELEASE_CHANNEL="stable"
@@ -168,11 +170,12 @@ echo "  → WiFi country: ${WIFI_COUNTRY}"
 echo ""
 
 # Switch the repository to the correct version before installing anything.
-# Both channels pin to the latest release tag on the main branch —
+# stable / beta pin to the latest release tag on the main branch —
 # stable uses non-prerelease tags (v1.0.0), beta uses pre-release tags
-# (v1.0.4-beta.4).
+# (v1.0.4-beta.4).  dev tracks the latest dev branch HEAD (unstable).
 cd "${METIXEL_DIR}"
 git fetch origin --tags 2>/dev/null || true
+git fetch origin dev:dev 2>/dev/null || true
 
 # Ensure we're on main before looking for tags
 git checkout main 2>/dev/null || true
@@ -184,16 +187,23 @@ if [ "${RELEASE_CHANNEL}" = "stable" ]; then
         | grep -v -- '-' \
         | sort -V \
         | tail -1)
-else
+elif [ "${RELEASE_CHANNEL}" = "beta" ]; then
     # Latest pre-release tag (e.g. v1.0.4-beta.4)
     LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]-*' \
         | sort -V \
         | tail -1)
+else
+    # dev channel: track the latest dev branch HEAD (no tag)
+    LATEST_TAG=""
 fi
 
 if [ -n "${LATEST_TAG}" ]; then
     git checkout "${LATEST_TAG}" 2>/dev/null || true
     echo "  → Pinned to ${LATEST_TAG} (${RELEASE_CHANNEL})"
+elif [ "${RELEASE_CHANNEL}" = "dev" ]; then
+    git checkout dev 2>/dev/null || true
+    git pull --ff-only 2>/dev/null || true
+    echo "  → Using dev branch HEAD (${RELEASE_CHANNEL})"
 else
     echo "  → No ${RELEASE_CHANNEL} tag found — staying on main branch HEAD"
 fi
@@ -275,10 +285,21 @@ mkdir -p /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel
 # RELEASE_TAG is deterministic: prefer the nearest tag, else fall back to the
 # branch name; strip any 'v' prefix and any -dirty/-g<hash> suffix so the
 # release folder name is stable and matches what update.sh expects.
-RELEASE_TAG="${LATEST_TAG:-$(git -C "${METIXEL_DIR}" describe --tags --abbrev=0 2>/dev/null || git -C "${METIXEL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
-RELEASE_TAG="${RELEASE_TAG#v}"
-RELEASE_TAG="${RELEASE_TAG%%-*}"
-RELEASE_TAG="v${RELEASE_TAG}"
+if [ "${RELEASE_CHANNEL}" = "dev" ]; then
+    # Dev installs must NOT collide with a tagged release: the release dir
+    # separates installs by version, and a dev checkout whose nearest reachable
+    # tag matches an already-installed release (e.g. v1.2.3) would have its
+    # systemd/ (and src/, scripts/) silently skipped by the move loop below —
+    # it never overwrites an existing directory.  Use a branch-derived
+    # non-tag name so the dev code — including systemd/ — is always fresh.
+    RELEASE_BRANCH="$(git -C "${METIXEL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+    RELEASE_TAG="dev-${RELEASE_BRANCH}"
+else
+    RELEASE_TAG="${LATEST_TAG:-$(git -C "${METIXEL_DIR}" describe --tags --abbrev=0 2>/dev/null || git -C "${METIXEL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
+    RELEASE_TAG="${RELEASE_TAG#v}"
+    RELEASE_TAG="${RELEASE_TAG%%-*}"
+    RELEASE_TAG="v${RELEASE_TAG}"
+fi
 RELEASE_DIR="/opt/metixel/releases/${RELEASE_TAG}"
 mkdir -p "${RELEASE_DIR}"
 # Move the app code into the release folder.  RELEASE_DIR lives INSIDE
@@ -312,7 +333,9 @@ mkdir -p "${METIXEL_DIR}/etc"
 # existing sample_media (user may have replaced it).
 if [ -d "${METIXEL_DIR}/data/media/sample_media" ]; then
     mkdir -p /opt/metixel/data/media/sample_media
-    cp -n "${METIXEL_DIR}"/data/media/sample_media/* /opt/metixel/data/media/sample_media/ 2>/dev/null || true
+    # Copy the landscape/portrait subfolders recursively (never overwrite
+    # existing sample_media the user may have replaced).
+    cp -rn "${METIXEL_DIR}"/data/media/sample_media/. /opt/metixel/data/media/sample_media/ 2>/dev/null || true
 fi
 
 # Persist config.json + logging.conf into /data (user-editable). __main__.py
@@ -335,11 +358,24 @@ echo "[5/9] Installing systemd services..."
 # The app code (including systemd/) now lives in the release dir.
 cp "${RELEASE_DIR}/systemd/metixel-backend.service" /etc/systemd/system/
 cp "${RELEASE_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
-cp "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" /etc/systemd/system/
+# The cursor-hider mode is a newer feature; only install its service if the
+# release actually ships it (older releases lack the mode by design, and a
+# unit that execs --mode cursor-hider on old code would crash-loop forever).
+if [ -f "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" ] \
+   && grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"; then
+    cp "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" /etc/systemd/system/
+    CURSOR_HIDER_PRESENT=true
+else
+    echo "  ! Release does not support cursor-hider — skipping its service"
+    rm -f /etc/systemd/system/metixel-cursor-hider.service 2>/dev/null || true
+    CURSOR_HIDER_PRESENT=false
+fi
 systemctl daemon-reload
 systemctl enable metixel-backend
 systemctl enable metixel-cage
-systemctl enable metixel-cursor-hider
+if [ "${CURSOR_HIDER_PRESENT}" = true ]; then
+    systemctl enable metixel-cursor-hider
+fi
 
 # Enable linger for the pi user so systemd-logind creates
 # /run/user/1000 at boot even without a user login.

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Test python-mpv inside QApplication under cage."""
+
 import sys
-from PySide6.QtWidgets import QApplication
+
 import mpv
+from PySide6.QtWidgets import QApplication
 
 app = QApplication(sys.argv)
 print("QApplication created")

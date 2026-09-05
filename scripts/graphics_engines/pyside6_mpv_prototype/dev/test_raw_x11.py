@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Test raw mpv_create under X11 with QApplication."""
+
 import ctypes
 import ctypes.util
 import locale
 import sys
-locale.setlocale(locale.LC_NUMERIC, 'C')
+
+locale.setlocale(locale.LC_NUMERIC, "C")
 from PySide6.QtWidgets import QApplication
 
 name = ctypes.util.find_library("mpv") or "libmpv.so.2"

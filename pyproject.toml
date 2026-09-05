@@ -75,6 +75,13 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 
+# The pyside6_mpv_prototype/dev/ scripts are standalone debug tools that
+# deliberately call side-effect setup (faulthandler, locale, version prints)
+# BEFORE importing PySide6/mpv — the import order is exactly what they
+# diagnose.  E402 (module-level import not at top) is intentional there.
+[tool.ruff.lint.per-file-ignores]
+"scripts/graphics_engines/pyside6_mpv_prototype/dev/*.py" = ["E402"]
+
 [tool.mypy]
 python_version = "3.11"
 warn_return_any = true

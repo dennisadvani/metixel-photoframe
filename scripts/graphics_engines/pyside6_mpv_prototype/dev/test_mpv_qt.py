@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Test mpv_create inside a QApplication under cage."""
+
 import ctypes
 import ctypes.util
 import sys
+
 from PySide6.QtWidgets import QApplication
 
 name = ctypes.util.find_library("mpv") or "libmpv.so.2"
