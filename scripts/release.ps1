@@ -7,7 +7,7 @@
 .DESCRIPTION
     Switches to dev, pulls latest, bumps the version, commits on dev,
     pushes a release branch, opens a pull request to main, waits for CI
-    checks to pass, then STOPS — you review and merge the PR yourself in
+    checks to pass, then STOPS - you review and merge the PR yourself in
     GitHub.  Afterwards run with -Finalize <version> to tag main and push
     the tag.
 
@@ -15,7 +15,7 @@
       gh auth login
 
     NOTE: the "main" branch ruleset requires a pull request before merging.
-    This script deliberately does NOT merge the PR — you approve and merge
+    This script deliberately does NOT merge the PR - you approve and merge
     it in the GitHub UI.  If the ruleset also requires an approving review,
     set required_approving_review_count to 0 (solo maintainer) or have a
     collaborator approve the PR.
@@ -73,7 +73,7 @@ if (-not $Type -and -not $Version -and -not $Finalize) {
     Write-Host "       .\scripts\release.ps1 -Finalize <version>   (after the PR is merged)"
     Write-Host ""
     Write-Host "Examples:"
-    Write-Host "  .\scripts\release.ps1 minor-beta # bump number + beta (1.1.9-beta.9 → 1.1.10-beta.10)"
+    Write-Host "  .\scripts\release.ps1 minor-beta # bump number + beta (1.1.9-beta.9 -> 1.1.10-beta.10)"
     Write-Host "  .\scripts\release.ps1 -Version 0.2.0-beta.2"
     Write-Host "  .\scripts\release.ps1 -Finalize 0.2.0-beta.2   (after the PR is merged)"
     Write-Host "  .\scripts\release.ps1 -DryRun beta"
@@ -155,7 +155,7 @@ if ($Finalize) {
     # IDENTICAL content, their commit histories differ.  Every release, this
     # divergence grows and causes spurious merge conflicts on the next release
     # PR.  Point dev at main's (just-released) commit so both branches are
-    # byte-identical — the next version bump starts fresh from the release.
+    # byte-identical - the next version bump starts fresh from the release.
     Write-Host "Re-aligning dev to main (identical history)..." -ForegroundColor Green
     git checkout -B dev main
     if ($LASTEXITCODE -ne 0) { throw "Failed to land dev on main" }
@@ -219,14 +219,14 @@ $NewVersion = if ($BumpText -match 'version:\s*(\S+)') {
 }
 
 # If the requested version already matches the current version, __init__.py
-# is unchanged — there's no bump commit to make.  This is the legitimate
+# is unchanged - there's no bump commit to make.  This is the legitimate
 # case where the version is already present on dev, so we continue (skip the
 # commit) rather than abort.
 $IniPath = Join-Path $RepoRoot "src\metixel\__init__.py"
 $CurrentVersion = (Select-String -Path $IniPath -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 $VersionChanged = ($NewVersion -ne $CurrentVersion)
 if (-not $VersionChanged) {
-    Write-Host "Version $NewVersion is already current on dev — no bump needed." -ForegroundColor Yellow
+    Write-Host "Version $NewVersion is already current on dev - no bump needed." -ForegroundColor Yellow
 }
 
 Write-Host "New version: " -ForegroundColor Green -NoNewline
@@ -254,7 +254,7 @@ if ($VersionChanged) {
     if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
     Write-Host "Version bump committed on dev." -ForegroundColor Green
 } else {
-    Write-Host "Version already current on dev — skipping bump commit." -ForegroundColor Cyan
+    Write-Host "Version already current on dev - skipping bump commit." -ForegroundColor Cyan
 }
 
 # -- Push dev ----------------------------------------------------------------
@@ -305,10 +305,10 @@ git checkout dev
 git branch -D $ReleaseBranch 2>$null
 
 Write-Host ""
-Write-Host "=== Release $NewVersion PR ready — merge it yourself in GitHub ===" -ForegroundColor Green
+Write-Host "=== Release $NewVersion PR ready - merge it yourself in GitHub ===" -ForegroundColor Green
 Write-Host "  $PrUrl"
 Write-Host ""
-Write-Host "CI checks passed. I have NOT merged the PR — please review and merge it" -ForegroundColor Yellow
+Write-Host "CI checks passed. I have NOT merged the PR - please review and merge it" -ForegroundColor Yellow
 Write-Host "in GitHub yourself." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "After merging, finalise the release (tags main + pushes the tag):" -ForegroundColor Green
