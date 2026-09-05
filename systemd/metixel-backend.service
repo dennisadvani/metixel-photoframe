@@ -20,7 +20,16 @@ Environment=METIXEL_DISPLAY_BACKEND=auto
 RuntimeDirectory=metixel
 RuntimeDirectoryMode=0755
 
-ExecStartPre=/bin/mkdir -p /opt/metixel/data/logs /opt/metixel/data/cache /opt/metixel/data/config /opt/metixel/data/media /opt/metixel/data/backups
+# Ensure the persistent data dirs exist and are owned by pi.  A
+# root-created metixel.log (e.g. from a one-off root run during install)
+# would otherwise make this pi-run service crash-loop with
+#   PermissionError: .../data/logs/metixel.log
+# The '+' prefix runs as root so it can chown files that were created by
+# root.  mkdir -p is idempotent; chown fixes the log-dir ownership on every
+# (re)start.  Scoped to data/logs (not -R over all of data) so big media
+# trees aren't walked on each restart.
+ExecStartPre=+/bin/mkdir -p /opt/metixel/data/logs /opt/metixel/data/cache /opt/metixel/data/config /opt/metixel/data/media /opt/metixel/data/backups
+ExecStartPre=+/usr/bin/chown -R pi:pi /opt/metixel/data/logs
 ExecStart=/usr/bin/python3 -m metixel --mode backend --config /opt/metixel/data/config.json
 Restart=always
 RestartSec=5
