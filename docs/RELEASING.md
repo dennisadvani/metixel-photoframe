@@ -185,6 +185,7 @@ PR:
 # Bump, commit on dev, push a release branch, open a PR to main, wait for CI
 scripts/release.sh minor-beta      # bump minor + beta (or: scripts/release.ps1)
 scripts/release.sh beta            # bump beta only
+scripts/release.ps1 -Version 0.2.0-beta.2   # set an exact version (Windows)
 
 # …review and merge the PR yourself in GitHub…
 

@@ -41,6 +41,22 @@ _WLR_ENV: dict[str, str] = {
     "HOME": os.environ.get("HOME", "/home/pi"),
 }
 
+#: Map a clockwise rotation in degrees to the wlr-randr ``--transform`` value.
+_WLR_TRANSFORMS: dict[int, str] = {
+    0: "normal",
+    90: "90",
+    180: "180",
+    270: "270",
+}
+
+
+def _wlr_transform(rotation: int) -> str:
+    """Return the wlr-randr ``--transform`` value for a clockwise rotation.
+
+    Unsupported values fall back to ``normal`` (0°).
+    """
+    return _WLR_TRANSFORMS.get(rotation, "normal")
+
 
 class GpuInfo:
     """GPU memory introspection with a short-TTL cache.
@@ -258,6 +274,110 @@ class WlrOutput:
             )
             return name
         return None
+
+    def list_modes(self) -> list[dict[str, Any]]:
+        """Return the real monitor's supported modes from wlr-randr.
+
+        Each entry is ``{"width", "height", "refresh", "preferred", "current"}``
+        for the resolved output.  Returns an empty list if wlr-randr is
+        unavailable or the output cannot be resolved.
+        """
+        if not os.path.exists(_WLR_BIN):
+            logger.debug("wlr-randr not installed — cannot list display modes")
+            return []
+        try:
+            result = subprocess.run(
+                [_WLR_BIN, "--json"],
+                capture_output=True,
+                timeout=5,
+                env=_WLR_ENV,
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "wlr-randr --json failed (%d): %s",
+                    result.returncode,
+                    result.stderr.decode(errors="replace").strip(),
+                )
+                return []
+            outputs = json.loads(result.stdout.decode(errors="replace") or "[]")
+        except Exception:
+            logger.warning("Failed to list display modes via wlr-randr", exc_info=True)
+            return []
+
+        if not isinstance(outputs, list) or not outputs:
+            return []
+
+        target = self.resolve(fallback=False)
+        for out in outputs:
+            if out.get("name") == target:
+                modes = out.get("modes", []) or []
+                return [m for m in modes if isinstance(m, dict)]
+        return []
+
+    def set_mode(
+        self,
+        *,
+        width: int = 0,
+        height: int = 0,
+        refresh_rate: int = 0,
+        rotation: int = 0,
+    ) -> bool:
+        """Apply a resolution / refresh rate / rotation via wlr-randr.
+
+        Only the non-zero / non-default arguments are applied (0 width,
+        height, or refresh rate means "leave unchanged"; rotation 0 means
+        "no rotation").  Returns True on success, False if wlr-randr is
+        unavailable or the mode is unsupported (caller should fall back to
+        the native mode and log a warning).
+
+        wlr-randr expresses refresh rate as part of the mode string:
+        ``--mode <width>x<height>[@<refresh>Hz]`` — there is no separate
+        ``--rate`` flag.
+        """
+        try:
+            if not os.path.exists(_WLR_BIN):
+                logger.debug("wlr-randr not installed at %s", _WLR_BIN)
+                return False
+
+            output = self.resolve()
+            cmd = [_WLR_BIN, "--output", output]
+            if width > 0 and height > 0:
+                mode = f"{width}x{height}"
+                if refresh_rate > 0:
+                    mode += f"@{refresh_rate}Hz"
+                cmd += ["--mode", mode]
+            # A refresh rate without an explicit resolution cannot be
+            # expressed in wlr-randr's mode string — skip it (the caller
+            # normally supplies width/height together with the rate).
+            if rotation:
+                cmd += ["--transform", _wlr_transform(rotation)]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=5,
+                env=_WLR_ENV,
+            )
+            if result.returncode == 0:
+                logger.info(
+                    "wlr-randr set mode on %s: %dx%d @ %dHz rot=%d",
+                    output,
+                    width,
+                    height,
+                    refresh_rate,
+                    rotation,
+                )
+                return True
+
+            stderr = result.stderr.decode(errors="replace").strip()
+            logger.warning("wlr-randr set_mode exited %d: %s", result.returncode, stderr)
+            return False
+        except FileNotFoundError:
+            logger.debug("wlr-randr not installed — cannot set display mode")
+            return False
+        except Exception:
+            logger.warning("wlr-randr set_mode failed", exc_info=True)
+            return False
 
     def set_power(self, on: bool) -> bool:
         """Toggle the display via wlr-randr. Returns True on success.

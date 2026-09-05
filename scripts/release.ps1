@@ -7,7 +7,7 @@
 .DESCRIPTION
     Switches to dev, pulls latest, bumps the version, commits on dev,
     pushes a release branch, opens a pull request to main, waits for CI
-    checks to pass, then STOPS — you review and merge the PR yourself in
+    checks to pass, then STOPS - you review and merge the PR yourself in
     GitHub.  Afterwards run with -Finalize <version> to tag main and push
     the tag.
 
@@ -15,7 +15,7 @@
       gh auth login
 
     NOTE: the "main" branch ruleset requires a pull request before merging.
-    This script deliberately does NOT merge the PR — you approve and merge
+    This script deliberately does NOT merge the PR - you approve and merge
     it in the GitHub UI.  If the ruleset also requires an approving review,
     set required_approving_review_count to 0 (solo maintainer) or have a
     collaborator approve the PR.
@@ -23,6 +23,10 @@
 .PARAMETER Type
     Release type: minor-beta (bump minor + beta), beta (beta only),
     rc, stable, minor, or major.
+
+.PARAMETER Version
+    Set an exact version string instead of deriving it from a release type
+    (e.g. -Version 0.2.0-beta.2).  Mutually exclusive with Type.
 
 .PARAMETER Finalize
     Tag main with the given version and push the tag, then RE-ALIGN dev to
@@ -35,7 +39,7 @@
 
 .EXAMPLE
     .\scripts\release.ps1 minor-beta
-    .\scripts\release.ps1 beta
+    .\scripts\release.ps1 -Version 0.2.0-beta.2
     .\scripts\release.ps1 stable
     .\scripts\release.ps1 minor
     .\scripts\release.ps1 -DryRun beta
@@ -45,6 +49,9 @@ param(
     [Parameter(Mandatory=$false, Position=0)]
     [ValidateSet("minor-beta", "beta", "rc", "stable", "minor", "major")]
     [string]$Type,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Version,
 
     [Parameter(Mandatory=$false)]
     [string]$Finalize,
@@ -58,19 +65,17 @@ $RepoRoot = Resolve-Path "$ScriptDir\.."
 
 # -- Validate ---------------------------------------------------------------
 
-if (-not $Type -and -not $Finalize) {
-    Write-Host "ERROR: No release type or -Finalize specified." -ForegroundColor Red
+if (-not $Type -and -not $Version -and -not $Finalize) {
+    Write-Host "ERROR: No release type, version, or -Finalize specified." -ForegroundColor Red
     Write-Host ""
     Write-Host "Usage: .\scripts\release.ps1 [-DryRun] <minor-beta|beta|rc|stable|minor|major>"
+    Write-Host "       .\scripts\release.ps1 -Version <version>       (set an exact version)"
     Write-Host "       .\scripts\release.ps1 -Finalize <version>   (after the PR is merged)"
     Write-Host ""
     Write-Host "Examples:"
-    Write-Host "  .\scripts\release.ps1 minor-beta # bump number + beta (1.1.9-beta.9 → 1.1.10-beta.10)"
-    Write-Host "  .\scripts\release.ps1 beta       # bump beta only (1.1.9-beta.9 → 1.1.9-beta.10)"
-    Write-Host "  .\scripts\release.ps1 rc         # bump rc number"
-    Write-Host "  .\scripts\release.ps1 stable     # strip pre-release -> stable"
-    Write-Host "  .\scripts\release.ps1 minor      # bump minor -> 0.3.0"
-    Write-Host "  .\scripts\release.ps1 major      # bump major -> 1.0.0"
+    Write-Host "  .\scripts\release.ps1 minor-beta # bump number + beta (1.1.9-beta.9 -> 1.1.10-beta.10)"
+    Write-Host "  .\scripts\release.ps1 -Version 0.2.0-beta.2"
+    Write-Host "  .\scripts\release.ps1 -Finalize 0.2.0-beta.2   (after the PR is merged)"
     Write-Host "  .\scripts\release.ps1 -DryRun beta"
     exit 1
 }
@@ -150,7 +155,7 @@ if ($Finalize) {
     # IDENTICAL content, their commit histories differ.  Every release, this
     # divergence grows and causes spurious merge conflicts on the next release
     # PR.  Point dev at main's (just-released) commit so both branches are
-    # byte-identical — the next version bump starts fresh from the release.
+    # byte-identical - the next version bump starts fresh from the release.
     Write-Host "Re-aligning dev to main (identical history)..." -ForegroundColor Green
     git checkout -B dev main
     if ($LASTEXITCODE -ne 0) { throw "Failed to land dev on main" }
@@ -170,9 +175,30 @@ if ($Finalize) {
 
 # -- Bump version -----------------------------------------------------------
 
-Write-Host "Bumping version: $Type" -ForegroundColor Green
+# When given an explicit -Version, set it exactly; otherwise bump from the
+# current version using the release-type flag.
+if ($Version) {
+    Write-Host "Setting version: $Version" -ForegroundColor Green
+} else {
+    Write-Host "Bumping version: $Type" -ForegroundColor Green
+}
+
 $BumpScript = Join-Path $RepoRoot "scripts\bump_version.py"
-$BumpOutput = & python $BumpScript $BumpFlag 2>&1
+# Validate the version (dry-run) BEFORE making any changes, so an invalid
+# version never leaves the tree dirty or commits anything.
+$ValidateArgs = @($BumpFlag, "--dry-run")
+if ($Version) { $ValidateArgs = @("--set", $Version, "--dry-run") }
+$ValidateOutput = & python $BumpScript @ValidateArgs 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Version validation failed:" -ForegroundColor Red
+    Write-Host ($ValidateOutput -join "`n")
+    exit 1
+}
+
+# Run the real bump (writes src/metixel/__init__.py).
+# Without --dry-run, bump_version.py writes the file.
+$BumpArgs = if ($Version) { @("--set", $Version) } else { @($BumpFlag) }
+$BumpOutput = & python $BumpScript @BumpArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Version bump failed:" -ForegroundColor Red
     Write-Host ($BumpOutput -join "`n")
@@ -185,11 +211,22 @@ if ($LASTEXITCODE -ne 0) {
 # PowerShell may capture this as a string array; join first, then
 # extract just the version number from the first line.
 $BumpText = if ($BumpOutput -is [array]) { $BumpOutput -join "`n" } else { "$BumpOutput" }
-$NewVersion = if ($BumpText -match 'Bumped version:\s*(\S+)') {
+$NewVersion = if ($BumpText -match 'version:\s*(\S+)') {
     $Matches[1]
 } else {
     # Fallback: take the first non-empty line
     ($BumpText -split "`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1).Trim()
+}
+
+# If the requested version already matches the current version, __init__.py
+# is unchanged - there's no bump commit to make.  This is the legitimate
+# case where the version is already present on dev, so we continue (skip the
+# commit) rather than abort.
+$IniPath = Join-Path $RepoRoot "src\metixel\__init__.py"
+$CurrentVersion = (Select-String -Path $IniPath -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+$VersionChanged = ($NewVersion -ne $CurrentVersion)
+if (-not $VersionChanged) {
+    Write-Host "Version $NewVersion is already current on dev - no bump needed." -ForegroundColor Yellow
 }
 
 Write-Host "New version: " -ForegroundColor Green -NoNewline
@@ -209,12 +246,16 @@ if ($DryRun) {
     exit 0
 }
 
-# -- Commit version bump on dev ---------------------------------------------
+# -- Commit version bump on dev (skipped if the version was already current) --
 
-git add src/metixel/__init__.py
-git commit -m "Bump version to $NewVersion"
-if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
-Write-Host "Version bump committed on dev." -ForegroundColor Green
+if ($VersionChanged) {
+    git add src/metixel/__init__.py
+    git commit -m "Bump version to $NewVersion"
+    if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
+    Write-Host "Version bump committed on dev." -ForegroundColor Green
+} else {
+    Write-Host "Version already current on dev - skipping bump commit." -ForegroundColor Cyan
+}
 
 # -- Push dev ----------------------------------------------------------------
 
@@ -264,10 +305,10 @@ git checkout dev
 git branch -D $ReleaseBranch 2>$null
 
 Write-Host ""
-Write-Host "=== Release $NewVersion PR ready — merge it yourself in GitHub ===" -ForegroundColor Green
+Write-Host "=== Release $NewVersion PR ready - merge it yourself in GitHub ===" -ForegroundColor Green
 Write-Host "  $PrUrl"
 Write-Host ""
-Write-Host "CI checks passed. I have NOT merged the PR — please review and merge it" -ForegroundColor Yellow
+Write-Host "CI checks passed. I have NOT merged the PR - please review and merge it" -ForegroundColor Yellow
 Write-Host "in GitHub yourself." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "After merging, finalise the release (tags main + pushes the tag):" -ForegroundColor Green

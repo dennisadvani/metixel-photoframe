@@ -9,6 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     sanitizeInt,
     setChecked,
@@ -149,6 +150,86 @@ import {
         }
     }
 
+    function toggleNtpFields(enabled) {
+        var group = document.getElementById("ntp-servers-group");
+        if (group) group.classList.toggle("hidden", !enabled);
+    }
+
+    // -- NTP Servers (dynamic row list, mirrors watch paths) ----------------
+
+    /**
+     * Render all NTP server rows from the config array.
+     * @param {Array} servers - Array of server hostname strings.
+     */
+    function renderNtpServers(servers) {
+        var list = document.getElementById("ntp-servers-list");
+        if (!list) return;
+        list.innerHTML = "";
+        var values = (servers && servers.length) ? servers : [""];
+        values.forEach(function (value) {
+            addNtpServerRow(value || "");
+        });
+    }
+
+    /**
+     * Add a single NTP server row to the DOM.
+     * @param {string} value - The server hostname.
+     * @param {boolean} focus - Whether to focus the input (for new rows).
+     */
+    function addNtpServerRow(value, focus) {
+        var list = document.getElementById("ntp-servers-list");
+        if (!list) return;
+
+        var row = document.createElement("div");
+        row.className = "ntp-server-row";
+        row.style.cssText = "display:flex;gap:0.35rem;align-items:center;margin-bottom:0.35rem";
+
+        // Server input
+        var input = document.createElement("input");
+        input.type = "text";
+        input.value = value;
+        input.placeholder = "0.debian.pool.ntp.org";
+        input.className = "input-premium";
+        input.style.cssText = "flex:1;min-width:140px";
+
+        // Remove button
+        var removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.innerHTML = '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">close</span>';
+        removeBtn.title = "Remove this NTP server";
+        removeBtn.className = "btn--danger";
+        removeBtn.style.cssText = "flex-shrink:0;padding:0.3rem 0.5rem;font-size:0.82rem";
+        removeBtn.addEventListener("click", function () {
+            row.remove();
+        });
+
+        row.appendChild(input);
+        row.appendChild(removeBtn);
+        list.appendChild(row);
+
+        if (focus) {
+            input.focus();
+            input.select();
+        }
+    }
+
+    /**
+     * Collect all NTP server rows into the config array format.
+     * @returns {Array} Array of non-empty server hostname strings.
+     */
+    function collectNtpServers() {
+        var rows = document.querySelectorAll("#ntp-servers-list .ntp-server-row");
+        var servers = [];
+        rows.forEach(function (row) {
+            var input = row.querySelector("input");
+            if (input) {
+                var value = input.value.trim();
+                if (value) servers.push(value);
+            }
+        });
+        return servers;
+    }
+
     // -- Settings -----------------------------------------------------------
 
     var _settingsBound = false;
@@ -217,12 +298,25 @@ import {
         setValue("cfg-local-interval", local.poll_interval_seconds || 30);
         renderWatchPaths(local.watch_paths || []);
 
+        // Time / NTP (Playback page)
+        const sysCfg = config.system || {};
+        setChecked("cfg-ntp-enabled", sysCfg.ntp_enabled !== false);
+        renderNtpServers(sysCfg.ntp_servers || [""]);
+        toggleNtpFields(sysCfg.ntp_enabled !== false);
+
         // Image optimisation (moved from Sync page)
         const imgCfg = config.image || {};
         setChecked("cfg-image-opt-enabled", imgCfg.optimisation_enabled !== false);
         setValue("cfg-image-max-width", imgCfg.optimise_max_width || 0);
         setValue("cfg-image-max-height", imgCfg.optimise_max_height || 0);
         _toggleImageOptSettings(imgCfg.optimisation_enabled !== false);
+
+        // Security — web password + session timeout + screen PIN timeout.
+        // The password/PIN fields are always left empty (they are write-only);
+        // only the timeout dropdowns reflect the current config.
+        const webCfg = config.web || {};
+        setValue("cfg-web-session-timeout", webCfg.session_timeout_minutes != null ? webCfg.session_timeout_minutes : 30);
+        setValue("cfg-screen-pin-timeout", webCfg.screen_pin_timeout_minutes != null ? webCfg.screen_pin_timeout_minutes : 60);
 
         // Event listeners — bind once
         if (!_settingsBound) {
@@ -382,6 +476,33 @@ import {
                 toggleNtpFields(this.checked);
             });
 
+            // Add NTP server button
+            document.getElementById("btn-add-ntp-server")?.addEventListener("click", function () {
+                addNtpServerRow("", true);
+            });
+
+            // Save Time Settings (NTP + timezone are saved immediately; NTP
+            // servers are saved here together so the user can edit all at once.)
+            document.getElementById("btn-save-time")?.addEventListener("click", async function () {
+                var ntpEnabled = document.getElementById("cfg-ntp-enabled").checked;
+                var ntpServers = collectNtpServers();
+                // Persist config
+                await apiPut("/config/system", {
+                    ntp_enabled: ntpEnabled,
+                    ntp_servers: ntpServers,
+                });
+                // Apply NTP settings via systemd-timesyncd
+                if (ntpEnabled) {
+                    await apiPost("/time/ntp", {
+                        enabled: true,
+                        servers: ntpServers,
+                    });
+                } else {
+                    await apiPost("/time/ntp", { enabled: false });
+                }
+                showToast("Time settings saved" + (ntpEnabled ? " — NTP enabled" : ""), "success");
+            });
+
             // Timezone set button
             document.getElementById("btn-save-timezone")?.addEventListener("click", async function () {
                 var tz = document.getElementById("cfg-timezone").value;
@@ -393,6 +514,93 @@ import {
                 } else {
                     showToast("Failed to set timezone: " + ((result && result.message) || "Unknown error"), "error");
                 }
+            });
+
+            // ── Security card ──────────────────────────────────────────
+
+            // Web dashboard password (set/change/clear) + session timeout.
+            document.getElementById("btn-save-web-password")?.addEventListener("click", async () => {
+                var pw = document.getElementById("cfg-web-password").value;
+                var confirm = document.getElementById("cfg-web-password-confirm").value;
+                var timeout = sanitizeInt(document.getElementById("cfg-web-session-timeout").value, 30);
+
+                if (pw !== confirm) {
+                    showToast("Web passwords do not match", "error");
+                    return;
+                }
+                if (pw && pw.length < 8) {
+                    showToast("Web password must be at least 8 characters", "error");
+                    return;
+                }
+
+                // Save the timeout first (always), then set/clear the password.
+                var timeoutResult = await apiPut("/config/web", { session_timeout_minutes: timeout });
+                // Always call /auth/password — with a value it sets/changes the
+                // password; with an empty value it clears it (auth disabled).
+                var pwResult = await apiPost("/auth/password", { password: pw });
+                if (pwResult && pwResult.status === "ok") {
+                    showToast(pw ? "Web password set" : "Web password cleared", "success");
+                } else {
+                    showToast("Failed to update web password: " + ((pwResult && pwResult.message) || "Unknown error"), "error");
+                }
+                document.getElementById("cfg-web-password").value = "";
+                document.getElementById("cfg-web-password-confirm").value = "";
+            });
+
+            // Device password (SSH + Samba, synced) — confirmation dialog.
+            document.getElementById("btn-save-device-password")?.addEventListener("click", async () => {
+                var pw = document.getElementById("cfg-device-password").value;
+                var confirm = document.getElementById("cfg-device-password-confirm").value;
+                if (!pw) { showToast("Enter a new device password", "error"); return; }
+                if (pw !== confirm) { showToast("Device passwords do not match", "error"); return; }
+                if (pw.length < 8) { showToast("Device password must be at least 8 characters", "error"); return; }
+
+                var ok = await confirmDialog(
+                    "This changes the password for SSH login AND the Samba share. Existing sessions stay active; new logins use the new password. Continue?",
+                    { title: "Change device password?", okText: "Change password", danger: true }
+                );
+                if (!ok) return;
+
+                var result = await apiPost("/system/device-password", {
+                    new_password: pw,
+                    confirm_password: confirm,
+                });
+                if (result && result.status === "ok") {
+                    showToast("Device password changed (SSH + Samba)", "success");
+                } else if (result && result.status === "partial") {
+                    showToast("Console password changed, but Samba failed — stores out of sync", "error");
+                } else {
+                    showToast("Failed to change device password: " + ((result && result.message) || "Unknown error"), "error");
+                }
+                document.getElementById("cfg-device-password").value = "";
+                document.getElementById("cfg-device-password-confirm").value = "";
+            });
+
+            // Screen PIN (set/change/clear) + PIN timeout.
+            document.getElementById("btn-save-screen-pin")?.addEventListener("click", async () => {
+                var pin = document.getElementById("cfg-screen-pin").value;
+                var confirm = document.getElementById("cfg-screen-pin-confirm").value;
+                var timeout = sanitizeInt(document.getElementById("cfg-screen-pin-timeout").value, 60);
+
+                var timeoutResult = await apiPut("/config/web", { screen_pin_timeout_minutes: timeout });
+
+                if (pin) {
+                    if (!/^[0-9]{4,6}$/.test(pin)) {
+                        showToast("Screen PIN must be 4-6 digits", "error");
+                        return;
+                    }
+                    if (pin !== confirm) { showToast("Screen PINs do not match", "error"); return; }
+                    var pinResult = await apiPost("/auth/screen-pin", { pin: pin, confirm: confirm });
+                    if (pinResult && pinResult.status === "ok") {
+                        showToast("Screen PIN set", "success");
+                    } else {
+                        showToast("Failed to set screen PIN: " + ((pinResult && pinResult.message) || "Unknown error"), "error");
+                    }
+                } else if (timeoutResult) {
+                    showToast("Screen PIN cleared / timeout saved", "success");
+                }
+                document.getElementById("cfg-screen-pin").value = "";
+                document.getElementById("cfg-screen-pin-confirm").value = "";
             });
         }
     }
@@ -412,7 +620,7 @@ import {
         // Ensure we have at least the defaults if config is empty
         if (!paths || paths.length === 0) {
             paths = [
-                { path: "media/sample_media/", enabled: true },
+                { path: "media/sample_media/landscape/", enabled: true },
                 { path: "media/sync/immich/", enabled: true },
                 { path: "media/my_media/", enabled: true }
             ];

@@ -80,6 +80,9 @@ def apply_update():
             Defaults to the current configured channel.
         version (str, optional): Specific version tag/SHA to install.
             Defaults to the latest on the channel.
+        keep_existing (bool, optional): If the target release already exists
+            locally, keep it (skip the delete-before-reinstall step).  The
+            caller should have confirmed with the user.
 
     The update runs synchronously — the HTTP response is sent AFTER
     the update completes and services have been restarted.
@@ -92,14 +95,105 @@ def apply_update():
         data = request.get_json(silent=True) or {}
         channel = data.get("channel")
         version = data.get("version")
+        keep_existing = bool(data.get("keep_existing", False))
 
-        result = mgr.apply_update(channel=channel, version=version)
+        result = mgr.apply_update(channel=channel, version=version, keep_existing=keep_existing)
         status_code = 200 if result.get("status") == "ok" else 400
         return jsonify(result), status_code
     except RuntimeError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 503
     except Exception as exc:
         logger.exception("Update apply failed")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@updates_bp.route("/releases", methods=["GET"])
+def list_releases():
+    """List GitHub releases available for manual install.
+
+    Returns the cached release list (atomic-era releases >= 1.2.3).  If the
+    list isn't cached yet, triggers a background check and returns an empty
+    list — the UI should poll ``GET /api/updates/status`` to refresh.
+    """
+    try:
+        mgr = _get_update_manager()
+        return jsonify({"status": "ok", "releases": mgr.list_releases()})
+    except RuntimeError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 503
+    except Exception as exc:
+        logger.exception("Failed to list releases")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@updates_bp.route("/rollback", methods=["POST"])
+def rollback():
+    """Roll back the live symlink to a previously installed release.
+
+    Accepts JSON body:
+        version (str): The release version to roll back to (must already
+            exist locally under ``releases/``).
+
+    Flips the live symlink and restarts services.  No download/install.
+    """
+    try:
+        mgr = _get_update_manager()
+        data = request.get_json(silent=True) or {}
+        version = data.get("version")
+        if not version:
+            return jsonify({"status": "error", "message": "Missing 'version' in request body"}), 400
+
+        result = mgr.rollback(version)
+        status_code = 200 if result.get("status") == "ok" else 400
+        return jsonify(result), status_code
+    except RuntimeError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 503
+    except Exception as exc:
+        logger.exception("Rollback failed")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@updates_bp.route("/apt-upgrade", methods=["POST"])
+def apt_upgrade():
+    """Run a full OS ``apt update && apt upgrade`` and reboot afterwards.
+
+    Runs in a detached background thread (the reboot kills this process).
+    Returns immediately with ``{"status": "ok"}``.
+    """
+    try:
+        mgr = _get_update_manager()
+        result = mgr.apt_upgrade()
+        status_code = 200 if result.get("status") == "ok" else 400
+        return jsonify(result), status_code
+    except RuntimeError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 503
+    except Exception as exc:
+        logger.exception("apt upgrade failed")
+        return jsonify({"status": "error", "message": str(exc)}), 500
+
+
+@updates_bp.route("/auto-update", methods=["PUT"])
+def set_auto_update():
+    """Configure the weekly auto-update schedule.
+
+    Accepts JSON body (any subset):
+        enabled (bool): Turn auto-update on/off.
+        day (int): Day of week (0=Monday … 6=Sunday).
+        time (str): ``HH:MM`` (any time of day).
+    """
+    try:
+        mgr = _get_update_manager()
+        data = request.get_json(silent=True) or {}
+        result = mgr.set_auto_update(
+            enabled=data.get("enabled"),
+            day=data.get("day"),
+            time_str=data.get("time"),
+        )
+        status_code = 200 if result.get("status") == "ok" else 400
+        return jsonify(result), status_code
+    except RuntimeError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 503
+    except Exception as exc:
+        logger.exception("Auto-update config failed")
         return jsonify({"status": "error", "message": str(exc)}), 500
 
 

@@ -58,6 +58,8 @@ class WaylandBackend(DisplayBackend):
         fullscreen=True,
         hide_cursor=True,
         fps_limit=30,
+        refresh_rate=0,
+        rotation=0,
         **kwargs,
     ):
         raise NotImplementedError(

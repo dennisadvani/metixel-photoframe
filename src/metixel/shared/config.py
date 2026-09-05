@@ -25,6 +25,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "height": 0,
         "fullscreen": True,
         "fps_limit": 30,
+        "refresh_rate": 0,  # 0 = auto/native; otherwise Hz (e.g. 60, 50, 30)
+        "rotation": 0,  # screen rotation in degrees clockwise: 0, 90, 180, 270
         "hide_cursor": True,
         "schedule_enabled": False,
         "schedule_on_time": "07:00",
@@ -75,7 +77,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "local": {
             "enabled": True,
             "watch_paths": [
-                {"path": "media/sample_media/", "enabled": True},
+                {"path": "media/sample_media/landscape/", "enabled": True},
                 {"path": "media/sync/immich/", "enabled": True},
                 {"path": "media/my_media/", "enabled": True},
             ],
@@ -86,6 +88,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "host": "0.0.0.0",
         "port": 8080,
         "debug": False,
+        # Optional web-dashboard password.  Empty string = auth disabled
+        # (default, so first boot and existing installs are unaffected).
+        # When set, the dashboard and all /api/* routes (except the exempt
+        # set) require a login.  Stored as a salted hash, never plaintext.
+        "password": "",
+        # Optional on-screen UI PIN (future).  Empty string = disabled.
+        # Independent of the web password and the device password.  Stored
+        # as a salted hash.  Default 6 digits, accepted range 4-6.
+        "screen_pin": "",
+        # Random secret used to sign the Flask session cookie.  Generated
+        # and persisted on first need so logins survive a backend restart.
+        # Empty string = not yet generated.
+        "auth_secret": "",
+        # Web session idle timeout in minutes.  0 = no timeout (forever) —
+        # the user's PC has its own OS/browser protections.  Default 30.
+        "session_timeout_minutes": 30,
+        # On-screen PIN unlock timeout in minutes.  Capped at 1440 (24h) —
+        # anything higher defeats the PIN's purpose.  Default 60.
+        "screen_pin_timeout_minutes": 60,
     },
     "mqtt": {
         "enabled": False,
@@ -99,6 +120,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "password": "",
         "discovery_enabled": True,  # Home Assistant MQTT Discovery
         "discovery_prefix": "homeassistant",  # HA discovery base topic
+    },
+    "ddc": {
+        # DDC/CI monitor control: needs ddcutil (apt), I²C access, and a
+        # DDC-capable display.  Enabled by default; the UI degrades gracefully
+        # if ddcutil or a capable monitor is absent.
+        "enabled": True,
+        "display": 1,  # ddcutil display number (1 = first detected)
+        "poll_seconds": 0,  # 0 = refresh only on load / after set / manual
     },
     "input": {
         # HDMI-CEC is opt-in: it needs the Debian python3-libcec bindings
@@ -136,10 +165,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "update": {
         "channel": "stable",
         "auto_check": True,
+        "auto_update": True,
+        "auto_update_day": 0,
+        "auto_update_time": "04:30",
         "check_interval_hours": 6,
         "github_repo": "dennisadvani/metixel-photoframe",
         "last_check": None,
         "last_update": None,
+        "last_auto_update": None,
     },
     "timeouts": {
         # ── ffprobe / metadata ──────────────────────────────────────
@@ -306,11 +339,30 @@ class Config:
 
     @property
     def web(self) -> dict[str, Any]:
-        return self._section("web")
+        """Web server + auth settings with backward-compatible defaults.
+
+        Fills in any missing keys (e.g. the optional ``password``,
+        ``screen_pin``, ``auth_secret`` and timeout keys on an older config
+        file) from the global defaults so callers never get KeyError.
+        """
+        w = self._data.setdefault("web", {})
+        defaults = DEFAULT_CONFIG.get("web", {})
+        for key, val in defaults.items():
+            w.setdefault(key, val)
+        return cast(dict[str, Any], w)
 
     @property
     def mqtt(self) -> dict[str, Any]:
         return self._section("mqtt")
+
+    @property
+    def ddc(self) -> dict[str, Any]:
+        """DDC/CI settings with backward-compatible defaults."""
+        d = self._data.setdefault("ddc", {})
+        defaults = DEFAULT_CONFIG.get("ddc", {})
+        for key, val in defaults.items():
+            d.setdefault(key, val)
+        return cast(dict[str, Any], d)
 
     @property
     def input(self) -> dict[str, Any]:
@@ -340,13 +392,40 @@ class Config:
             u = {
                 "channel": "stable",
                 "auto_check": True,
+                "auto_update": True,
+                "auto_update_day": 0,
+                "auto_update_time": "04:30",
                 "check_interval_hours": 6,
                 "github_repo": "dennisadvani/metixel-photoframe",
                 "last_check": None,
                 "last_update": None,
+                "last_auto_update": None,
             }
             self._data["update"] = u
         return cast(dict[str, Any], u)
+
+    def _randomise_auto_update_schedule(self) -> None:
+        """Pick a randomised weekly auto-update schedule on first boot.
+
+        Chooses a random day of the week (0=Monday … 6=Sunday) and a random
+        time within the 03:00–06:00 local window.  Called only when a fresh
+        config is created so every device updates at a different moment,
+        avoiding thundering-herd load on the GitHub API / release mirrors.
+
+        Note: the 03:00–06:00 restriction applies ONLY to the first-boot
+        randomisation.  Users may later pick any time/day in the Web UI.
+        """
+        import random
+
+        day = random.randint(0, 6)
+        # Random minute within 03:00–05:59 (the 3a–6a window).
+        minute = random.randint(0, 179)
+        hour, minute_of_hour = divmod(minute, 60)
+        time_str = f"{3 + hour:02d}:{minute_of_hour:02d}"
+        u = self._data.setdefault("update", {})
+        u["auto_update_day"] = day
+        u["auto_update_time"] = time_str
+        logger.info("Randomised auto-update schedule: day=%d time=%s", day, time_str)
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a top-level config value."""
@@ -406,6 +485,7 @@ class Config:
                 path,
             )
             config = cls()
+            config._randomise_auto_update_schedule()
             config.save(path)
             return config
 

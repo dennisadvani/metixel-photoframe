@@ -278,6 +278,25 @@ var _apiConnected = true;
 var _apiErrorCount = 0;
 var _apiLastErrorTime = 0;
 
+// Optional handler invoked when an API call returns 401/403 (auth required
+// or session expired).  main.js registers this to show the login gate.
+var _authRequiredHandler = null;
+
+/**
+ * Register a callback invoked when the API returns 401/403.
+ * @param {Function|null} handler
+ */
+export function setAuthRequiredHandler(handler) {
+    _authRequiredHandler = handler;
+}
+
+function _handleAuthFailure(path, status) {
+    // Avoid console spam — only notify once per auth failure burst.
+    if (_authRequiredHandler) {
+        _authRequiredHandler(path, status);
+    }
+}
+
 function _apiUpdateConnectionStatus(ok) {
     var overlay = document.getElementById("connection-overlay");
     if (!overlay) return;
@@ -300,10 +319,14 @@ function _apiUpdateConnectionStatus(ok) {
 
 export async function apiGet(path) {
     try {
-        const res = await fetch(`/api${path}`);
+        const res = await fetch(`/api${path}`, { credentials: "same-origin" });
         if (!res.ok) {
-            console.error("API GET %s failed: %s %s", path, res.status, res.statusText);
-            _apiUpdateConnectionStatus(false);
+            if (res.status === 401 || res.status === 403) {
+                _handleAuthFailure(path, res.status);
+            } else {
+                console.error("API GET %s failed: %s %s", path, res.status, res.statusText);
+                _apiUpdateConnectionStatus(false);
+            }
             return null;
         }
         _apiUpdateConnectionStatus(true);
@@ -325,11 +348,16 @@ export async function apiPut(path, data) {
         const res = await fetch(`/api${path}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
             body: JSON.stringify(data),
         });
         if (!res.ok) {
-            console.error("API PUT %s failed: %s %s", path, res.status, res.statusText);
-            _apiUpdateConnectionStatus(false);
+            if (res.status === 401 || res.status === 403) {
+                _handleAuthFailure(path, res.status);
+            } else {
+                console.error("API PUT %s failed: %s %s", path, res.status, res.statusText);
+                _apiUpdateConnectionStatus(false);
+            }
             return null;
         }
         _apiUpdateConnectionStatus(true);
@@ -350,11 +378,27 @@ export async function apiPost(path, data) {
         const res = await fetch(`/api${path}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
             body: data ? JSON.stringify(data) : undefined,
         });
+        if (!res.ok) {
+            if (res.status === 401 || res.status === 403) {
+                _handleAuthFailure(path, res.status);
+            } else {
+                console.error("API POST %s failed: %s %s", path, res.status, res.statusText);
+                _apiUpdateConnectionStatus(false);
+            }
+            return null;
+        }
+        _apiUpdateConnectionStatus(true);
         return await res.json();
     } catch (err) {
-        console.error("API error:", err);
+        var now = Date.now();
+        if (now - _apiLastErrorTime > 30000) {
+            console.warn("API unreachable (backend may be restarting):", err.message);
+            _apiLastErrorTime = now;
+        }
+        _apiUpdateConnectionStatus(false);
         return null;
     }
 }

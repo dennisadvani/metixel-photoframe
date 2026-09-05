@@ -61,9 +61,9 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 8. **Configuration is atomic.** Never write `config.json` directly. Always write to a temp file and use `os.replace()` to atomically swap. The frontend watches for `inotify IN_MODIFY` events.
 
-9. **Systemd is the process manager.** Two services: `metixel-backend.service` and `metixel-cage.service` (on Trixie, the frontend runs under cage). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
+9. **Systemd is the process manager.** Three services: `metixel-backend.service`, `metixel-cage.service` (on Trixie, the frontend runs under cage), and `metixel-cursor-hider.service` (hides the cage cursor via a persistent virtual mouse). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
 
-10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks; keep the total bundle under 200KB. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
+10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
 
 11. **Test on desktop first.** The `tk_backend.py` (tkinter-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
 
@@ -79,7 +79,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
     - **Composition root:** `src/metixel/__main__.py` is thin — CLI parsing + logging only; it delegates to `build_backend()` (`backend/daemon.py`) and `build_renderer()` (`frontend/renderer.py`). Never put business logic in `__main__.py`.
     - **New external systems:** when adding a new external dependency, add a Protocol + adapter — do not import the library into core. See `ARCHITECTURE.md` §6.7.
 
-14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
+14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `testing/unit_tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
 15. **OTA is a thin bootstrap + atomic Blue/Green hand-off + startup self-heal.** The runtime pip
     deps (`requirements-pip.txt`) and system deps (`requirements-system.txt`) must be applied on
@@ -125,7 +125,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
       split deps across `~/.local` and `/usr`).
     - Runtime deps go in `requirements-pip.txt`, NOT only in pyproject optional extras (those are
       skipped by `pip install -e .` and were the root cause of the HEIC/HEIF OTA bug).
-    - Guarded by `tests/backend/test_update_manager.py` and `tests/backend/test_dependencies.py`.
+    - Guarded by `testing/unit_tests/backend/test_update_manager.py` and `testing/unit_tests/backend/test_dependencies.py`.
     - **Startup self-heal (`backend/dependencies.py`):** on boot, `BackendDaemon.run()` calls
       `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
       installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
@@ -138,7 +138,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
       split deps across `~/.local` and `/usr`).
     - Runtime deps go in `requirements-pip.txt`, NOT only in pyproject optional extras (those are
       skipped by `pip install -e .` and were the root cause of the HEIC/HEIF OTA bug).
-    - Guarded by `tests/backend/test_update_manager.py` and `tests/backend/test_dependencies.py`.
+    - Guarded by `testing/unit_tests/backend/test_update_manager.py` and `testing/unit_tests/backend/test_dependencies.py`.
 
 ## Web UI Style Guide
 
@@ -192,11 +192,52 @@ The mobile block forces `button { width: 100% }`. Small inline buttons must keep
 
 When editing `dashboard.css` or any file under `static/js/` (SPA entry point is `main.js`), **bump the `?v=` query** on both the stylesheet `<link>` and the `<script src>` in `index.html` (e.g. `main.js?v=15` → `v=16`). Otherwise browsers serve stale assets.
 
+### Tailwind CSS build (dev machine only)
+
+The dashboard uses **Tailwind CSS v4** for styling, but the Pi **never runs Tailwind**. CSS is built on the dev machine and the compiled output is committed.
+
+- **Source:** `src/metixel/backend/web/static/css/input.css` — the Tailwind entry point. It imports `tailwindcss`, defines the design tokens in `@theme`, and imports the hand-written styles.
+- **Hand-written styles:** `src/metixel/backend/web/static/css/custom.css` — the legacy design system, preserved verbatim. It is imported **inside `@layer components`** so Tailwind utilities (in `@layer utilities`, a higher-priority layer) can override it. **Do not move it out of the layer** — the un-layered universal reset `*, ::before, ::after { margin:0; padding:0 }` would otherwise beat every Tailwind utility and they'd all compute to 0.
+- **Build:** `npm run build:css` (one-shot) or `npm run watch:css` (watch). Output goes to `dashboard.css` (minified), which is what the Pi serves.
+- **Workflow:** edit `input.css` / `custom.css` / `index.html` → run `npm run build:css` → bump `?v=` in `index.html` → sync via the existing `scp` task. **Never build on the Pi.**
+- **Config:** `tailwind.config.js` scans `templates/**/*.html` and `static/js/**/*.js` for class names.
+
+### Premium design system (Slideshow Settings pattern)
+
+The dashboard uses a premium, cinematic design language — Apple-like restraint, Sonos/consumer-electronics feel, art-gallery aesthetic. **Avoid** generic admin-dashboard styling, excessive cards, gradients everywhere, neon colours, glassmorphism, huge headings, or pill-shaped everything.
+
+**Card anatomy** (every card follows this):
+- Container: `bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light`
+- Header: `flex items-center gap-2.5` with a `w-1 h-[1.1em] bg-primary rounded-sm` accent bar (vertically centered against the title via `items-center`, not `items-baseline`) + an uppercase `tracking-[0.14em]` eyebrow label on the right
+- Section dividers: `border-t border-border/60` — used only at **semantic boundaries** (header→content, control-group→toggle-group, content→action), never between every row
+- Action footer: `mt-5 pt-3 border-t border-border/60 flex justify-end`
+
+**Setting rows** (label left, control right, hint below label):
+```html
+<div class="setting-row">
+  <div class="setting-label">
+    <span class="text-[0.85rem] font-medium text-text-secondary">Label</span>
+    <span class="text-[0.72rem] text-text-muted leading-snug">Hint</span>
+  </div>
+  <div class="setting-control">
+    <input ... class="input-premium">
+  </div>
+</div>
+```
+
+**Premium controls** (defined in `input.css` under `@layer components`):
+- `.input-premium` — near-black fill `rgba(0,0,0,0.35)`, hairline `#2a2f45` border, soft burgundy focus ring
+- `.range-premium` — thin 2px track, tactile 14px thumb with burgundy-tinted border
+- `.checkbox-premium` — custom 18px square, burgundy fill + **SVG background-image checkmark** (NOT `::after` — pseudo-elements don't render on `<input>` elements)
+- `.select-premium` — `appearance:none` with a custom SVG chevron
+
+**Grouping rule:** group settings by **interaction type** (value controls vs on/off toggles) or by semantic concern, and separate groups with a single divider. Don't put a divider between every row.
+
 ### General
 
-- Keep the bundle under 200KB, no frameworks.
+- No frameworks.
 - Settings live in `.card` blocks with an `<h2>` title; fields use `.form-group` + `.form-label`; primary save buttons are `.btn--primary`.
-- The sync task mirrors only `src/metixel/` — UI files under `src/metixel/backend/web/` ARE included, but `tests/` are not (copy separately).
+- The sync task mirrors only `src/metixel/` — UI files under `src/metixel/backend/web/` ARE included, but `testing/` are not (copy separately).
 
 ## Build & Run Commands
 
@@ -214,7 +255,7 @@ python -m metixel --mode frontend --config etc/config.json
 cage -- python3 -m metixel --mode frontend --config etc/config.json
 
 # Run tests
-python -m pytest tests/ -v
+python -m pytest testing/unit_tests/ -v
 
 # Build Phase 1 OS image
 sudo bash scripts/build_phase1.sh
@@ -238,6 +279,7 @@ mypy src/metixel/
 | `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
 | `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
 | `src/metixel/display/tk_backend.py` | Desktop dev: tkinter-based software renderer |
+| `src/metixel/display/cursor_hider.py` | Hides the cage/Wayland cursor via a persistent virtual absolute mouse (evdev) |
 | `src/metixel/display/__init__.py` | Backend auto-detection factory |
 | `src/metixel/backend/state.py` | Atomic config read/write + change notification + playlist management |
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue + startup dependency self-heal |
@@ -277,6 +319,6 @@ mypy src/metixel/
 - Verify memory constraints for Pi Zero 2 W (512MB)
 - Ensure the display backend abstraction isn't leaked
 - **Video frame extraction is a backend responsibility.** The frontend must never import ffmpeg/ffprobe or extract frames. Frames are generated by `VideoProcessor` during Phase 2 (OPTIMISE) and referenced via `MediaItem.first_frame_path` / `MediaItem.last_frame_path`.- **Never import third-party libraries in core** — add a Protocol port + adapter and inject it (see rule 13)
-- Verify your change with the full test suite on the Pi (`python3 -m pytest tests/`) after desktop tests
+- Verify your change with the full test suite on the Pi (`python3 -m pytest testing/unit_tests/`) after desktop tests
 - Run `cat ARCHITECTURE.md` to re-establish project context
 - **Keep the web JS modular** — native ES6 modules, no bundler; see Web UI Style Guide → JavaScript architecture before touching `static/js/`

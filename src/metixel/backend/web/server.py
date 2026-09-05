@@ -22,10 +22,32 @@ from flask import (
 
 from metixel import __version__
 from metixel.backend.state import StateManager
+from metixel.backend.web.auth import WebAuthService
 from metixel.backend.web.media_service import MAX_UPLOAD_BYTES
 from metixel.shared.ipc import IPCClient
 
 logger = logging.getLogger(__name__)
+
+#: Paths under /api/* that are exempt from the web-password auth gate.
+#: These must stay reachable without credentials:
+#:   * /api/health            — OTA update.sh health-check + monitoring
+#:   * /api/auth/login|logout|me — the gate itself (login must be reachable
+#:                                 before auth; password set/change is NOT
+#:                                 exempt — it requires an authenticated session)
+#:   * /api/slideshow-started — frontend renderer loopback signal (urllib,
+#:                              no cookies)
+#:   * /api/network/*         — captive-portal Wi-Fi setup must work before
+#:                              any password is set
+#:   * /api/control           — IPC control commands (trusted local process)
+_API_AUTH_EXEMPT_PREFIXES = (
+    "/api/health",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/me",
+    "/api/slideshow-started",
+    "/api/network/",
+    "/api/control",
+)
 
 
 def _is_ap_mode() -> bool:
@@ -88,6 +110,10 @@ def create_app(
     app.config["METIXEL_OPT_QUEUE"] = opt_queue
     app.config["METIXEL_UPDATE_MGR"] = update_mgr
     app.config["METIXEL_DAEMON"] = daemon
+    if daemon is not None:
+        ddc_svc = getattr(daemon, "_ddc_service", None)
+        if ddc_svc is not None:
+            app.config["METIXEL_DDC"] = ddc_svc
 
     # Hard cap on the request body size.  Media uploads are streamed to disk,
     # but a pathological request must not be allowed to fill tmpfs (RAM) with
@@ -95,13 +121,56 @@ def create_app(
     # with media_service (also used for the per-file upload cap).
     app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 
+    # Optional web-dashboard auth.  The WebAuthService owns the password hash
+    # and the session-signing secret (persisted in web.auth_secret so logins
+    # survive a backend restart).  When no password is set, auth is disabled
+    # and the gate below is a no-op.
+    auth_service = WebAuthService(state)
+    app.config["METIXEL_AUTH"] = auth_service
+    app.config["SECRET_KEY"] = auth_service.ensure_secret()
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    # No TLS on the LAN by default — the password is the access boundary.
+    app.config["SESSION_COOKIE_SECURE"] = False
+
     # Silence Flask's HTTP access logs (they flood the log output)
     logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
+    # ── Auth gate ──────────────────────────────────────────────────────────
+    # Protect all /api/* routes except the exempt set.  When no web password
+    # is set, auth is disabled and this is a no-op.  API requests get a 401
+    # JSON response; HTML GETs are redirected to the login view.
+    @app.before_request
+    def _auth_gate() -> Response | tuple[Response, int] | None:
+        path = request.path
+        if not path.startswith("/api/"):
+            return None
+        if path.startswith(_API_AUTH_EXEMPT_PREFIXES):
+            return None
+        service = current_app.config.get("METIXEL_AUTH")
+        if service is None or not service.is_enabled():
+            return None
+        from metixel.backend.web.routes.auth import is_authenticated
+
+        if is_authenticated():
+            return None
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "error": "Authentication required",
+                    "message": "Authentication required",
+                }
+            ),
+            401,
+        )
+
     # Register route blueprints
+    from metixel.backend.web.routes.auth import auth_bp
     from metixel.backend.web.routes.browse import browse_bp
     from metixel.backend.web.routes.config import config_bp
     from metixel.backend.web.routes.control import control_bp
+    from metixel.backend.web.routes.ddc import ddc_bp
     from metixel.backend.web.routes.health import health_bp
     from metixel.backend.web.routes.immich import immich_bp
     from metixel.backend.web.routes.input import input_bp
@@ -110,6 +179,7 @@ def create_app(
     from metixel.backend.web.routes.messages import messages_bp
     from metixel.backend.web.routes.network import network_bp
     from metixel.backend.web.routes.processing import processing_bp
+    from metixel.backend.web.routes.security import security_bp
     from metixel.backend.web.routes.system import system_bp
     from metixel.backend.web.routes.time import time_bp
     from metixel.backend.web.routes.updates import updates_bp
@@ -117,10 +187,12 @@ def create_app(
     app.register_blueprint(config_bp, url_prefix="/api/config")
     # Each config sub-resource module is registered under its own prefix so
     # the URLs mirror the modules (system/time/input/control/health/browse).
+    app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(system_bp, url_prefix="/api/system")
     app.register_blueprint(time_bp, url_prefix="/api/time")
     app.register_blueprint(input_bp, url_prefix="/api/input")
     app.register_blueprint(control_bp, url_prefix="/api/control")
+    app.register_blueprint(ddc_bp, url_prefix="/api/ddc")
     app.register_blueprint(health_bp, url_prefix="/api/health")
     app.register_blueprint(browse_bp, url_prefix="/api/browse")
     app.register_blueprint(media_bp, url_prefix="/api/media")
@@ -128,6 +200,7 @@ def create_app(
     app.register_blueprint(immich_bp, url_prefix="/api/immich")
     app.register_blueprint(messages_bp, url_prefix="/api")
     app.register_blueprint(network_bp, url_prefix="/api")
+    app.register_blueprint(security_bp, url_prefix="/api")
     app.register_blueprint(updates_bp, url_prefix="/api/updates")
     app.register_blueprint(processing_bp, url_prefix="/api/processing")
 

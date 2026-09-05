@@ -56,10 +56,11 @@ if [ "${INSIDE_REPO}" = false ]; then
     echo "Release channel:"
     echo "  stable = Latest stable release (recommended)"
     echo "  beta   = Pre-release with latest features"
+    echo "  dev    = Development branch (latest commits, unstable)"
     read -p "  Channel [stable]: " RELEASE_CHANNEL
     RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
     case "$RELEASE_CHANNEL" in
-        stable|beta) ;;
+        stable|beta|dev) ;;
         *)
             echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
             RELEASE_CHANNEL="stable"
@@ -144,10 +145,11 @@ if [ -z "${RELEASE_CHANNEL}" ]; then
     echo "Release channel:"
     echo "  stable = Latest stable release (recommended)"
     echo "  beta   = Pre-release with latest features"
+    echo "  dev    = Development branch (latest commits, unstable)"
     read -p "  Channel [stable]: " RELEASE_CHANNEL
     RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
     case "$RELEASE_CHANNEL" in
-        stable|beta) ;;
+        stable|beta|dev) ;;
         *)
             echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
             RELEASE_CHANNEL="stable"
@@ -168,11 +170,12 @@ echo "  → WiFi country: ${WIFI_COUNTRY}"
 echo ""
 
 # Switch the repository to the correct version before installing anything.
-# Both channels pin to the latest release tag on the main branch —
+# stable / beta pin to the latest release tag on the main branch —
 # stable uses non-prerelease tags (v1.0.0), beta uses pre-release tags
-# (v1.0.4-beta.4).
+# (v1.0.4-beta.4).  dev tracks the latest dev branch HEAD (unstable).
 cd "${METIXEL_DIR}"
 git fetch origin --tags 2>/dev/null || true
+git fetch origin dev:dev 2>/dev/null || true
 
 # Ensure we're on main before looking for tags
 git checkout main 2>/dev/null || true
@@ -184,16 +187,28 @@ if [ "${RELEASE_CHANNEL}" = "stable" ]; then
         | grep -v -- '-' \
         | sort -V \
         | tail -1)
-else
+elif [ "${RELEASE_CHANNEL}" = "beta" ]; then
     # Latest pre-release tag (e.g. v1.0.4-beta.4)
     LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]-*' \
         | sort -V \
         | tail -1)
+else
+    # dev channel: track the latest dev branch HEAD (no tag)
+    LATEST_TAG=""
 fi
 
 if [ -n "${LATEST_TAG}" ]; then
     git checkout "${LATEST_TAG}" 2>/dev/null || true
     echo "  → Pinned to ${LATEST_TAG} (${RELEASE_CHANNEL})"
+elif [ "${RELEASE_CHANNEL}" = "dev" ]; then
+    # Switch to the dev branch deterministically.  `git checkout dev` can
+    # silently fail (and, with `|| true`, leave the repo on main) when no
+    # local dev branch tracks origin/dev yet — so use --track explicitly.
+    git checkout --track origin/dev 2>/dev/null \
+        || git checkout dev 2>/dev/null \
+        || git checkout -B dev origin/dev
+    git pull --ff-only 2>/dev/null || true
+    echo "  → Using dev branch HEAD (${RELEASE_CHANNEL})"
 else
     echo "  → No ${RELEASE_CHANNEL} tag found — staying on main branch HEAD"
 fi
@@ -212,6 +227,8 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     libopenblas0 \
     cec-utils \
     libcec-dev \
+    ddcutil \
+    i2c-tools \
     cage \
     xwayland \
     wlr-randr \
@@ -252,6 +269,12 @@ pip3 install ${PIP_IGNORE} pi3d 2>/dev/null || \
 pip3 install ${PIP_IGNORE} -r requirements-pip.txt 2>/dev/null || \
     pip3 install ${PIP_IGNORE} -r requirements-pip.txt
 
+# Dev & testing tools (pytest, pytest-cov, ruff, mypy) — installed as part of
+# the base install so no separate dev-env script is needed. These mirror the
+# [dev] extra in pyproject.toml.
+pip3 install ${PIP_IGNORE} ruff mypy pytest pytest-cov 2>/dev/null || \
+    pip3 install ${PIP_IGNORE} ruff mypy pytest pytest-cov
+
 # -- Git safe.directory (OTA updates run as root via systemd-run) ------------
 # Marks the canonical install location AND the release dir (added in step 4).
 echo "[3b/9] Marking repository as safe for git..."
@@ -260,17 +283,28 @@ git config --system --add safe.directory /opt/metixel/releases 2>/dev/null || tr
 
 # -- Directory structure (atomic Blue/Green layout) --------------------------
 echo "[4/9] Creating directory structure (data / releases / live)..."
-mkdir -p /opt/metixel/data/config /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/backups /opt/metixel/releases /run/metixel
+mkdir -p /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/backups /opt/metixel/releases /run/metixel
 
 # Move the cloned app code into a versioned release folder, and put config in
 # /data (persistent). The app runs from the live symlink.
 # RELEASE_TAG is deterministic: prefer the nearest tag, else fall back to the
 # branch name; strip any 'v' prefix and any -dirty/-g<hash> suffix so the
 # release folder name is stable and matches what update.sh expects.
-RELEASE_TAG="${LATEST_TAG:-$(git -C "${METIXEL_DIR}" describe --tags --abbrev=0 2>/dev/null || git -C "${METIXEL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
-RELEASE_TAG="${RELEASE_TAG#v}"
-RELEASE_TAG="${RELEASE_TAG%%-*}"
-RELEASE_TAG="v${RELEASE_TAG}"
+if [ "${RELEASE_CHANNEL}" = "dev" ]; then
+    # Dev installs must NOT collide with a tagged release: the release dir
+    # separates installs by version, and a dev checkout whose nearest reachable
+    # tag matches an already-installed release (e.g. v1.2.3) would have its
+    # systemd/ (and src/, scripts/) silently skipped by the move loop below —
+    # it never overwrites an existing directory.  Use a branch-derived
+    # non-tag name so the dev code — including systemd/ — is always fresh.
+    RELEASE_BRANCH="$(git -C "${METIXEL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+    RELEASE_TAG="dev-${RELEASE_BRANCH}"
+else
+    RELEASE_TAG="${LATEST_TAG:-$(git -C "${METIXEL_DIR}" describe --tags --abbrev=0 2>/dev/null || git -C "${METIXEL_DIR}" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)}"
+    RELEASE_TAG="${RELEASE_TAG#v}"
+    RELEASE_TAG="${RELEASE_TAG%%-*}"
+    RELEASE_TAG="v${RELEASE_TAG}"
+fi
 RELEASE_DIR="/opt/metixel/releases/${RELEASE_TAG}"
 mkdir -p "${RELEASE_DIR}"
 # Move the app code into the release folder.  RELEASE_DIR lives INSIDE
@@ -304,7 +338,9 @@ mkdir -p "${METIXEL_DIR}/etc"
 # existing sample_media (user may have replaced it).
 if [ -d "${METIXEL_DIR}/data/media/sample_media" ]; then
     mkdir -p /opt/metixel/data/media/sample_media
-    cp -n "${METIXEL_DIR}"/data/media/sample_media/* /opt/metixel/data/media/sample_media/ 2>/dev/null || true
+    # Copy the landscape/portrait subfolders recursively (never overwrite
+    # existing sample_media the user may have replaced).
+    cp -rn "${METIXEL_DIR}"/data/media/sample_media/. /opt/metixel/data/media/sample_media/ 2>/dev/null || true
 fi
 
 # Persist config.json + logging.conf into /data (user-editable). __main__.py
@@ -327,9 +363,24 @@ echo "[5/9] Installing systemd services..."
 # The app code (including systemd/) now lives in the release dir.
 cp "${RELEASE_DIR}/systemd/metixel-backend.service" /etc/systemd/system/
 cp "${RELEASE_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
+# The cursor-hider mode is a newer feature; only install its service if the
+# release actually ships it (older releases lack the mode by design, and a
+# unit that execs --mode cursor-hider on old code would crash-loop forever).
+if [ -f "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" ] \
+   && grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"; then
+    cp "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" /etc/systemd/system/
+    CURSOR_HIDER_PRESENT=true
+else
+    echo "  ! Release does not support cursor-hider — skipping its service"
+    rm -f /etc/systemd/system/metixel-cursor-hider.service 2>/dev/null || true
+    CURSOR_HIDER_PRESENT=false
+fi
 systemctl daemon-reload
 systemctl enable metixel-backend
 systemctl enable metixel-cage
+if [ "${CURSOR_HIDER_PRESENT}" = true ]; then
+    systemctl enable metixel-cursor-hider
+fi
 
 # Enable linger for the pi user so systemd-logind creates
 # /run/user/1000 at boot even without a user login.
@@ -427,8 +478,10 @@ systemctl unmask hostapd dnsmasq 2>/dev/null || true
 
 # -- Samba share (media only) ------------------------------------------------
 # Only shares /opt/metixel/data/media so users can add/remove photos/videos.
-# For full-project access during development, run setup_trixie_dev_env.sh
-# which adds a separate [metixel] share pointing to /opt/metixel.
+# Dev & testing tools (pytest, ruff, mypy) are installed as part of the base
+# install (see the Python packages step above), so no separate dev-env script
+# is needed. For full-project Samba access during development, add a [metixel]
+# share pointing to /opt/metixel manually.
 echo "[8/9] Configuring Samba share (/opt/metixel/data/media as 'metixel-media')..."
 
 # Add 'invalid users = nobody' to the [homes] section so the system
@@ -506,6 +559,15 @@ if [ -f "${BOOT_CONFIG}" ]; then
         echo "gpu_mem=${GPU_MEM}" | tee -a "${BOOT_CONFIG}"
     fi
 fi
+
+# -- I²C (ddcutil) -----------------------------------------------------------
+# ddcutil talks DDC/CI to the monitor over the I²C bus.  The i2c-dev kernel
+# module must be loaded.  Persist it via modules-load.d so it loads on every
+# boot, and load it now so ddcutil works without a reboot.
+echo "Configuring I²C (ddcutil)…"
+echo "i2c-dev" > /etc/modules-load.d/metixel-i2c.conf
+modprobe i2c-dev 2>/dev/null || true
+echo "  + Enabled i2c-dev module (persistent via /etc/modules-load.d/metixel-i2c.conf)"
 
 # ============================================================================
 # SETUP COMPLETE — Reboot

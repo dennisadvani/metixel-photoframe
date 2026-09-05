@@ -132,12 +132,15 @@ sudo ln -sfn "/opt/metixel/releases/v${APP_VERSION#v}" "${LIVE_DIR}"
 # Copy systemd units
 sudo cp "${PROJECT_ROOT}/systemd/metixel-backend.service" "${MOUNT_DIR}/etc/systemd/system/"
 sudo cp "${PROJECT_ROOT}/systemd/metixel-cage.service" "${MOUNT_DIR}/etc/systemd/system/"
+sudo cp "${PROJECT_ROOT}/systemd/metixel-cursor-hider.service" "${MOUNT_DIR}/etc/systemd/system/"
 
 # Enable services
 sudo ln -sf /etc/systemd/system/metixel-backend.service \
     "${MOUNT_DIR}/etc/systemd/system/multi-user.target.wants/metixel-backend.service" 2>/dev/null || true
 sudo ln -sf /etc/systemd/system/metixel-cage.service \
     "${MOUNT_DIR}/etc/systemd/system/multi-user.target.wants/metixel-cage.service" 2>/dev/null || true
+sudo ln -sf /etc/systemd/system/metixel-cursor-hider.service \
+    "${MOUNT_DIR}/etc/systemd/system/multi-user.target.wants/metixel-cursor-hider.service" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 7. Cleanup and finalize

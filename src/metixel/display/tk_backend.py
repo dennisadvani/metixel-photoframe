@@ -79,6 +79,8 @@ class TkBackend(DisplayBackend):
         fullscreen: bool = True,
         hide_cursor: bool = True,
         fps_limit: int = 30,
+        refresh_rate: int = 0,
+        rotation: int = 0,
         **kwargs: Any,
     ) -> None:
         # Use a manageable window size on desktop (clamp to 1280×720 max).
@@ -91,6 +93,10 @@ class TkBackend(DisplayBackend):
         self._h = min(height, 720)
         self._fps_limit = fps_limit
         self._frame_delay_ms = max(1, int(1000 / fps_limit))
+        # Refresh rate and rotation are not applicable to the tkinter dev
+        # backend — accepted for interface compatibility and ignored.
+        self._refresh_rate = refresh_rate
+        self._rotation = rotation
 
         self._root = tk.Tk()
         self._root.title("Metixel Photoframe — Dev Mode (Tkinter)")

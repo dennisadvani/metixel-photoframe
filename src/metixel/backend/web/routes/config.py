@@ -10,10 +10,15 @@ import subprocess
 from flask import Blueprint, current_app, jsonify, request
 
 from metixel.backend.web.helpers import get_body, jsonify_error
+from metixel.shared.subprocess import schedule_sudo
 
 logger = logging.getLogger(__name__)
 
 config_bp = Blueprint("config", __name__)
+
+#: Display-mode keys that require a frontend (cage) restart to take effect,
+#: because the display backend's ``create()`` runs once at startup.
+_DISPLAY_MODE_KEYS = ("width", "height", "refresh_rate", "rotation")
 
 
 @config_bp.route("", methods=["GET"])
@@ -145,6 +150,23 @@ def update_config_section(section: str):
                 daemon.reset_pipeline()
             except Exception:
                 logger.debug("Pipeline reset failed", exc_info=True)
+
+        # Display-mode changes (resolution / refresh rate / rotation) require
+        # a frontend restart to take effect — the display backend's create()
+        # runs once at startup and applies the mode via wlr-randr then.  The
+        # frontend runs under the metixel-cage service, so restart it after a
+        # short delay so the HTTP response is sent first.
+        if section == "display" and any(k in data for k in _DISPLAY_MODE_KEYS):
+            schedule_sudo(
+                ["systemctl", "restart", "metixel-cage"],
+                ok_message="Frontend restarted to apply display mode",
+                fail_message="sudo systemctl restart metixel-cage",
+                thread_name="display-mode-restart",
+            )
+            logger.info(
+                "Display mode changed — frontend restart scheduled to apply "
+                "width/height/refresh_rate/rotation"
+            )
 
         # When the welcome banner is dismissed (system.first_run → false),
         # also dismiss all on-screen welcome messages so they don't linger.

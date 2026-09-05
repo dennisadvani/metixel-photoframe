@@ -1,0 +1,225 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
+ *
+ * Tailwind v4 entry point. This file is compiled by the Tailwind CLI
+ * (dev machine only) into dashboard.css, which is what the Pi serves.
+ *
+ *   npm run build:css   →  one-shot build
+ *   npm run watch:css   →  watch mode
+ *
+ * The hand-written design system lives in custom.css and is preserved
+ * verbatim; Tailwind utilities are layered on top so the migration can
+ * happen incrementally, card by card.
+ */
+
+@import "tailwindcss";
+
+/* ── Metixel design tokens (burgundy-on-white) ──────────────────────────── */
+@theme {
+  /* Brand — deep burgundy-red from the Metixel logo */
+  --color-primary: #8B1A2B;
+  --color-primary-hover: #A01D32;
+  --color-primary-muted: rgba(139, 26, 43, 0.12);
+  --color-primary-light: rgba(139, 26, 43, 0.06);
+
+  /* Surfaces — dark premium */
+  --color-bg: #0b0d14;
+  --color-surface: #11141f;
+  --color-surface-raised: #181b28;
+  --color-surface-hover: #1e2132;
+
+  /* Status */
+  --color-success: #059669;
+  --color-warning: #f0a030;
+  --color-danger: #dc2626;
+  --color-info: #60a5fa;
+
+  /* Text */
+  --color-text: #e2e4ed;
+  --color-text-secondary: #9a9db5;
+  --color-text-muted: #5f6278;
+
+  /* Borders & decor */
+  --color-border: #1e2235;
+  --color-border-light: #252940;
+
+  /* Radius */
+  --radius-card: 12px;
+  --radius-sm: 8px;
+}
+
+/* ── Existing hand-written design system (preserved verbatim) ─────────────
+ * Wrapped in @layer components so Tailwind utilities (which live in
+ * @layer utilities, a higher-priority layer) can override these styles.
+ * Without this, the un-layered universal reset `*, ::before, ::after`
+ * would beat every Tailwind utility (e.g. p-5, mb-3.5) and they'd all
+ * compute to 0. */
+@layer components {
+  @import "./custom.css";
+
+  /* ── Card header divider spacing ──────────────────────────────────────
+   * Every card's header row uses `flex items-center gap-2.5` and is
+   * immediately followed by the `mt-5 border-t border-border/60` divider.
+   * The divider had no bottom margin, so content sat tight against the
+   * line.  Add breathing room below it once here instead of in every card.
+   */
+  .flex.items-center.gap-2\.5 + div.border-t {
+    margin-bottom: 1rem; /* mb-4 */
+  }
+
+  /* ── Premium controls (Slideshow Settings proof-of-concept) ──────────── */
+
+  /* Setting row — label left, control right, hint below label */
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1.25rem;
+    padding: 0.9rem 0;
+  }
+  .setting-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+    flex: 1;
+  }
+  .setting-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  /* On narrow screens, stack label above control so wide controls
+   * (e.g. the Watch Paths list) never squeeze the label to zero width. */
+  @media (max-width: 480px) {
+    .setting-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.4rem;
+    }
+    .setting-control {
+      width: 100%;
+      flex-wrap: wrap;
+    }
+  }
+
+  /* Refined input — near-black fill, hairline border, soft focus */
+  .input-premium {
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid #2a2f45;
+    border-radius: 6px;
+    color: #e2e4ed;
+    font-size: 0.85rem;
+    font-family: inherit;
+    padding: 0.45rem 0.6rem;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .input-premium:focus {
+    outline: none;
+    border-color: rgba(139, 26, 43, 0.6);
+    box-shadow: 0 0 0 1px rgba(139, 26, 43, 0.25);
+  }
+  .input-premium::placeholder {
+    color: #5f6278;
+  }
+
+  /* Refined range slider — thin track, tactile thumb */
+  input[type="range"].range-premium {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 24px;
+    background: transparent;
+    cursor: pointer;
+  }
+  input[type="range"].range-premium::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 1px;
+    background: #2a2f45;
+  }
+  input[type="range"].range-premium::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #e2e4ed;
+    border: 1px solid rgba(139, 26, 43, 0.45);
+    margin-top: -6px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    transition: border-color 0.15s ease;
+  }
+  input[type="range"].range-premium::-webkit-slider-thumb:hover {
+    border-color: #8B1A2B;
+  }
+  input[type="range"].range-premium::-moz-range-track {
+    height: 2px;
+    border-radius: 1px;
+    background: #2a2f45;
+  }
+  input[type="range"].range-premium::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #e2e4ed;
+    border: 1px solid rgba(139, 26, 43, 0.45);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+  }
+
+  /* Refined checkbox — accent fill with light checkmark.
+   * NOTE: uses a background-image SVG checkmark (not ::after) because
+   * pseudo-elements do NOT render on <input> elements (replaced elements). */
+  input[type="checkbox"].checkbox-premium {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1px solid #2a2f45;
+    background: rgba(0, 0, 0, 0.25);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  input[type="checkbox"].checkbox-premium:hover {
+    border-color: rgba(139, 26, 43, 0.5);
+  }
+  input[type="checkbox"].checkbox-premium:checked {
+    background: #8B1A2B;
+    border-color: #8B1A2B;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'%3E%3Cpath d='M4 4 L14 14 M14 4 L4 14' fill='none' stroke='%23e2e4ed' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 12px 12px;
+  }
+
+  /* Refined select — custom chevron */
+  select.select-premium {
+    appearance: none;
+    -webkit-appearance: none;
+    color-scheme: dark;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid #2a2f45;
+    border-radius: 6px;
+    color: #e2e4ed;
+    font-size: 0.85rem;
+    font-family: inherit;
+    padding: 0.45rem 0.6rem;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1 L5 5 L9 1' fill='none' stroke='%239a9db5' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    background-size: 0.6rem;
+    padding-right: 1.6rem;
+  }
+  select.select-premium:focus {
+    outline: none;
+    border-color: rgba(139, 26, 43, 0.6);
+    box-shadow: 0 0 0 1px rgba(139, 26, 43, 0.25);
+  }
+  select.select-premium option {
+    background: #11141f;
+    color: #e2e4ed;
+  }
+}

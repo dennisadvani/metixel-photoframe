@@ -13,6 +13,9 @@ build/
 venv/
 env/
 
+# Node / npm (dev-machine Tailwind tooling; never ships to the Pi)
+node_modules/
+
 # IDE
 .vscode/*
 !.vscode/sync-to-pi.ps1
@@ -33,11 +36,15 @@ build/
 
 # Media files — user content, not source code
 media/
+scripts/pyside6_mpv_prototype/test_videos
 
 # Cache and runtime
 cache/
 logs/
 /run/
+
+# Functional-test credentials (never commit real WiFi passwords)
+testing/functional/.env
 *.log
 
 # Environment
@@ -60,5 +67,5 @@ htmlcov/
 etc/config.json
 
 # Test videos (large files, not source code)
-video_benchmark/source
-video_benchmark/out
+scripts/video_benchmark/source
+scripts/video_benchmark/out

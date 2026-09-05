@@ -140,7 +140,7 @@ fi
 # user-created custom subfolders) is preserved. Only empty scaffolding dirs
 # that have no monolithic source are created now.
 echo "[3/8] Creating /data, /releases, /live…"
-mkdir -p "${DATA_DIR}/config" "${DATA_DIR}/backups"
+mkdir -p "${DATA_DIR}/backups"
 mkdir -p "${RELEASES_DIR}"
 
 # ── Move persistent data → /data ────────────────────────────────────────────
@@ -251,10 +251,10 @@ PYEOF
 
 # ── Ensure the whole install root is pi-owned ──────────────────────────────
 # On a clean install /opt/metixel is often root-owned (setup ran via sudo).
-# The `pi` service must be able to create data subdirs (e.g. data/config via
+# The `pi` service must be able to create data subdirs (e.g. data/logs via
 # ensure_data_dirs) and write logs/media/cache — so chown the entire root
 # recursively at the end. This prevents the crash-loop:
-#   PermissionError: /opt/metixel/data/config (created by pi but data owned root).
+#   PermissionError: /opt/metixel/data/logs (created by pi but data owned root).
 chown -R pi:pi "${INSTALL_ROOT}" 2>/dev/null || true
 chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
 
@@ -265,11 +265,23 @@ chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
 # mechanism setup_trixie_metixel.sh uses, and it avoids the fragile exact-string
 # sed that previously left some devices with a stale PYTHONPATH (crash-loop).
 echo "[8/8] Installing canonical systemd unit files…"
-for unit in metixel-backend.service metixel-cage.service metixel-frontend.service; do
+for unit in metixel-backend.service metixel-cage.service; do
     if [ -f "${RELEASE_DIR}/systemd/${unit}" ]; then
         cp "${RELEASE_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"
     fi
 done
+
+# metixel-frontend.service was the obsolete pre-cage launcher and is no longer
+# shipped.  Some aging devices may still have a stale copy installed from an
+# early release — stop and remove it so it can't linger or double-launch the
+# frontend alongside cage.
+if systemctl list-unit-files metixel-frontend.service 2>/dev/null | grep -q metixel-frontend; then
+    systemctl stop metixel-frontend.service 2>/dev/null || true
+    systemctl disable metixel-frontend.service 2>/dev/null || true
+    rm -f /etc/systemd/system/metixel-frontend.service
+    systemctl daemon-reload
+    echo "  Removed obsolete metixel-frontend.service"
+fi
 
 systemctl daemon-reload
 # Ensure the services are enabled so they survive reboot.

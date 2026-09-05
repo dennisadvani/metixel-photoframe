@@ -371,17 +371,17 @@ import {
 
         var data = await apiGet("/messages/persistent");
         if (!data || !data.persistent) {
-            card.style.display = "none";
+            card.classList.add("hidden");
             return;
         }
 
         var messages = data.persistent;
         if (messages.length === 0) {
-            card.style.display = "none";
+            card.classList.add("hidden");
             return;
         }
 
-        card.style.display = "";
+        card.classList.remove("hidden");
         list.innerHTML = "";
 
         messages.forEach(function (msg) {
@@ -550,7 +550,7 @@ import {
         var progEl = document.getElementById("dash-sync-progress");
         var prog = data.progress;
         if (prog && prog.syncing && progEl) {
-            progEl.style.display = "block";
+            progEl.classList.remove("hidden");
             var phaseLabels = { "starting": "Starting\u2026", "resolving_album": "Looking up album\u2026", "fetching_assets": "Fetching assets\u2026", "downloading": "Downloading", "cleaning": "Cleaning up\u2026", "cancelled": "Cancelled", "error": "Error" };
             var phaseEl = document.getElementById("dash-sync-phase");
             if (phaseEl) phaseEl.textContent = phaseLabels[prog.phase] || prog.phase || "Syncing\u2026";
@@ -561,7 +561,7 @@ import {
             var fileEl = document.getElementById("dash-sync-file");
             if (fileEl) fileEl.textContent = prog.current_file || "";
         } else if (progEl) {
-            progEl.style.display = "none";
+            progEl.classList.add("hidden");
         }
 
         // ── Last sync status ─────────────────────────────────────

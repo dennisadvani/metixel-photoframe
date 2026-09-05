@@ -135,9 +135,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--mode",
-        choices=["backend", "frontend"],
-        required=True,
-        help="Run mode: backend (daemon + web) or frontend (display renderer)",
+        choices=["backend", "frontend", "cursor-hider"],
+        help=(
+            "Run mode: backend (daemon + web), frontend (display renderer), "
+            "or cursor-hider (hide the cage cursor via a virtual mouse)"
+        ),
     )
     parser.add_argument(
         "--config",
@@ -150,6 +152,15 @@ def main() -> None:
         action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--clear-web-password",
+        action="store_true",
+        help=(
+            "Clear the optional web-dashboard password (auth disabled) and "
+            "rotate the session-signing secret.  Recovery path for a forgotten "
+            "password.  Does not start the daemon."
+        ),
+    )
     args = parser.parse_args()
 
     # Ensure the persistent data directories exist (config, logs, media,
@@ -161,6 +172,23 @@ def main() -> None:
     _setup_logging(args.config, log_level)
 
     logger = logging.getLogger("metixel")
+
+    # Standalone admin action: clear the web password (forgot-password recovery).
+    if args.clear_web_password:
+        from metixel.backend.state import StateManager
+        from metixel.backend.web.auth import WebAuthService
+
+        state = StateManager(args.config)
+        service = WebAuthService(state)
+        service.clear_password()
+        service.rotate_secret()
+        logger.info("Web password cleared and auth secret rotated")
+        print("Web password cleared. The dashboard no longer requires a login.")
+        return
+
+    if not args.mode:
+        parser.error("--mode is required unless --clear-web-password is given")
+
     logger.info("Metixel Photoframe v%s starting in %s mode", __version__, args.mode)
 
     if args.mode == "backend":
@@ -173,6 +201,11 @@ def main() -> None:
         from metixel.frontend.renderer import build_renderer
 
         build_renderer(config_path=args.config).run()
+    elif args.mode == "cursor-hider":
+        # Composition root: start the cursor-hiding daemon (runs as root).
+        from metixel.display.cursor_hider import build_cursor_hider
+
+        build_cursor_hider().run()
 
 
 if __name__ == "__main__":

@@ -37,4 +37,4 @@ jobs:
         run: mypy src/metixel/
 
       - name: Tests (pytest)
-        run: pytest tests/ -q --no-cov
+        run: pytest testing/unit_tests/ -q --no-cov

@@ -25,7 +25,7 @@ vlc-plugin-video-output
 vlc-data
 cpulimit
 
-# Input / CEC
+# Input / CEC / DDC
 # libcec-dev + cec-utils provide the native libcec library. The Python
 # bindings come from the PyPI 'cec' package (python-cec) — see
 # requirements-pip.txt. The Debian 'python3-libcec' package does NOT exist in
@@ -33,6 +33,11 @@ cpulimit
 cec-utils
 libcec-dev
 python3-evdev
+# ddcutil talks DDC/CI over I²C (monitor brightness/contrast/input, etc.)
+ddcutil
+# i2c-tools provides the i2c-dev kernel module + i2cset/i2cget used by ddcutil
+# to talk to the monitor over the I²C bus.
+i2c-tools
 
 # Networking
 git

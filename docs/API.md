@@ -7,6 +7,33 @@
 
 Base URL: `http://<frame-ip>/api` (port 8080 also works — Flask listens directly)
 
+### Authentication (optional web password)
+
+When a web password is set (`web.password` in config), all `/api/*` routes
+except the exempt set require a valid session cookie.  Auth uses a Flask
+signed session cookie (`HttpOnly`, `SameSite=Lax`).  There is no TLS on the
+LAN by default — the password is the access boundary.
+
+- `POST /api/auth/login` — Authenticate.  Body: `{"password": "..."}`.
+  Sets the session cookie on success.  Returns `{"authenticated": true}`.
+  Rate-limited (5 attempts, then a 5-minute cooldown).
+- `POST /api/auth/logout` — Clear the session cookie.
+- `GET /api/auth/me` — Auth status: `{enabled, authenticated,
+  session_timeout_minutes, version}`.  Used by the SPA boot gate.
+- `POST /api/auth/password` — Set/change/clear the web password (requires an
+  authenticated session).  Body: `{"password": "..."}` (empty clears it).
+- `POST /api/auth/screen-pin` — Set/change/clear the optional on-screen UI
+  PIN (requires an authenticated session).  Body: `{"pin": "...",
+  "confirm": "..."}` or `{"clear": true}`.  PINs are 4-6 digits.
+- `GET /api/auth/screen-pin/status` — `{enabled, timeout_minutes}`.
+
+**Exempt from auth** (reachable without a session):
+- `GET /api/health` — OTA update.sh health-check + monitoring
+- `POST /api/auth/login|logout|me` — the gate itself
+- `POST /api/slideshow-started` — frontend renderer loopback signal
+- `/api/network/*` — captive-portal Wi-Fi setup
+- `POST /api/control` — IPC control commands (trusted local process)
+
 ### Configuration
 - `GET /api/config` — Full configuration
 - `GET /api/config/<section>` — Section config
@@ -23,6 +50,13 @@ Base URL: `http://<frame-ip>/api` (port 8080 also works — Flask listens direct
 - `GET /api/system/mqtt-status` — MQTT broker connection state
   (`disabled` | `connected` | `auth_error` | `connecting` | `not_responding`), plus
   `broker`/`port` and the rejection `error` (e.g. `Not authorized`) when applicable.
+- `POST /api/system/device-password` — Change the synced device password
+  (SSH console + Samba share).  Body: `{"new_password": "...",
+  "confirm_password": "..."}`.  Runs `sudo -n chpasswd` then
+  `sudo -n smbpasswd -a -s pi`.  Requires an authenticated session (no
+  "current password" field — sudo is NOPASSWD).  Returns `{"status": "ok"}`
+  on success, or `{"status": "partial", "console": "ok", "samba": "failed"}`
+  if the console password changed but Samba failed (stores out of sync).
 
 ### Time
 - `GET /api/time` — Current server time

@@ -154,7 +154,7 @@ graph TB
 
 ### 2.1 Process Architecture
 
-The system runs as **two systemd services**:
+The system runs as **three systemd services**:
 
 1. **`metixel-backend.service`** — The long-running backend daemon:
    - Sync engine (Immich polling, folder watching)
@@ -164,14 +164,22 @@ The system runs as **two systemd services**:
    - CEC/IR input handlers
    - Writes `config.json` on settings change
 
-2. **`metixel-frontend.service`** — The display renderer:
+2. **`metixel-cage.service`** — The frontend display renderer, launched under the cage Wayland compositor:
    - Starts AFTER `metixel-backend.service`
+   - Runs `cage` → `cage_launch.sh` → `python3 -m metixel --mode frontend`
    - Opens the display backend
    - Reads `config.json` at startup, watches for `inotify IN_MODIFY` events
    - Runs the main render loop
    - Connects to `/run/metixel/control.sock` for immediate commands
+   - Note: the obsolete pre-cage `metixel-frontend.service` (legacy Bullseye direct launch) was removed — cage is the only frontend launcher.
 
-**Why two processes?** The frontend renderer must own the GPU context (EGL context is bound to one process). The backend handles I/O-heavy operations that could cause frame drops if run in the same thread.
+3. **`metixel-cursor-hider.service`** — Hides the cage/Wayland cursor:
+   - Runs as root (for `/dev/uinput` access)
+   - Starts BEFORE `metixel-cage.service`
+   - Creates a persistent virtual absolute mouse and parks it off-screen
+   - Pure Python (evdev), no daemon/socket — see `display/cursor_hider.py`
+
+**Why two processes?** The frontend renderer must own the GPU context (EGL context is bound to one process). The backend handles I/O-heavy operations that could cause frame drops if run in the same thread. The cursor hider is a separate root service because it needs `/dev/uinput` access that the hardened backend/cage units (running as `pi`) do not have.
 
 ---
 
@@ -306,14 +314,16 @@ metixel-photoframe/                           # Repository root
 │
 ├── systemd/                           # systemd unit files
 │   ├── metixel-backend.service       # Backend daemon (all platforms)
-│   ├── metixel-cage.service          # Frontend under cage (Trixie/KMS)
-│   └── metixel-frontend.service      # Frontend direct (legacy Bullseye)
+│   └── metixel-cage.service          # Frontend under cage (Trixie/KMS)
 │
-├── tests/                             # Automated tests (mirrors src/metixel domains)
-│   ├── backend/
-│   ├── frontend/
-│   ├── display/
-│   └── shared/
+├── testing/                           # All test suites
+│   ├── unit_tests/                    # Automated unit tests (mirrors src/metixel domains)
+│   │   ├── backend/
+│   │   ├── frontend/
+│   │   ├── display/
+│   │   └── shared/
+│   ├── web-tests/                     # Playwright E2E suite (live frame)
+│   └── functional/                    # On-Pi hardware tests (Wi-Fi/AP/sudo)
 │
 ├── docs/                              # Documentation
 │   ├── CHANGELOG.md                   # Release notes
@@ -930,6 +940,7 @@ the composition root (`BackendDaemon(..., ports=Ports(...))`).
 | `CecController` | `LibCecAdapter` | HDMI-CEC (TV remote) |
 | `IrSocket` | `LircSocketAdapter` | LIRC IR remote |
 | `DisplayDriver` | display factory (`detect_backend`) | pi3d / PyOpenGL / tkinter |
+| `DdcController` | `DdcutilAdapter` | DDC/CI monitor control (`ddcutil`) |
 
 Every service constructor accepts its port with a **real default**, so existing
 behaviour is unchanged when no ports are injected; tests inject lightweight
@@ -952,11 +963,11 @@ business logic and giving tests a single seam to inject fakes
   never a direct import in core.
 - `src/metixel/__main__.py` stays thin: CLI parsing + logging only, delegating to
   the `build_*` factories.
-- Unit tests mirror the package (`tests/backend|frontend|display|shared/`) and use
+- Unit tests mirror the package (`testing/unit_tests/backend|frontend|display|shared/`) and use
   fakes implementing the ports (the Protocols are `@runtime_checkable`, so
   `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use
   `pytest.importorskip`. Web tests use the shared fixtures in
-  `tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
+  `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
 ---
 

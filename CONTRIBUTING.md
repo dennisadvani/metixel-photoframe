@@ -105,14 +105,52 @@ run.
 | **[Pi] Follow Logs** | Tails both services' journal |
 | **[Local] Install Playwright (Web UI Test)** | One-time `npm install` + Chromium for the web tests |
 | **[Local] Run Web UI Tests (Web UI Test)** | Runs the Playwright suite against the Pi you pick |
+| **[Local] Run Functional Tests (Wi-Fi/AP/Sudo)** | Runs the on-Pi functional suite (smoke test, then Wi-Fi + sudo in test mode, then AP) against the Pi you pick |
+| **[Local] Run Functional Tests (Wi-Fi + Sudo only)** | Runs only the smoke + Wi-Fi + sudo functional tests (skips the AP test) |
 | **[Pi] Restart All / Backend / Frontend** | Quick service restarts without syncing |
 
 > **Note:** the sync task only mirrors `src/metixel/`. Test files under
-> `tests/` are **not** synced — copy them manually when you change tests:
+> `testing/` are **not** synced — copy them manually when you change tests:
 >
 > ```powershell
-> scp -r tests/ pi@<pi-ip>:/opt/metixel/tests/
+> scp -r testing/unit_tests/ pi@<pi-ip>:/opt/metixel/testing/unit_tests/
 > ```
+
+## Functional (hardware) tests — `testing/functional/`
+
+The `testing/functional/` directory holds **on-Pi hardware tests** that
+exercise the real Wi-Fi/AP stack (`nmcli`, `hostapd`, `dnsmasq`) and
+passwordless sudo. They are deliberately excluded from the default
+`testing/unit_tests/` run and from CI — they must run on a real Pi as the
+`pi` user.
+
+**Prerequisites on the Pi:**
+- A Wi-Fi radio (`wlan0`) and an Ethernet uplink for control.
+- Passwordless sudo: `pi ALL=(ALL) NOPASSWD: ALL`.
+- The repo checked out at the live symlink (default `/opt/metixel/live`).
+- A `testing/functional/.env` file with the test network credentials (copy
+  `testing/functional/.env.example` and fill in `METIXEL_TEST_WIFI_SSID` /
+  `METIXEL_TEST_WIFI_PASSWORD`). The `.env` is gitignored — never commit
+  real credentials.
+
+**Run them** (from this repo, against a Pi):
+
+```bash
+scripts/run_functional_tests.sh <pi-host> [<pi-user>] [--wifi-only]
+```
+
+The functional tests are **not synced** — they run from the Pi's own git
+clone at the live symlink, so the code under test matches the installed
+release. The script only pushes a local `testing/functional/.env` if one
+exists (the credentials aren't part of the git clone). The Wi-Fi tests run
+with `METIXEL_NETWORK_TEST_MODE=1`, which makes the controller **ignore
+Ethernet for connectivity decisions** — so the Pi stays reachable over SSH
+while the Wi-Fi radio is exercised. The AP test runs in a **separate
+invocation** because starting hostapd takes `wlan0` out of client mode; pass
+`--wifi-only` to skip it.
+
+The suite skips itself (rather than failing) if the host isn't a Pi, has no
+`wlan0`, lacks passwordless sudo, or has no `.env` credentials.
 
 ## Branching model
 
@@ -135,18 +173,18 @@ headlessly against a **live frame**).
 
 ### Python unit tests
 
-Unit tests live under `tests/`, mirroring the `src/metixel/` package layout
-(`tests/backend|frontend|display|shared/`).
+Unit tests live under `testing/unit_tests/`, mirroring the `src/metixel/`
+package layout (`testing/unit_tests/backend|frontend|display|shared/`).
 
 Run them locally on your workstation (the dev venv has pytest, mypy, numpy,
 Pillow, Flask):
 
 ```powershell
 # Windows (dev venv)
-.\.venv\Scripts\python.exe -m pytest tests/ -v
+.\venv\Scripts\python.exe -m pytest testing/unit_tests/ -v
 
 # On the Pi
-cd /opt/metixel && python -m pytest tests/ -v
+cd /opt/metixel && python -m pytest testing/unit_tests/ -v
 ```
 
 **Conventions:**
@@ -156,8 +194,9 @@ cd /opt/metixel && python -m pytest tests/ -v
   `src/metixel/shared/ports.py` (they are `@runtime_checkable`, so
   `isinstance(fake, HttpGateway)` works).
 - Hardware-dependent tests use `pytest.importorskip(...)`.
-- Web route tests use the shared fixtures in `tests/backend/web/conftest.py`
-  (real `create_app()` + mocked outbound dependencies).
+- Web route tests use the shared fixtures in
+  `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked
+  outbound dependencies).
 - Target Python is 3.9+; the codebase is shared across Phase 1 (Raspberry Pi)
   and Phase 2 (other SBCs) — keep platform-specific logic behind the display
   backend abstraction.
@@ -178,15 +217,15 @@ don't introduce *new* errors.
 
 ### Web UI tests (Playwright)
 
-The `web-tests/` folder is a **Playwright end-to-end suite** for the web
-dashboard. It runs headless Chromium from your workstation and talks to a
-**live frame's Flask backend** over the LAN (nginx on **port 80** proxying to
-Flask on 8080) — no Pi-side tooling required.
+The `testing/web-tests/` folder is a **Playwright end-to-end suite** for the
+web dashboard. It runs headless Chromium from your workstation and talks to
+a **live frame's Flask backend** over the LAN (nginx on **port 80** proxying
+to Flask on 8080) — no Pi-side tooling required.
 
 **One-time setup:**
 
 ```powershell
-cd web-tests
+cd testing/web-tests
 npm install
 npx playwright install chromium
 ```
@@ -196,7 +235,7 @@ Or use the **[Local] Install Playwright (Web UI Test)** VS Code task.
 **Run the suite:**
 
 ```powershell
-cd web-tests
+cd testing/web-tests
 $env:METIXEL_URL = "http://192.168.222.122"   # or set in the VS Code task
 npx playwright test
 ```
@@ -233,7 +272,7 @@ Or use the **[Local] Run Web UI Tests (Web UI Test)** VS Code task, which reuses
 - `npx playwright test tests/walk.spec.js` — just the regression net.
 - `npx playwright test --headed` — watch the browser.
 
-Full details in [`web-tests/README.md`](web-tests/README.md).
+Full details in [`testing/web-tests/README.md`](testing/web-tests/README.md).
 
 ## Code style
 
@@ -245,9 +284,8 @@ Full details in [`web-tests/README.md`](web-tests/README.md).
   or editing files.
 - **Web JS:** native ES6 modules, **no bundler, no build step, no frameworks**
   — one module per page under `src/metixel/backend/web/static/js/`, shared
-  infra in `core.js`, entry point `main.js`. Keep the bundle under 200KB and
-  bump the `?v=` cache-buster on `index.html` when editing `static/js/` or the
-  stylesheet.
+  infra in `core.js`, entry point `main.js`. Bump the `?v=` cache-buster on
+  `index.html` when editing `static/js/` or the stylesheet.
 - **Web UI design:** burgundy-on-white design system — use the CSS design tokens
   (`var(--primary)`, `var(--text)`, …), Material Symbols icons (never emoji),
   and green only for backgrounds/accents. See the Web UI Style Guide in
@@ -259,10 +297,10 @@ Full details in [`web-tests/README.md`](web-tests/README.md).
    ```bash
    ruff check src/metixel/     # lint
    mypy src/metixel/           # type check
-   .\.venv\Scripts\python.exe -m pytest tests/ -v   # unit tests
+   .\.venv\Scripts\python.exe -m pytest testing/unit_tests/ -v   # unit tests
    ```
 2. If the change touches web UI behaviour, run the Playwright suite against a
-   live frame (`cd web-tests; npx playwright test`) to confirm the dashboard,
+   live frame (`cd testing/web-tests; npx playwright test`) to confirm the dashboard,
    save buttons and controls still work.
 3. Verify on the Pi: **[Pi] Sync Code (scp)** + **[Pi] Sync + Restart All (scp)**, then
    **[Pi] Follow Logs** to confirm the services boot cleanly.

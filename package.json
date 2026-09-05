@@ -1,0 +1,14 @@
+{
+  "name": "metixel-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dev-only tooling for the Metixel Photoframe web dashboard. Never installed on the Pi — CSS is built on the dev machine and committed.",
+  "scripts": {
+    "build:css": "tailwindcss -i src/metixel/backend/web/static/css/input.css -o src/metixel/backend/web/static/css/dashboard.css --minify",
+    "watch:css": "tailwindcss -i src/metixel/backend/web/static/css/input.css -o src/metixel/backend/web/static/css/dashboard.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.0",
+    "tailwindcss": "^4.3.0"
+  }
+}

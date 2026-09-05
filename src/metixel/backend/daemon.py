@@ -72,6 +72,8 @@ class BackendDaemon:
         # The MQTT client (set in _start_mqtt_client) — used by
         # set_display_power() to push screen-state changes to HA immediately.
         self._mqtt_client: MQTTClient | None = None
+        # DDC/CI monitor control — wired early so the web API can use it.
+        self._ddc_service = self._build_ddc_service()
 
     # -- Service lifecycle ---------------------------------------------------
 
@@ -251,6 +253,17 @@ class BackendDaemon:
                 self._mqtt_client.publish_screen_now()
             if source:
                 logger.info("Display power set to %s (%s)", "ON" if on else "OFF", source)
+
+    def _build_ddc_service(self):
+        """Construct the DDC/CI service (port injection or real ddcutil adapter)."""
+        from metixel.backend.display_control.ddc_service import DdcService
+        from metixel.shared.adapters import DdcutilAdapter
+
+        controller = self._ports.ddc if self._ports.ddc is not None else DdcutilAdapter()
+        return DdcService(
+            controller=controller,
+            get_config=lambda: self._state.config.ddc,
+        )
 
     def _start_input_handlers(self) -> None:
         """Start CEC and IR input handlers."""

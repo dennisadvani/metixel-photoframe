@@ -48,7 +48,7 @@
     "local": {
       "enabled": true,
       "watch_paths": [
-        {"path": "media/sample_media/", "enabled": true},
+        {"path": "media/sample_media/landscape/", "enabled": true},
         {"path": "media/sync/immich/", "enabled": true},
         {"path": "media/my_media/", "enabled": true}
       ],
@@ -58,7 +58,12 @@
   "web": {
     "host": "0.0.0.0",
     "port": 8080,
-    "debug": false
+    "debug": false,
+    "password": "",
+    "screen_pin": "",
+    "auth_secret": "",
+    "session_timeout_minutes": 30,
+    "screen_pin_timeout_minutes": 60
   },
   "mqtt": {
     "enabled": false,

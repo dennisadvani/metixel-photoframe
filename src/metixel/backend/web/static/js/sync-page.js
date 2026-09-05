@@ -44,9 +44,9 @@ import { loadMedia } from "./media-page.js";
             _syncPollTimer = null;
         }
         var cancelBtn = document.getElementById("btn-cancel-sync");
-        if (cancelBtn) cancelBtn.style.display = "none";
+        if (cancelBtn) cancelBtn.classList.add("hidden");
         var progressDiv = document.getElementById("immich-progress");
-        if (progressDiv) progressDiv.style.display = "none";
+        if (progressDiv) progressDiv.classList.add("hidden");
     }
 
     function _toggleImmichInterval(enabled) {
@@ -301,8 +301,8 @@ import { loadMedia } from "./media-page.js";
         // ── Live progress ──────────────────────────────────────────
         var prog = data.progress;
         if (prog && prog.syncing) {
-            if (progressDiv) progressDiv.style.display = "block";
-            if (cancelBtn) cancelBtn.style.display = "inline-block";
+            if (progressDiv) progressDiv.classList.remove("hidden");
+            if (cancelBtn) cancelBtn.classList.remove("hidden");
 
             var phaseLabel = prog.phase || "";
             var phaseText = {
@@ -339,8 +339,8 @@ import { loadMedia } from "./media-page.js";
             // detect when it finishes and auto-stop polling.
             _syncWasActive = true;
         } else {
-            if (progressDiv) progressDiv.style.display = "none";
-            if (cancelBtn) cancelBtn.style.display = "none";
+            if (progressDiv) progressDiv.classList.add("hidden");
+            if (cancelBtn) cancelBtn.classList.add("hidden");
 
             // If a sync was running and now it's finished, stop the
             // polling interval and re-enable the Sync Now button.
@@ -352,13 +352,13 @@ import { loadMedia } from "./media-page.js";
         }
 
         // ── Last result ───────────────────────────────────────────
-        statusEl.style.display = "block";
+        statusEl.classList.remove("hidden");
 
         if (data.status === "never_run" || !data.last_sync) {
             textEl.textContent = "Never run";
             textEl.style.color = "var(--text-muted)";
             detailEl.textContent = "";
-            if (errorsEl) { errorsEl.style.display = "none"; errorsEl.innerHTML = ""; }
+            if (errorsEl) { errorsEl.classList.add("hidden"); errorsEl.innerHTML = ""; }
             return;
         }
 
@@ -423,10 +423,10 @@ import { loadMedia } from "./media-page.js";
         if (errorsEl) {
             var realErrors = (s.errors || []).filter(function (e) { return e.indexOf("Cancelled") < 0; });
             if (realErrors.length > 0) {
-                errorsEl.style.display = "block";
+                errorsEl.classList.remove("hidden");
                 errorsEl.innerHTML = realErrors.map(function (e) { return "<li>" + escapeHtml(e) + "</li>"; }).join("");
             } else {
-                errorsEl.style.display = "none";
+                errorsEl.classList.add("hidden");
                 errorsEl.innerHTML = "";
             }
         }
