@@ -53,7 +53,7 @@ def _merge_key_map(defaults: dict[int, str], stored: dict) -> dict[str, list[int
     explicitly cleared it (removing the defaults too).
     """
     effective: dict[str, list[int]] = {}
-    for cmd, code in defaults.items():
+    for code, cmd in defaults.items():
         effective.setdefault(cmd, []).append(code)
     for cmd, codes in stored.items():
         if codes:

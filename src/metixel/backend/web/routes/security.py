@@ -50,7 +50,12 @@ def _run_privileged(cmd: list[str], input: str | None = None):
     """
     return run_cmd(
         [
-            "sudo", "-n", "systemd-run", "--wait", "--collect", "--pipe",
+            "sudo",
+            "-n",
+            "systemd-run",
+            "--wait",
+            "--collect",
+            "--pipe",
             "--unit=metixel-passwd",
             *cmd,
         ],
