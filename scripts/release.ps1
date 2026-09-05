@@ -218,12 +218,17 @@ $NewVersion = if ($BumpText -match 'version:\s*(\S+)') {
     ($BumpText -split "`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 1).Trim()
 }
 
-# If the requested version already matches the current version, __init__.py
-# is unchanged - there's no bump commit to make.  This is the legitimate
-# case where the version is already present on dev, so we continue (skip the
+# If the requested version already matches the version that is COMMITTED on
+# the current branch, there's no bump commit to make - continue (skip the
 # commit) rather than abort.
-$IniPath = Join-Path $RepoRoot "src\metixel\__init__.py"
-$CurrentVersion = (Select-String -Path $IniPath -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+#
+# IMPORTANT: read the current version from git (the committed __version__),
+# NOT from the working-tree file.  bump_version.py has already written the
+# file to $NewVersion just above, so reading the file here would ALWAYS equal
+# $NewVersion and the commit below would be skipped every time - leaving the
+# bump as an uncommitted change and creating the release branch/PR from stale
+# dev.  git show gives the pre-bump committed value regardless.
+$CurrentVersion = (git show HEAD:src/metixel/__init__.py | Select-String '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 $VersionChanged = ($NewVersion -ne $CurrentVersion)
 if (-not $VersionChanged) {
     Write-Host "Version $NewVersion is already current on dev - no bump needed." -ForegroundColor Yellow
