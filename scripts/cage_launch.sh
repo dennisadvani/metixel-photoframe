@@ -21,11 +21,19 @@
 # (covers mid-session hot-plug / desktop testing).
 set -u
 
+
+# Trigger the cursor-hider to park the cursor off-screen.  This is the single
+# source of truth — it runs from the same launcher that starts the frontend,
+# regardless of how the app is launched (cage systemd unit, CLI, etc.).
+# Best-effort: if the hider service isn't running, this is a harmless no-op.
+/usr/bin/env python3 /opt/metixel/live/scripts/trigger_cursor_hider.py
+
 # Wait for the compositor's Wayland socket (cage creates it on startup).
 for _ in $(seq 1 100); do
     [ -S "${XDG_RUNTIME_DIR:-/run/user/1000}/wayland-0" ] && break
     sleep 0.1
 done
+
 
 # Disable phantom outputs (no EDID) before the frontend starts.
 /usr/bin/env python3 - "$XDG_RUNTIME_DIR" <<'PY'
