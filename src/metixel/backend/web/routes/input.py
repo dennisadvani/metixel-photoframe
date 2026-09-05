@@ -8,6 +8,7 @@ import logging
 
 from flask import Blueprint, current_app, jsonify
 
+from metixel.backend.input_handlers.keyboard import DEFAULT_KEY_MAP
 from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
 
 logger = logging.getLogger(__name__)
@@ -17,19 +18,50 @@ input_bp = Blueprint("input", __name__)
 
 @input_bp.route("/keyboard/map", methods=["GET"])
 def keyboard_map():
-    """Get the current keyboard key mapping."""
-    state = current_app.config["METIXEL_STATE"]
-    input_cfg = state.config.input
-    stored = input_cfg.get("keyboard_map", {}) or {}
+    """Get the current keyboard key mapping.
+
+    The live ``KeyboardHandler`` holds the *effective* map (code defaults
+    overlaid with any stored ``config.input.keyboard_map`` overrides), so the
+    UI here always reflects exactly what the handler uses.  If the keyboard
+    handler has not been started, fall back to merging ``DEFAULT_KEY_MAP`` with
+    the stored config so the table is still populated.
+    """
+    handler = get_daemon_component("_keyboard_handler")
+    if handler is not None and hasattr(handler, "key_map"):
+        # {cmd: [codes]} — already merges defaults + stored overrides.
+        cmd_map = handler.key_map
+    else:
+        cmd_map = _merge_key_map(
+            DEFAULT_KEY_MAP,
+            current_app.config["METIXEL_STATE"].config.input.get("keyboard_map", {}) or {},
+        )
 
     # Include default key names for display
     result: dict[str, list[dict]] = {}
-    for cmd, codes in stored.items():
+    for cmd, codes in cmd_map.items():
         result[cmd] = []
         for code in codes:
             name = _key_name(code)
             result[cmd].append({"code": code, "name": name})
     return jsonify({"map": result})
+
+
+def _merge_key_map(defaults: dict[int, str], stored: dict) -> dict[str, list[int]]:
+    """Return {cmd: [codes]} = ``defaults`` overlaid with ``stored`` overrides.
+
+    Mirrors ``KeyboardHandler``: an empty list for a command means the user
+    explicitly cleared it (removing the defaults too).
+    """
+    effective: dict[str, list[int]] = {}
+    for cmd, code in defaults.items():
+        effective.setdefault(cmd, []).append(code)
+    for cmd, codes in stored.items():
+        if codes:
+            effective[cmd] = list(codes)
+        else:
+            # Explicit clear → blank this command (defaults included).
+            effective[cmd] = []
+    return effective
 
 
 @input_bp.route("/keyboard/learn", methods=["POST"])
