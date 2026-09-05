@@ -412,12 +412,11 @@ import {
             setValue("cfg-display-resolution", current);
         });
 
-        // Security — web password + session timeout + screen PIN timeout.
-        // The password/PIN fields are always left empty (they are write-only);
-        // only the timeout dropdowns reflect the current config.
+        // Security — web password + session timeout.
+        // The password field is always left empty (it is write-only); only the
+        // timeout dropdown reflects the current config.
         const webCfg = config.web || {};
         setValue("cfg-web-session-timeout", webCfg.session_timeout_minutes != null ? webCfg.session_timeout_minutes : 30);
-        setValue("cfg-screen-pin-timeout", webCfg.screen_pin_timeout_minutes != null ? webCfg.screen_pin_timeout_minutes : 60);
 
         // Event listeners — bind once
         if (!_settingsBound) {

@@ -1394,46 +1394,6 @@
                     <div class="flex justify-end mt-2">
                         <button id="btn-save-device-password" class="btn--primary">Change Device Password</button>
                     </div>
-
-                    <div class="mt-5 border-t border-border/60"></div>
-
-                    <!-- Screen PIN (future on-screen UI) -->
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Screen PIN</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">Protects the future on-screen UI on the frame. Independent of the web password and device password. Max 24 hours.</span>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" id="cfg-screen-pin" class="input-premium w-40" autocomplete="new-password" placeholder="4-6 digits" inputmode="numeric" pattern="[0-9]{4,6}">
-                        </div>
-                    </div>
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Confirm Screen PIN</span>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" id="cfg-screen-pin-confirm" class="input-premium w-40" autocomplete="new-password" placeholder="Repeat PIN" inputmode="numeric" pattern="[0-9]{4,6}">
-                        </div>
-                    </div>
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">PIN Unlock Timeout</span>
-                        </div>
-                        <div class="setting-control">
-                            <select id="cfg-screen-pin-timeout" class="select-premium input-premium w-44">
-                                <option value="5">5 minutes</option>
-                                <option value="15">15 minutes</option>
-                                <option value="30">30 minutes</option>
-                                <option value="60">1 hour</option>
-                                <option value="180">3 hours</option>
-                                <option value="720">12 hours</option>
-                                <option value="1440">24 hours</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="flex justify-end mt-2">
-                        <button id="btn-save-screen-pin" class="btn--primary">Save Screen PIN</button>
-                    </div>
                 </div>
 
  <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
@@ -1633,6 +1593,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=59"></script>
+    <script type="module" src="/static/js/main.js?v=61"></script>
 </body>
 </html>

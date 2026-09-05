@@ -274,9 +274,8 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
         setValue("cfg-web-host", web.host || "0.0.0.0");
         setValue("cfg-web-port", web.port || 8080);
 
-        // Security — web session timeout + screen PIN timeout (System page).
+        // Security — web session timeout (System page).
         setValue("cfg-web-session-timeout", web.session_timeout_minutes != null ? web.session_timeout_minutes : 30);
-        setValue("cfg-screen-pin-timeout", web.screen_pin_timeout_minutes != null ? web.screen_pin_timeout_minutes : 60);
         if (!_advancedBound) {
             _advancedBound = true;
 
@@ -427,33 +426,6 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
                 }
                 document.getElementById("cfg-device-password").value = "";
                 document.getElementById("cfg-device-password-confirm").value = "";
-            });
-
-            // Screen PIN (set/change/clear) + PIN timeout.
-            document.getElementById("btn-save-screen-pin")?.addEventListener("click", async () => {
-                var pin = document.getElementById("cfg-screen-pin").value;
-                var confirm = document.getElementById("cfg-screen-pin-confirm").value;
-                var timeout = sanitizeInt(document.getElementById("cfg-screen-pin-timeout").value, 60);
-
-                await apiPut("/config/web", { screen_pin_timeout_minutes: timeout });
-
-                if (pin) {
-                    if (!/^[0-9]{4,6}$/.test(pin)) {
-                        showToast("Screen PIN must be 4-6 digits", "error");
-                        return;
-                    }
-                    if (pin !== confirm) { showToast("Screen PINs do not match", "error"); return; }
-                    var pinResult = await apiPost("/auth/screen-pin", { pin: pin, confirm: confirm });
-                    if (pinResult && pinResult.status === "ok") {
-                        showToast("Screen PIN set", "success");
-                    } else {
-                        showToast("Failed to set screen PIN: " + ((pinResult && pinResult.message) || "Unknown error"), "error");
-                    }
-                } else {
-                    showToast("Screen PIN cleared / timeout saved", "success");
-                }
-                document.getElementById("cfg-screen-pin").value = "";
-                document.getElementById("cfg-screen-pin-confirm").value = "";
             });
 
             // Clear image cache

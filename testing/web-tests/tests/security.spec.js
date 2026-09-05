@@ -1,6 +1,7 @@
-// Security flows: web password login gate, device password (SSH+Samba),
-// and screen PIN.  These tests are destructive — they set and clear
-// credentials — so each test restores the frame to a known state.
+// Security flows: web password login gate and device password (SSH+Samba).
+// These tests are destructive — they set and clear credentials — so each
+// test restores the frame to a known state.  (The screen-PIN controls are
+// hidden in the VLC-flavoured UI, so there are no screen-PIN web tests.)
 //
 // The suite's global-setup.js clears any pre-existing web password over SSH
 // so the frame starts with auth disabled.  A beforeAll here re-asserts that
@@ -12,7 +13,6 @@ const { clearWebPasswordAndRestart } = require("../ssh-utils");
 
 const WEB_PW = "TestWebPass123!";
 const DEVICE_PW = "TestDevicePass123!";
-const PIN = "123456";
 
 test.describe("security", () => {
     test.beforeAll(async () => {
@@ -80,31 +80,5 @@ test.describe("security", () => {
         await page.locator("#cfg-device-password-confirm").fill("");
         await page.locator("#btn-save-device-password").click();
         await expect(page.locator(".toast", { hasText: "Enter a new device password" }).first()).toBeVisible();
-    });
-
-    test("screen PIN set + clear", async ({ page }) => {
-        const errors = collectErrors(page);
-        await goToPage(page, "system");
-
-        // Set a screen PIN.
-        await page.locator("#cfg-screen-pin").fill(PIN);
-        await page.locator("#cfg-screen-pin-confirm").fill(PIN);
-        await page.locator("#btn-save-screen-pin").click();
-        await expect(page.locator(".toast").first()).toBeVisible();
-
-        // Clear it.
-        await page.locator("#cfg-screen-pin").fill("");
-        await page.locator("#cfg-screen-pin-confirm").fill("");
-        await page.locator("#btn-save-screen-pin").click();
-        await expect(page.locator(".toast").first()).toBeVisible();
-        expectNoErrors(errors);
-    });
-
-    test("screen PIN invalid length is rejected", async ({ page }) => {
-        await goToPage(page, "system");
-        await page.locator("#cfg-screen-pin").fill("123");
-        await page.locator("#cfg-screen-pin-confirm").fill("123");
-        await page.locator("#btn-save-screen-pin").click();
-        await expect(page.locator(".toast").first()).toContainText("4-6 digits");
     });
 });
