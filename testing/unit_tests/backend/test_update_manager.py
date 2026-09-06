@@ -284,6 +284,26 @@ class TestFixups:
         assert "COUNT" in content
         assert "HAS_128" in content
 
+    def test_cursor_hider_fixup_provisions_service(self) -> None:
+        """Devices installed or migrated before 1.2.5 never received the
+        metixel-cursor-hider unit (migration only provisioned backend + cage).
+        The fixup must install + enable it from the release, and start it when
+        the live code already supports the mode (fixups run pre-swap)."""
+        repo = Path(__file__).resolve().parents[3]
+        fixup = repo / "scripts" / "fixups" / "v1.2.5-cursor-hider.sh"
+        content = fixup.read_text(encoding="utf-8")
+
+        # Installs the unit from the release dir into /etc/systemd/system.
+        assert "systemd/metixel-cursor-hider.service" in content
+        assert 'cp "${UNIT_SRC}" "${UNIT_DST}"' in content
+        assert "systemctl daemon-reload" in content
+        assert "systemctl enable metixel-cursor-hider.service" in content
+        # Guarded: never installed against a release lacking the mode.
+        assert 'grep -q "cursor-hider" "${REPO}/src/metixel/__main__.py"' in content
+        # Start is attempted only when the live code already supports the mode.
+        assert "systemctl is-active --quiet metixel-cursor-hider.service" in content
+        assert "REBOOT_REQUIRED" in content
+
 
 class TestUpdateScript:
     """The atomic updater drives install + swap + rollback via update.sh."""
