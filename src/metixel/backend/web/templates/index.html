@@ -772,14 +772,6 @@
                     </div>
                     <div class="setting-row">
                         <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">FPS Limit</span>
-                        </div>
-                        <div class="setting-control">
-                            <input type="number" id="cfg-fps-limit" min="10" max="60" value="30" class="input-premium w-24 text-right">
-                        </div>
-                    </div>
-                    <div class="setting-row">
-                        <div class="setting-label">
                             <span class="text-[0.85rem] font-medium text-text-secondary">Screen Rotation</span>
                         </div>
                         <div class="setting-control">
@@ -791,7 +783,15 @@
                             </select>
                         </div>
                     </div>
-                    <p class="text-text-muted text-[0.76rem] leading-relaxed mt-2">Resolution, refresh rate and rotation are applied on the next frontend restart. Changing the resolution or rotation clears the media cache so new photos/videos are re-optimised at the new screen size.</p>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Rendering FPS Limit</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="number" id="cfg-fps-limit" min="10" max="60" value="30" class="input-premium w-24 text-right">
+                        </div>
+                    </div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mt-2">Changing the resolution or rotation clears the media cache so new photos/videos are re-optimised at the new screen size.</p>
                     <div class="flex justify-end mt-3">
                         <button id="btn-save-display" class="btn--primary">Save Display Settings</button>
                     </div>
