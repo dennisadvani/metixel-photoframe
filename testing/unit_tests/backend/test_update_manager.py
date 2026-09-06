@@ -156,6 +156,12 @@ class TestInstallScript:
         # The systemd units are copied, not sed-mutated (the only sed -i left is
         # the Samba share path rewrite, which is unrelated to systemd).
         assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
+        # The cursor-hider service (newer feature) is installed + enabled only
+        # when the release ships it — never against code that lacks the
+        # --mode cursor-hider entrypoint (that would crash-loop forever).
+        assert "metixel-cursor-hider.service" in content
+        assert 'grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"' in content
+        assert "CURSOR_HIDER_PRESENT" in content
 
     def test_migrate_script_repairs_partial_state(self) -> None:
         """A partial/aborted migration (data/ present but no valid live symlink)
@@ -320,6 +326,22 @@ class TestUpdateScript:
 
         # The rename into releases/ still happens after the commit resolution.
         assert 'mv "${STAGING_DIR}" "${RELEASE_DIR}"' in content
+
+    def test_update_script_provisions_new_systemd_service(self) -> None:
+        """An atomic upgrade must install + start a NEW systemd service shipped
+        by the release (e.g. metixel-cursor-hider in 1.2.5).  Devices installed
+        or migrated before the service existed would otherwise never run it."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        # The hider unit is provisioned from the staged release (guarded: only
+        # when the release actually ships the --mode cursor-hider entrypoint).
+        assert "metixel-cursor-hider.service" in content
+        assert 'grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"' in content
+        assert "systemctl enable metixel-cursor-hider.service" in content
+        assert "systemctl start metixel-cursor-hider.service" in content
+        # Runs AFTER the health check so provisioning can't affect rollback.
+        assert "New release is healthy" in content
+        assert content.index("metixel-cursor-hider.service") > content.index("healthy")
 
 
 class TestAutoUpdateSchedule:
