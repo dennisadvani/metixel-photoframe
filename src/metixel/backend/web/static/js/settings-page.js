@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * Settings page module. Slideshow / video / image optimisation / local-folder settings, watch-path rows, folder browser and transcode profile helpers.
+ * Settings page module. Playback page (slideshow / video / display / time / DDC monitor control) + optimisation page settings, plus timezone/NTP helpers and watch-path helpers shared with the Sources page.
  */
 
 import {
@@ -16,6 +16,8 @@ import {
     showToast,
     updatePowerButton
 } from "./core.js";
+
+import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
 
     function _toggleTranscodeSettings(enabled) {
         var el = document.getElementById("transcode-settings");
@@ -676,7 +678,12 @@ import {
                     showToast("Failed to set timezone: " + ((result && result.message) || "Unknown error"), "error");
                 }
             });
+
+            // Monitor Control (DDC/CI) card — bind once
+            bindDdcControls();
         }
+
+        await loadDdcControls();
     }
 
     // -- Watch Paths (per-row) ----------------------------------------------

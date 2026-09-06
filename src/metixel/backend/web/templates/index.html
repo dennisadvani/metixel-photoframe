@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=37">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=41">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -95,34 +95,47 @@
         </div>
 
         <main>
-            <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Dashboard Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
+            <!-- Dashboard Page -->
             <section id="page-dashboard" class="page active">
                 <div id="welcome-banner" class="card card--welcome" style="display:none">
                     <button class="card-close" id="btn-welcome-dismiss" aria-label="Dismiss" title="Dismiss">&times;</button>
-                    <h2>Welcome to Metixel Photoframe!</h2>
-                    <div class="welcome-grid">
-                        <div class="welcome-item">
-                            <span class="material-symbols-outlined">desktop_windows</span>
-                            <div>
-                                <strong>Web Dashboard</strong>
-                                <p>Manage your frame at <code id="welcome-url">http://metixel.local</code></p>
-                            </div>
-                        </div>
-                        <div class="welcome-item">
-                            <span class="material-symbols-outlined">upload</span>
-                            <div>
-                                <strong>Upload Media</strong>
-                                <p>
-                                    Open the <a href="#media">Media Library</a> and tap
-                                    <strong>Upload Media</strong> — or drag &amp; drop
-                                    photos and videos straight from any device on your network.
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                    <p style="margin-top:0.75rem;color:var(--text-muted);font-size:0.82rem">Dismiss this welcome banner to remove the welcome pop-up message on the screen.</p>
+                    <h2>Welcome to Metixel Photo Frame, lets get you up and running!</h2>
+                    <ol class="welcome-steps">
+                        <li class="welcome-step">
+                            <span class="welcome-step-num" aria-hidden="true">1</span>
+                            <span><a href="#system/security">Set a password</a> to protect the web interface.</span>
+                        </li>
+                        <li class="welcome-step">
+                            <span class="welcome-step-num" aria-hidden="true">2</span>
+                            <span>Change the <a href="#system/security">device password</a> (SSH + SMB).</span>
+                        </li>
+                        <li class="welcome-step">
+                            <span class="welcome-step-num" aria-hidden="true">3</span>
+                            <span><a href="#media/media-library">Upload media</a> in the Media Library or drop files on the SMB share.</span>
+                        </li>
+                        <li class="welcome-step">
+                            <span class="welcome-step-num" aria-hidden="true">4</span>
+                            <span>Adjust <a href="#playback/slideshow-settings">slide duration</a> &amp; <a href="#playback/display-settings">screen orientation</a>.</span>
+                        </li>
+                        <li class="welcome-step">
+                            <span class="welcome-step-num" aria-hidden="true">5</span>
+                            <span>Disable the sample <a href="#sources/local-folders">media watch folders</a>.</span>
+                        </li>
+                        <li class="welcome-step">
+                            <span class="welcome-step-num" aria-hidden="true">6</span>
+                            <span>Using Immich? <a href="#sources/immich-sync">Set up sync</a>.</span>
+                        </li>
+                        <li class="welcome-step">
+                            <span class="welcome-step-num" aria-hidden="true">7</span>
+                            <span>Enable <a href="#system/system">quiet boot</a> — only Metixel shows on the screen at startup.</span>
+                        </li>
+                        <li class="welcome-step welcome-step--done">
+                            <span class="welcome-step-num" aria-hidden="true">8</span>
+                            <span>Done? <strong>Close this banner (×)</strong> to dismiss future welcome messages.</span>
+                        </li>
+                    </ol>
                 </div>
-                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                <div id="card-system-status" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">System Status</h2>
@@ -177,7 +190,7 @@
                     </div>
                 </div>
 
-                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                <div id="card-now-playing" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Now Playing</h2>
@@ -192,7 +205,7 @@
                     </div>
                 </div>
 
-                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                <div id="card-background-processing" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Background Processing</h2>
@@ -246,7 +259,7 @@
                     </div>
                 </div>
 
-                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                <div id="card-sync-status" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Sync Status</h2>
@@ -283,7 +296,7 @@
 
             <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Media Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
             <section id="page-media" class="page">
-                <div class="card">
+                <div id="card-media-library" class="card">
                     <h2>Media Library</h2>
                     <div class="media-toolbar">
                         <button id="btn-upload-media" type="button">
@@ -292,6 +305,31 @@
                         <input type="file" id="file-upload" accept="image/*,video/*" multiple style="display:none">
                         <span class="media-toolbar-hint">Tap to pick photos/videos, or drag &amp; drop onto the grid</span>
                     </div>
+                    <details class="media-smb" id="media-smb">
+                        <summary>
+                            <span class="material-symbols-outlined smb-chevron" aria-hidden="true">chevron_right</span>
+                            <span>Prefer copying files from your computer? Open the SMB media share</span>
+                        </summary>
+                        <div class="media-smb-body">
+                            <p class="media-smb-intro">Connect to the <code>metixel-media</code> share and drop photos/videos in — they are picked up automatically. Sign in with your <strong>device password</strong> (System → Security → Device Password).</p>
+                            <div class="media-smb-cols">
+                                <div class="media-smb-os">
+                                    <div class="media-smb-os-title">Windows — File Explorer</div>
+                                    <p class="media-smb-path"><code>\\metixel.local\metixel-media</code><button type="button" class="media-smb-copy" title="Copy address"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">content_copy</span></button></p>
+                                    <p class="media-smb-path"><code id="media-smb-win-ip">—</code><button type="button" class="media-smb-copy" title="Copy address"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">content_copy</span></button></p>
+                                </div>
+                                <div class="media-smb-os">
+                                    <div class="media-smb-os-title">macOS — Finder</div>
+                                    <p class="media-smb-path"><code>smb://metixel.local/metixel-media</code><button type="button" class="media-smb-copy" title="Copy address"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">content_copy</span></button></p>
+                                    <p class="media-smb-path"><code id="media-smb-mac-ip">—</code><button type="button" class="media-smb-copy" title="Copy address"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">content_copy</span></button></p>
+                                </div>
+                            </div>
+                            <p class="media-smb-foot">
+                                <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle" aria-hidden="true">lan</span>
+                                <span>Frame address: <code id="media-smb-ip">—</code>. In Windows, paste the path into File Explorer; on macOS use Finder → <em>Go</em> → <em>Connect to Server…</em>. If <code>metixel.local</code> doesn’t resolve, use the IP address.</span>
+                            </p>
+                        </div>
+                    </details>
                     <div id="upload-progress" class="upload-progress" style="display:none"></div>
                     <div class="media-filter-bar">
                         <input type="text" id="media-filter-name" placeholder="Filter by filename… (press Enter)" autocomplete="off">
@@ -318,7 +356,7 @@
             <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Sync Page (Immich only) â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
             <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Network Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
             <section id="page-network" class="page">
-                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                <div id="card-network-status" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Network Status</h2>
@@ -328,7 +366,7 @@
                     <div id="network-status" class="text-[0.92rem] text-text-secondary">Loading…</div>
                 </div>
 
-                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                <div id="card-available-networks" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Available Networks</h2>
@@ -340,7 +378,7 @@
                     <div id="network-scan-status" class="status-msg hidden mt-2 p-2 rounded text-[0.85rem]"></div>
                 </div>
 
-                <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                <div id="card-access-point" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Access Point</h2>
@@ -387,7 +425,7 @@
             <!-- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• Advanced Page â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• -->
             <!-- Datasection -->
             <section id="page-sources" class="page">
-                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                 <div id="card-local-folders" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Local Folders</h2>
@@ -432,7 +470,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-immich-sync" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Immich Sync</h2>
@@ -560,7 +598,7 @@
         
             <!-- Datasection -->
             <section id="page-playback" class="page">
-                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                 <div id="card-slideshow-settings" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Slideshow Settings</h2>
@@ -660,7 +698,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-video-settings" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Video Settings</h2>
@@ -704,7 +742,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-display-settings" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Display Settings</h2>
@@ -759,7 +797,45 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-monitor-control" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Monitor Control (DDC/CI)</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Hardware</span>
+                    </div>
+                    <div class="mt-5 border-t border-border/60"></div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Adjust the monitor’s own picture settings (brightness, contrast, input, …) over HDMI DDC/CI. Controls appear only for features your display reports.</p>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable DDC/CI</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-ddc-enabled" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div id="ddc-fields" class="hidden mt-2">
+                        <div class="setting-row">
+                            <div class="setting-label">
+                                <span class="text-[0.85rem] font-medium text-text-secondary">Display number</span>
+                                <span class="text-[0.72rem] text-text-muted leading-snug">Usually <code>1</code> (first detected). Change only if you have multiple DDC displays.</span>
+                            </div>
+                            <div class="setting-control">
+                                <input type="number" id="cfg-ddc-display" min="1" max="8" value="1" class="input-premium w-20 text-right">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex gap-2 flex-wrap items-center mt-3 justify-end">
+                        <button id="btn-ddc-refresh" class="btn--sm btn--secondary" type="button">
+                            <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">refresh</span> Refresh
+                        </button>
+                        <button id="btn-save-ddc" class="btn--primary">Save DDC Settings</button>
+                    </div>
+                    <p id="ddc-status" class="text-text-muted text-[0.76rem] mb-2">—</p>
+                    <p id="ddc-empty" class="text-text-muted text-[0.76rem] hidden">Monitor DDC/CI not available</p>
+                    <div id="ddc-controls" class="hidden"></div>
+                </div>
+
+ <div id="card-time" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Time</h2>
@@ -848,7 +924,7 @@
         
             <!-- Datasection -->
             <section id="page-optimisation" class="page">
-                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                 <div id="card-image-optimisation" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Image Optimisation</h2>
@@ -897,7 +973,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-video-optimisation" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Video Optimisation</h2>
@@ -1097,7 +1173,7 @@
         
             <!-- Datasection -->
             <section id="page-system" class="page">
-                 <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                 <div id="card-system" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">System</h2>
@@ -1149,7 +1225,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-updates" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Updates</h2>
@@ -1301,7 +1377,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-keyboard" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Keyboard / Remote Control</h2>
@@ -1324,7 +1400,7 @@
                     <div id="kbd-learn-status" style="margin-top:0.5rem;padding:0.4rem 0.6rem;border-radius:4px;display:none;font-size:0.85rem"></div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-security" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Security</h2>
@@ -1376,8 +1452,8 @@
                     <!-- Device password (SSH + Samba, synced) -->
                     <div class="setting-row">
                         <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Device Password</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">Used for SSH login and the Samba share — changing it updates both. This is separate from the web dashboard password.</span>
+                            <span class="text-[0.85rem] font-medium text-text-secondary">SSH Login and File Sharing (Samba) Password</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Used for SSH login and the Samba share — changing it updates both. Separate from the web dashboard password.</span>
                         </div>
                         <div class="setting-control">
                             <input type="password" id="cfg-device-password" class="input-premium w-40" autocomplete="new-password" placeholder="New device password">
@@ -1396,7 +1472,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-mqtt" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">MQTT / Home Assistant</h2>
@@ -1484,45 +1560,7 @@
                     </div>
                 </div>
 
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
-                    <div class="flex items-center gap-2.5">
-                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
-                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Monitor Control (DDC/CI)</h2>
-                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Hardware</span>
-                    </div>
-                    <div class="mt-5 border-t border-border/60"></div>
-                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Adjust the monitor’s own picture settings (brightness, contrast, input, …) over HDMI DDC/CI. Controls appear only for features your display reports.</p>
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable DDC/CI</span>
-                        </div>
-                        <div class="setting-control">
-                            <input type="checkbox" id="cfg-ddc-enabled" class="checkbox-premium">
-                        </div>
-                    </div>
-                    <div id="ddc-fields" class="hidden mt-2">
-                        <div class="setting-row">
-                            <div class="setting-label">
-                                <span class="text-[0.85rem] font-medium text-text-secondary">Display number</span>
-                                <span class="text-[0.72rem] text-text-muted leading-snug">Usually <code>1</code> (first detected). Change only if you have multiple DDC displays.</span>
-                            </div>
-                            <div class="setting-control">
-                                <input type="number" id="cfg-ddc-display" min="1" max="8" value="1" class="input-premium w-20 text-right">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="flex gap-2 flex-wrap items-center mt-3 justify-end">
-                        <button id="btn-ddc-refresh" class="btn--sm btn--secondary" type="button">
-                            <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">refresh</span> Refresh
-                        </button>
-                        <button id="btn-save-ddc" class="btn--primary">Save DDC Settings</button>
-                    </div>
-                    <p id="ddc-status" class="text-text-muted text-[0.76rem] mb-2">—</p>
-                    <p id="ddc-empty" class="text-text-muted text-[0.76rem] hidden">Monitor DDC/CI not available</p>
-                    <div id="ddc-controls" class="hidden"></div>
-                </div>
-
- <div class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+ <div id="card-system-logs" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
                     <div class="flex items-center gap-2.5">
                         <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
                         <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">System Logs</h2>
@@ -1593,6 +1631,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=61"></script>
+    <script type="module" src="/static/js/main.js?v=63"></script>
 </body>
 </html>

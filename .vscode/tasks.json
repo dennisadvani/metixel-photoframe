@@ -157,6 +157,50 @@
             "problemMatcher": []
         },
         {
+            "label": "[Local] Build Dashboard CSS",
+            "detail": "Compiles input.css + custom.css into dashboard.css (minified) via Tailwind. Run after any custom.css / input.css edit, then bump the ?v= cache-buster in index.html and sync to the Pi.",
+            "type": "shell",
+            "command": "npm run build:css",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "group": {
+                "kind": "build"
+            },
+            "presentation": {
+                "reveal": "always",
+                "clear": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Watch Dashboard CSS",
+            "detail": "Watches input.css / custom.css and recompiles dashboard.css on every save. Leave running in the background terminal (stop with Ctrl+C).",
+            "type": "shell",
+            "command": "npm run watch:css",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
             "label": "[Local] Release",
             "detail": "Cuts a release from the dev branch with the exact version you enter (e.g. 0.2.0-beta.2).",
             "type": "shell",

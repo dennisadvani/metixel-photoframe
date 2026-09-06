@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * DDC/CI monitor-control helpers for the Advanced page.
+ * DDC/CI monitor-control helpers (shared widget module) for the Monitor
+ * Control (DDC/CI) card on the Playback page.
  *
  * Capability-first: probes /api/ddc/capabilities and builds controls only for
  * features the monitor reports. No fixed brightness/contrast sliders.

@@ -1,10 +1,10 @@
-// System + playback pages: system info, timezone/clock, display save, and the
-// embedded updates + keyboard sections.  Restart/reboot/shutdown/clear-cache
+// System + playback pages: system info, timezone/clock, display/DDC save, and
+// the embedded updates + keyboard sections.  Restart/reboot/shutdown/clear-cache
 // are NOT clicked here (see destructive.spec.js).
 //
 // The SPA was restructured: the old "advanced" page was split into the
-// "playback" route (clock/timezone/display) and the "system" route (system
-// info, updates, keyboard, security).
+// "playback" route (clock/timezone/display/monitor-control) and the "system"
+// route (system info, updates, keyboard, security).
 const { test, expect } = require("@playwright/test");
 const { goToPage, collectErrors, expectNoErrors, assertSaveRestores } = require("./helpers");
 
@@ -41,6 +41,14 @@ test.describe("system", () => {
     test("keyboard map table loads", async ({ page }) => {
         await goToPage(page, "system");
         await expect(page.locator("#kbd-map-body")).toBeVisible();
+    });
+
+    test("monitor control (DDC/CI) card lives on Playback, not System", async ({ page }) => {
+        // The SPA keeps every page section in the DOM, so the assertion must
+        // be scoped to the System page (the card now lives in #page-playback).
+        await goToPage(page, "system");
+        await expect(page.locator("#page-system #card-monitor-control")).toHaveCount(0);
+        await expect(page.locator("#page-playback #card-monitor-control")).toHaveCount(1);
     });
 });
 

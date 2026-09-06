@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * Advanced page module. Display/schedule/timezone settings, keyboard mapping, system info and the system power/restart actions.
+ * System page module. System info, updates, keyboard/remote mapping, security, MQTT / Home Assistant and system logs; plus the system power/restart actions.
  */
 
 import {
@@ -20,7 +20,6 @@ import {
 
 import { refreshLogs } from "./logs-page.js";
 import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
-import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
 
     // -- UI Helpers ---------------------------------------------------------
 
@@ -229,21 +228,6 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
                 _mqttStatusTimer = null;
             }
         }, 5000);
-
-        // Fetch detected display resolution from the frontend
-        apiGet("/health/display/info").then(function (info) {
-            if (info && info.width > 0 && info.height > 0) {
-                var el = document.getElementById("display-detected-res");
-                if (el) {
-                    var text = "Detected: " + info.width + " × " + info.height;
-                    if (info.refresh_rate) text += " @ " + info.refresh_rate + " Hz";
-                    if (info.rotation) text += " · rotated " + info.rotation + "°";
-                    if (info.output) text += " · connected via " + info.output;
-                    el.textContent = text;
-                    el.style.color = "var(--text-muted)";
-                }
-            }
-        });
 
         // System
         var sys = config.system || {};
@@ -509,12 +493,7 @@ import { loadDdcControls, bindDdcControls } from "./ddc-controls.js";
 
             // ── Update Controls ──────────────────────────────────────
             bindUpdateControls();
-
-            // ── DDC/CI Monitor Control ───────────────────────────────
-            bindDdcControls();
         }
-
-        await loadDdcControls();
     }
 
 export { loadAdvanced };

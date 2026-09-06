@@ -58,6 +58,7 @@ import {
         await _fetchMediaPage(0);
 
         _bindUpload();
+        _setupSambaHelp();
     }
 
     /** Read the current filter values from the toolbar. */
@@ -429,6 +430,87 @@ function _renderUploadResults(resp) {
         showToast("Uploaded " + saved.length + " file" + (saved.length === 1 ? "" : "s"), "success");
         loadMedia();
         setTimeout(function () { prog.style.display = "none"; }, 8000);
+    }
+}
+
+// -- SMB media share helper -----------------------------------------------
+
+var _sambaBound = false;
+
+async function _setupSambaHelp() {
+    var box = document.getElementById("media-smb");
+    if (!box) return;
+
+    // Bind the copy buttons once (delegated, so any future rows keep working).
+    if (!_sambaBound) {
+        _sambaBound = true;
+        box.addEventListener("click", function (e) {
+            var btn = e.target.closest ? e.target.closest(".media-smb-copy") : null;
+            if (!btn) return;
+            var code = btn.parentElement && btn.parentElement.querySelector("code");
+            if (!code) return;
+            var text = code.textContent.trim();
+            if (!text || text === "\u2014") {
+                showToast("No network IP yet — connect the frame to Wi-Fi or Ethernet first", "info");
+                return;
+            }
+            _copyText(text);
+        });
+    }
+
+    // Fill in the current-IP share addresses (the metixel.local rows are static).
+    var ip = "";
+    var status = await apiGet("/network/status");
+    if (status && status.ip) ip = String(status.ip).trim();
+
+    // The AP-fallback range (192.168.42.x) means there is no real network.
+    // If the user reached the dashboard by IP, reuse that host for the share.
+    if (!ip || ip.indexOf("192.168.42.") === 0 || ip === "127.0.0.1") {
+        var host = window.location.hostname || "";
+        ip = (host && host !== "localhost" && host.indexOf("metixel.local") !== 0) ? host : "";
+    }
+
+    var winIp = document.getElementById("media-smb-win-ip");
+    var macIp = document.getElementById("media-smb-mac-ip");
+    var curIp = document.getElementById("media-smb-ip");
+    if (ip) {
+        if (winIp) winIp.textContent = "\\\\" + ip + "\\metixel-media";
+        if (macIp) macIp.textContent = "smb://" + ip + "/metixel-media";
+        if (curIp) curIp.textContent = ip;
+    } else {
+        var dash = "\u2014";
+        if (winIp) winIp.textContent = dash;
+        if (macIp) macIp.textContent = dash;
+        if (curIp) curIp.textContent = dash;
+    }
+}
+
+/** Copy text to the clipboard (works on plain-http LAN pages too). */
+function _copyText(text) {
+    function _done() {
+        showToast("Address copied — paste it into File Explorer or Finder", "success");
+    }
+    function _legacyCopy() {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        var ok = false;
+        try {
+            ok = document.execCommand("copy");
+        } catch (_) {
+            ok = false;
+        }
+        document.body.removeChild(ta);
+        if (ok) _done();
+        else showToast("Copy blocked by the browser — select the address and copy it manually", "info");
+    }
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(_done, _legacyCopy);
+    } else {
+        _legacyCopy();
     }
 }
 

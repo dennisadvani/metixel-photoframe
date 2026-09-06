@@ -103,16 +103,39 @@ import { showLogin } from "./login.js";
     registerPage("network", loadNetwork);
     registerPage("system", loadAdvanced);
 
-    var hash = location.hash.substring(1);
     var validPages = ["dashboard", "media", "sources", "playback", "optimisation", "network", "system"];
-    var startPage = validPages.indexOf(hash) >= 0 ? hash : "dashboard";
-    navigateTo(startPage);
 
-    // Support plain <a href="#page"> links anywhere (e.g. the welcome card).
-    window.addEventListener("hashchange", function () {
-        var p = location.hash.substring(1);
-        if (validPages.indexOf(p) >= 0) navigateTo(p);
+    // Deep links come in two shapes: plain pages (#media) and page+card
+    // links (#media/media-library) that also flash the targeted card.
+    function parseHash(raw) {
+        var parts = raw.split("/");
+        if (validPages.indexOf(parts[0]) < 0) return null;
+        return { page: parts[0], card: parts.length > 1 ? parts[1] : null };
+    }
+
+    // Handle <a href="#page"> and <a href="#page/card"> clicks directly so a
+    // second click on the same link still re-runs navigation/flash even when
+    // the hash value is unchanged (no hashchange event would fire).
+    document.addEventListener("click", function (e) {
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        var link = e.target.closest ? e.target.closest('a[href^="#"]') : null;
+        if (!link) return;
+        var target = parseHash(link.getAttribute("href").substring(1));
+        if (!target) return;
+        e.preventDefault();
+        navigateTo(target.page, target.card);
+        closeDrawer();
     });
+
+    // Back/forward and manually edited hashes re-run the same navigation.
+    window.addEventListener("hashchange", function () {
+        var target = parseHash(location.hash.substring(1));
+        if (target) navigateTo(target.page, target.card);
+    });
+
+    // Boot on the deep-linked page/card (e.g. #media/media-library) if any.
+    var bootTarget = parseHash(location.hash.substring(1));
+    navigateTo(bootTarget ? bootTarget.page : "dashboard", bootTarget ? bootTarget.card : null);
 
     // Check auth state after the SPA has booted.
     bootAuthGate();

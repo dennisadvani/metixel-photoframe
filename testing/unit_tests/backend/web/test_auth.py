@@ -5,9 +5,6 @@
 from __future__ import annotations
 
 import json
-from unittest import mock
-
-import pytest
 
 
 def _set_web_password(mock_state, password: str) -> None:

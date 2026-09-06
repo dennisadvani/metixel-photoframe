@@ -3,18 +3,27 @@
 // frame's configuration is left unchanged).
 //
 // The SPA was restructured: the old "settings" page was split into the
-// "playback" route (slideshow/video/display/time) and the "optimisation"
-// route (image + transcode), while local-sync lives on the "sources" route.
+// "playback" route (slideshow/video/display/monitor-control/time) and the
+// "optimisation" route (image + transcode), while local-sync lives on the
+// "sources" route.
 const { test, expect } = require("@playwright/test");
 const { goToPage, collectErrors, expectNoErrors, assertSaveRestores } = require("./helpers");
 
 test.describe("settings", () => {
-    test("playback page loads with slideshow + video save buttons", async ({ page }) => {
+    test("playback page loads with slideshow/video/display/monitor-control save buttons", async ({ page }) => {
         const errors = collectErrors(page);
         await goToPage(page, "playback");
-        for (const id of ["btn-save-slideshow", "btn-save-video", "btn-save-display"]) {
+        for (const id of ["btn-save-slideshow", "btn-save-video", "btn-save-display", "btn-save-ddc"]) {
             await expect(page.locator("#" + id)).toBeVisible();
         }
+        expectNoErrors(errors);
+    });
+
+    test("monitor control (DDC/CI) card lives on the playback page", async ({ page }) => {
+        const errors = collectErrors(page);
+        await goToPage(page, "playback");
+        await expect(page.locator("#card-monitor-control")).toBeVisible();
+        await expect(page.locator("#btn-ddc-refresh")).toBeVisible();
         expectNoErrors(errors);
     });
 
