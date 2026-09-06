@@ -602,7 +602,11 @@ class BackendDaemon:
             messages = [
                 {
                     "title": "Welcome to Metixel",
-                    "body": f"Manage your photo frame via the Web UI at http://metixel.local or http://{ip}.",
+                    "body": (
+                        f"Manage your photo frame via the Web UI at http://metixel.local or "
+                        f"http://{ip}. Login to change passwords, configure slideshows, and "
+                        "manage your media library. The web interface is unsecured by default."
+                    ),
                 },
                 {
                     "title": "Upload photos via File Sharing",

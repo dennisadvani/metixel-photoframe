@@ -7,8 +7,6 @@ from __future__ import annotations
 import json
 from unittest import mock
 
-import pytest
-
 
 def _make_result(returncode: int = 0, stderr: str = "") -> mock.Mock:
     r = mock.Mock()
@@ -32,8 +30,8 @@ class TestDevicePassword:
         calls = []
         monkeypatch.setattr(
             sec_mod,
-            "run_sudo",
-            lambda cmd, **kw: calls.append((cmd, kw.get("input"))) or _make_result(),
+            "_run_privileged",
+            lambda cmd, input=None: calls.append((cmd, input)) or _make_result(),
         )
         monkeypatch.setattr(sec_mod, "is_raspberry_pi", lambda: True)
 
@@ -47,8 +45,9 @@ class TestDevicePassword:
         assert data["console"] == "ok"
         assert data["samba"] == "ok"
 
-        # Both sudo commands must run, in order, with the right args + stdin.
-        # run_sudo prepends "sudo -n", so the route passes the bare command.
+        # Both privileged commands must run, in order, with the right args +
+        # stdin.  _run_privileged receives the BARE command (it wraps it in
+        # ``sudo systemd-run --pipe`` internally), so we assert those here.
         assert len(calls) == 2
         assert calls[0][0] == ["chpasswd"]
         assert calls[0][1] == "pi:newpass123\n"
@@ -60,7 +59,7 @@ class TestDevicePassword:
         import metixel.backend.web.routes.security as sec_mod
 
         results = iter([_make_result(0), _make_result(1, stderr="smb error")])
-        monkeypatch.setattr(sec_mod, "run_sudo", lambda cmd, **kw: next(results))
+        monkeypatch.setattr(sec_mod, "_run_privileged", lambda cmd, input=None: next(results))
         monkeypatch.setattr(sec_mod, "is_raspberry_pi", lambda: True)
 
         resp = client.post(
@@ -78,7 +77,9 @@ class TestDevicePassword:
         import metixel.backend.web.routes.security as sec_mod
 
         monkeypatch.setattr(
-            sec_mod, "run_sudo", lambda cmd, **kw: _make_result(1, stderr="chpasswd error")
+            sec_mod,
+            "_run_privileged",
+            lambda cmd, input=None: _make_result(1, stderr="chpasswd error"),
         )
         monkeypatch.setattr(sec_mod, "is_raspberry_pi", lambda: True)
 

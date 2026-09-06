@@ -6,13 +6,9 @@ from __future__ import annotations
 
 import json
 import time
-from unittest import mock
-
-import pytest
 
 from metixel.backend.web.auth import (
     MAX_PIN_ATTEMPTS,
-    PIN_COOLDOWN_SECONDS,
     SCREEN_PIN_TIMEOUT_MAX_MINUTES,
     ScreenPinService,
 )

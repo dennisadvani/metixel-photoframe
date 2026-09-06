@@ -9,7 +9,7 @@ them into the local sync directory.
 
 The tests require Immich credentials in ``functional/.env``:
 
-    METIXEL_TEST_IMMICH_URL=http://192.168.222.228:2283
+    METIXEL_TEST_IMMICH_URL=http://192.168.1.10:2283
     METIXEL_TEST_IMMICH_API_KEY=your-api-key
     METIXEL_TEST_IMMICH_ALBUM_1=AlbumNameOne
     METIXEL_TEST_IMMICH_ALBUM_2=AlbumNameTwo

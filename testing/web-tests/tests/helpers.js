@@ -19,6 +19,11 @@ function collectErrors(page) {
     });
     page.on("pageerror", (err) => errors.push("pageerror: " + String(err)));
     page.on("requestfailed", (req) => errors.push("requestfailed: " + req.url()));
+    // Browser console messages don't include the URL for failed requests —
+    // capture the response too so a 404/500 shows exactly which resource it was.
+    page.on("response", (res) => {
+        if (res.status() >= 400) errors.push("network: HTTP " + res.status() + " " + res.url());
+    });
     return errors;
 }
 

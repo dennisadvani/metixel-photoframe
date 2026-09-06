@@ -49,6 +49,7 @@
       "enabled": true,
       "watch_paths": [
         {"path": "media/sample_media/landscape/", "enabled": true},
+        {"path": "media/sample_media/portrait/", "enabled": false},
         {"path": "media/sync/immich/", "enabled": true},
         {"path": "media/my_media/", "enabled": true}
       ],

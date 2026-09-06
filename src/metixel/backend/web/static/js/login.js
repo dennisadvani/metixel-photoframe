@@ -85,9 +85,17 @@ async function _submit() {
 export function showLogin(onSuccess) {
     _init();
     _onLoginSuccess = onSuccess || null;
+    var alreadyVisible = _overlay && _overlay.style.display === "flex";
     if (_overlay) _overlay.style.display = "flex";
     if (_passwordInput) {
-        _passwordInput.value = "";
+        // Only clear the field when transitioning from hidden → shown (first
+        // show, or after a successful login).  On repeat calls while the
+        // overlay is already visible (e.g. several page loads each hit 401/403
+        // during boot and re-invoke this) we must NOT wipe what the user has
+        // typed, otherwise the password field keeps clearing itself.
+        if (!alreadyVisible) {
+            _passwordInput.value = "";
+        }
         setTimeout(function () { _passwordInput.focus(); }, 50);
     }
     _setError("");

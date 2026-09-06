@@ -11,6 +11,7 @@ import {
     apiPut,
     confirmDialog,
     escapeHtml,
+    sanitizeInt,
     setButtonBusy,
     setChecked,
     setValue,
@@ -18,6 +19,7 @@ import {
 } from "./core.js";
 
 import { loadMedia } from "./media-page.js";
+import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings-page.js";
 
     // -- Sync ---------------------------------------------------------------
 
@@ -26,6 +28,7 @@ import { loadMedia } from "./media-page.js";
     var _syncWasActive = false;
     var _syncRestoreBtn = null;  // setButtonBusy restore fn for the Sync Now button
     var _albumData = null;  // Cached album list from GET /api/immich/albums
+    var _localBound = false;  // Local watch-folder controls bound once
 
     function startSyncPolling() {
         if (_syncPollTimer) return;
@@ -145,7 +148,34 @@ import { loadMedia } from "./media-page.js";
         setValue("cfg-immich-interval", ((imm.poll_interval_seconds || 3600) / 3600).toFixed(1));
         setChecked("cfg-immich-strict", imm.strict_sync === true);
         _toggleImmichInterval(imm.enabled || false);
-
+        // ── Local watch folders (Sources page) ──────────────────────────────
+        // The Local Folders card (watch paths) lives on this page.  Render the
+        // configured paths and bind the add/save controls here so they work
+        // regardless of whether the Settings page was visited first.
+        const local = config.sync?.local || {};
+        setChecked("cfg-local-enabled", local.enabled !== false);
+        setValue("cfg-local-interval", local.poll_interval_seconds || 30);
+        renderWatchPaths(local.watch_paths || []);
+        if (!_localBound) {
+            _localBound = true;
+            document.getElementById("btn-add-watch-path")?.addEventListener("click", function () {
+                addWatchPathRow("", true, true);
+            });
+            document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/sync", {
+                    local: {
+                        enabled: document.getElementById("cfg-local-enabled").checked,
+                        watch_paths: collectWatchPaths(),
+                        poll_interval_seconds: sanitizeInt(document.getElementById("cfg-local-interval").value, 30),
+                    },
+                });
+                if (result) {
+                    showToast("Local sync settings saved!", "success");
+                } else {
+                    showToast("Failed to save local sync settings", "error");
+                }
+            });
+        }
         // Render the configured (synced) albums list
         await _loadSyncedAlbums();
 

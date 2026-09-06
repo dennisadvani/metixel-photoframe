@@ -21,10 +21,12 @@
 #   * testing/functional/.env with METIXEL_TEST_WIFI_SSID/PASSWORD
 #
 # The LATEST local tests are copied to a fresh tmp dir on the Pi and run from
-# there — so you can iterate on the tests without syncing the whole repo.  The
+# there — so you can iterate on the tests without syncing the whole repo.  Most
 # tests talk to the RUNNING backend over HTTP (:8080) and read /run/metixel
-# state files, so they don't need the repo checkout on the Pi.  Only the
-# gitignored .env credentials file is pushed alongside them.
+# state files.  The Wi-Fi + AP tests additionally import `metixel.*` directly,
+# so they run with PYTHONPATH=${METIXEL_SRC} pointing at the live checkout the
+# services run from (the pip editable install's .pth can go stale after a
+# Blue/Green release swap, since old release dirs are deleted).
 #
 # The Wi-Fi tests run with METIXEL_NETWORK_TEST_MODE=1 so Ethernet is ignored
 # for connectivity (the Pi stays reachable over SSH).  The AP test runs in a
@@ -34,6 +36,10 @@ set -euo pipefail
 PI_HOST=""
 PI_USER="pi"
 WIFI_ONLY=0
+#: Filesystem path to the metixel source package ON the Pi (the wifi/AP tests
+#: import `metixel.*` directly).  Defaults to the canonical live checkout the
+#: systemd services run from; override with METIXEL_SRC if the layout differs.
+METIXEL_SRC="${METIXEL_SRC:-/opt/metixel/live/src}"
 for arg in "$@"; do
     case "${arg}" in
         --wifi-only)
@@ -88,16 +94,24 @@ echo "==> Running Immich sync test (separate invocation — downloads can take m
 ssh "${PI_USER}@${PI_HOST}" \
     "cd ${REMOTE_FUNC} && python3 -m pytest test_immich.py -m functional -v --no-cov -p no:cacheprovider"
 
+echo "==> Running MQTT / Home Assistant test (config round-trip + broker status)"
+ssh "${PI_USER}@${PI_HOST}" \
+    "cd ${REMOTE_FUNC} && python3 -m pytest test_mqtt.py -m functional -v --no-cov -p no:cacheprovider"
+
+echo "==> Running DDC/CI monitor control test (brightness/contrast round-trip + factory reset)"
+ssh "${PI_USER}@${PI_HOST}" \
+    "cd ${REMOTE_FUNC} && python3 -m pytest test_ddc.py -m functional -v --no-cov -p no:cacheprovider"
+
 echo "==> Running Wi-Fi + sudo + network-message functional tests (test mode)"
 ssh "${PI_USER}@${PI_HOST}" \
-    "cd ${REMOTE_FUNC} && METIXEL_NETWORK_TEST_MODE=1 python3 -m pytest test_sudo.py test_wifi.py -m functional -v --no-cov -p no:cacheprovider"
+    "cd ${REMOTE_FUNC} && METIXEL_NETWORK_TEST_MODE=1 PYTHONPATH=${METIXEL_SRC} python3 -m pytest test_sudo.py test_wifi.py -m functional -v --no-cov -p no:cacheprovider"
 
 if [[ "${WIFI_ONLY}" -eq 1 ]]; then
     echo "==> Skipping AP tests (--wifi-only)"
 else
     echo "==> Running AP functional tests (separate invocation)"
     ssh "${PI_USER}@${PI_HOST}" \
-        "cd ${REMOTE_FUNC} && python3 -m pytest test_ap.py -m functional -v --no-cov -p no:cacheprovider"
+        "cd ${REMOTE_FUNC} && PYTHONPATH=${METIXEL_SRC} python3 -m pytest test_ap.py -m functional -v --no-cov -p no:cacheprovider"
 fi
 
 # Clean up the tmp dir on the Pi.

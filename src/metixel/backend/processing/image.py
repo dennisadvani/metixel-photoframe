@@ -113,6 +113,28 @@ class ImageProcessor:
         self._image_cache.mkdir(parents=True, exist_ok=True)
         self._thumb_cache.mkdir(parents=True, exist_ok=True)
 
+    def update_screen_size(self, screen_width: int, screen_height: int) -> None:
+        """Update the resize target after runtime screen-size changes.
+
+        The effective (post-rotation) screen size is only known once the
+        frontend has written ``display_info.json`` during boot, which can
+        arrive *after* this processor is constructed.  Call this when the
+        resolved size changes so ``process()`` targets the correct dims.
+        """
+        if screen_width <= 0 or screen_height <= 0:
+            return
+        if (screen_width, screen_height) == (self._screen_w, self._screen_h):
+            return
+        logger.info(
+            "ImageProcessor screen target updated %dx%d → %dx%d",
+            self._screen_w,
+            self._screen_h,
+            screen_width,
+            screen_height,
+        )
+        self._screen_w = screen_width
+        self._screen_h = screen_height
+
     @staticmethod
     def needs_optimisation(
         width: int,

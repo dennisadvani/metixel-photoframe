@@ -394,6 +394,21 @@ header {
     background: linear-gradient(135deg, #1a1a2e 0%, #2d1f3d 50%, #1a1a2e 100%);
     border-color: var(--primary);
 }
+
+/* Deep-link card highlight — a flashing red border/ring for a few seconds
+   after navigating to a specific card (e.g. #system/security).  Matches the
+   welcome-banner treatment so the targeted card stands out. */
+@keyframes card-flash {
+    0%   { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);   border-color: var(--border); }
+    15%  { box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.55); border-color: #dc2626; }
+    35%  { box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.45); border-color: #dc2626; }
+    60%  { box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.25); border-color: #dc2626; }
+    100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);   border-color: var(--border); }
+}
+.card-flash {
+    animation: card-flash 2.5s ease-out 1;
+    border-color: #dc2626 !important;
+}
 .card--welcome h2::before {
     display: none;
 }
@@ -414,40 +429,47 @@ header {
     color: #fff;
     background: rgba(255,255,255,0.1);
 }
-.welcome-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    margin-top: 0.5rem;
+.welcome-steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    gap: 0.6rem 1.5rem;
+    list-style: none;
+    margin: 0.9rem 0 0;
+    padding: 0;
 }
-.welcome-item {
+.welcome-step {
     display: flex;
     align-items: flex-start;
-    gap: 0.75rem;
-    flex: 1;
-    min-width: 220px;
-}
-.welcome-item .material-symbols-outlined {
-    font-size: 1.5rem;
-    color: var(--primary);
-    margin-top: 0.15rem;
-}
-.welcome-item strong {
-    color: #fff;
-    font-size: 0.9rem;
-}
-.welcome-item p {
-    margin: 0.25rem 0 0;
+    gap: 0.55rem;
     color: var(--text-muted);
     font-size: 0.83rem;
     line-height: 1.5;
 }
-.welcome-item code {
-    background: rgba(255,255,255,0.08);
-    padding: 0.15rem 0.4rem;
-    border-radius: 3px;
-    font-size: 0.8rem;
+.welcome-step-num {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.3rem;
+    height: 1.3rem;
+    margin-top: 0.08rem;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.1);
     color: #e0a0a0;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+.welcome-step a {
+    color: #e0a0a0;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.welcome-step a:hover {
+    color: #fff;
+}
+.welcome-step--done strong {
+    color: #fff;
+    font-weight: 600;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -945,6 +967,110 @@ button:focus-visible {
 .media-toolbar-hint {
     font-size: 0.78rem;
     color: var(--text-muted);
+}
+
+/* "Open the SMB share" accordion under the Upload Media button */
+.media-smb {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    margin-bottom: 0.85rem;
+    overflow: hidden;
+}
+.media-smb summary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.55rem 0.7rem;
+    cursor: pointer;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    list-style: none;
+}
+.media-smb summary::-webkit-details-marker {
+    display: none;
+}
+.media-smb summary:hover {
+    color: var(--text);
+}
+.media-smb .smb-chevron {
+    color: var(--text-muted);
+    font-size: 1.1em;
+    transition: transform 0.15s ease;
+}
+.media-smb[open] .smb-chevron {
+    transform: rotate(90deg);
+}
+.media-smb-body {
+    border-top: 1px solid var(--border);
+    padding: 0.6rem 0.7rem 0.75rem;
+    font-size: 0.8rem;
+}
+.media-smb-intro {
+    margin: 0 0 0.6rem;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+.media-smb-cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 0.6rem 1.4rem;
+}
+.media-smb-os-title {
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+.media-smb-path {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0.4rem 0 0;
+    font-size: 0.8rem;
+}
+.media-smb-path code {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.28rem 0.45rem;
+    color: var(--text);
+    overflow-wrap: anywhere;
+}
+.media-smb-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 1.7rem;
+    height: 1.7rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.media-smb-copy:hover {
+    color: var(--text);
+    border-color: var(--primary);
+}
+.media-smb-foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.7rem 0 0;
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+.media-smb-foot code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0.08rem 0.3rem;
 }
 
 .upload-progress {

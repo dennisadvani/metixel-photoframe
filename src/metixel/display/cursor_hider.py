@@ -52,7 +52,10 @@ _HI = 6000
 # Unix socket the service listens on for triggers.
 DEFAULT_SOCKET_PATH = "/run/metixel/cursor-hider.sock"
 # How long to keep firing after a trigger (seconds).
-_FIRE_DURATION = 2.0
+#
+# The hider does NOT move the mouse autonomously — it only fires when a
+# caller sends a 'hide' trigger.  This is the duration of that burst.
+_FIRE_DURATION = 5.0
 
 
 class _UInputLike(Protocol):
@@ -147,18 +150,15 @@ class CursorHider:
             time.sleep(self._interval)
         logger.info("Cursor-hide window complete (%d events)", self._count)
 
-    def _listen(self) -> None:
-        """Listen on the Unix socket for a ``hide`` trigger.
+    def _bind_socket(self) -> socket.socket:
+        """Create (or rebind) the Unix datagram trigger socket.
 
-        The socket file can be removed by other processes sharing
-        ``/run/metixel`` (e.g. the frontend's IPC cleanup).  We detect a
-        missing socket and rebind it so triggers keep working.
+        The socket must exist so ``sendto`` triggers (from cage_launch.sh or a
+        client) are delivered instead of being silently dropped.
         """
         if not hasattr(socket, "AF_UNIX"):
-            logger.debug("AF_UNIX not available — cursor-hider trigger disabled")
-            return
-        sock_dir = os.path.dirname(self._socket_path)
-        os.makedirs(sock_dir, exist_ok=True)
+            raise OSError("AF_UNIX not available")
+        os.makedirs(os.path.dirname(self._socket_path), exist_ok=True)
 
         def _bind() -> socket.socket:
             if os.path.exists(self._socket_path):
@@ -172,7 +172,21 @@ class CursorHider:
             s.settimeout(0.5)
             return s
 
-        sock = _bind()
+        return _bind()
+
+    def _listen(self, sock: socket.socket | None = None) -> None:
+        """Listen on the Unix socket for a ``hide`` trigger.
+
+        The socket file can be removed by other processes sharing
+        ``/run/metixel`` (e.g. the frontend's IPC cleanup).  We detect a
+        missing socket and rebind it so triggers keep working.
+        """
+        if not hasattr(socket, "AF_UNIX"):
+            logger.debug("AF_UNIX not available — cursor-hider trigger disabled")
+            return
+
+        if sock is None:
+            sock = self._bind_socket()
         logger.info("Cursor-hider listening on %s", self._socket_path)
         try:
             while self._running:
@@ -181,7 +195,7 @@ class CursorHider:
                     logger.warning("Cursor-hider socket missing — rebinding")
                     with contextlib.suppress(Exception):
                         sock.close()
-                    sock = _bind()
+                    sock = self._bind_socket()
                 try:
                     data = sock.recv(4096)
                     if data:
@@ -201,18 +215,15 @@ class CursorHider:
                 os.unlink(self._socket_path)
 
     def run(self) -> None:
-        """Create the device, fire once immediately, then listen for triggers.
+        """Create the device, bind the trigger socket, then listen.
 
-        The service starts BEFORE cage (``Before=metixel-cage.service``), so
-        firing the hide window on startup parks the cursor off-screen before
-        cage draws it.  It then keeps listening so the frontend can re-trigger
-        (e.g. on hot-plug or restart) as a safety net.
+        The hider does NOT fire on its own.  It creates the persistent virtual
+        device and waits for a ``hide`` trigger on the socket.  Only when a
+        caller sends one does it park the cursor off-screen.  Binding the
+        socket before listening means triggers are delivered.
         """
         self.start()
         self._running = True
-        # Fire immediately on startup — before cage boots — so the cursor is
-        # parked off-screen before it is ever drawn.
-        self._fire_window()
         self._listen()
 
     def close(self) -> None:

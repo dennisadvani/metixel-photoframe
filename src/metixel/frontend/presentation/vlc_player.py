@@ -183,6 +183,14 @@ class VlcVideoPlayer:
             "--rc-host",
             f"localhost:{self._rc_port}",
             "--rc-fake-tty",  # No TTY needed
+            # In portrait only, size VLC's window to the rotated canvas.
+            # In landscape the video native size already equals the canvas
+            # (e.g. 1920x1080), so VLC's window maps at the right size with
+            # no post-map resize — exactly the 1.2.4 behaviour.  In portrait
+            # the video (e.g. 1080x1920) is smaller than the rotated root
+            # (1200x1920), so we set the window size up front.  We must NOT
+            # use --fullscreen: that maps at the video native size first then
+            # asks the WM to stretch — that post-map resize flashes black.
             video_path,
         ]
 
@@ -197,12 +205,21 @@ class VlcVideoPlayer:
             cmd.insert(1, f"--aspect-ratio={display_ratio}")
         # "contain": nothing — VLC's default letterbox/pillarbox
 
+        if self._screen_h > self._screen_w:
+            # Portrait: constrain the window to the rotated canvas so it
+            # maps already at the final size (no resize flash).
+            cmd.insert(1, "--video-y=0")
+            cmd.insert(1, "--video-x=0")
+            cmd.insert(1, f"--height={self._screen_h}")
+            cmd.insert(1, f"--width={self._screen_w}")
+
         logger.debug(
             "VlcVideoPlayer (subprocess): %s (hw_codecs=%s, fit=%s)",
             video_path,
             ", ".join(self._hw_codecs) if self._hw_codecs else "auto",
             fit_mode,
         )
+        logger.debug("VLC command: %s", " ".join(cmd))
 
         self._finished = False
         self._start_time = time.monotonic()
@@ -213,6 +230,14 @@ class VlcVideoPlayer:
 
         try:
             env = os.environ.copy()
+            # Launch VLC with the same inherited environment in every
+            # orientation — identical to the 1.2.4 landscape behaviour.
+            # We do NOT strip $WAYLAND_DISPLAY: doing so forces VLC onto
+            # the X11 vout, which pops a blank window over the poster
+            # before the first frame (the flash).  Keeping the env
+            # untouched lets VLC use the native Wayland path, the same
+            # one landscape uses and the same one that runs cleanly
+            # when VLC is launched manually.
             if "DISPLAY" not in env:
                 env["DISPLAY"] = ":0"
 

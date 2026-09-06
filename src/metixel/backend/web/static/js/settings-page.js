@@ -2,20 +2,22 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * Settings page module. Slideshow / video / image optimisation / local-folder settings, watch-path rows, folder browser and transcode profile helpers.
+ * Settings page module. Playback page (slideshow / video / display / time / DDC monitor control) + optimisation page settings, plus timezone/NTP helpers and watch-path helpers shared with the Sources page.
  */
 
 import {
     apiGet,
     apiPost,
     apiPut,
-    confirmDialog,
     escapeHtml,
     sanitizeInt,
     setChecked,
     setValue,
-    showToast
+    showToast,
+    updatePowerButton
 } from "./core.js";
+
+import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
 
     function _toggleTranscodeSettings(enabled) {
         var el = document.getElementById("transcode-settings");
@@ -155,6 +157,11 @@ import {
         if (group) group.classList.toggle("hidden", !enabled);
     }
 
+    function toggleScheduleFields(enabled) {
+        var fields = document.getElementById("schedule-fields");
+        if (fields) fields.classList.toggle("hidden", !enabled);
+    }
+
     // -- NTP Servers (dynamic row list, mirrors watch paths) ----------------
 
     /**
@@ -230,6 +237,51 @@ import {
         return servers;
     }
 
+    // -- Clock & Timezone (Playback page) -----------------------------------
+
+    /** @type {number|null} */
+    var _clockTimer = null;
+
+    async function _refreshServerClock() {
+        var el = document.getElementById("server-clock");
+        if (!el) return;
+        try {
+            var data = await apiGet("/time");
+            if (data && data.time) {
+                el.textContent = data.time;
+                el.title = data.date + " " + data.timezone + " (UTC" + (data.utc_offset || "") + ")";
+            }
+        } catch (_) {
+            // Clock is non-critical — silently ignore errors
+        }
+    }
+
+    async function loadTimezoneList(currentTz) {
+        var sel = document.getElementById("cfg-timezone");
+        if (!sel) return;
+        sel.innerHTML = '<option value="">Auto-detect</option>';
+        try {
+            var data = await apiGet("/time/timezones");
+            if (data && data.timezones) {
+                data.timezones.forEach(function (tz) {
+                    var opt = document.createElement("option");
+                    opt.value = tz;
+                    opt.textContent = tz;
+                    if (tz === currentTz) opt.selected = true;
+                    sel.appendChild(opt);
+                });
+            }
+        } catch (_) {}
+        // If currentTz is not in the list, add it
+        if (currentTz && !Array.from(sel.options).some(function (o) { return o.value === currentTz; })) {
+            var opt = document.createElement("option");
+            opt.value = currentTz;
+            opt.textContent = currentTz + " (current)";
+            opt.selected = true;
+            sel.appendChild(opt);
+        }
+    }
+
     // -- Settings -----------------------------------------------------------
 
     var _settingsBound = false;
@@ -275,6 +327,22 @@ import {
             };
         }
         setChecked("cfg-video-enabled", v.playback_enabled === true);
+        // Portrait (90/270°) — the current player cannot display rotated
+        // video, so force the toggle off and inform the user.  This is a
+        // GUI companion to the backend guard in queue.py which excludes
+        // videos from the playlist regardless of playback_enabled.
+        var rotNum = Number(((config.display || {}).rotation) || 0) % 360;
+        var portrait = (rotNum === 90 || rotNum === 270);
+        var vidEnabled = document.getElementById("cfg-video-enabled");
+        var vidWarn = document.getElementById("cfg-video-rotation-warning");
+        if (portrait) {
+            setChecked("cfg-video-enabled", false);
+            if (vidEnabled) vidEnabled.disabled = true;
+            if (vidWarn) vidWarn.classList.remove("hidden");
+        } else {
+            if (vidEnabled) vidEnabled.disabled = false;
+            if (vidWarn) vidWarn.classList.add("hidden");
+        }
         setValue("cfg-video-player-backend", v.player_backend || "auto");
         setValue("cfg-video-max-duration", v.max_duration_seconds || 0);
         setChecked("cfg-transcode-enabled", v.transcoding_enabled !== false);
@@ -292,17 +360,17 @@ import {
         _toggleTranscodeSettings(v.transcoding_enabled !== false);
         _toggleCpuThrottleGroup(v.cpu_throttle_enabled !== false);
 
-        // Local folders (moved from Sync page)
-        const local = config.sync?.local || {};
-        setChecked("cfg-local-enabled", local.enabled !== false);
-        setValue("cfg-local-interval", local.poll_interval_seconds || 30);
-        renderWatchPaths(local.watch_paths || []);
-
         // Time / NTP (Playback page)
         const sysCfg = config.system || {};
         setChecked("cfg-ntp-enabled", sysCfg.ntp_enabled !== false);
         renderNtpServers(sysCfg.ntp_servers || [""]);
         toggleNtpFields(sysCfg.ntp_enabled !== false);
+
+        // Server clock + timezone dropdown (the Time card lives on Playback).
+        loadTimezoneList(sysCfg.timezone || "");
+        _refreshServerClock();
+        if (_clockTimer) clearInterval(_clockTimer);
+        _clockTimer = setInterval(_refreshServerClock, 10000);
 
         // Image optimisation (moved from Sync page)
         const imgCfg = config.image || {};
@@ -311,12 +379,46 @@ import {
         setValue("cfg-image-max-height", imgCfg.optimise_max_height || 0);
         _toggleImageOptSettings(imgCfg.optimisation_enabled !== false);
 
-        // Security — web password + session timeout + screen PIN timeout.
-        // The password/PIN fields are always left empty (they are write-only);
-        // only the timeout dropdowns reflect the current config.
+        // Display Settings (the card lives on the Playback page).  The frontend
+        // writes display_info.json with the effective (rotated) resolution; the
+        // rotation dropdown must reflect it so the UI isn't stuck at 0°.
+        const disp = config.display || {};
+        setChecked("cfg-display-auto", (disp.width === 0 && disp.height === 0));
+        setValue("cfg-fps-limit", disp.fps_limit || 30);
+        setValue("cfg-display-rotation", disp.rotation || 0);
+        setChecked("cfg-schedule-enabled", disp.schedule_enabled === true);
+        setValue("cfg-schedule-on", disp.schedule_on_time || "07:00");
+        setValue("cfg-schedule-off", disp.schedule_off_time || "22:00");
+        toggleScheduleFields(disp.schedule_enabled === true);
+
+        // Populate the resolution+refresh dropdown from supported modes so the
+        // Playback page's Display card is fully functional when shown there.
+        apiGet("/health/display/modes").then(function (data) {
+            var sel = document.getElementById("cfg-display-resolution");
+            if (!sel) return;
+            sel.innerHTML = '<option value="0x0@0">Auto (native)</option>';
+            var modes = (data && data.modes) || [];
+            modes.forEach(function (m) {
+                var opt = document.createElement("option");
+                opt.value = m.width + "x" + m.height + "@" + (m.refresh || 0);
+                var label = m.width + " × " + m.height;
+                if (m.refresh) label += " @ " + m.refresh + " Hz";
+                if (m.preferred) label += " (native)";
+                opt.textContent = label;
+                sel.appendChild(opt);
+            });
+            var current = "0x0@0";
+            if (disp.width > 0 && disp.height > 0) {
+                current = disp.width + "x" + disp.height + "@" + (disp.refresh_rate || 0);
+            }
+            setValue("cfg-display-resolution", current);
+        });
+
+        // Security — web password + session timeout.
+        // The password field is always left empty (it is write-only); only the
+        // timeout dropdown reflects the current config.
         const webCfg = config.web || {};
         setValue("cfg-web-session-timeout", webCfg.session_timeout_minutes != null ? webCfg.session_timeout_minutes : 30);
-        setValue("cfg-screen-pin-timeout", webCfg.screen_pin_timeout_minutes != null ? webCfg.screen_pin_timeout_minutes : 60);
 
         // Event listeners — bind once
         if (!_settingsBound) {
@@ -325,6 +427,78 @@ import {
             document.getElementById("cfg-transition-duration")?.addEventListener("input", function () {
                 document.getElementById("cfg-transition-duration-label").textContent = this.value + " ms";
             });
+
+            // Populate the "Detected:" line from the frontend's display info
+            // (effective rotated resolution), as the Playback page's Display
+            // card is shown there but populated here.
+            apiGet("/health/display/info").then(function (info) {
+                var el = document.getElementById("display-detected-res");
+                if (el && info && info.width > 0 && info.height > 0) {
+                    var text = "Detected: " + info.width + " × " + info.height;
+                    if (info.refresh_rate) text += " @ " + info.refresh_rate + " Hz";
+                    if (info.rotation) text += " · rotated " + info.rotation + "°";
+                    if (info.output) text += " · connected via " + info.output;
+                    el.textContent = text;
+                    el.style.color = "var(--text-muted)";
+                }
+            });
+
+            // Save Display Settings (Playback page's Display card).
+            document.getElementById("btn-save-display")?.addEventListener("click", async () => {
+                const isAutoSave = document.getElementById("cfg-display-auto").checked;
+                var val = document.getElementById("cfg-display-resolution").value || "0x0@0";
+                var parts = val.split("@");
+                var res = (parts[0] || "0x0").split("x");
+                var width = isAutoSave ? 0 : sanitizeInt(res[0], 0);
+                var height = isAutoSave ? 0 : sanitizeInt(res[1], 0);
+                var refresh = isAutoSave ? 0 : sanitizeInt(parts[1], 0);
+                var newRotation = sanitizeInt(document.getElementById("cfg-display-rotation").value, 0) % 360;
+                var result = await apiPut("/config/display", {
+                    width: width,
+                    height: height,
+                    fps_limit: sanitizeInt(document.getElementById("cfg-fps-limit").value, 30),
+                    refresh_rate: refresh,
+                    rotation: newRotation,
+                });
+                if (result) {
+                    showToast("Display settings saved — frontend restarting to apply", "success", 5000);
+                    if (newRotation === 90 || newRotation === 270) {
+                        showToast("Video playback is disabled in portrait mode (90°/270°)", "info", 6000);
+                    }
+                } else {
+                    showToast("Failed to save display settings", "error");
+                }
+            });
+
+            // Display Power Save Schedule — saves only the schedule keys.
+            document.getElementById("btn-save-schedule")?.addEventListener("click", async () => {
+                var result = await apiPut("/config/display", {
+                    schedule_enabled: document.getElementById("cfg-schedule-enabled").checked,
+                    schedule_on_time: document.getElementById("cfg-schedule-on").value,
+                    schedule_off_time: document.getElementById("cfg-schedule-off").value,
+                });
+                if (result) {
+                    showToast("Display power schedule saved!", "success");
+                } else {
+                    showToast("Failed to save display power schedule", "error");
+                }
+            });
+
+            // Display power toggle — reads actual state from health endpoint.
+            var powerBtn = document.getElementById("btn-display-power");
+            powerBtn?.addEventListener("click", async () => {
+                var health = await apiGet("/health");
+                var currentlyOn = health ? health.display_on !== false : true;
+                var newState = !currentlyOn;
+                await apiPost("/control", { cmd: newState ? "screen_on" : "screen_off" });
+                updatePowerButton(newState);
+                showToast(newState ? "Display turned on" : "Display turned off", "info");
+            });
+            // Initial state from health poll
+            (async function _initPowerBtn() {
+                var health = await apiGet("/health");
+                updatePowerButton(health ? health.display_on !== false : true);
+            })();
 
             document.getElementById("btn-save-slideshow")?.addEventListener("click", async () => {
                 var hexVal = (document.getElementById("cfg-matte-color-hex")?.value || "#141414").replace("#", "");
@@ -373,6 +547,16 @@ import {
             });
 
             document.getElementById("btn-save-video")?.addEventListener("click", async () => {
+                // Portrait guard — videos cannot play at 90/270°, so never
+                // save playback_enabled=true while rotating.  The toggle is
+                // disabled by loadSettings in portrait; guard again in case
+                // the state changed before the user clicked save.
+                var vidEnabled = document.getElementById("cfg-video-enabled");
+                if (vidEnabled && vidEnabled.disabled && vidEnabled.checked) {
+                    showToast("Video playback is unavailable in portrait mode (90°/270°)", "error", 5000);
+                    vidEnabled.checked = false;
+                    return;
+                }
                 var result = await apiPut("/config/video", {
                     playback_enabled: document.getElementById("cfg-video-enabled").checked,
                     player_backend: document.getElementById("cfg-video-player-backend").value,
@@ -426,22 +610,6 @@ import {
                 }
             });
 
-            // ── Local Sync save ────────────────────────────────────────
-            document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
-                var result = await apiPut("/config/sync", {
-                    local: {
-                        enabled: document.getElementById("cfg-local-enabled").checked,
-                        watch_paths: collectWatchPaths(),
-                        poll_interval_seconds: sanitizeInt(document.getElementById("cfg-local-interval").value, 30),
-                    },
-                });
-                if (result) {
-                    showToast("Local sync settings saved!", "success");
-                } else {
-                    showToast("Failed to save local sync settings", "error");
-                }
-            });
-
             // ── Image Optimisation save ─────────────────────────────────
             document.getElementById("btn-save-image-opt")?.addEventListener("click", async () => {
                 var result = await apiPut("/config/image", {
@@ -459,11 +627,6 @@ import {
             // Image optimisation toggle
             document.getElementById("cfg-image-opt-enabled")?.addEventListener("change", function () {
                 _toggleImageOptSettings(this.checked);
-            });
-
-            // Add Watch Path button
-            document.getElementById("btn-add-watch-path")?.addEventListener("click", function () {
-                addWatchPathRow("", true, true);
             });
 
             // Schedule toggle
@@ -516,93 +679,11 @@ import {
                 }
             });
 
-            // ── Security card ──────────────────────────────────────────
-
-            // Web dashboard password (set/change/clear) + session timeout.
-            document.getElementById("btn-save-web-password")?.addEventListener("click", async () => {
-                var pw = document.getElementById("cfg-web-password").value;
-                var confirm = document.getElementById("cfg-web-password-confirm").value;
-                var timeout = sanitizeInt(document.getElementById("cfg-web-session-timeout").value, 30);
-
-                if (pw !== confirm) {
-                    showToast("Web passwords do not match", "error");
-                    return;
-                }
-                if (pw && pw.length < 8) {
-                    showToast("Web password must be at least 8 characters", "error");
-                    return;
-                }
-
-                // Save the timeout first (always), then set/clear the password.
-                var timeoutResult = await apiPut("/config/web", { session_timeout_minutes: timeout });
-                // Always call /auth/password — with a value it sets/changes the
-                // password; with an empty value it clears it (auth disabled).
-                var pwResult = await apiPost("/auth/password", { password: pw });
-                if (pwResult && pwResult.status === "ok") {
-                    showToast(pw ? "Web password set" : "Web password cleared", "success");
-                } else {
-                    showToast("Failed to update web password: " + ((pwResult && pwResult.message) || "Unknown error"), "error");
-                }
-                document.getElementById("cfg-web-password").value = "";
-                document.getElementById("cfg-web-password-confirm").value = "";
-            });
-
-            // Device password (SSH + Samba, synced) — confirmation dialog.
-            document.getElementById("btn-save-device-password")?.addEventListener("click", async () => {
-                var pw = document.getElementById("cfg-device-password").value;
-                var confirm = document.getElementById("cfg-device-password-confirm").value;
-                if (!pw) { showToast("Enter a new device password", "error"); return; }
-                if (pw !== confirm) { showToast("Device passwords do not match", "error"); return; }
-                if (pw.length < 8) { showToast("Device password must be at least 8 characters", "error"); return; }
-
-                var ok = await confirmDialog(
-                    "This changes the password for SSH login AND the Samba share. Existing sessions stay active; new logins use the new password. Continue?",
-                    { title: "Change device password?", okText: "Change password", danger: true }
-                );
-                if (!ok) return;
-
-                var result = await apiPost("/system/device-password", {
-                    new_password: pw,
-                    confirm_password: confirm,
-                });
-                if (result && result.status === "ok") {
-                    showToast("Device password changed (SSH + Samba)", "success");
-                } else if (result && result.status === "partial") {
-                    showToast("Console password changed, but Samba failed — stores out of sync", "error");
-                } else {
-                    showToast("Failed to change device password: " + ((result && result.message) || "Unknown error"), "error");
-                }
-                document.getElementById("cfg-device-password").value = "";
-                document.getElementById("cfg-device-password-confirm").value = "";
-            });
-
-            // Screen PIN (set/change/clear) + PIN timeout.
-            document.getElementById("btn-save-screen-pin")?.addEventListener("click", async () => {
-                var pin = document.getElementById("cfg-screen-pin").value;
-                var confirm = document.getElementById("cfg-screen-pin-confirm").value;
-                var timeout = sanitizeInt(document.getElementById("cfg-screen-pin-timeout").value, 60);
-
-                var timeoutResult = await apiPut("/config/web", { screen_pin_timeout_minutes: timeout });
-
-                if (pin) {
-                    if (!/^[0-9]{4,6}$/.test(pin)) {
-                        showToast("Screen PIN must be 4-6 digits", "error");
-                        return;
-                    }
-                    if (pin !== confirm) { showToast("Screen PINs do not match", "error"); return; }
-                    var pinResult = await apiPost("/auth/screen-pin", { pin: pin, confirm: confirm });
-                    if (pinResult && pinResult.status === "ok") {
-                        showToast("Screen PIN set", "success");
-                    } else {
-                        showToast("Failed to set screen PIN: " + ((pinResult && pinResult.message) || "Unknown error"), "error");
-                    }
-                } else if (timeoutResult) {
-                    showToast("Screen PIN cleared / timeout saved", "success");
-                }
-                document.getElementById("cfg-screen-pin").value = "";
-                document.getElementById("cfg-screen-pin-confirm").value = "";
-            });
+            // Monitor Control (DDC/CI) card — bind once
+            bindDdcControls();
         }
+
+        await loadDdcControls();
     }
 
     // -- Watch Paths (per-row) ----------------------------------------------
@@ -621,6 +702,7 @@ import {
         if (!paths || paths.length === 0) {
             paths = [
                 { path: "media/sample_media/landscape/", enabled: true },
+                { path: "media/sample_media/portrait/", enabled: false },
                 { path: "media/sync/immich/", enabled: true },
                 { path: "media/my_media/", enabled: true }
             ];
@@ -856,4 +938,4 @@ document.addEventListener("keydown", function (e) {
     }
 });
 
-export { loadSettings };
+export { loadSettings, renderWatchPaths, collectWatchPaths, addWatchPathRow };

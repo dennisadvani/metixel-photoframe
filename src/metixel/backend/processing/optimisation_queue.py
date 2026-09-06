@@ -34,6 +34,7 @@ from metixel.backend.processing.image import ImageProcessor
 from metixel.backend.processing.utils import nice_cmd
 from metixel.backend.processing.video import VideoProcessor, VideoScan
 from metixel.backend.state import StateManager
+from metixel.shared.display import effective_screen_size
 from metixel.shared.io import merge_json
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.paths import resolve_install_path
@@ -319,8 +320,7 @@ class OptimisationQueue:
         """
         config = self._state.config
         display = config.display
-        sw = display.get("width") or 1920
-        sh = display.get("height") or 1080
+        sw, sh = effective_screen_size(display)
 
         # Image threshold config
         image_cfg = config.image
@@ -375,8 +375,7 @@ class OptimisationQueue:
         """Lazy-initialize media processors with current config thresholds."""
         config = self._state.config
         display = config.display
-        sw = display.get("width") or 1920
-        sh = display.get("height") or 1080
+        sw, sh = effective_screen_size(display)
 
         cache_dir = resolve_install_path(config.system.get("cache_dir", "cache/"))
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -417,6 +416,22 @@ class OptimisationQueue:
             self._video_max_h,
             "enabled" if self._video_transcode_enabled else "disabled",
         )
+
+    def _sync_processor_screen_size(self) -> None:
+        """Update processors to the current effective (post-rotation) size.
+
+        The frontend writes ``display_info.json`` (with the real rotated
+        resolution) some seconds after boot — potentially after the
+        processors were constructed with a fallback size.  Re-reading it here
+        and pushing the new target into the processors fixes that boot-order
+        race, so images/videos re-optimise at the correct dimensions.
+        """
+        config = self._state.config
+        sw, sh = effective_screen_size(config.display)
+        if self._image_processor is not None:
+            self._image_processor.update_screen_size(sw, sh)
+        if self._video_processor is not None:
+            self._video_processor.update_screen_size(sw, sh)
 
     def _cleanup_partial_transcodes(self) -> None:
         """Remove incomplete transcode artifacts from cache/videos/ on startup.
@@ -662,6 +677,12 @@ class OptimisationQueue:
         if processor is None:
             return
 
+        # The effective (post-rotation) screen size is only known once the
+        # frontend has written display_info.json during boot, which may arrive
+        # AFTER the processors were constructed.  Re-resolve lazily so images
+        # are re-optimised at the current screen target, not a stale fallback.
+        self._sync_processor_screen_size()
+
         # ── Snapshot memory at batch start ────────────────────────────
         _mem_before = self._read_mem_used_mb()
         _batch_start = time.monotonic()
@@ -810,6 +831,10 @@ class OptimisationQueue:
             self._video_processing = True
 
         try:
+            # Re-resolve the effective screen size in case it was only written
+            # by the frontend after this queue started (see _sync_processor_screen_size).
+            self._sync_processor_screen_size()
+
             # ── Phase A: scan every video ─────────────────────────────
             scan_total = self._vid_scanned + len(batch)
             pending_encode: list[VideoScan] = []

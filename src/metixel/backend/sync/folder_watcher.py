@@ -33,6 +33,7 @@ from metixel.backend.processing.thumbnail import (
 from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
 from metixel.backend.state import StateManager
 from metixel.shared.config import resolve_watch_paths
+from metixel.shared.display import effective_screen_size
 from metixel.shared.io import merge_json
 from metixel.shared.media import (
     IMAGE_EXTENSIONS,
@@ -663,8 +664,7 @@ class FolderWatcher:
         config = self._state.config
         cache_dir = resolve_install_path(config.system.get("cache_dir", "cache/"))
         display = config.display
-        screen_w = display.get("width") or 1920
-        screen_h = display.get("height") or 1080
+        screen_w, screen_h = effective_screen_size(display)
 
         if item.media_type == MediaType.IMAGE:
             img_cfg = config.image

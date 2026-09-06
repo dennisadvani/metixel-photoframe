@@ -139,15 +139,81 @@ export function registerPage(page, loader) {
     _pageLoaders[page] = loader;
 }
 
+// Card deep-link highlighting.  `flashCard` is invoked by `navigateTo` when
+// a page/card deep link such as `#media/media-library` is followed.
+var _flashedCard = null;
+
+/**
+ * Resolve a deep-link card token to its DOM element.
+ *
+ * Tokens accept either the card element's full id (`card-media-library`)
+ * or that id with the `card-` prefix omitted (`media-library`), so links
+ * can be written in the short form `#media/media-library`.
+ *
+ * @param {string} cardToken
+ * @returns {Element|null}
+ */
+function findCard(cardToken) {
+    if (!cardToken) return null;
+    var el = document.getElementById(cardToken);
+    if (!el) el = document.getElementById("card-" + cardToken);
+    return el;
+}
+
+/**
+ * Flash a card with the `card-flash` red-ring animation and scroll it into
+ * view.  Re-invoking on the same (or another) card restarts from scratch.
+ * @param {string} cardToken - Card element id or its `card-`-less slug.
+ */
+function flashCard(cardToken) {
+    var el = findCard(cardToken);
+    if (!el) return;
+
+    // Clear any in-flight flash so this one starts clean.
+    if (_flashedCard) {
+        _flashedCard.classList.remove("card-flash");
+        _flashedCard = null;
+    }
+
+    function onFinish(e) {
+        if (e.animationName !== "card-flash") return;
+        el.removeEventListener("animationend", onFinish);
+        el.removeEventListener("animationcancel", onFinish);
+        if (_flashedCard === el) {
+            el.classList.remove("card-flash");
+            _flashedCard = null;
+        }
+    }
+
+    void el.offsetWidth; // force a reflow so the animation always restarts
+    el.classList.add("card-flash");
+    _flashedCard = el;
+    el.addEventListener("animationend", onFinish);
+    el.addEventListener("animationcancel", onFinish);
+
+    var reduceMotion = window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollIntoView({
+        behavior: reduceMotion ? "auto" : "smooth",
+        block: "center",
+    });
+}
+
 /**
  * Navigate to a page: updates the hash, nav active state, and visible
  * `.page` element, then invokes the registered page loader.
- * @param {string} page
+ *
+ * @param {string} page - Page name (matches `data-page` / `#hash`).
+ * @param {string} [cardId] - Optional deep-link target: the card element's
+ *   id (e.g. `card-media-library`) or that id without the `card-` prefix
+ *   (e.g. `media-library`).  When set, the targeted card is scrolled into
+ *   view and briefly flashed with the `card-flash` red-ring animation.
  */
-export function navigateTo(page) {
+export function navigateTo(page, cardId) {
     // Persist page in URL hash so refreshes stay on the same tab
-    if (location.hash.substring(1) !== page) {
-        history.replaceState(null, "", "#" + page);
+    var hash = cardId ? page + "/" + cardId : page;
+    if (location.hash.substring(1) !== hash) {
+        history.replaceState(null, "", "#" + hash);
     }
 
     // Update nav drawer active state
@@ -164,6 +230,11 @@ export function navigateTo(page) {
     const loader = _pageLoaders[page];
     if (loader) {
         loader();
+    }
+
+    // Deep-link highlight — flash the targeted card now that it is visible.
+    if (cardId) {
+        flashCard(cardId);
     }
 }
 

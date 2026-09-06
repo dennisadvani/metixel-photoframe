@@ -28,12 +28,13 @@ Or from VS Code (**Terminal → Run Task**):
 |---|---|
 | `walk.spec.js` | Every top-level route loads with **no console/page/network errors** (the regression net — catches wrong API paths, broken imports, page-module failures) |
 | `dashboard.spec.js` | Live stats populate, current media + playlist shown, prev/next/pause controls fire over IPC |
-| `settings.spec.js` | All five save buttons work; slideshow/local-sync/video fields **save → persist → restore** |
+| `settings.spec.js` | Playback + optimisation routes: slideshow/video/display save buttons; slideshow/video/local-sync fields **save → persist → restore**; image + transcode save fire |
 | `sync.spec.js` | Immich fields load; Test Connection reports a result (Sync Now / Fetch Albums are not auto-triggered) |
 | `network.spec.js` | Live network status loads; Wi-Fi country field present (no scan / AP toggle) |
 | `media.spec.js` | Media library loads and the filters are present |
-| `advanced.spec.js` | System info, server clock, timezone list, display save+restore, updates + keyboard sections |
-| `security.spec.js` | Web-password login gate (set → gate → wrong/correct → clear), device-password validation, screen-PIN set/clear + length validation |
+| `advanced.spec.js` | Split across new routes: **system** page (system info, updates + keyboard sections) and **playback** page (server clock, timezone list, display save+restore) |
+| `security.spec.js` | Web-password login gate (set → gate → wrong/correct → clear) + device-password validation (mismatch/empty rejected). Screen-PIN controls are hidden in the VLC-flavoured UI, so they are not web-tested |
+| `samba.spec.js` | Device-password & SMB share: set a throwaway device password, verify the Samba share is reachable from the workstation with it, then restore the original password and re-verify |
 - `destructive.spec.js` | **Opt-in only** (`npm run test:destructive`) — restart-services button (accepts the confirm dialog, waits for reconnect) |
 
 ## Auth / SSH requirement
@@ -51,8 +52,19 @@ $env:METIXEL_SSH_USER = "pi"            # SSH user (default "pi")
 ```
 
 The `security.spec.js` tests are destructive — they set and clear the web
-password, device password, and screen PIN — and restore the frame to a clean
-state afterwards.
+password and device password — and restore the frame to a clean state
+afterwards.  (The screen-PIN controls are not exposed in the VLC-flavoured
+UI, so there are no screen-PIN web tests.)
+
+> **Login field vs. repeated 401/403 (fixed 2026-09-05):** at boot the SPA
+> fires many `apiGet()` calls while the login gate is up, and each returns
+> `401/403`, which re-invokes `showLogin()`. `showLogin()` used to
+> unconditionally clear `#login-password`, so the field kept wiping itself
+> while you typed. It now only clears the field on the hidden → visible
+> transition (first show / after a successful login); repeat calls while the
+> overlay is already visible preserve the typed value (they still re-focus).
+> The `security.spec.js` login-gate tests remain valid — they `.fill()` the
+> field explicitly, independent of this focus/clear behaviour.
 
 ## Safety notes
 

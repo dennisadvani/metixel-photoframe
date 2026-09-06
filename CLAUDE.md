@@ -150,9 +150,9 @@ The dashboard JS lives in `src/metixel/backend/web/static/js/` and is organised 
 
 - **`main.js`** is the ONLY entry point (loaded by `index.html` as `<script type="module" src="/static/js/main.js?v=N">`). It imports `core.js` + every page module, binds the nav/burger shell, registers pages, and boots the SPA. No page logic lives here.
 - **`core.js`** is the shared-infrastructure module and must stay page-agnostic: the API layer (`apiGet`/`apiPut`/`apiPost` + private connection tracking), the SPA router (`navigateTo`/`registerPage`), `showToast`, `openDrawer`/`closeDrawer`, and DOM/string utils (`escapeHtml`, `sanitizeInt`, `setChecked`, `setValue`, `setStat`, `updatePowerButton`, `timeAgo`).
-- **One module per feature area**, each exporting its page loader and keeping its own state module-private: `dashboard-page.js`, `settings-page.js`, `network-page.js`, `sync-page.js`, `media-page.js`, `logs-page.js`, `advanced-page.js`, `updates-page.js`.
+- **One module per feature area**, each exporting its page loader and keeping its own state module-private: `dashboard-page.js`, `settings-page.js` (playback + optimisation routes), `network-page.js`, `sync-page.js` (sources route), `media-page.js`, `advanced-page.js` (system route). Embedded, non-top-level sections live in card-level modules (`updates-page.js`, `logs-page.js`) and shared widget modules (`ddc-controls.js` for the DDC/CI Monitor Control card).
 - **Router pattern (no circular imports):** page modules call `registerPage("name", loader)`; `navigateTo(page)` dispatches through core's registry. `core.js` must never import page modules, and page modules must only import the cross-module symbols listed below.
-  - Allowed cross-module edges (keep the import graph a DAG): `sync-page → media-page` (`loadMedia`), `advanced-page → logs-page` (`refreshLogs`) and `advanced-page → updates-page` (`loadUpdateStatus`, `bindUpdateControls`). Everything else imports `core.js` only.
+  - Allowed cross-module edges (keep the import graph a DAG): `sync-page → media-page` (`loadMedia`), `sync-page → settings-page` (`renderWatchPaths`, `collectWatchPaths`, `addWatchPathRow`), `advanced-page → logs-page` (`refreshLogs`), `advanced-page → updates-page` (`loadUpdateStatus`, `bindUpdateControls`), and `settings-page → ddc-controls` (`loadDdcControls`, `bindDdcControls`). Everything else imports `core.js` only.
 - **Scoping & state:** use strict `import`/`export`; modules are strict-mode by default (no `"use strict"`, no IIFE wrapper). Keep module-level state private inside its own module — never share mutable state across page modules; only `core.js` holds cross-cutting state (API connection tracking).
 - **Line endings:** all web JS files are **CRLF**. When a script regenerates files, normalise `\r\n`→`\n` internally and write `\n`→`\r\n`.
 - **ES modules are deferred**, so `document` is fully parsed when module top-level code runs (e.g. `core.js` may cache `#nav-drawer`/`#nav-backdrop` at load).
@@ -192,14 +192,16 @@ The mobile block forces `button { width: 100% }`. Small inline buttons must keep
 
 When editing `dashboard.css` or any file under `static/js/` (SPA entry point is `main.js`), **bump the `?v=` query** on both the stylesheet `<link>` and the `<script src>` in `index.html` (e.g. `main.js?v=15` → `v=16`). Otherwise browsers serve stale assets.
 
+`dashboard.css` is **generated** from `input.css` + `custom.css` — never hand-edit it. Edits to `custom.css`/`input.css` do **not** reach the browser until `dashboard.css` is rebuilt and synced to the Pi, so rebuild **before** bumping `?v=` (see the Tailwind build section below).
+
 ### Tailwind CSS build (dev machine only)
 
 The dashboard uses **Tailwind CSS v4** for styling, but the Pi **never runs Tailwind**. CSS is built on the dev machine and the compiled output is committed.
 
 - **Source:** `src/metixel/backend/web/static/css/input.css` — the Tailwind entry point. It imports `tailwindcss`, defines the design tokens in `@theme`, and imports the hand-written styles.
 - **Hand-written styles:** `src/metixel/backend/web/static/css/custom.css` — the legacy design system, preserved verbatim. It is imported **inside `@layer components`** so Tailwind utilities (in `@layer utilities`, a higher-priority layer) can override it. **Do not move it out of the layer** — the un-layered universal reset `*, ::before, ::after { margin:0; padding:0 }` would otherwise beat every Tailwind utility and they'd all compute to 0.
-- **Build:** `npm run build:css` (one-shot) or `npm run watch:css` (watch). Output goes to `dashboard.css` (minified), which is what the Pi serves.
-- **Workflow:** edit `input.css` / `custom.css` / `index.html` → run `npm run build:css` → bump `?v=` in `index.html` → sync via the existing `scp` task. **Never build on the Pi.**
+- **Build:** `npm run build:css` (one-shot) or `npm run watch:css` (watch) — also available as the **[Local] Build Dashboard CSS** and **[Local] Watch Dashboard CSS** VS Code tasks. Output goes to `dashboard.css` (minified), which is what the Pi serves.
+- **Workflow:** edit `input.css` / `custom.css` → run `npm run build:css` (or the **[Local] Build Dashboard CSS** task) → bump `?v=` in `index.html` → sync via the **[Pi] Sync Code (scp)** task. **Never build on the Pi**, and never edit `dashboard.css` by hand — it is generated.
 - **Config:** `tailwind.config.js` scans `templates/**/*.html` and `static/js/**/*.js` for class names.
 
 ### Premium design system (Slideshow Settings pattern)
@@ -311,6 +313,7 @@ mypy src/metixel/
 | `src/metixel/backend/web/static/js/main.js` | Web SPA entry point — wires core + page modules to the router |
 | `src/metixel/backend/web/static/js/core.js` | Web SPA shared infra — API layer, router (`navigateTo`/`registerPage`), toast, DOM utils |
 | `src/metixel/backend/web/static/js/*-page.js` | Web SPA — one ES module per page (dashboard/settings/network/sync/media/logs/advanced/updates) |
+| `src/metixel/backend/web/static/js/ddc-controls.js` | Web SPA — shared DDC/CI Monitor Control card module (imported by the Playback page's settings module) |
 
 ## If You're Unsure
 

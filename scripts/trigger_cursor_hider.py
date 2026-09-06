@@ -3,8 +3,9 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Send a 'hide' trigger to the cursor-hider service.
 
-Used by metixel-cage.service's ExecStartPre to park the cursor off-screen
-BEFORE cage starts.  Best-effort — exits 0 even if the service isn't running.
+Used by cage_launch.sh to park the cursor off-screen once the compositor has
+started (the hider fires every 0.1s for _FIRE_DURATION, covering compositor
+startup).  Best-effort — exits 0 even if the service isn't running.
 """
 
 import json
