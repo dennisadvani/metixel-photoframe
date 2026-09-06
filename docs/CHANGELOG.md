@@ -5,13 +5,79 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.5]
+
+### Features
+
+- **Web dashboard password** — System → Security can now protect the
+  dashboard and its API with a login screen. Passwords are stored as salted
+  hashes, sessions use a signed `HttpOnly` cookie with a configurable idle
+  timeout (default 30 minutes), and login locks out for 5 minutes after 5
+  failed attempts. Leave the password empty for the previous open dashboard;
+  a forgotten password can be cleared from the console
+  (`python -m metixel --clear-web-password`).
+- **Synced device password** — changing the Device Password (System →
+  Security) now updates the SSH console password and the Samba share
+  password together, so the two stores can never drift apart. A partially
+  failed change is reported instead of silently leaving them out of sync.
+- **Monitor control (DDC/CI)** — a Playback-page Monitor Control card offers
+  brightness, contrast, input source, and other VCP features. Metixel probes
+  the attached display with `ddcutil` and only shows controls the monitor
+  actually reports (requires I²C access and a DDC-capable display).
+- **Resolution, refresh rate and rotation** — display settings can now pick
+  the resolution/refresh rate from the monitor's real supported modes and
+  rotate the screen 0/90/180/270°. The change is applied automatically
+  (frontend restart), and a resolution/rotation change re-optimises media
+  for the new canvas size. Video playback is only available in landscape
+  (0°/180°); at 90°/270° it is disabled with a warning in the UI.
+- **Scheduled automatic updates** — updates can now be installed
+  automatically on a chosen weekday and time. The schedule is randomised
+  once on first boot so a fleet of frames doesn't all update at the same
+  moment.
+- **Install, rollback and OS upgrades from the UI** — the Updates card lists
+  available releases for manual install, can roll back to any previously
+  installed release (switches the live symlink — no re-download), and adds
+  an "Upgrade OS & Reboot" action that runs a full `apt upgrade`. The old
+  `dev` update channel is now labelled **Main (latest commits)**.
+- **Redesigned web UI** — the dashboard is rebuilt on Tailwind CSS and the
+  former Settings/Image Sync/Advanced pages are reorganised into
+  purpose-based pages: **Sources** (folders + Immich), **Playback**
+  (slideshow, display/monitor, clock), **Optimisation** (image/video
+  processing), and **System** (info, updates, security, keyboard, MQTT).
+
+### Behind the scenes
+
+- **Portrait-mode media optimisation fixed** — images and videos are now
+  optimised to the effective post-rotation screen size (e.g. 1200×1920 for a
+  1920×1200 panel rotated 90°), resolved once the frontend reports the real
+  resolution at boot instead of optimising at the raw config size.
+- **Keyboard-map page now matches reality** — it displays the full effective
+  key map (built-in defaults merged with stored overrides) instead of only
+  the stored overrides.
+- **Backend log-directory ownership** — the backend service unit now ensures
+  its log directories are created with correct ownership at startup.
+- **Update & rollback hardening** — reinstalling a release that already
+  exists locally now deletes the stale copy first; only atomic-era
+  (Blue/Green) releases are offered for install and rollback.
+- **DDC/CI reliability** — feature probing/caching was refactored, and a
+  one-time device fixup enables the `i2c-dev` kernel module so monitor
+  control works on devices installed before DDC existed.
+- **Screen-PIN groundwork** — the backend and API for an optional on-screen
+  PIN (4–6 digits, unlock timeout, attempt lockout) are in place, ready for
+  the upcoming on-screen interface; it is a separate credential and is not
+  yet exposed in the current UI.
+- **Admin & install tooling** — added an uninstall script and a legacy
+  monolithic setup script for testing the Blue/Green migration, and updated
+  the setup/migration/OTA scripts for the new layout.
+- **Test-suite overhaul** — tests were consolidated under `testing/` and
+  extended with on-device functional suites (DDC/CI, MQTT, device password +
+  Samba end-to-end, captive portal/Wi-Fi, media, smoke) plus new unit and
+  web tests against the redesigned UI.
+
 ## [1.2.4]
 
 ### Added
 
-- **DDC/CI monitor control** — opt-in Advanced-page controls for brightness,
-  contrast, input source, and other VCP features. Metixel probes the monitor
-  with `ddcutil` and only shows features the display reports.
 - **Fallback to nearest existing ancestor in the folder browser** — when a
   configured watch path no longer exists, the browser now walks up to the
   nearest existing ancestor and shows that instead of an empty/broken tree,
