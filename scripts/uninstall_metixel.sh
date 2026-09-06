@@ -6,8 +6,10 @@
 #
 # Reverts a Raspberry Pi back to its pre-setup state (before running
 # setup_trixie_metixel.sh). This:
-#   1. Stops & removes the Metixel systemd services (stopped FIRST so nothing
-#      reactivates while we tear down the rest)
+#   1. Stops & removes every Metixel systemd service/unit — including any
+#      enablement links, drop-ins, and lingering processes that keep running
+#      even after the unit files are gone (stopped FIRST so nothing reactivates
+#      while we tear down the rest)
 #   2. Reverts all quiet-boot settings (restores factory boot defaults)
 #   3. Removes the iptables port 80 → 8080 redirect
 #   4. Removes the Samba [metixel-media] share and related smb.conf changes
@@ -58,23 +60,51 @@ echo ""
 # 1. Stop & remove Metixel systemd services (before touching anything else)
 # ============================================================================
 echo "[1/9] Stopping and removing Metixel systemd services..."
+# Stop EVERY known Metixel unit unconditionally.  Stopping must not be gated on
+# `systemctl list-unit-files` finding the unit: after a partial uninstall or an
+# upgrade that removed a unit file, systemd still tracks the loaded unit and a
+# service can keep running in the LOAD=not-found / ACTIVE=running state (this
+# is exactly what happened with metixel-cursor-hider.service).
 for svc in metixel-backend metixel-cage metixel-frontend metixel-cursor-hider metixel-enable-wifi; do
-    if systemctl list-unit-files | grep -q "^${svc}\.service"; then
-        # Disable BEFORE stop: for Restart=always units, stopping alone can
-        # race a queued auto-restart. Disabling first + reset-failed clears
-        # the restart state so the unit stays down.
-        systemctl disable "${svc}.service" 2>/dev/null || true
-        systemctl stop "${svc}.service" 2>/dev/null || true
-        systemctl reset-failed "${svc}.service" 2>/dev/null || true
-        echo "  + Stopped & disabled ${svc}.service"
-    fi
-    if [ -f "/etc/systemd/system/${svc}.service" ]; then
-        rm -f "/etc/systemd/system/${svc}.service"
-        echo "  + Removed /etc/systemd/system/${svc}.service"
-    fi
+    # Disable BEFORE stop: for Restart=always units, stopping alone can race a
+    # queued auto-restart. Disabling first + reset-failed clears the restart
+    # state so the unit stays down.
+    systemctl disable "${svc}.service" 2>/dev/null || true
+    systemctl stop "${svc}.service" 2>/dev/null || true
+    systemctl reset-failed "${svc}.service" 2>/dev/null || true
+    echo "  + Stopped & disabled ${svc}.service"
 done
-# Stop any Metixel Python processes that a service wrapper may not have caught.
-pkill -f "/opt/metixel" 2>/dev/null && echo "  + Killed lingering Metixel processes" || true
+
+# Remove the unit files, their drop-in dirs, and any enablement symlinks.
+# `systemctl disable` only removes *.wants links while the unit file still
+# exists — a unit removed out from under systemd (e.g. by a partial uninstall)
+# leaves broken symlinks pointing at nothing behind.
+rm -f /etc/systemd/system/metixel-*.service
+rm -rf /etc/systemd/system/metixel-*.service.d
+rm -f /etc/systemd/system/*.wants/metixel-*.service
+rm -f /etc/systemd/system/*.requires/metixel-*.service
+find /etc/systemd/system -maxdepth 2 -type l -name 'metixel-*' -delete 2>/dev/null || true
+echo "  + Removed Metixel unit files and enablement links"
+systemctl daemon-reload
+
+# Stop any Metixel Python processes a service wrapper may not have caught.
+# The systemd units exec `python3 -m metixel --mode ...`, whose argv contains
+# NO /opt/metixel path — so the old `pkill -f "/opt/metixel"` missed them.
+# Match the python entrypoints instead (legacy setups exec the full path).
+# None of these patterns can match this script's own `bash ...` process.
+for pat in "python3 -m metixel" "python -m metixel" "python3 /opt/metixel" "python /opt/metixel"; do
+    pkill -f "$pat" 2>/dev/null || true
+done
+# cage launches the frontend under the compositor (via cage_launch.sh) and
+# must go too — exact-name match so unrelated processes are left alone.
+pkill -x cage 2>/dev/null || true
+sleep 2
+# SIGKILL any stragglers that ignored the graceful TERM above.
+for pat in "python3 -m metixel" "python -m metixel" "python3 /opt/metixel" "python /opt/metixel"; do
+    pkill -9 -f "$pat" 2>/dev/null || true
+done
+pkill -9 -x cage 2>/dev/null || true
+echo "  + Killed lingering Metixel processes"
 systemctl daemon-reload
 
 # ============================================================================
@@ -219,9 +249,12 @@ if [ -d "${METIXEL_DIR}" ]; then
 else
     echo "  = ${METIXEL_DIR} not present"
 fi
-# Remove the runtime directory created by setup
-rm -rf /run/metixel
-echo "  + Removed /run/metixel"
+# Remove the runtime directory created by setup (may still hold the
+# cursor-hider socket / IPC sockets after the services above are gone).
+if [ -d /run/metixel ]; then
+    rm -rf /run/metixel
+    echo "  + Removed /run/metixel"
+fi
 
 # ============================================================================
 # Summary
@@ -233,7 +266,7 @@ echo "╚═══════════════════════�
 echo ""
 echo "Reverted:"
 echo "  - Quiet boot settings (factory boot defaults restored)"
-echo "  - Metixel systemd services removed"
+echo "  - Metixel systemd services, enablement links & processes removed"
 echo "  - iptables port 80 → 8080 redirect removed"
 echo "  - Samba [metixel-media] share removed"
 echo "  - Wi-Fi captive-portal (hostapd/dnsmasq) config removed"

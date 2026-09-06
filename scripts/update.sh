@@ -249,6 +249,25 @@ else
     fi
 fi
 
+# ── 6b) PROVISION any NEW systemd service shipped by this release ───────────
+# The Blue/Green swap runs the NEW code, but /etc/systemd/system only receives
+# units at install/migration time.  If a release adds a service (e.g.
+# metixel-cursor-hider in 1.2.5), an upgraded device would never run it without
+# this step.  Runs AFTER the health check so a failure here cannot influence
+# the rollback decision above (the new release is already healthy).
+if [ -f "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" ] \
+   && grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"; then
+    echo "  Installing new systemd service metixel-cursor-hider.service…"
+    cp "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable metixel-cursor-hider.service 2>/dev/null || true
+    systemctl start metixel-cursor-hider.service 2>/dev/null || true
+    # Trigger it now — cage_launch.sh already ran during the step [6/7] restart
+    # (before this service existed), so without an explicit trigger the cursor
+    # would stay visible until the next cage restart or reboot.
+    /usr/bin/env python3 "${RELEASE_DIR}/scripts/trigger_cursor_hider.py" 2>/dev/null || true
+fi
+
 # ── 7) RECORD installed packages for future removal ─────────────────────────
 echo "[7/7] Recording installed package manifest…"
 python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" <<'PYEOF'

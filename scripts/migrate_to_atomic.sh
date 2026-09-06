@@ -271,6 +271,20 @@ for unit in metixel-backend.service metixel-cage.service; do
     fi
 done
 
+# The cursor-hider mode is a newer feature; only install its service if the
+# release actually ships it (older releases lack the mode by design, and a
+# unit that execs --mode cursor-hider on old code would crash-loop forever).
+# Mirrors the guard in setup_trixie_metixel.sh.
+CURSOR_HIDER_PRESENT=false
+if [ -f "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" ] \
+   && grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"; then
+    cp "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" /etc/systemd/system/
+    CURSOR_HIDER_PRESENT=true
+else
+    echo "  ! Release does not support cursor-hider — skipping its service"
+    rm -f /etc/systemd/system/metixel-cursor-hider.service 2>/dev/null || true
+fi
+
 # metixel-frontend.service was the obsolete pre-cage launcher and is no longer
 # shipped.  Some aging devices may still have a stale copy installed from an
 # early release — stop and remove it so it can't linger or double-launch the
@@ -286,6 +300,9 @@ fi
 systemctl daemon-reload
 # Ensure the services are enabled so they survive reboot.
 systemctl enable metixel-backend.service metixel-cage.service 2>/dev/null || true
+if [ "${CURSOR_HIDER_PRESENT}" = true ]; then
+    systemctl enable metixel-cursor-hider.service 2>/dev/null || true
+fi
 
 # ── Update Samba share path → /data ─────────────────────────────────────────
 # The migration moved media/ from ${INSTALL_ROOT}/media to ${DATA_DIR}/media.
@@ -317,6 +334,12 @@ echo "  live   : ${LIVE_LINK} → $(readlink "${LIVE_LINK}")"
 if [ "${RESTART}" = "yes" ]; then
     echo "Restarting services…"
     systemctl enable metixel-backend metixel-cage 2>/dev/null || true
+    if [ "${CURSOR_HIDER_PRESENT}" = true ]; then
+        # Start the hider BEFORE cage so its trigger socket is bound when
+        # cage_launch.sh runs (Before=metixel-cage.service orders them at boot).
+        systemctl enable metixel-cursor-hider 2>/dev/null || true
+        systemctl start metixel-cursor-hider 2>/dev/null || true
+    fi
     systemctl start metixel-backend 2>/dev/null || true
     systemctl start metixel-cage 2>/dev/null || true
 fi
