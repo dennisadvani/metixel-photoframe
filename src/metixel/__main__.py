@@ -20,7 +20,7 @@ from metixel import __version__
 from metixel.shared.paths import data_dir, ensure_data_dirs
 
 
-def _setup_logging(config_path: Path, log_level: int) -> None:
+def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = True) -> None:
     """Set up logging: file + console + in-memory ring buffer.
 
     Tries to load ``etc/logging.conf`` for file-based logging.
@@ -31,6 +31,10 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
     ``system.log_level`` so the user can control log file size
     via the web UI.  The ring buffer is always ``DEBUG`` so the
     dashboard severity checkboxes can filter the full stream.
+    When ``file_logging`` is False (root-run entry points such as the
+    cursor-hider daemon or the ``--clear-web-password`` one-shot) only the
+    console and ring-buffer handlers are attached: the persistent on-disk
+    ``metixel.log`` is never opened, so it stays owned by the pi user.
     """
     fmt = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -45,51 +49,52 @@ def _setup_logging(config_path: Path, log_level: int) -> None:
     root.setLevel(log_level)
     root.addHandler(console)
 
-    # 2. File handler — use logging.conf if available, else default path.
-    #    logging.conf lives in the persistent data dir (data/etc), alongside
-    #    config.json — NOT derived from config_path.parent.parent arithmetic.
-    log_conf = data_dir() / "etc" / "logging.conf"
-    log_dir = data_dir() / "logs"
-    log_file = log_dir / "metixel.log"
+    if file_logging:
+        # 2. File handler — use logging.conf if available, else default path.
+        #    logging.conf lives in the persistent data dir (data/etc), alongside
+        #    config.json — NOT derived from config_path.parent.parent arithmetic.
+        log_conf = data_dir() / "etc" / "logging.conf"
+        log_dir = data_dir() / "logs"
+        log_file = log_dir / "metixel.log"
 
-    if log_conf.exists():
-        with contextlib.suppress(Exception):
-            # Fall through to manual setup on failure
-            logging.config.fileConfig(str(log_conf), disable_existing_loggers=False)
+        if log_conf.exists():
+            with contextlib.suppress(Exception):
+                # Fall through to manual setup on failure
+                logging.config.fileConfig(str(log_conf), disable_existing_loggers=False)
 
-    # Ensure file handler exists (may have been added by fileConfig, or add manually)
-    has_file_handler = any(isinstance(h, logging.FileHandler) for h in root.handlers)
-    if not has_file_handler:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
-            str(log_file),
-            maxBytes=10_485_760,
-            backupCount=5,
-        )
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(fmt)
-        root.addHandler(file_handler)
+        # Ensure file handler exists (may have been added by fileConfig, or add manually)
+        has_file_handler = any(isinstance(h, logging.FileHandler) for h in root.handlers)
+        if not has_file_handler:
+            log_dir.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(
+                str(log_file),
+                maxBytes=10_485_760,
+                backupCount=5,
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(fmt)
+            root.addHandler(file_handler)
 
-    # 2b. Apply persisted file-handler log level from config.json.
-    #     Only file handlers are changed — the ring buffer stays at
-    #     DEBUG so the dashboard can always filter the full stream.
-    try:
-        import json as _json
+        # 2b. Apply persisted file-handler log level from config.json.
+        #     Only file handlers are changed — the ring buffer stays at
+        #     DEBUG so the dashboard can always filter the full stream.
+        try:
+            import json as _json
 
-        if config_path.exists():
-            raw = _json.loads(config_path.read_text(encoding="utf-8"))
-            persisted_level = raw.get("system", {}).get("log_level", "NONE").upper()
-            file_levels = {
-                "DEBUG": logging.DEBUG,
-                "INFO": logging.INFO,
-                "WARNING": logging.WARNING,
-                "ERROR": logging.ERROR,
-                "NONE": 100,  # Above CRITICAL (50) — effectively disables disk logging
-            }
-            file_level = file_levels.get(persisted_level, 100)
-            _apply_file_handler_levels(file_level)
-    except Exception:
-        pass  # Config file may not exist yet or be unreadable
+            if config_path.exists():
+                raw = _json.loads(config_path.read_text(encoding="utf-8"))
+                persisted_level = raw.get("system", {}).get("log_level", "NONE").upper()
+                file_levels = {
+                    "DEBUG": logging.DEBUG,
+                    "INFO": logging.INFO,
+                    "WARNING": logging.WARNING,
+                    "ERROR": logging.ERROR,
+                    "NONE": 100,  # Above CRITICAL (50) — effectively disables disk logging
+                }
+                file_level = file_levels.get(persisted_level, 100)
+                _apply_file_handler_levels(file_level)
+        except Exception:
+            pass  # Config file may not exist yet or be unreadable
 
     # 3. Ring buffer for web UI — attach to BOTH root and metixel loggers.
     #    The web API reads from the metixel logger's handlers, but non-
@@ -127,6 +132,14 @@ def _apply_file_handler_levels(level: int) -> None:
     for handler in logging.getLogger().handlers:
         if isinstance(handler, logging.FileHandler):
             handler.setLevel(level)
+
+
+def _wants_file_logging(mode: str | None) -> bool:
+    """Only the pi-run daemons (backend/frontend) write the persistent
+    metixel.log.  Root-run entry points (cursor-hider, --clear-web-password)
+    must not open it or the file ends up root-owned.
+    """
+    return mode in ("backend", "frontend")
 
 
 def main() -> None:
@@ -169,7 +182,12 @@ def main() -> None:
 
     # Configure logging
     log_level = logging.DEBUG if args.debug else logging.INFO
-    _setup_logging(args.config, log_level)
+    # Only the pi-run daemons (backend/frontend) write the persistent
+    # metixel.log.  Root-run entry points (cursor-hider, --clear-web-password)
+    # must never open it: a root-created metixel.log makes the pi backend
+    # crash-loop with PermissionError (see metixel-backend.service ExecStartPre).
+    file_logging = _wants_file_logging(args.mode)
+    _setup_logging(args.config, log_level, file_logging=file_logging)
 
     logger = logging.getLogger("metixel")
 
