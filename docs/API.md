@@ -91,7 +91,14 @@ LAN by default — the password is the access boundary.
   folder can be deleted; returns `{"status": "ok", "deleted": bool}`.
 
 ### Filesystem
-- `GET /api/browse?path=...` — Browse folders for path selection
+- `GET /api/browse?path=...` — Browse folders for path selection.  Returns
+  `{current_path, parent_path, entries, base_path, can_create}` where
+  `entries` are subdirectory objects `{name, path}` and `can_create` is true
+  only inside the media tree.
+- `POST /api/browse/create` — Create a new folder inside the currently
+  browsed directory.  Body: `{"path": "<parent dir>", "name": "<folder name>"}`.
+  Names must be plain (no path separators, `..`, or hidden-dot prefix).
+  Restricted to the media tree (`<data dir>/media`).
 
 ### Media
 - `GET /api/media/list` — List media items
@@ -101,8 +108,10 @@ LAN by default — the password is the access boundary.
 #### Uploading media (`POST /api/media/upload`)
 
 Accepts `multipart/form-data` with one or more files under the **`files`**
-field name.  Files are streamed to `media/my_media/` (an enabled watch path),
-so the folder watcher picks them up and they flow into the slideshow.
+field name.  Files are streamed to the configured upload destination —
+`system.upload_dir` (relative paths resolve under the persistent data dir),
+falling back to `media/my_media/` (an enabled watch path) when unset — so
+the folder watcher picks them up and they flow into the slideshow.
 
 Behaviour:
 - **Extension whitelist** — only image/video formats are accepted

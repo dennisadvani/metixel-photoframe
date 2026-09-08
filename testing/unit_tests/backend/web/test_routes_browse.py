@@ -155,3 +155,149 @@ class TestBrowseFolder:
         data = resp.get_json()
         # Falls back to the nearest existing ancestor (the media dir).
         assert data["current_path"] == str((root / "media").resolve())
+
+
+class TestBrowseCanCreate:
+    """The browse payload reports where folder creation is allowed."""
+
+    def test_can_create_true_inside_media_tree(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        media = root / "media"
+        (media / "sub").mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.get("/api/browse", query_string={"path": str(media / "sub")})
+
+        assert resp.status_code == 200
+        assert resp.get_json()["can_create"] is True
+        assert resp.get_json()["base_path"] == str(root.resolve())
+
+    def test_can_create_false_outside_media_tree(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        # Browsing the data root itself (not the media subdir) → no creation.
+        resp = client.get("/api/browse", query_string={"path": str(root)})
+
+        assert resp.status_code == 200
+        assert resp.get_json()["can_create"] is False
+
+
+class TestBrowseCreateFolder:
+    """Exercises the folder-creation endpoint (``POST /api/browse/create``)."""
+
+    def test_creates_folder_inside_media(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        media = root / "media"
+        media.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post(
+            "/api/browse/create",
+            json={"path": str(media), "name": "new_folder"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok"
+        assert (media / "new_folder").is_dir()
+
+    def test_relative_parent_resolved_against_data_dir(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        media = root / "media"
+        media.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post(
+            "/api/browse/create",
+            json={"path": "media", "name": "rel_folder"},
+        )
+
+        assert resp.status_code == 200
+        assert (media / "rel_folder").is_dir()
+
+    def test_rejects_creating_outside_media(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post(
+            "/api/browse/create",
+            json={"path": str(root), "name": "elsewhere"},
+        )
+
+        assert resp.status_code == 403
+        assert "inside the media folder" in resp.get_json()["error"]
+        assert not (root / "elsewhere").exists()
+
+    def test_rejects_path_traversal_name(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        media = root / "media"
+        media.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post(
+            "/api/browse/create",
+            json={"path": str(media), "name": "../escape"},
+        )
+
+        assert resp.status_code == 400
+        assert not (root / "escape").exists()
+        assert not (media.parent / "escape").exists()
+
+    def test_rejects_hidden_and_dot_names(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        media = root / "media"
+        media.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        for bad in (".hidden", "..", "."):
+            resp = client.post(
+                "/api/browse/create",
+                json={"path": str(media), "name": bad},
+            )
+            assert resp.status_code == 400
+
+    def test_rejects_existing_folder(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        media = root / "media"
+        (media / "exists").mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post(
+            "/api/browse/create",
+            json={"path": str(media), "name": "exists"},
+        )
+
+        assert resp.status_code == 409
+
+    def test_requires_path_and_name(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        media = root / "media"
+        media.mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post("/api/browse/create", json={"path": str(media)})
+        assert resp.status_code == 400
+
+        resp = client.post("/api/browse/create", json={"name": "x"})
+        assert resp.status_code == 400

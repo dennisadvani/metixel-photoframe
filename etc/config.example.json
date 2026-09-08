@@ -95,6 +95,7 @@
   },
   "system": {
     "cache_dir": "cache/",
+    "upload_dir": "",
     "log_level": "NONE",
     "db_path": "cache/metixel.db"
   }

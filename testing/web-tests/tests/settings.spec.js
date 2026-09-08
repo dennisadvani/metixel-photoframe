@@ -52,6 +52,9 @@ test.describe("settings", () => {
             saveBtn: "#btn-save-local-sync",
             value: 60,
         });
+        // btn-save-local-sync sends watch_paths → restarts the backend; let it
+        // settle so the next test doesn't hit a mid-restart frame.
+        await page.waitForTimeout(5000);
     });
 
     test("video max duration save + restore", async ({ page }) => {
@@ -61,6 +64,8 @@ test.describe("settings", () => {
             saveBtn: "#btn-save-video",
             value: 90,
         });
+        // btn-save-video restarts the backend; let it settle before the next test.
+        await page.waitForTimeout(5000);
     });
 
     test("image optimisation save button fires", async ({ page }) => {
@@ -69,6 +74,8 @@ test.describe("settings", () => {
         await page.locator("#btn-save-image-opt").click();
         await expect(page.locator(".toast").first()).toBeVisible();
         expectNoErrors(errors);
+        // btn-save-image-opt restarts the backend; let it settle before the next test.
+        await page.waitForTimeout(5000);
     });
 
     test("transcode save button fires", async ({ page }) => {
@@ -77,5 +84,7 @@ test.describe("settings", () => {
         await page.locator("#btn-save-transcode").click();
         await expect(page.locator(".toast").first()).toBeVisible();
         expectNoErrors(errors);
+        // btn-save-transcode restarts the backend; let it settle before the next test.
+        await page.waitForTimeout(5000);
     });
 });

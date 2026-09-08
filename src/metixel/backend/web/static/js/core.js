@@ -10,6 +10,8 @@
  * Exposes:
  *   - API layer:       apiGet, apiPut, apiPost (+ private connection tracking)
  *   - UI shell:        showToast, openDrawer, closeDrawer, navigateTo, registerPage
+ *   - Folder browser:  openFolderBrowser, closeFolderBrowser (shared modal +
+ *                      .btn-browse[data-target] wiring, create-folder support)
  *   - DOM/string utils: setStat, updatePowerButton, setButtonBusy,
  *                       sanitizeInt, setChecked, setValue, escapeHtml, timeAgo
  */
@@ -108,6 +110,215 @@ export function confirmDialog(message, opts) {
         if (okBtn) okBtn.focus();
     });
 }
+
+// -- Folder Browser (shared) -----------------------------------------------
+
+// The folder-browser modal is a single shared dialog (#folder-browser-modal)
+// used by every "browse for a folder" control across the SPA (watch paths,
+// cache dir, sync dir, upload destination).  Its logic lives here in core so
+// any page module can open it via openFolderBrowser() without duplicating the
+// browse/create/select wiring.
+
+/** @type {HTMLInputElement|null} The input to fill when a folder is selected. */
+var _browserTargetInput = null;
+/** @type {function|null} Optional custom handler run on Select (replaces input fill). */
+var _browserOnSelect = null;
+/** Absolute path of the folder the user is currently viewing. */
+var _browserCurrentPath = "";
+
+/**
+ * Open the shared folder-browser modal.
+ *
+ * @param {HTMLInputElement} [inputEl] - The input whose value seeds the initial
+ *        path and receives the selected (data-dir-relative) path on Select.
+ * @param {object} [opts]
+ * @param {string} [opts.initialPath] - Path to start browsing at.  Defaults to
+ *        the input's current value, or the backend's media-folder default.
+ * @param {function(string, object)} [opts.onSelect] - Optional handler called
+ *        with the chosen absolute path + the last browse response instead of
+ *        filling *inputEl* (e.g. to persist a setting immediately).
+ */
+export function openFolderBrowser(inputEl, opts) {
+    opts = opts || {};
+    _browserTargetInput = inputEl || null;
+    _browserOnSelect = typeof opts.onSelect === "function" ? opts.onSelect : null;
+    var modal = document.getElementById("folder-browser-modal");
+    if (modal) modal.classList.add("open");
+
+    var startPath = "";
+    if (opts.initialPath != null) {
+        startPath = String(opts.initialPath);
+    } else if (inputEl && inputEl.value) {
+        startPath = inputEl.value.trim();
+    }
+    browseFolder(startPath);
+}
+
+export function closeFolderBrowser() {
+    var modal = document.getElementById("folder-browser-modal");
+    if (modal) modal.classList.remove("open");
+    _browserTargetInput = null;
+    _browserOnSelect = null;
+}
+
+/**
+ * Browse a folder via the API and populate the modal list.
+ * @param {string} folderPath - The path to browse.
+ */
+async function browseFolder(folderPath) {
+    var pathEl = document.getElementById("browser-current-path");
+    var listEl = document.getElementById("browser-entries");
+    if (!listEl) return;
+
+    listEl.innerHTML = '<li style="padding:0.5rem;color:var(--text-muted)">Loading…</li>';
+
+    var data = await apiGet("/browse?path=" + encodeURIComponent(folderPath));
+    if (!data || data.error) {
+        listEl.innerHTML = '<li style="padding:0.5rem;color:var(--danger)">'
+            + escapeHtml((data && data.error) || "Cannot browse folder") + '</li>';
+        return;
+    }
+
+    _browserCurrentPath = data.current_path || folderPath;
+    if (pathEl) pathEl.textContent = _browserCurrentPath;
+
+    // Parent directory button state
+    var parentBtn = document.getElementById("btn-browser-parent");
+    if (parentBtn) {
+        parentBtn.disabled = !data.parent_path;
+        parentBtn.onclick = function () {
+            if (data.parent_path) browseFolder(data.parent_path);
+        };
+    }
+
+    // Build entry list
+    var html = "";
+    if (!data.entries || data.entries.length === 0) {
+        html = '<li style="padding:0.5rem;color:var(--text-muted)">No subdirectories</li>';
+    } else {
+        data.entries.forEach(function (entry) {
+            html += '<li class="browser-entry" data-path="' + escapeHtml(entry.path) + '"'
+                + ' style="padding:0.4rem 0.5rem;cursor:pointer;border-bottom:1px solid var(--border);font-size:0.82rem">'
+                + '<span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">folder</span> '
+                + escapeHtml(entry.name) + '</li>';
+        });
+    }
+    listEl.innerHTML = html;
+
+    // Click handlers for entries (navigate into subdir)
+    listEl.querySelectorAll(".browser-entry").forEach(function (li) {
+        li.addEventListener("click", function () {
+            browseFolder(li.getAttribute("data-path"));
+        });
+        li.addEventListener("mouseenter", function () {
+            this.style.background = "var(--accent-bg)";
+        });
+        li.addEventListener("mouseleave", function () {
+            this.style.background = "";
+        });
+    });
+
+    // "Create folder" row — only where the backend allows creating folders
+    // (restricted to the media tree).  The name field is cleared on each
+    // navigation so a stale name never lingers between folders.
+    var createRow = document.getElementById("browser-create-row");
+    var nameInput = document.getElementById("browser-new-folder-name");
+    if (createRow) createRow.style.display = data.can_create ? "" : "none";
+    if (nameInput) nameInput.value = "";
+
+    // Select button: run the custom handler, else fill the target input
+    // with a data-dir-relative path (config stores folders relative to it).
+    var selectBtn = document.getElementById("btn-browser-select");
+    if (selectBtn) {
+        selectBtn.onclick = function () {
+            if (_browserOnSelect) {
+                _browserOnSelect(_browserCurrentPath, data);
+            } else if (_browserTargetInput && _browserCurrentPath) {
+                var relPath = _pathRelativeToDataDir(_browserCurrentPath, data.base_path);
+                _browserTargetInput.value = relPath;
+            }
+            closeFolderBrowser();
+        };
+    }
+}
+
+/**
+ * Strip the persistent data dir prefix, producing the relative form that
+ * config values use (e.g. "<data>/media/my_media/" → "media/my_media/").
+ * Falls back to the absolute path when not under the data dir.  Separators
+ * are normalised to forward slashes so values stay portable across OSes.
+ */
+function _pathRelativeToDataDir(absPath, basePath) {
+    var base = basePath || "/opt/metixel/data";
+    var norm = String(absPath).replace(/\\/g, "/");
+    base = String(base).replace(/\\/g, "/");
+    if (norm.indexOf(base) === 0) {
+        var rel = norm.substring(base.length).replace(/^\/+/, "");
+        if (rel && rel[rel.length - 1] !== "/") rel += "/";
+        return rel;
+    }
+    return norm;
+}
+
+/** Create a folder inside the currently browsed directory, then open it. */
+async function createFolder() {
+    var nameInput = document.getElementById("browser-new-folder-name");
+    if (!nameInput) return;
+    var name = nameInput.value.trim();
+    if (!name) {
+        showToast("Enter a folder name first", "info");
+        nameInput.focus();
+        return;
+    }
+    var createBtn = document.getElementById("btn-browser-create");
+    var restore = createBtn ? setButtonBusy(createBtn, "Creating…") : function () {};
+    var result = await apiPost("/browse/create", { path: _browserCurrentPath, name: name });
+    restore();
+    if (!result || result.error) {
+        showToast("Could not create folder: " + ((result && result.error) || "request failed"), "error", 5000);
+        return;
+    }
+    showToast("Folder \u201c" + name + "\u201d created", "success");
+    // Navigate into the new folder so the user can confirm with Select.
+    browseFolder(result.path);
+}
+
+// Bind all folder-browser controls at module import time — the DOM is fully
+// parsed by then (ES modules are deferred) — so the browse buttons AND the
+// modal's controls work on every page (Settings, Sources, Media, System)
+// regardless of navigation order.
+
+// Open: every folder-browse button (data-target = id of the input to fill).
+document.querySelectorAll(".btn-browse").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+        var targetId = this.getAttribute("data-target");
+        var inputEl = document.getElementById(targetId);
+        if (inputEl) openFolderBrowser(inputEl);
+    });
+});
+
+// Create-folder button inside the modal.
+document.getElementById("btn-browser-create")?.addEventListener("click", createFolder);
+// Also allow Enter inside the new-folder name field.
+document.getElementById("browser-new-folder-name")?.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        createFolder();
+    }
+});
+// Close: the Cancel button.
+document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
+// Close: clicking the modal backdrop (outside the dialog).
+document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
+    if (e.target === this) closeFolderBrowser();
+});
+// Close: pressing Escape while the modal is open.
+document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") {
+        var modal = document.getElementById("folder-browser-modal");
+        if (modal && modal.classList.contains("open")) closeFolderBrowser();
+    }
+});
 
 // -- Page Navigation -------------------------------------------------------
 

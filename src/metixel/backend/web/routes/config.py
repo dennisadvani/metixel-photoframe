@@ -144,53 +144,61 @@ def update_config_section(section: str):
             except Exception:
                 logger.debug("OptimisationQueue reload failed", exc_info=True)
 
-        # Trigger a full pipeline reset when config changes affect
-        # what media is playable — simpler and more robust than
-        # trying to incrementally update items mid-pipeline.
-        # "sync" is included so that enabling/disabling watch folders
-        # and toggling local sync on/off clears the playlist and
-        # re-scans with the correct set of active paths.
-        daemon = current_app.config.get("METIXEL_DAEMON")
-        if daemon is not None and section in ("video", "image", "display", "sync"):
-            try:
-                daemon.reset_pipeline()
-            except Exception:
-                logger.debug("Pipeline reset failed", exc_info=True)
+        # ── Full rebuild (service restart) on pipeline-affecting saves ──────
+        # Changes that alter what media is playable / how it is processed are
+        # applied with a clean backend restart (the folder watcher + queue +
+        # journal + playlist are all rebuilt fresh on boot), which has proven
+        # far more reliable than the old in-process pipeline reset.  Settings
+        # are already persisted atomically above (state.update_config → save),
+        # and schedule_sudo() delays 2s so the HTTP response flushes first.
+        #
+        # The restart is scoped to the *keys that actually affect the media
+        # pipeline* so routine saves (display power schedule, Immich
+        # credentials, poll-interval tweaks) don't bounce the frame:
+        #   - sync:      only local watch-path / local-enabled changes
+        #   - video/image: any processing-setting save
+        #   - display:   only mode/size keys (resolution / refresh / rotation)
+        needs_rebuild = False
+        if section in ("video", "image"):
+            needs_rebuild = True
+        elif section == "sync":
+            local = data.get("local")
+            if isinstance(local, dict):
+                needs_rebuild = any(k in local for k in ("watch_paths", "enabled"))
+        elif section == "display":
+            needs_rebuild = any(k in data for k in _DISPLAY_MODE_KEYS)
 
-        # Display-mode changes (resolution / refresh rate / rotation) require
-        # a frontend restart to take effect — the display backend's create()
-        # runs once at startup and applies the mode via wlr-randr then.  The
-        # frontend runs under the metixel-cage service, so restart it after a
-        # short delay so the HTTP response is sent first.
-        if section == "display" and any(k in data for k in _DISPLAY_MODE_KEYS):
-            # Changing the canvas *size* (width/height/rotation) means any
-            # previously-optimised images/videos were scaled for the old
-            # dimensions, so they must be re-processed at the new size.  Clear
-            # the processed-media cache so the next scan re-optimises from the
-            # source (the pipeline reset below re-discovers and re-queues).
-            if any(k in data for k in _DISPLAY_SIZE_KEYS):
-                try:
-                    deleted, freed = clear_cache(state)
-                    logger.info(
-                        "Canvas size changed (width/height/rotation) — cleared %d "
-                        "processed cache file(s), freed %.1f MB",
-                        deleted,
-                        freed / (1024 * 1024),
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to clear processed cache after canvas-size change",
-                        exc_info=True,
-                    )
+        # A canvas *size* change (width/height/rotation) invalidates every
+        # optimised image/video (they were scaled for the old dimensions), so
+        # clear the processed-media cache before the restart re-scans.
+        if section == "display" and any(k in data for k in _DISPLAY_SIZE_KEYS):
+            try:
+                deleted, freed = clear_cache(state)
+                logger.info(
+                    "Canvas size changed (width/height/rotation) — cleared %d "
+                    "processed cache file(s), freed %.1f MB",
+                    deleted,
+                    freed / (1024 * 1024),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to clear processed cache after canvas-size change",
+                    exc_info=True,
+                )
+
+        if needs_rebuild:
+            # Restart the backend; the frontend (metixel-cage) reconnects to
+            # the freshly-rebuilt pipeline.  The delay lets the response flush.
             schedule_sudo(
-                ["systemctl", "restart", "metixel-cage"],
-                ok_message="Frontend restarted to apply display mode",
-                fail_message="sudo systemctl restart metixel-cage",
-                thread_name="display-mode-restart",
+                ["systemctl", "restart", "metixel-backend"],
+                ok_message="Backend restarted to rebuild media pipeline",
+                fail_message="sudo systemctl restart metixel-backend",
+                thread_name="pipeline-rebuild-restart",
             )
             logger.info(
-                "Display mode changed — frontend restart scheduled to apply "
-                "width/height/refresh_rate/rotation"
+                "Pipeline-affecting %s settings saved — backend restart scheduled "
+                "to rebuild the media pipeline",
+                section,
             )
 
         # When the welcome banner is dismissed (system.first_run → false),

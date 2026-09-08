@@ -682,31 +682,33 @@ class FrontendRenderer:
                 )
 
         if removed_ids:
-            # Only prune when the backend playlist has at least as many
-            # items as the frontend queue.  If the backend playlist is
-            # smaller, the backend is likely still building its initial
-            # playlist (e.g. after a cache clear).  Removing items
-            # prematurely would leave the slideshow with an empty queue
-            # and cause a black screen.
-            if len(items) >= len(self._presentation._queue):
-                removed = self._presentation.remove_items(removed_ids)
-                if removed:
-                    logger.info(
-                        "Removed %d items from slideshow "
-                        "(backend playlist: %d, frontend queue: %d)",
-                        removed,
-                        len(items),
-                        len(self._presentation._queue),
-                    )
-            else:
-                logger.debug(
-                    "Not pruning %d item(s) — backend playlist is still "
-                    "building (%d items vs frontend %d).  Items will be "
-                    "reconciled when the backend finishes processing.",
-                    len(removed_ids),
+            # The frontend reliably restarts whenever the backend does (the
+            # cage service rides along with the backend restart), so the old
+            # "backend playlist is still building" race this guard protected
+            # against is now handled by the restart itself — no stale larger
+            # queue survives to be wrongly pruned.  Pruning unconditionally
+            # here fixes live file deletions from watch folders leaving
+            # stale items in the queue (which rendered as black screens).
+            #
+            # GUARD COMMENTED OUT FOR TESTING:
+            #   if len(items) >= len(self._presentation._queue):
+            removed = self._presentation.remove_items(removed_ids)
+            if removed:
+                logger.info(
+                    "Removed %d items from slideshow (backend playlist: %d, frontend queue: %d)",
+                    removed,
                     len(items),
                     len(self._presentation._queue),
                 )
+            # else:
+            #     logger.debug(
+            #         "Not pruning %d item(s) — backend playlist is still "
+            #         "building (%d items vs frontend %d).  Items will be "
+            #         "reconciled when the backend finishes processing.",
+            #         len(removed_ids),
+            #         len(items),
+            #         len(self._presentation._queue),
+            #     )
 
         if not new_ids and not removed_ids:
             logger.debug(

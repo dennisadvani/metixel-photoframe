@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
@@ -14,6 +15,38 @@ from metixel.shared.paths import data_dir
 logger = logging.getLogger(__name__)
 
 browse_bp = Blueprint("browse", __name__)
+
+
+def _resolve_browse_path(requested: str) -> Path | None:
+    """Resolve and security-check a ``path`` param against the data dir.
+
+    Absolute paths are used as-is (the dashboard configures the user's own
+    system, so any readable location is acceptable).  Relative paths resolve
+    against the persistent data directory.  Returns ``None`` when the path
+    is not a readable directory (the caller decides the error response).
+    """
+    base = data_dir()
+    requested_path = Path(requested or "")
+    if not requested_path.is_absolute():
+        requested_path = base / requested_path
+    try:
+        return requested_path.resolve()
+    except (OSError, RuntimeError):
+        return None
+
+
+def _can_create_under(path: Path) -> bool:
+    """True if *path* is inside (or is) ``<data dir>/media``.
+
+    Folder creation in the browser modal is restricted to the media tree so
+    the UI can never create directories outside the frame's media area.
+    """
+    media_root = (data_dir() / "media").resolve()
+    try:
+        path.resolve().relative_to(media_root)
+        return True
+    except ValueError:
+        return False
 
 
 @browse_bp.route("", methods=["GET"])
@@ -36,15 +69,8 @@ def browse_folder():
     # photos/videos live, not at the data root.
     default_path = str(base / "media")
     requested = request.args.get("path") or default_path
-    requested_path = Path(requested)
-
-    if not requested_path.is_absolute():
-        requested_path = base / requested_path
-
-    # Resolve and security-check: don't allow escaping the base path
-    try:
-        resolved = requested_path.resolve()
-    except (OSError, RuntimeError):
+    resolved = _resolve_browse_path(requested)
+    if resolved is None:
         return jsonify({"error": "Invalid path"}), 400
 
     # Allow browsing anywhere readable — the user is configuring their
@@ -86,8 +112,68 @@ def browse_folder():
             "current_path": str(resolved),
             "parent_path": parent,
             "entries": entries,
+            # Persistent data dir — lets the UI display folders relative to it
+            # (config values are stored relative to the data dir).
+            "base_path": str(base),
+            # Whether the browser can create new folders in this directory.
+            # Creation is restricted to the media tree (see _can_create_under).
+            "can_create": _can_create_under(resolved),
         }
     )
+
+
+@browse_bp.route("/create", methods=["POST"])
+def create_folder():
+    """Create a new subdirectory inside the currently browsed folder.
+
+    Request body:
+        path (str): The parent directory (absolute, or relative to the
+            persistent data dir).
+        name (str): The new folder name.  Must be a plain directory name
+            (no path separators, ``..``, or hidden-dot prefix); it is
+            sanitised before use.
+
+    Creation is restricted to the media tree (``<data dir>/media``) so the
+    UI can never create directories elsewhere on the filesystem.
+
+    Returns:
+        JSON ``{status: "ok", path: <abs path>, name: <name>}``.
+    """
+    body = request.get_json(silent=True) or {}
+    parent_raw = str(body.get("path") or "").strip()
+    name_raw = str(body.get("name") or "").strip()
+
+    if not parent_raw or not name_raw:
+        return jsonify({"error": "Both 'path' and 'name' are required"}), 400
+
+    # Validate the name: plain directory name, no separators / traversal /
+    # hidden-dot prefix, no reserved "." / "..".
+    if (
+        name_raw in (".", "..")
+        or "/" in name_raw
+        or "\\" in name_raw
+        or name_raw.startswith(".")
+        or name_raw != re.sub(r"[^A-Za-z0-9._ -]", "_", name_raw)
+    ):
+        return jsonify({"error": f"Invalid folder name: {name_raw}"}), 400
+
+    parent = _resolve_browse_path(parent_raw)
+    if parent is None or not parent.exists() or not parent.is_dir():
+        return jsonify({"error": "Parent folder not found"}), 404
+    if not _can_create_under(parent):
+        return jsonify({"error": "New folders can only be created inside the media folder"}), 403
+
+    target = parent / name_raw
+    if target.exists():
+        return jsonify({"error": f"Folder already exists: {name_raw}"}), 409
+    try:
+        target.mkdir()
+    except OSError as e:
+        logger.warning("Failed to create folder %s: %s", target, e)
+        return jsonify({"error": f"Cannot create folder: {e}"}), 500
+
+    logger.info("Folder created via web UI: %s", target)
+    return jsonify({"status": "ok", "path": str(target), "name": name_raw})
 
 
 def _safe_fallback(missing: Path, base: Path) -> Path | None:

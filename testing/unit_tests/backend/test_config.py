@@ -338,6 +338,7 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("network.connection_check_url", "http://connectivity-check.ubuntu.com"),
     # system
     ("system.cache_dir", "cache/"),
+    ("system.upload_dir", ""),
     ("system.log_level", "NONE"),
     ("system.quiet_boot", False),
     ("system.first_run", True),
