@@ -185,8 +185,13 @@ class TestPutDisplayConfig:
         assert data["refresh_rate"] == 0
         assert data["rotation"] == 0
 
-    def test_display_mode_change_schedules_frontend_restart(self, client, monkeypatch):
-        """Changing rotation/refresh schedules a metixel-cage restart."""
+    def test_display_mode_change_schedules_backend_restart(self, client, monkeypatch):
+        """Changing rotation/refresh schedules a metixel-backend restart.
+
+        The old pipeline reset was replaced with a full service restart, so a
+        display-mode change must bounce the backend (the frontend reconnects
+        to the freshly-rebuilt pipeline on the new mode).
+        """
         import metixel.backend.web.routes.config as config_mod
 
         scheduled: list[list[str]] = []
@@ -200,10 +205,10 @@ class TestPutDisplayConfig:
             json={"rotation": 180, "refresh_rate": 60},
         )
         assert resp.status_code == 200
-        assert scheduled == [["systemctl", "restart", "metixel-cage"]]
+        assert scheduled == [["systemctl", "restart", "metixel-backend"]]
 
     def test_display_non_mode_change_no_restart(self, client, monkeypatch):
-        """Changing only fps_limit/schedule does NOT restart the frontend."""
+        """Changing only fps_limit/schedule does NOT restart the backend."""
         import metixel.backend.web.routes.config as config_mod
 
         scheduled: list[list[str]] = []
@@ -217,6 +222,99 @@ class TestPutDisplayConfig:
             json={"fps_limit": 24},
         )
         assert resp.status_code == 200
+        assert scheduled == []
+
+
+# ---------------------------------------------------------------------------
+# Pipeline rebuild (backend restart) on pipeline-affecting saves
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineRebuildRestart:
+    """PUT to video/image/sync(display) schedules a backend restart only when
+    the save actually affects the media pipeline (not routine saves)."""
+
+    def _scheduled(self, monkeypatch) -> list[list[str]]:
+        import metixel.backend.web.routes.config as config_mod
+
+        scheduled: list[list[str]] = []
+
+        def fake_schedule_sudo(cmd, **kwargs):
+            scheduled.append(cmd)
+
+        monkeypatch.setattr(config_mod, "schedule_sudo", fake_schedule_sudo)
+        return scheduled
+
+    def test_video_save_restarts_backend(self, client, monkeypatch):
+        scheduled = self._scheduled(monkeypatch)
+        resp = client.put(
+            "/api/config/video",
+            json={"transcoding_enabled": False},
+        )
+        assert resp.status_code == 200
+        assert scheduled == [["systemctl", "restart", "metixel-backend"]]
+
+    def test_image_save_restarts_backend(self, client, monkeypatch):
+        scheduled = self._scheduled(monkeypatch)
+        resp = client.put(
+            "/api/config/image",
+            json={"optimisation_enabled": False},
+        )
+        assert resp.status_code == 200
+        assert scheduled == [["systemctl", "restart", "metixel-backend"]]
+
+    def test_sync_local_watch_paths_restarts_backend(self, client, monkeypatch):
+        scheduled = self._scheduled(monkeypatch)
+        resp = client.put(
+            "/api/config/sync",
+            json={
+                "local": {
+                    "watch_paths": [{"path": "media/a/", "enabled": True}],
+                }
+            },
+        )
+        assert resp.status_code == 200
+        assert scheduled == [["systemctl", "restart", "metixel-backend"]]
+
+    def test_sync_local_enabled_toggle_restarts_backend(self, client, monkeypatch):
+        scheduled = self._scheduled(monkeypatch)
+        resp = client.put(
+            "/api/config/sync",
+            json={"local": {"enabled": False}},
+        )
+        assert resp.status_code == 200
+        assert scheduled == [["systemctl", "restart", "metixel-backend"]]
+
+    def test_sync_local_poll_interval_no_restart(self, client, monkeypatch):
+        """Changing only the poll interval does not rebuild the pipeline."""
+        scheduled = self._scheduled(monkeypatch)
+        resp = client.put(
+            "/api/config/sync",
+            json={"local": {"poll_interval_seconds": 60}},
+        )
+        assert resp.status_code == 200
+        assert scheduled == []
+
+    def test_sync_immich_only_save_no_restart(self, client, monkeypatch):
+        """Saving Immich credentials/albums does not bounce the backend."""
+        scheduled = self._scheduled(monkeypatch)
+        resp = client.put(
+            "/api/config/sync",
+            json={"immich": {"server_url": "https://x", "api_key": "k"}},
+        )
+        assert resp.status_code == 200
+        assert scheduled == []
+
+    def test_non_pipeline_section_no_restart(self, client, monkeypatch):
+        """slideshow/system/web saves never restart the backend."""
+        scheduled = self._scheduled(monkeypatch)
+        for section, payload in [
+            ("slideshow", {"image_duration_seconds": 10}),
+            ("system", {"log_level": "DEBUG"}),
+            ("web", {"session_timeout_minutes": 60}),
+        ]:
+            resp = client.put(f"/api/config/{section}", json=payload)
+            assert resp.status_code == 200
         assert scheduled == []
 
 

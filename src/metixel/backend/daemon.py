@@ -117,31 +117,6 @@ class BackendDaemon:
         with contextlib.suppress(Exception):
             self._state.flush_journal()
 
-    def reset_pipeline(self) -> None:
-        """Clear all queues and restart the media pipeline from scratch.
-
-        Called when config changes affect what media is playable
-        (watch folders, video playback toggle, resolution thresholds).
-        Triggers the folder watcher to re-scan on its next cycle.
-        """
-        logger.info("Pipeline reset requested — clearing all queues")
-
-        # 1. Clear the slideshow playlist
-        self._state.clear_playlist()
-
-        # 2. Drain the optimisation queue (all pending items)
-        opt_queue = getattr(self, "_opt_queue", None)
-        if opt_queue is not None:
-            opt_queue.pause()
-            logger.info("Optimisation queue drained")
-
-        # 3. Reset folder watcher snapshot so the next scan
-        #    re-discovers all files with the new config
-        watcher = getattr(self, "_folder_watcher", None)
-        if watcher is not None:
-            watcher.reset_snapshot()
-            logger.info("Folder watcher snapshot reset — will re-scan")
-
     def _ensure_runtime_dependencies(self) -> None:
         """Install any missing runtime Python dependencies on startup.
 
