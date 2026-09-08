@@ -7,7 +7,9 @@
 
 import {
     apiGet,
+    apiPut,
     escapeHtml,
+    openFolderBrowser,
     setButtonBusy,
     showToast
 } from "./core.js";
@@ -20,6 +22,8 @@ import {
     var _mediaLoading = false;
     /** Guard so upload/drop bindings are attached once */
     var _mediaUploadBound = false;
+    /** Guard so the upload-destination browse button is bound once. */
+    var _mediaDestBound = false;
 
     async function loadMedia() {
         _mediaOffset = 0;
@@ -29,10 +33,15 @@ import {
         var el = document.getElementById("media-list");
         el.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
 
+        // Single /config fetch shared by the upload-destination control and
+        // the folder-filter dropdown below.
+        var config = await apiGet("/config");
+
+        _setupUploadDestination(config);
+
         // Populate folder filter dropdown from enabled watch paths only.
         // The media API only scans enabled paths, so a disabled folder
         // would always show 0 results and look broken to the user.
-        var config = await apiGet("/config");
         if (config && config.sync && config.sync.local && config.sync.local.watch_paths) {
             var paths = config.sync.local.watch_paths;
             var sel = document.getElementById("media-filter-folder");
@@ -298,6 +307,84 @@ import {
             el.appendChild(btn);
         }
     }
+
+// -- Upload destination --------------------------------------------------
+
+/**
+ * Initialise the "where uploads are copied" control in the media toolbar.
+ *
+ * Reads the persisted ``system.upload_dir`` config value (relative paths are
+ * resolved under the persistent data dir) and lets the user browse for a new
+ * destination via the shared folder browser.  The chosen folder is saved to
+ * config immediately on Select.
+ */
+async function _setupUploadDestination(config) {
+    var btn = document.getElementById("btn-upload-destination");
+    var label = document.getElementById("media-upload-destination");
+
+    // Nothing to wire up if the toolbar control isn't present.
+    if (!btn && !label) return;
+
+    var configured = (config && config.system && config.system.upload_dir) || "";
+    var value = String(configured || "").trim();
+
+    if (label) {
+        // Fall back to the legacy default when nothing is persisted yet.
+        label.textContent = value || "media/my_media/";
+        label.title = value || "Default destination (media/my_media/) \u2014 uploads must land in an enabled folder to reach the slideshow";
+    }
+
+    if (!_mediaDestBound) {
+        _mediaDestBound = true;
+        if (btn) {
+            btn.addEventListener("click", function () {
+                // Start at the currently shown destination (fresh each click —
+                // the label is updated on every loadMedia and after each save).
+                var curLabel = document.getElementById("media-upload-destination");
+                openFolderBrowser(null, {
+                    initialPath: curLabel ? curLabel.textContent.trim() : "",
+                    onSelect: function (absPath, browseData) {
+                        var relPath = relativeForConfig(absPath, browseData && browseData.base_path);
+                        _saveUploadDestination(relPath);
+                    }
+                });
+            });
+        }
+    }
+}
+
+/** Persist the chosen upload destination (data-dir-relative) to config. */
+async function _saveUploadDestination(relPath) {
+    var result = await apiPut("/config/system", { upload_dir: relPath });
+    if (result) {
+        var label = document.getElementById("media-upload-destination");
+        if (label) {
+            label.textContent = relPath;
+            label.title = relPath + " \u2014 uploads must land in an enabled folder to reach the slideshow";
+        }
+        showToast("Upload destination set to " + relPath, "success");
+    } else {
+        showToast("Failed to save the upload destination", "error");
+    }
+}
+
+/**
+ * Convert an absolute data-dir path to the relative form config stores
+ * (relative paths resolve under the persistent data dir on the backend).
+ * Separators are normalised to forward slashes so values stay portable
+ * across OSes (Windows dev runs produce backslash paths otherwise).
+ * Falls back to the absolute path when the folder isn't under the data dir.
+ */
+function relativeForConfig(absPath, basePath) {
+    var base = String(basePath || "/opt/metixel/data").replace(/\\/g, "/");
+    var p = String(absPath || "").replace(/\\/g, "/");
+    if (p.indexOf(base) === 0) {
+        var rel = p.substring(base.length).replace(/^\/+/, "");
+        if (rel && rel[rel.length - 1] !== "/") rel += "/";
+        return rel;
+    }
+    return p;
+}
 
 // -- Upload -------------------------------------------------------------
 

@@ -65,15 +65,28 @@ def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = Tr
         # Ensure file handler exists (may have been added by fileConfig, or add manually)
         has_file_handler = any(isinstance(h, logging.FileHandler) for h in root.handlers)
         if not has_file_handler:
-            log_dir.mkdir(parents=True, exist_ok=True)
-            file_handler = logging.handlers.RotatingFileHandler(
-                str(log_file),
-                maxBytes=10_485_760,
-                backupCount=5,
-            )
-            file_handler.setLevel(logging.DEBUG)
-            file_handler.setFormatter(fmt)
-            root.addHandler(file_handler)
+            try:
+                log_dir.mkdir(parents=True, exist_ok=True)
+                file_handler = logging.handlers.RotatingFileHandler(
+                    str(log_file),
+                    maxBytes=10_485_760,
+                    backupCount=5,
+                )
+                file_handler.setLevel(logging.DEBUG)
+                file_handler.setFormatter(fmt)
+                root.addHandler(file_handler)
+            except OSError as exc:
+                # metixel.log unwritable (bad ownership/perms, read-only FS, or a
+                # full/unwritable parent dir) → run console + ring buffer only.
+                # Never crash the daemon over a log file (graceful degradation,
+                # core rule 7) — this is the same failure mode as a root-owned
+                # metixel.log crash-looping the pi backend.  The console handler
+                # is attached above, so this warning is still visible at boot.
+                logging.getLogger("metixel").warning(
+                    "metixel.log not writable at %s; disabling file logging (%s)",
+                    log_file,
+                    exc,
+                )
 
         # 2b. Apply persisted file-handler log level from config.json.
         #     Only file handlers are changed — the ring buffer stays at

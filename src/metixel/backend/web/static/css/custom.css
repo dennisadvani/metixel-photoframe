@@ -964,9 +964,25 @@ button:focus-visible {
     margin-right: 0;
 }
 
-.media-toolbar-hint {
+.media-toolbar .media-toolbar-hint {
+    /* The hint lives on its own line under the upload controls. */
+    flex-basis: 100%;
     font-size: 0.78rem;
     color: var(--text-muted);
+    margin-top: -0.35rem;
+}
+
+#btn-upload-destination {
+    margin-top: 0;
+    margin-right: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#btn-upload-destination .material-symbols-outlined {
+    flex-shrink: 0;
 }
 
 /* "Open the SMB share" accordion under the Upload Media button */
@@ -1670,6 +1686,17 @@ footer {
 
 .browser-entry:hover {
     background: var(--primary-light);
+}
+
+/* "Create folder" row in the folder-browser modal */
+.browser-create-row {
+    display: flex;
+    align-items: center;
+}
+
+.browser-create-row input {
+    flex: 1;
+    min-width: 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

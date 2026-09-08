@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=41">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=42">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -301,6 +301,9 @@
                     <div class="media-toolbar">
                         <button id="btn-upload-media" type="button">
                             <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">upload</span> Upload Media
+                        </button>
+                        <button id="btn-upload-destination" type="button" class="btn--secondary btn--sm" aria-label="Choose where uploaded media is saved" title="Choose where uploaded media is saved">
+                            <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span> Save to&nbsp;<span id="media-upload-destination">media/my_media/</span>
                         </button>
                         <input type="file" id="file-upload" accept="image/*,video/*" multiple style="display:none">
                         <span class="media-toolbar-hint">Tap to pick photos/videos, or drag &amp; drop onto the grid</span>
@@ -1607,10 +1610,19 @@
             <div style="margin-bottom:0.5rem;font-size:0.82rem;word-break:break-all">
                 <span id="browser-current-path">/opt/metixel/</span>
             </div>
-            <ul id="browser-entries" style="list-style:none;padding:0;margin:0 0 0.8rem 0;max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">
+            <ul id="browser-entries" style="list-style:none;padding:0;margin:0 0 0.6rem 0;max-height:300px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">
                 <li style="padding:0.5rem;color:var(--text-muted)">Loading…</li>
             </ul>
-            <div style="display:flex;gap:0.5rem;justify-content:flex-end">
+            <div id="browser-create-row" class="browser-create-row" style="display:none;margin-bottom:0.7rem">
+                <div style="display:flex;gap:0.5rem;align-items:center">
+                    <span class="material-symbols-outlined" style="font-size:1rem;color:var(--text-muted);flex-shrink:0" aria-hidden="true">create_new_folder</span>
+                    <input type="text" id="browser-new-folder-name" class="btn-browse-create-input" placeholder="New folder name" autocomplete="off" style="flex:1;min-width:0;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
+                    <button id="btn-browser-create" type="button" class="btn--secondary btn--sm" style="margin:0;flex-shrink:0">
+                        <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">create_new_folder</span> Create
+                    </button>
+                </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap">
                 <button id="btn-browser-parent" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">arrow_upward</span> Parent</button>
                 <button id="btn-browser-select" class="btn--primary">Select</button>
                 <button id="btn-browser-cancel" class="btn--secondary">Cancel</button>
@@ -1631,6 +1643,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=63"></script>
+    <script type="module" src="/static/js/main.js?v=64"></script>
 </body>
 </html>

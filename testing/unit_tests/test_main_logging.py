@@ -79,3 +79,46 @@ class TestSetupLoggingFileHandler:
         # The root-running entry points must not open the pi-owned log at all.
         assert _root_file_handlers() == []
         assert not log_file.exists()
+
+class TestUnwritableLogFileGuard:
+    """Graceful degradation when metixel.log cannot be opened for writing.
+
+    A root-owned or otherwise unwritable metixel.log must never crash the
+    daemon at startup (see the root-owned crash-loop bug referenced in the
+    module docstring).  ``_setup_logging`` should fall back to console + ring
+    buffer only and not attach any FileHandler.
+    """
+
+    def test_rotating_handler_open_failure_is_graceful(
+        self, clean_root_logger, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(main_mod, "data_dir", lambda: tmp_path)
+
+        def _boom(*args, **kwargs):
+            raise PermissionError(
+                13, "Permission denied", str(tmp_path / "logs" / "metixel.log")
+            )
+
+        monkeypatch.setattr(logging.handlers, "RotatingFileHandler", _boom)
+
+        # Must not raise, and must not attach any file handler.
+        main_mod._setup_logging(
+            tmp_path / "config.json", logging.DEBUG, file_logging=True
+        )
+
+        assert _root_file_handlers() == []
+
+    def test_unwritable_log_dir_is_graceful(
+        self, clean_root_logger, tmp_path, monkeypatch
+    ) -> None:
+        # Make data_dir()/logs a plain file so the mkdir() inside _setup_logging
+        # raises FileExistsError (an OSError) instead of creating a directory.
+        monkeypatch.setattr(main_mod, "data_dir", lambda: tmp_path)
+        (tmp_path / "logs").write_text("not a directory", encoding="utf-8")
+
+        main_mod._setup_logging(
+            tmp_path / "config.json", logging.DEBUG, file_logging=True
+        )
+
+        assert _root_file_handlers() == []
+

@@ -130,3 +130,38 @@ def test_upload_no_files_returns_400(app, client):
     resp = client.post("/api/media/upload", data={}, content_type="multipart/form-data")
     assert resp.status_code == 400
     assert resp.get_json()["errors"][0]["error"] == "No files supplied"
+
+
+def test_upload_saves_into_configured_upload_dir(app, client, mock_state, tmp_path):
+    """When ``system.upload_dir`` is set, uploads land there (not my_media)."""
+    custom_dir = tmp_path / "custom" / "incoming"
+    mock_state.update_config("system", {"upload_dir": str(custom_dir)})
+
+    resp = _upload(client, [("photo.jpg", b"\xff\xd8\xff\xe0fakejpeg")])
+
+    assert resp.status_code == 201
+    assert resp.get_json()["saved_count"] == 1
+    assert (custom_dir / "photo.jpg").read_bytes() == b"\xff\xd8\xff\xe0fakejpeg"
+
+
+def test_upload_saves_into_relative_upload_dir(app, client, mock_state, tmp_path, monkeypatch):
+    """A relative ``upload_dir`` resolves under the persistent data dir."""
+    from pathlib import Path
+
+    import metixel.backend.web.media_service as media_service
+
+    def fake_resolve(p):
+        # Treat relative paths as under tmp_path so the test never touches the
+        # workspace data dir on a desktop run.
+        path = Path(p)
+        return path if path.is_absolute() else (tmp_path / "data" / path).resolve()
+
+    monkeypatch.setattr(media_service, "resolve_install_path", fake_resolve)
+
+    expected = (tmp_path / "data" / "media" / "uploaded").resolve()
+    mock_state.update_config("system", {"upload_dir": "media/uploaded/"})
+
+    resp = _upload(client, [("photo.jpg", b"\xff\xd8\xff\xe0fakejpeg")])
+
+    assert resp.status_code == 201
+    assert (expected / "photo.jpg").read_bytes() == b"\xff\xd8\xff\xe0fakejpeg"

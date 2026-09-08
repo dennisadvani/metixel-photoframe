@@ -155,6 +155,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "system": {
         "cache_dir": "cache/",
+        # Web-UI upload destination.  Relative paths resolve under the
+        # persistent data dir (e.g. "media/my_media/" → <data>/media/my_media).
+        # Empty = the legacy default (media/my_media).  The chosen folder
+        # should be an enabled watch path so uploads reach the slideshow.
+        "upload_dir": "",
         "log_level": "NONE",
         "quiet_boot": False,
         "first_run": True,

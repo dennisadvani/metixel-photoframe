@@ -9,7 +9,7 @@ import {
     apiGet,
     apiPost,
     apiPut,
-    escapeHtml,
+    openFolderBrowser,
     sanitizeInt,
     setChecked,
     setValue,
@@ -807,98 +807,6 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
         return paths;
     }
 
-    // -- Folder Browser ------------------------------------------------------
-
-    /** @type {HTMLInputElement|null} The input element to fill when a folder is selected. */
-    var _browserTargetInput = null;
-
-    function openFolderBrowser(inputEl) {
-        _browserTargetInput = inputEl;
-        var modal = document.getElementById("folder-browser-modal");
-        if (modal) modal.classList.add("open");
-        // Start browsing at the current input value, or let the backend
-        // default to the media folder when the field is empty.
-        browseFolder(inputEl.value.trim() || "");
-    }
-
-    function closeFolderBrowser() {
-        var modal = document.getElementById("folder-browser-modal");
-        if (modal) modal.classList.remove("open");
-        _browserTargetInput = null;
-    }
-
-    /**
-     * Browse a folder via the API and populate the modal list.
-     * @param {string} folderPath - The path to browse.
-     */
-
-    async function browseFolder(folderPath) {
-        var pathEl = document.getElementById("browser-current-path");
-        var listEl = document.getElementById("browser-entries");
-        if (!listEl) return;
-
-        listEl.innerHTML = '<li style="padding:0.5rem;color:var(--text-muted)">Loading…</li>';
-
-        var data = await apiGet("/browse?path=" + encodeURIComponent(folderPath));
-        if (!data || data.error) {
-            listEl.innerHTML = '<li style="padding:0.5rem;color:var(--danger)">' + escapeHtml((data && data.error) || "Cannot browse folder") + '</li>';
-            return;
-        }
-
-        if (pathEl) pathEl.textContent = data.current_path || folderPath;
-
-        // Parent directory button state
-        var parentBtn = document.getElementById("btn-browser-parent");
-        if (parentBtn) {
-            parentBtn.disabled = !data.parent_path;
-            parentBtn.onclick = function () {
-                if (data.parent_path) browseFolder(data.parent_path);
-            };
-        }
-
-        // Build entry list
-        var html = "";
-        if (!data.entries || data.entries.length === 0) {
-            html = '<li style="padding:0.5rem;color:var(--text-muted)">No subdirectories</li>';
-        } else {
-            data.entries.forEach(function (entry) {
-                html += '<li class="browser-entry" data-path="' + escapeHtml(entry.path) + '" style="padding:0.4rem 0.5rem;cursor:pointer;border-bottom:1px solid var(--border);font-size:0.82rem"><span class="material-symbols-outlined" style="font-size:0.9rem;vertical-align:middle">folder</span> ' + escapeHtml(entry.name) + '</li>';
-            });
-        }
-        listEl.innerHTML = html;
-
-        // Click handlers for entries (navigate into subdir)
-        listEl.querySelectorAll(".browser-entry").forEach(function (li) {
-            li.addEventListener("click", function () {
-                browseFolder(li.getAttribute("data-path"));
-            });
-            li.addEventListener("mouseenter", function () {
-                this.style.background = "var(--accent-bg)";
-            });
-            li.addEventListener("mouseleave", function () {
-                this.style.background = "";
-            });
-        });
-
-        // Select button: use the currently browsed folder
-        var selectBtn = document.getElementById("btn-browser-select");
-        if (selectBtn) {
-            selectBtn.onclick = function () {
-                if (_browserTargetInput && data.current_path) {
-                    // Make path relative to the persistent data dir if possible
-                    var relPath = data.current_path;
-                    var basePrefix = "/opt/metixel/data/";
-                    if (relPath.indexOf(basePrefix) === 0) {
-                        relPath = relPath.substring(basePrefix.length);
-                        if (!relPath.endsWith("/")) relPath += "/";
-                    }
-                    _browserTargetInput.value = relPath;
-                }
-                closeFolderBrowser();
-            };
-        }
-    }
-
     // -- Image Optimisation helpers ------------------------------------------
 
     function _toggleImageOptSettings(enabled) {
@@ -908,34 +816,5 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
             el.style.opacity = enabled ? "1" : "0.5";
         }
     }
-
-// Bind all folder-browser controls at module import time — the DOM is fully
-// parsed by then (ES modules are deferred) — so the browse buttons AND the
-// modal's cancel controls (Cancel button, backdrop click, Escape) work on
-// every page (Settings, Image Sync, Advanced) regardless of navigation order,
-// not just after the Settings page has been visited.
-
-// Open: every folder-browse button.
-document.querySelectorAll(".btn-browse").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-        var targetId = this.getAttribute("data-target");
-        var inputEl = document.getElementById(targetId);
-        if (inputEl) openFolderBrowser(inputEl);
-    });
-});
-
-// Close: the Cancel button.
-document.getElementById("btn-browser-cancel")?.addEventListener("click", closeFolderBrowser);
-// Close: clicking the modal backdrop (outside the dialog).
-document.getElementById("folder-browser-modal")?.addEventListener("click", function (e) {
-    if (e.target === this) closeFolderBrowser();
-});
-// Close: pressing Escape while the modal is open.
-document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") {
-        var modal = document.getElementById("folder-browser-modal");
-        if (modal && modal.classList.contains("open")) closeFolderBrowser();
-    }
-});
 
 export { loadSettings, renderWatchPaths, collectWatchPaths, addWatchPathRow };

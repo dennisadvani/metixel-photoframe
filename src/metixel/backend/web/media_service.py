@@ -136,16 +136,23 @@ def watch_folder_name(file_path: Path, roots: list[Path]) -> str:
 
 
 def resolve_upload_dir(state) -> Path:
-    """Return the user-upload folder (``media/my_media``), creating it if needed.
+    """Return the web-UI upload folder, creating it if needed.
 
-    ``my_media`` is an enabled watch path in the default config, so files
-    written here are picked up by the FolderWatcher and flow through the
-    optimisation pipeline into the slideshow.
+    Honors the persisted ``system.upload_dir`` config value when set
+    (relative paths resolve under the persistent data dir).  Otherwise falls
+    back to ``<media_dir>/my_media`` — the legacy default.  Whatever the
+    destination, it should be an enabled watch path so files written here
+    are picked up by the FolderWatcher and flow through the optimisation
+    pipeline into the slideshow.
     """
     config = state.config
-    media_dir = Path(config.system.get("media_dir", "media/"))
-    media_dir = resolve_install_path(media_dir)
-    upload_dir = media_dir / UPLOAD_SUBDIR
+    configured = str(config.system.get("upload_dir", "") or "").strip()
+    if configured:
+        upload_dir = resolve_install_path(configured).resolve()
+    else:
+        media_dir = Path(config.system.get("media_dir", "media/"))
+        media_dir = resolve_install_path(media_dir)
+        upload_dir = media_dir / UPLOAD_SUBDIR
     upload_dir.mkdir(parents=True, exist_ok=True)
     return upload_dir
 
