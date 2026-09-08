@@ -695,8 +695,7 @@ class FrontendRenderer:
             removed = self._presentation.remove_items(removed_ids)
             if removed:
                 logger.info(
-                    "Removed %d items from slideshow "
-                    "(backend playlist: %d, frontend queue: %d)",
+                    "Removed %d items from slideshow (backend playlist: %d, frontend queue: %d)",
                     removed,
                     len(items),
                     len(self._presentation._queue),
