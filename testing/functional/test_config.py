@@ -12,6 +12,7 @@ config file directly from disk.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import time
@@ -44,6 +45,17 @@ def _api_put(path: str, payload: dict) -> dict:
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
         method="PUT",
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode())
+
+
+def _api_post(path: str, payload: dict) -> dict:
+    req = urllib.request.Request(
+        f"{BASE}{path}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         return json.loads(resp.read().decode())
@@ -134,3 +146,81 @@ def test_config_survives_backend_restart() -> None:
         # Restore the original value.
         if original is not None:
             _api_put(f"/api/config/{_TEST_SECTION}", {_TEST_KEY: original})
+
+
+def _log_file_path() -> Path:
+    """Resolve the on-disk metixel.log path from the running backend.
+
+    The log file lives at ``<data dir>/logs/metixel.log``, and the config
+    file reported by the API lives directly in the data dir
+    (``<data dir>/config.json``).  Deriving it from the reported config path
+    keeps the test correct on any install layout (``/opt/metixel``, dev).
+    """
+    return _config_path().parent / "logs" / "metixel.log"
+
+
+def test_log_file_owned_by_pi_and_writes_logs() -> None:
+    """The backend's metixel.log must be owned by pi:pi and receive writes.
+
+    The backend runs as the ``pi`` user, so a log file created by root (e.g.
+    a one-off root invocation during install) would make the pi-run service
+    fail to open it.  We verify ownership, then toggle the file log level to
+    INFO (from the current value, normally NONE), trigger an INFO log write
+    via a harmless config round-trip, and confirm the file grows.
+    """
+    log_path = _log_file_path()
+
+    # Read the current level so we can restore it afterwards (normally NONE).
+    current_level = "NONE"
+    with contextlib.suppress(Exception):
+        current_level = _api_get("/api/config/system").get("log_level", "NONE")
+
+    try:
+        # Enable INFO disk logging so the FileHandler actually writes.
+        resp = _api_post("/api/logs/level", {"level": "INFO"})
+        assert resp.get("status") == "ok", f"could not set log level to INFO: {resp}"
+
+        # Record the file size (creating the file if needed) so we can detect
+        # growth.  Wait a moment for the handler to open the file.
+        size_before = log_path.stat().st_size if log_path.exists() else 0
+
+        # Trigger INFO-level log lines with a harmless slideshow round-trip
+        # (slideshow does NOT trigger a pipeline restart).
+        section = _api_get(f"/api/config/{_TEST_SECTION}")
+        original = section.get(_TEST_KEY)
+        _api_put(f"/api/config/{_TEST_SECTION}", {_TEST_KEY: _TEST_VALUE})
+        if original is not None:
+            _api_put(f"/api/config/{_TEST_SECTION}", {_TEST_KEY: original})
+
+        # Give the RotatingFileHandler a moment to flush.
+        deadline = time.monotonic() + 10
+        size_after = size_before
+        while time.monotonic() < deadline:
+            if log_path.exists():
+                size_after = log_path.stat().st_size
+                if size_after > size_before:
+                    break
+            time.sleep(0.5)
+
+        assert log_path.exists(), f"metixel.log was not created at {log_path}"
+        assert size_after > size_before, (
+            "metixel.log did not grow after enabling INFO logging + a config "
+            f"round-trip (size {size_before} → {size_after})"
+        )
+
+        # The file must still be owned by pi after being (re)opened by the
+        # pi-run backend — this is the real ownership regression guard.
+        st = log_path.stat()
+        assert st.st_uid == 1000, f"metixel.log not owned by pi (uid {st.st_uid})"
+        assert st.st_gid == 1000, f"metixel.log not owned by group pi (gid {st.st_gid})"
+
+        # Sanity check the content actually looks like a log line.
+        tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-1]
+        assert "[" in tail and "]" in tail, (
+            f"last log line does not look like a log entry: {tail!r}"
+        )
+    finally:
+        # Restore the original file log level (normally NONE) so the device
+        # is left exactly as we found it.
+        with contextlib.suppress(Exception):
+            _api_post("/api/logs/level", {"level": current_level or "NONE"})
