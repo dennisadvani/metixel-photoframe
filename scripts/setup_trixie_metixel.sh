@@ -283,7 +283,7 @@ git config --system --add safe.directory /opt/metixel/releases 2>/dev/null || tr
 
 # -- Directory structure (atomic Blue/Green layout) --------------------------
 echo "[4/9] Creating directory structure (data / releases / live)..."
-mkdir -p /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/backups /opt/metixel/releases /run/metixel
+mkdir -p /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/cache/ddcutil /opt/metixel/data/backups /opt/metixel/releases /run/metixel
 
 # Move the cloned app code into a versioned release folder, and put config in
 # /data (persistent). The app runs from the live symlink.
@@ -568,6 +568,13 @@ echo "Configuring I²C (ddcutil)…"
 echo "i2c-dev" > /etc/modules-load.d/metixel-i2c.conf
 modprobe i2c-dev 2>/dev/null || true
 echo "  + Enabled i2c-dev module (persistent via /etc/modules-load.d/metixel-i2c.conf)"
+# ddcutil caches performance stats + capabilities under $XDG_CACHE_HOME
+# (else $HOME/.cache).  The backend service runs with ProtectHome=yes, so
+# /home is read-only — point ddcutil at a writable dir under the data dir
+# (the adapter sets XDG_CACHE_HOME to this path).  Created now so it exists
+# and is pi-owned from the first boot.
+mkdir -p /opt/metixel/data/cache/ddcutil
+echo "  + Created ddcutil cache dir /opt/metixel/data/cache/ddcutil"
 
 # ============================================================================
 # SETUP COMPLETE — Reboot

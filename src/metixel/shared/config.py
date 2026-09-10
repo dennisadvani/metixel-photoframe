@@ -129,6 +129,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "enabled": True,
         "display": 1,  # ddcutil display number (1 = first detected)
         "poll_seconds": 0,  # 0 = refresh only on load / after set / manual
+        # Per-command ddcutil timeout.  Marginal DDC buses (e.g. a Pi 3 with an
+        # older HDMI monitor) can take 5-9 s for a single capabilities probe,
+        # so the default has generous headroom to avoid false "no DDC-capable
+        # monitor" results.
+        "timeout_seconds": 15.0,
     },
     "input": {
         # HDMI-CEC is opt-in: it needs the Debian python3-libcec bindings

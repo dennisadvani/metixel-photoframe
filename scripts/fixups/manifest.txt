@@ -4,3 +4,4 @@
 v1.3.0-gpu-mem.sh
 v1.4.0-i2c-dev.sh
 v1.2.5-cursor-hider.sh
+v1.2.6-ddc-cache.sh

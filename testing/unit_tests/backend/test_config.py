@@ -318,6 +318,7 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("ddc.enabled", True),
     ("ddc.display", 1),
     ("ddc.poll_seconds", 0),
+    ("ddc.timeout_seconds", 15.0),
     # input
     ("input.cec_enabled", False),
     ("input.ir_enabled", False),

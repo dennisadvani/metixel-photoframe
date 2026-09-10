@@ -233,8 +233,24 @@ class BackendDaemon:
         """Construct the DDC/CI service (port injection or real ddcutil adapter)."""
         from metixel.backend.display_control.ddc_service import DdcService
         from metixel.shared.adapters import DdcutilAdapter
+        from metixel.shared.paths import data_dir
 
-        controller = self._ports.ddc if self._ports.ddc is not None else DdcutilAdapter()
+        if self._ports.ddc is not None:
+            controller = self._ports.ddc
+        else:
+            ddc_cfg = self._state.config.ddc
+            try:
+                timeout = float(ddc_cfg.get("timeout_seconds", 15.0) or 15.0)
+            except (TypeError, ValueError):
+                timeout = 15.0
+            controller = DdcutilAdapter(
+                timeout=timeout,
+                # Writable cache dir: the service runs with ProtectHome=yes, so
+                # ddcutil's default $HOME/.cache is read-only.  Keeping the
+                # cache under the persistent data dir lets ddcutil reuse its
+                # performance stats (far fewer slow re-probes).
+                cache_dir=data_dir() / "cache" / "ddcutil",
+            )
         return DdcService(
             controller=controller,
             get_config=lambda: self._state.config.ddc,
