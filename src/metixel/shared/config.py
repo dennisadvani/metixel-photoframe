@@ -15,6 +15,29 @@ from metixel.shared.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
+#: Name of the provisioning answers file that lives beside ``config.json``.
+#:
+#: The installer writes this as a PARTIAL config overlay (same schema as
+#: ``config.json``) so host configuration such as the WiFi regulatory domain
+#: can be established without the application having to run first — and
+#: without the installer hand-writing ``config.json``, which would duplicate
+#: the schema and bypass validation.
+#:
+#: Consumed exactly once: the application merges it and renames it to
+#: :data:`INIT_APPLIED_SUFFIX`, so presence is the "not yet applied" signal.
+#: This makes the whole flow order-independent — a restart before the merge
+#: simply retries on the next start rather than silently dropping the answers.
+INIT_FILENAME = "init.json"
+
+#: Suffix appended to a consumed init file (kept as an audit trail).
+INIT_APPLIED_SUFFIX = ".applied"
+
+
+def init_config_path() -> Path:
+    """Return the provisioning answers path (``<data>/init.json``)."""
+    return data_dir() / INIT_FILENAME
+
+
 # ---------------------------------------------------------------------------
 # Default configuration
 # ---------------------------------------------------------------------------
@@ -213,6 +236,21 @@ class Config:
 
     def __init__(self, data: dict[str, Any] | None = None) -> None:
         self._data: dict[str, Any] = deepcopy(data) if data else deepcopy(DEFAULT_CONFIG)
+        #: Set when a pending provisioning-answers overlay was applied by
+        #: :meth:`load`.  Exposed via :attr:`init_overlay` so callers (e.g. the
+        #: host reconciler) can read the installer's intent even before the
+        #: merged values are otherwise observable.
+        self._init_overlay: dict[str, Any] = {}
+
+    @property
+    def init_overlay(self) -> dict[str, Any]:
+        """Return the provisioning answers applied at load time (may be empty).
+
+        Empty when no ``init.json`` was pending.  Callers must treat this as a
+        fallback source and prefer the live config values, which are
+        authoritative once the user has chosen their own settings.
+        """
+        return deepcopy(self._init_overlay)
 
     def _section(self, key: str) -> dict[str, Any]:
         """Return a top-level config section as a typed dict."""
@@ -481,6 +519,12 @@ class Config:
         created AND immediately saved to *path* so that other subsystems
         (e.g. logging setup) can read ``system.log_level`` from it on
         the very first start.
+
+        A pending :data:`INIT_FILENAME` overlay (written by the installer) is
+        merged over the defaults and then renamed to ``*.applied``.  The rename
+        is what makes this safe to run repeatedly: presence means "not yet
+        applied", so a crash before the merge retries instead of losing the
+        installer's answers.
         """
         if path.exists():
             with open(path, encoding="utf-8") as f:
@@ -489,7 +533,7 @@ class Config:
             merged = deepcopy(DEFAULT_CONFIG)
             _deep_merge(merged, data)
             logger.info("Config loaded from %s", path)
-            return cls(merged)
+            config = cls(merged)
         else:
             logger.info(
                 "Config not found at %s — creating with defaults",
@@ -497,8 +541,59 @@ class Config:
             )
             config = cls()
             config._randomise_auto_update_schedule()
+
+        started_without_config = not path.exists()
+        applied = config._apply_init_overlay(path)
+        if started_without_config or applied:
             config.save(path)
-            return config
+        return config
+
+    def _apply_init_overlay(self, config_path: Path) -> bool:
+        """Merge and consume the installer's answers file, if one is pending.
+
+        Returns ``True`` when an overlay was applied.  Never raises: a
+        malformed answers file is logged and left in place so a human can see
+        what went wrong, rather than crash-looping the daemon.
+        """
+        # Only consider init.json when it sits beside the config we loaded;
+        # tests and desktop runs use arbitrary config paths.
+        init_path = config_path.parent / INIT_FILENAME
+        if not init_path.exists():
+            return False
+        try:
+            with open(init_path, encoding="utf-8") as f:
+                overlay = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not read %s: %s", init_path, exc)
+            return False
+        if not isinstance(overlay, dict):
+            logger.warning("Ignoring %s — expected a JSON object", init_path)
+            return False
+
+        # Store the overlay so reconcile.sh can use the same values before the
+        # merge is reflected anywhere else.
+        self._init_overlay = deepcopy(overlay)
+
+        _deep_merge(self._data, overlay)
+        logger.info(
+            "Applied provisioning answers from %s (%d top-level section(s))",
+            init_path,
+            len(overlay),
+        )
+
+        # Consume ONCE.  Renaming (rather than deleting) keeps an audit trail
+        # of what this device was provisioned with, and makes the file's
+        # presence the "not yet applied" signal.
+        try:
+            applied_path = init_path.with_name(init_path.name + INIT_APPLIED_SUFFIX)
+            if applied_path.exists():
+                applied_path.unlink()
+            init_path.rename(applied_path)
+        except OSError:
+            # The merge already happened in memory; a failed rename only means
+            # it is applied again next start, which is harmless (idempotent).
+            logger.warning("Could not mark %s as applied", init_path, exc_info=True)
+        return True
 
 
 # ---------------------------------------------------------------------------

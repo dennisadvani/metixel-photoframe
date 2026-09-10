@@ -81,6 +81,114 @@ def test_existing_config_keeps_auto_update_schedule(tmp_path):
     assert loaded.updates["auto_update_time"] == "05:00"
 
 
+class TestInitOverlay:
+    """Installer answers arrive as a partial init.json overlay.
+
+    The application owns the config schema, so the installer never writes
+    config.json itself — it writes ``init.json`` beside it, which the app
+    merges and consumes exactly once.
+    """
+
+    def _write_init(self, tmp_path: Path, payload: str) -> Path:
+        init = tmp_path / "init.json"
+        init.write_text(payload, encoding="utf-8")
+        return init
+
+    def test_overlay_applied_and_consumed_once(self, tmp_path: Path) -> None:
+        from metixel.shared.config import Config
+
+        init = self._write_init(
+            tmp_path, '{"network": {"wifi_country": "AU"}, "update": {"channel": "beta"}}'
+        )
+        config_path = tmp_path / "config.json"
+
+        config = Config.load(config_path)
+        assert config.network["wifi_country"] == "AU"
+        assert config.updates["channel"] == "beta"
+
+        # Consumed: renamed, not deleted, so there is an audit trail.
+        assert not init.exists()
+        applied = tmp_path / "init.json.applied"
+        assert applied.is_file()
+        assert "AU" in applied.read_text(encoding="utf-8")
+
+        # The merged values are persisted to config.json.
+        assert config_path.is_file()
+
+    def test_overlay_is_partial_and_keeps_defaults(self, tmp_path: Path) -> None:
+        """An overlay must not wipe sections it does not mention."""
+        from metixel.shared.config import Config
+
+        self._write_init(tmp_path, '{"network": {"wifi_country": "GB"}}')
+        config = Config.load(tmp_path / "config.json")
+
+        assert config.network["wifi_country"] == "GB"
+        # Untouched sections still hold their defaults.
+        assert config.slideshow["image_duration_seconds"] == 15
+        assert config.display["rotation"] == 0
+
+    def test_second_load_does_not_reapply(self, tmp_path: Path) -> None:
+        """Presence is the 'not yet applied' signal — a user editing the value
+        afterwards must not have it silently reverted on the next start."""
+        from metixel.shared.config import Config
+
+        self._write_init(tmp_path, '{"network": {"wifi_country": "AU"}}')
+        config_path = tmp_path / "config.json"
+
+        Config.load(config_path)
+
+        # User changes it via the web UI.
+        config = Config.load(config_path)
+        config.update("network", {"wifi_country": "US"})
+        config.save(config_path)
+
+        # The consumed init.json must NOT override the user's choice.
+        reloaded = Config.load(config_path)
+        assert reloaded.network["wifi_country"] == "US"
+
+    def test_overlay_survives_a_crash_before_merge(self, tmp_path: Path) -> None:
+        """If the app started before the merge (defaults-only config left
+        behind), a pending init.json must still apply on the next start."""
+        from metixel.shared.config import Config
+
+        config_path = tmp_path / "config.json"
+        # Simulate an earlier start that created defaults but never consumed.
+        Config().save(config_path)
+        assert not (tmp_path / "init.json").exists()
+
+        self._write_init(tmp_path, '{"network": {"wifi_country": "NZ"}}')
+        reloaded = Config.load(config_path)
+        assert reloaded.network["wifi_country"] == "NZ"
+
+    def test_malformed_overlay_does_not_crash(self, tmp_path: Path) -> None:
+        """A bad answers file must not crash-loop the daemon."""
+        from metixel.shared.config import Config
+
+        init = self._write_init(tmp_path, "{ not valid json")
+        config = Config.load(tmp_path / "config.json")
+
+        assert config.display["width"] == 0  # defaults still loaded
+        assert init.exists(), "an unreadable overlay is left for inspection"
+
+    def test_non_object_overlay_ignored(self, tmp_path: Path) -> None:
+        from metixel.shared.config import Config
+
+        self._write_init(tmp_path, '["not", "an", "object"]')
+        config = Config.load(tmp_path / "config.json")
+        assert config.display["width"] == 0
+
+    def test_init_overlay_property_exposes_applied_values(self, tmp_path: Path) -> None:
+        """reconcile.sh's contract: the applied overlay is readable, and empty
+        when there was nothing pending."""
+        from metixel.shared.config import Config
+
+        assert Config().init_overlay == {}
+
+        self._write_init(tmp_path, '{"network": {"wifi_country": "DE"}}')
+        config = Config.load(tmp_path / "config.json")
+        assert config.init_overlay["network"]["wifi_country"] == "DE"
+
+
 def test_video_playback_enabled_persists(tmp_path):
     """Verify video_playback_enabled saves and loads back correctly.
 

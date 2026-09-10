@@ -233,7 +233,6 @@ class BackendDaemon:
         """Construct the DDC/CI service (port injection or real ddcutil adapter)."""
         from metixel.backend.display_control.ddc_service import DdcService
         from metixel.shared.adapters import DdcutilAdapter
-        from metixel.shared.paths import data_dir
 
         if self._ports.ddc is not None:
             controller = self._ports.ddc
@@ -243,13 +242,19 @@ class BackendDaemon:
                 timeout = float(ddc_cfg.get("timeout_seconds", 15.0) or 15.0)
             except (TypeError, ValueError):
                 timeout = 15.0
+            # ddcutil's cache location is owned by the systemd unit, not the
+            # code: metixel-backend.service sets XDG_CACHE_HOME (required
+            # because ProtectHome=yes makes /home read-only).  Reading it from
+            # the environment keeps the unit the single source of truth, so the
+            # shipped unit and the running service cannot drift apart.
+            #
+            # When the env var is both unset AND empty, pass cache_dir=None so
+            # ddcutil keeps its own default ($HOME/.cache) — the right
+            # behaviour for desktop/dev runs where ProtectHome does not apply.
+            cache_env = os.environ.get("XDG_CACHE_HOME")
             controller = DdcutilAdapter(
                 timeout=timeout,
-                # Writable cache dir: the service runs with ProtectHome=yes, so
-                # ddcutil's default $HOME/.cache is read-only.  Keeping the
-                # cache under the persistent data dir lets ddcutil reuse its
-                # performance stats (far fewer slow re-probes).
-                cache_dir=data_dir() / "cache" / "ddcutil",
+                cache_dir=cache_env or None,
             )
         return DdcService(
             controller=controller,

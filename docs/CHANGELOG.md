@@ -5,6 +5,122 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`scripts/reconcile.sh` — the single owner of convergent host state.**
+  Idempotent, supports `--dry-run`, runs on **every** update (from the new
+  release's copy) *and* on fresh install. It converges the persistent data
+  tree, systemd units, I²C/ddcutil, Wi-Fi power saving, the port 80→8080
+  redirect, Samba values, the captive-portal config and linger. It refuses to
+  run outside a release directory, because its unit-shipping checks would
+  otherwise misread a stray directory.
+- **`scripts/configure_boot.sh` — boot configuration, applied at provisioning
+  and by a one-time fixup.** `/boot/firmware/config.txt` is deliberately
+  excluded from reconciliation: it is the device's own file, and a change only
+  takes effect after a reboot. Re-asserting `gpu_mem` on every update would
+  silently override a value the user deliberately chose and schedule an
+  unrelated, reboot-dependent behaviour change.
+- **`scripts/bootstrap.sh` — a thin, one-line installer.** It installs `git`,
+  obtains a checkout (clone, or `--local DIR` for development), writes the
+  installer's answers to `data/init.json`, then **delegates to
+  `scripts/update.sh`**. Installing and updating therefore run the *same* code
+  path, so a fresh install also exercises staging, the health check and
+  rollback. Because `bootstrap.sh` is tiny and stable it rarely changes, so it
+  rarely needs promoting to `main` before an installer change can be tested.
+  Supports `--dry-run`, `--channel`, `--wifi-country`, `--repo` and
+  `--skip-boot-config`, and refuses to run over an existing installation.
+- **`data/init.json` — installer answers as a partial config overlay.** The
+  installer no longer hand-writes `config.json` (which duplicated the schema in
+  shell and bypassed validation). It writes a partial overlay using the same
+  schema, which the application merges then renames to `init.json.applied`.
+  The rename makes presence the "not yet applied" signal, so a crash before the
+  merge retries instead of silently losing the answers. `reconcile.sh` reads the
+  same file for host state, so neither component depends on the other running
+  first.
+- **`--dry-run` for `scripts/update.sh`.** Prints the plan and exits without
+  staging, installing, swapping or restarting anything — including disarming the
+  destructive cleanup trap.
+- **`--staged-dir` for `scripts/update.sh`.** Accepts an already-cloned checkout
+  instead of cloning. Used by `bootstrap.sh` (which must clone anyway, since it
+  needs `update.sh` to exist first) and by local development to install a
+  working tree without pushing.
+
+### Fixed
+
+- **Stale systemd units on upgrade.** `/etc/systemd/system` is not part of the
+  Blue/Green symlink swap, so a device could run NEW code under OLD units — a
+  `metixel-cage.service` still launching `python3 -m metixel` directly instead
+  of `scripts/cage_launch.sh` (so phantom HDMI outputs were never disabled and
+  the cursor-hider was never triggered), and a `metixel-backend.service` whose
+  `ExecStartPre` did not match the release. Units are now installed
+  atomically on every update, backed up first, and restored on rollback.
+- **`data/config` no longer created.** The backend unit's `ExecStartPre` and
+  the installer both created a `data/config` directory that does not exist by
+  design (`config.json` lives at `data/config.json`). Directory creation and
+  ownership now have exactly one owner.
+- **Data tree ownership is reconciled as root.** `paths.ensure_data_dirs()` was
+  removed: the app runs as `pi` and cannot `chown` a directory left root-owned
+  by an installer, which was the actual cause of
+  `PermissionError: /opt/metixel/data/logs` crash-loops.
+- **The installer silently dropped the WiFi country on a fresh device.** The
+  old code guarded its config write with `if os.path.exists(config.json)`, but
+  nothing created `config.json` at that point — so the block was a no-op and the
+  choice was lost. Answers now go to `init.json`, which the app always consumes.
+
+### Changed
+
+- **`scripts/reconcile.sh` now derives host state from configuration.** It reads
+  `config.json` (falling back to `init.json`) for the WiFi regulatory domain and
+  applies it, along with `rfkill` unblocking, the `smbd` service, and the Samba
+  account for `pi`. These were previously setup-only, so they never reached an
+  existing device on upgrade.
+- **The clone is no longer shallow.** `git clone --depth 1` was removed: the
+  application relies on a real `.git` on the device
+  (`update_manager._resolve_repo_root()`, `git reset --hard`, and local
+  debugging patches). A shallow clone silently broke all three.
+- **`etc/config.example.json` deleted.** It was a redundant second copy of the
+  schema; `DEFAULT_CONFIG` in `shared/config.py` is authoritative and the
+  application creates `config.json` itself on first start.
+- **The installer no longer self-bootstraps.** `setup_trixie_metixel.sh` used to
+  be downloadable from `main` and clone the repo itself, which meant the
+  installer had to be committed and promoted to `main` before it could be
+  tested. That behaviour now lives only in `bootstrap.sh`.
+- **The installer no longer duplicates host configuration.** It delegates
+  package installation and host config to the shared `ota_install.sh` and
+  `reconcile.sh`, so a fresh install and an upgrade converge to the same host.
+  This removes the drift that caused the unit and directory bugs above.
+- **`scripts/fixups/` is now reserved for genuine one-time repairs.** Four
+  convergent fixups were retired into `reconcile.sh`: `v1.2.5-cursor-hider`,
+  `v1.2.6-ddc-cache`, `v1.4.0-i2c-dev` and `v1.5.0-systemd-units`. Fixups run
+  *once ever*, so a mistake in one can never be corrected — convergent state
+  belongs in `reconcile.sh`. Already-repaired devices stay repaired (the ledger
+  means a retired entry simply never re-runs).
+  `v1.2.1-gpu-mem` is **retained**, because boot config is not convergent; it
+  now delegates to `configure_boot.sh` so it shares one implementation with the
+  installer.
+- **Removed `scripts/build_phase1.sh`** — an unused, non-functional image-build
+  stub. A flat image copy is not OTA-updatable.
+
+## [1.2.6]
+
+### Fixed
+
+- **DDC/CI monitor control reliability** — brightness/contrast and other
+  monitor controls could intermittently report "No DDC/CI-capable monitor
+  detected" or "no adjustable DDC features", especially on marginal DDC buses
+  (e.g. a Pi 3 with an older HDMI monitor). Two root causes are fixed:
+  - The per-command `ddcutil` timeout was too short (5 s). A single
+    `capabilities` probe can take 5–9 s on some monitors, so the probe timed
+    out before it could return features. The default is now 15 s, configurable
+    via `ddc.timeout_seconds`.
+  - `ddcutil`'s cache (`$HOME/.cache/ddcutil`) is unwritable under the backend
+    service's `ProtectHome=yes` hardening, so every probe re-ran the slow I²C
+    timing. The adapter now points `XDG_CACHE_HOME` at a writable
+    `/opt/metixel/data/cache/ddcutil`, and a one-time fixup provisions that
+    directory on existing devices.
+
 ## [1.2.5]
 
 ### Features

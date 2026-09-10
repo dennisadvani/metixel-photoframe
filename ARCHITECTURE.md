@@ -306,7 +306,7 @@ metixel-photoframe/                           # Repository root
 │   └── logging.conf                   # Python logging configuration
 │
 ├── scripts/                           # Build & deployment scripts
-│   ├── build_phase1.sh               # Build Trixie Lite image for Pi 2/3/Zero 2 W
+│   ├── reconcile.sh                  # Idempotent host-config convergence
 │   ├── quiet_boot.sh                 # Splash screen + silent boot config
 │   ├── setup_ap.sh                   # Wi-Fi captive portal setup
 │   ├── setup_trixie.sh              # Install deps for Trixie Lite (cage + pi3d)
@@ -789,8 +789,15 @@ together, and the separation is imposed at install time:
 | | Git repository (source) | Device (runtime) |
 |---|---|---|
 | Code | `src/`, `scripts/`, `systemd/` | `releases/<ver>/` (reached via `live`) |
-| Templates | `etc/config.example.json`, `etc/logging.conf` | copied into the release, then seeded |
+| Templates | `etc/logging.conf` | copied into the release, then seeded |
 | Runtime data | *(never committed)* | `/opt/metixel/data/` (config, logs, media, cache) |
+
+`config.json` has no template: the application owns the schema in Python
+(`shared/config.py` → `DEFAULT_CONFIG`) and **creates the file itself** on first
+start. The installer writes its answers to `data/init.json` — a partial overlay
+using the same schema — which the app merges and consumes once, renaming it to
+`init.json.applied`. `scripts/reconcile.sh` reads the same value for host state
+before the app has run, so neither depends on the other's ordering.
 
 `etc/` stays in git at the repo root because it holds **templates**, not user
 data. The setup/build scripts copy `etc/` into each release folder, then seed

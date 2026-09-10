@@ -251,10 +251,12 @@ PYEOF
 
 # ── Ensure the whole install root is pi-owned ──────────────────────────────
 # On a clean install /opt/metixel is often root-owned (setup ran via sudo).
-# The `pi` service must be able to create data subdirs (e.g. data/logs via
-# ensure_data_dirs) and write logs/media/cache — so chown the entire root
-# recursively at the end. This prevents the crash-loop:
-#   PermissionError: /opt/metixel/data/logs (created by pi but data owned root).
+# The `pi` service must be able to write logs/media/cache — so chown the entire
+# root recursively at the end. This prevents the crash-loop:
+#   PermissionError: /opt/metixel/data/logs (data owned root, service runs as pi)
+# NOTE: the per-directory ownership rules for the data tree itself live in
+# scripts/reconcile.sh, which owns that tree; this is the coarse install-time
+# sweep that runs before reconcile.sh is able to.
 chown -R pi:pi "${INSTALL_ROOT}" 2>/dev/null || true
 chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
 

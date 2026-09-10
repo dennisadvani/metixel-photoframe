@@ -1,7 +1,31 @@
 # Metixel fixup manifest — one fixup filename per line, run in order.
 # Each fixup runs exactly once per device (tracked in data/installed_fixups.json).
-# Add new fixups here as they are introduced.
-v1.3.0-gpu-mem.sh
-v1.4.0-i2c-dev.sh
-v1.2.5-cursor-hider.sh
-v1.2.6-ddc-cache.sh
+#
+# ── WHEN TO ADD A FIXUP (and when NOT to) ──────────────────────────────────
+# Convergent host configuration does NOT belong here — it belongs in
+# scripts/reconcile.sh, which runs on EVERY update and is idempotent.  Add a
+# fixup only when the target state cannot be derived from the current repo,
+# i.e. it depends on what this specific device used to be:
+#
+#   * one-way data migrations — e.g. a config value an older release CLAMPED
+#     to a narrower range that must now be widened (a deliberate value is
+#     indistinguishable from a clamped one without knowing device history)
+#   * destructive/ambiguous edits to user-owned shared files
+#   * anything that must happen exactly once and must NOT re-run
+#
+# Historical fixups were retired into reconcile.sh:
+#   v1.2.0-i2c-dev.sh       → reconcile.sh §3 (I²C)
+#   v1.2.0-systemd-units.sh → reconcile.sh §2 (systemd units)
+#   v1.2.5-cursor-hider.sh  → reconcile.sh §2 (systemd units)
+#   v1.2.6-ddc-cache.sh     → reconcile.sh §3 (I²C / ddcutil cache)
+#
+# Retiring a fixup does NOT undo it: already-repaired devices stay repaired,
+# and because the ledger (data/installed_fixups.json) records what has run, a
+# removed entry simply never runs again.
+#
+# Add one fixup filename per line below, in the order they should run.
+#
+# gpu_mem: NOT convergent — /boot/firmware/config.txt is the device's own file
+# and a change needs a reboot, so re-asserting it every update would override a
+# user's deliberate value.  It stays a one-time repair.
+v1.2.1-gpu-mem.sh

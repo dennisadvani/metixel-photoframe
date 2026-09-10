@@ -4,9 +4,12 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
-from metixel.backend.display_control.ddc_service import DdcService
+from metixel.backend.display_control.ddc_service import DdcBusyError, DdcService
 from metixel.shared.ddc_types import (
     DdcCapabilities,
     DdcDiscreteOption,
@@ -195,3 +198,135 @@ class TestTransientCapabilityFailure:
         codes = {f["code"] for f in caps2["features"]}
         assert 0x10 in codes
         assert fake._calls == 2, "expected the second call to re-run the probe"
+
+
+class _SlowCountingController(FakeDdcController):
+    """Controller that blocks inside detect()/capabilities() and counts calls.
+
+    Reproduces the production stampede: several concurrent API requests all
+    miss a cold cache and each spawn their own long-running ddcutil probe.
+    """
+
+    def __init__(self, *, hold: float = 0.35) -> None:
+        super().__init__()
+        self._hold = hold
+        self.detect_calls = 0
+        self.capabilities_calls = 0
+        self._entered = threading.Event()
+
+    def detect(self) -> list[DdcMonitor]:
+        self.detect_calls += 1
+        self._entered.set()
+        time.sleep(self._hold)
+        return super().detect()
+
+    def capabilities(self, display: int) -> DdcCapabilities:
+        self.capabilities_calls += 1
+        time.sleep(self._hold)
+        return super().capabilities(display)
+
+
+class TestProbeSerialisation:
+    """Only one ddcutil probe may run at a time (no I²C cache stampede)."""
+
+    def test_concurrent_status_probes_do_not_stampede(self) -> None:
+        """N concurrent status() calls must trigger a single detect() probe.
+
+        This is the regression guard for the observed 147-process ddcutil burst
+        plus `flock() for /dev/i2c-2 failed` errors right after a restart.
+        """
+        fake = _SlowCountingController(hold=0.4)
+        svc = DdcService(
+            fake,
+            get_config=lambda: {"enabled": True, "display": 1},
+            probe_timeout_seconds=5.0,
+        )
+
+        results: list[dict] = []
+        errors: list[BaseException] = []
+        barrier = threading.Barrier(6)
+
+        def worker() -> None:
+            barrier.wait()  # release all threads simultaneously
+            try:
+                results.append(svc.status())
+            except BaseException as exc:  # noqa: BLE001 - recorded for assertion
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=15)
+
+        assert not errors, f"probes raised instead of sharing a result: {errors}"
+        assert len(results) == 6
+        # The core assertion: one probe, not six.
+        assert fake.detect_calls == 1, (
+            f"expected a single serialised detect probe, got {fake.detect_calls}"
+        )
+        # Every caller still gets a usable answer.
+        assert all(r["available"] is True for r in results)
+
+    def test_capabilities_raise_busy_when_probe_in_flight(self) -> None:
+        """A caller that cannot wait is told to retry, not that DDC is absent."""
+        fake = _SlowCountingController(hold=0.5)
+        svc = DdcService(
+            fake,
+            get_config=lambda: {"enabled": True, "display": 1},
+            probe_timeout_seconds=0.05,  # give up almost immediately
+        )
+
+        probe_started = threading.Event()
+        original_detect = fake.detect
+
+        def signalling_detect() -> list[DdcMonitor]:
+            probe_started.set()
+            return original_detect()
+
+        fake.detect = signalling_detect  # type: ignore[method-assign]
+
+        holder: list[object] = []
+
+        def hold_probe() -> None:
+            # status() → _detect() acquires the probe lock and blocks in detect().
+            holder.append(svc.status())
+
+        t = threading.Thread(target=hold_probe)
+        t.start()
+        assert probe_started.wait(timeout=5), "probe never started"
+        try:
+            with pytest.raises(DdcBusyError):
+                svc.capabilities()
+        finally:
+            t.join(timeout=10)
+
+        assert holder, "the owner probe should have completed"
+        # The owner was not interrupted; it populated the cache.
+        assert fake.detect_calls == 1
+
+    def test_busy_error_is_not_an_unavailable_monitor(self) -> None:
+        """DdcBusyError must be distinguishable from 'no monitor detected'."""
+        fake = _SlowCountingController(hold=0.5)
+        svc = DdcService(
+            fake,
+            get_config=lambda: {"enabled": True, "display": 1},
+            probe_timeout_seconds=0.05,
+        )
+        started = threading.Event()
+        original = fake.detect
+
+        def signalling_detect() -> list[DdcMonitor]:
+            started.set()
+            return original()
+
+        fake.detect = signalling_detect  # type: ignore[method-assign]
+        t = threading.Thread(target=lambda: svc.status())
+        t.start()
+        assert started.wait(timeout=5)
+        try:
+            with pytest.raises(DdcBusyError) as exc_info:
+                svc.status()
+            assert "another ddc" in str(exc_info.value).lower()
+        finally:
+            t.join(timeout=10)

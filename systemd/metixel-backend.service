@@ -16,20 +16,31 @@ Environment=PYTHONPATH=/opt/metixel/live/src
 Environment=PYTHONUNBUFFERED=1
 Environment=METIXEL_DISPLAY_BACKEND=auto
 
-# systemd creates /run/metixel before namespace setup (avoids 226/NAMESPACE)
+# ddcutil persists its cached capabilities + performance stats under
+# $XDG_CACHE_HOME (else $HOME/.cache).  Two reasons this MUST be set here:
+#   1. ProtectHome=yes makes /home read-only for this service, so ddcutil's
+#      default cache is unusable — every probe would re-run the slow I²C
+#      sleep/retry timing and can exceed the ddcutil timeout entirely.
+#   2. This unit is the single source of truth for the location.  The code no
+#      longer hardcodes the path, so what ships in the release and what the
+#      service actually uses can never drift apart.
+# ddcutil appends its own `ddcutil/` subdirectory, giving
+# /opt/metixel/data/cache/ddcutil/ddcutil/.
+Environment=XDG_CACHE_HOME=/opt/metixel/data/cache/ddcutil
+
+# systemd creates /run/metixel before namespace setup (avoids 226/NAMESPACE).
+# This is systemd's own mechanism and must stay in the unit — the socket dir has
+# to exist before the service starts, on every boot, without an installer.
 RuntimeDirectory=metixel
 RuntimeDirectoryMode=0755
 
-# Ensure the persistent data dirs exist and are owned by pi.  A
-# root-created metixel.log (e.g. from a one-off root run during install)
-# would otherwise make this pi-run service crash-loop with
-#   PermissionError: .../data/logs/metixel.log
-# The '+' prefix runs as root so it can chown files that were created by
-# root.  mkdir -p is idempotent; chown fixes the log-dir ownership on every
-# (re)start.  Scoped to data/logs (not -R over all of data) so big media
-# trees aren't walked on each restart.
-ExecStartPre=+/bin/mkdir -p /opt/metixel/data/logs /opt/metixel/data/cache /opt/metixel/data/config /opt/metixel/data/media /opt/metixel/data/backups
-ExecStartPre=+/usr/bin/chown -R pi:pi /opt/metixel/data/logs
+# NOTE: the persistent data tree (data/logs, data/media, data/cache, data/etc,
+# …) is NOT created here.  scripts/reconcile.sh is the single owner of that
+# tree — it creates the directories and repairs ownership left root-owned by an
+# install.  Duplicating the list in the unit is what previously caused drift
+# (the unit created a `data/config` directory that does not exist by design).
+# reconcile.sh runs before the service starts on both the fresh-install and the
+# OTA path, so the tree is always in place by the time this unit launches.
 ExecStart=/usr/bin/python3 -m metixel --mode backend --config /opt/metixel/data/config.json
 Restart=always
 RestartSec=5

@@ -28,6 +28,14 @@ from metixel.shared.ports import DdcController
 logger = logging.getLogger(__name__)
 
 
+class DdcBusyError(RuntimeError):
+    """Raised when another DDC probe is already running and cannot be awaited.
+
+    A *transient* condition, not a configuration problem: the caller should
+    retry rather than report the monitor as unsupported.
+    """
+
+
 class DdcService:
     """Backend-owned DDC/CI façade used by the web API."""
 
@@ -37,11 +45,20 @@ class DdcService:
         get_config: Callable[[], Mapping[str, Any]],
         *,
         cache_ttl_seconds: float = 60.0,
+        probe_timeout_seconds: float = 10.0,
     ) -> None:
         self._controller = controller
         self._get_config = get_config
         self._cache_ttl = cache_ttl_seconds
+        #: How long a *waiting* caller blocks for an in-flight probe before
+        #: giving up with :class:`DdcBusyError`.  The owner is never interrupted
+        #: — it always finishes and populates the cache.
+        self._probe_timeout = probe_timeout_seconds
         self._lock = threading.Lock()
+        #: Serialises the expensive ddcutil probes.  Held only while a probe is
+        #: actually running (never during cheap cache lookups), so unrelated
+        #: cache hits are not blocked behind I²C work.
+        self._probe_lock = threading.Lock()
         self._monitors: list[DdcMonitor] | None = None
         self._monitors_at: float = 0.0
         self._caps: dict[int, tuple[float, DdcCapabilities]] = {}
@@ -178,7 +195,12 @@ class DdcService:
         return {"status": "ok", "display": disp}
 
     def refresh(self) -> dict[str, Any]:
-        """Invalidate caches and return a fresh status + capabilities."""
+        """Invalidate caches and return a fresh status + capabilities.
+
+        Raises :class:`DdcBusyError` if another probe is already in flight —
+        the invalidation still takes effect, so the concurrent probe simply
+        repopulates the cache with fresh data.
+        """
         with self._lock:
             self._monitors = None
             self._monitors_at = 0.0
@@ -208,51 +230,113 @@ class DdcService:
         return monitors[0].display
 
     def _detect(self, *, force: bool) -> list[DdcMonitor]:
-        now = time.monotonic()
-        with self._lock:
-            if (
-                not force
-                and self._monitors is not None
-                and (now - self._monitors_at) < self._cache_ttl
-            ):
-                return list(self._monitors)
+        monitors = self._cached_monitors() if not force else None
+        if monitors is not None:
+            return monitors
+
+        if not self._acquire_probe():
+            # Another caller is already probing.  Its result is authoritative,
+            # so reuse it rather than spawning a second competing ddcutil.
+            cached = self._cached_monitors()
+            if cached is not None:
+                return cached
+            with self._lock:
+                known = list(self._monitors or [])
+            if known:
+                return known
+            # Nothing cached yet: report a transient busy condition rather than
+            # the misleading "no DDC/CI-capable monitor detected" reason.
+            raise DdcBusyError("Another DDC/CI probe is already running")
+
         try:
-            monitors = list(self._controller.detect())
-        except Exception:
-            logger.warning("DDC detect failed", exc_info=True)
-            monitors = []
-        with self._lock:
-            self._monitors = monitors
-            self._monitors_at = time.monotonic()
-        return list(monitors)
+            # Re-check: the previous owner may have refreshed the cache while
+            # this caller was waiting for the lock.
+            monitors = self._cached_monitors()
+            if monitors is not None:
+                return monitors
+            try:
+                monitors = list(self._controller.detect())
+            except Exception:
+                logger.warning("DDC detect failed", exc_info=True)
+                monitors = []
+            with self._lock:
+                self._monitors = monitors
+                self._monitors_at = time.monotonic()
+            return list(monitors)
+        finally:
+            self._probe_lock.release()
 
     def _capabilities(self, display: int, *, force: bool) -> DdcCapabilities:
+        caps = None if force else self._cached_capabilities(display)
+        if caps is not None:
+            return caps
+
+        if not self._acquire_probe():
+            cached = self._cached_capabilities(display)
+            if cached is not None:
+                return cached
+            raise DdcBusyError("Another DDC/CI probe is already running")
+
+        try:
+            caps = None if force else self._cached_capabilities(display)
+            if caps is not None:
+                return caps
+            try:
+                caps = self._controller.capabilities(display)
+            except Exception:
+                logger.warning("DDC capabilities failed for display %s", display, exc_info=True)
+                # Do NOT cache a transient failure — let the caller see the empty
+                # result this call, but the next call retries the probe instead of
+                # serving a poisoned empty feature list for the whole TTL (a busy
+                # backend can make `ddcutil capabilities` exceed its 5s timeout,
+                # e.g. right after the Immich download saturates the pipeline).
+                caps = DdcCapabilities(display=display)
+            if not isinstance(caps, DdcCapabilities):
+                # Tolerate duck-typed fakes returning dicts / simple objects.
+                caps = _coerce_capabilities(caps, display)
+            with self._lock:
+                # Only cache a non-empty result.  A monitor that genuinely reports
+                # no features is indistinguishable from a transient failure at the
+                # service level, but exposing empty features is a softer failure
+                # than pinning the absence of brightness/contrast for 60s.
+                if caps.features:
+                    self._caps[display] = (time.monotonic(), caps)
+            return caps
+        finally:
+            self._probe_lock.release()
+
+    # -- Probe serialisation -------------------------------------------------
+
+    def _acquire_probe(self) -> bool:
+        """Take the probe lock, waiting briefly if another probe is in flight.
+
+        Returns ``True`` when this caller now owns the probe, ``False`` when a
+        different caller is already probing and the wait timed out.  The owner
+        always releases in a ``finally``, so the lock can never leak.
+        """
+        try:
+            return self._probe_lock.acquire(timeout=self._probe_timeout)
+        except TypeError:  # pragma: no cover - only on non-timeout Lock impls
+            return self._probe_lock.acquire()
+
+    def _cached_monitors(self) -> list[DdcMonitor] | None:
+        """Return the cached monitor list while it is still within the TTL."""
+        now = time.monotonic()
+        with self._lock:
+            if self._monitors is not None and (now - self._monitors_at) < self._cache_ttl:
+                return list(self._monitors)
+        return None
+
+    def _cached_capabilities(self, display: int) -> DdcCapabilities | None:
+        """Return cached capabilities for *display* if still within the TTL."""
         now = time.monotonic()
         with self._lock:
             cached = self._caps.get(display)
-            if not force and cached is not None and (now - cached[0]) < self._cache_ttl:
+            # Copy under the lock — DdcCapabilities is mutable and the cache
+            # entry may be replaced by another thread immediately afterwards.
+            if cached is not None and (now - cached[0]) < self._cache_ttl:
                 return cached[1]
-        try:
-            caps = self._controller.capabilities(display)
-        except Exception:
-            logger.warning("DDC capabilities failed for display %s", display, exc_info=True)
-            # Do NOT cache a transient failure — let the caller see the empty
-            # result this call, but the next call retries the probe instead of
-            # serving a poisoned empty feature list for the whole TTL (a busy
-            # backend can make `ddcutil capabilities` exceed its 5s timeout,
-            # e.g. right after the Immich download saturates the pipeline).
-            caps = DdcCapabilities(display=display)
-        if not isinstance(caps, DdcCapabilities):
-            # Tolerate duck-typed fakes returning dicts / simple objects.
-            caps = _coerce_capabilities(caps, display)
-        with self._lock:
-            # Only cache a non-empty result.  A monitor that genuinely reports
-            # no features is indistinguishable from a transient failure at the
-            # service level, but exposing empty features is a softer failure
-            # than pinning the absence of brightness/contrast for 60s.
-            if caps.features:
-                self._caps[display] = (time.monotonic(), caps)
-        return caps
+        return None
 
 
 def _coerce_capabilities(raw: Any, display: int) -> DdcCapabilities:

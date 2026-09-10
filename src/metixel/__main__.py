@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 from metixel import __version__
-from metixel.shared.paths import data_dir, ensure_data_dirs
+from metixel.shared.paths import data_dir
 
 
 def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = True) -> None:
@@ -66,6 +66,12 @@ def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = Tr
         has_file_handler = any(isinstance(h, logging.FileHandler) for h in root.handlers)
         if not has_file_handler:
             try:
+                # On the Pi, scripts/reconcile.sh owns the data tree and has
+                # already created data/logs.  This mkdir is a BEST-EFFORT
+                # fallback for desktop/dev runs where no installer exists (and
+                # it is harmless when the dir already exists: exist_ok=True).
+                # It is not a second source of truth for the tree — reconcile.sh
+                # owns the directory LIST and the ownership rules.
                 log_dir.mkdir(parents=True, exist_ok=True)
                 file_handler = logging.handlers.RotatingFileHandler(
                     str(log_file),
@@ -76,8 +82,8 @@ def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = Tr
                 file_handler.setFormatter(fmt)
                 root.addHandler(file_handler)
             except OSError as exc:
-                # metixel.log unwritable (bad ownership/perms, read-only FS, or a
-                # full/unwritable parent dir) → run console + ring buffer only.
+                # metixel.log unwritable (missing dir, bad ownership/perms, or a
+                # read-only/full filesystem) → run console + ring buffer only.
                 # Never crash the daemon over a log file (graceful degradation,
                 # core rule 7) — this is the same failure mode as a root-owned
                 # metixel.log crash-looping the pi backend.  The console handler
@@ -189,9 +195,12 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Ensure the persistent data directories exist (config, logs, media,
-    # cache) before logging writes to them on a fresh install.
-    ensure_data_dirs()
+    # NOTE: the persistent data tree is created and owned by
+    # scripts/reconcile.sh, which runs as root on both the fresh-install and
+    # OTA paths.  It is deliberately NOT created here: the app runs as pi and
+    # cannot fix ownership of a directory left root-owned by an install, so a
+    # second creator would only reintroduce the drift that crashed the backend
+    # with PermissionError on /opt/metixel/data/logs.
 
     # Configure logging
     log_level = logging.DEBUG if args.debug else logging.INFO

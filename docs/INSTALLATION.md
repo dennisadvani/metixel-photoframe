@@ -147,33 +147,62 @@ if you want to inspect or modify the install process.
 Insert the SD card, connect HDMI, Ethernet (recommended for the install),
 and power. Log in as `pi` (or via SSH).
 
-### 3. Run the setup script
+### 3. Run the bootstrap installer
+
+On a fresh Raspberry Pi OS Lite (Trixie) image, run the one-line installer:
 
 ```bash
-wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/setup_trixie_metixel.sh
-sudo bash setup_trixie_metixel.sh
+curl -fsSL https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/bootstrap.sh | sudo bash
 ```
 
-The script asks two questions upfront before installing anything:
+Or, to install from a checkout you already have (development):
 
-- **Release channel** — `stable` (pins to the latest tagged release) or
-  `beta` (tracks the dev branch with the newest features)
-- **WiFi country code** — sets the regulatory domain (e.g. `AU`, `US`,
-  `GB`) so the radio uses the correct channels for your region
+```bash
+sudo bash scripts/bootstrap.sh --local /path/to/checkout
+```
 
-After answering, press Enter to begin. The script runs for 30–60 minutes:
+The installer asks two questions before changing anything:
+
+- **Release channel** — `stable` (newest tagged release), `beta` (newest
+  pre-release) or `dev` (the dev branch)
+- **WiFi country code** — sets the radio's regulatory domain (e.g. `AU`,
+  `US`, `GB`) so the correct channels are used
+
+Supply them up front to skip the prompts entirely:
+
+```bash
+curl -fsSL .../bootstrap.sh | sudo bash -s -- --channel stable --wifi-country AU
+```
+
+Add `--dry-run` to print exactly what would happen without changing anything.
+
+> **Why `bootstrap.sh` is a separate, tiny script.** It only obtains a
+> checkout and then delegates to `scripts/update.sh` — the *same* script that
+> performs OTA updates. So a fresh install and an upgrade share one code path,
+> and installing exercises staging, the health check and rollback too. Because
+> `bootstrap.sh` rarely changes, it rarely needs to be promoted to `main` — all
+> the logic that evolves lives inside the checkout.
+
+> **No git checkout is left at the install root.** Code lives in
+> `/opt/metixel/releases/<version>` and the root holds only `data/`,
+> `releases/`, `live` and `run/`. Future updates go through `update.sh` (the
+> web UI or CLI), not `git pull`.
+
+After answering, press Enter to begin. The installer runs for 30–60 minutes:
 
 | Step | What it does |
 |---|---|
-| 1 | Installs system packages (cage, XWayland, Mesa, ffmpeg, VLC, Samba, hostapd, dnsmasq) |
-| 2 | Configures iptables redirect (port 80 → 8080) for the web dashboard |
-| 3 | Installs Python packages (pi3d, Flask, Pillow, etc.) |
-| 4 | Creates the Blue/Green directory structure (`/opt/metixel/data` for persistent config/logs/media/cache, `/opt/metixel/releases/<version>` for app code, `/opt/metixel/live` symlink) |
-| 5 | Installs and enables systemd services (`metixel-backend`, `metixel-cage`) |
-| 6 | Enables Wi-Fi and applies the chosen country code (rfkill unblock, iw reg set) |
-| 7 | Configures the captive portal (hostapd + dnsmasq) |
-| 8 | Sets up the Samba share for easy media upload |
-| 9 | Configures quiet boot (no kernel messages on screen) |
+| 1 | Installs `git` (needed to obtain a checkout) |
+| 2 | Resolves the chosen channel to a tag/commit and clones it |
+| 3 | Hands off to `scripts/update.sh`, which installs system packages (cage, XWayland, Mesa, ffmpeg, VLC, Samba, hostapd, dnsmasq) and Python packages, stages the release, swaps `live`, then health-checks and rolls back on failure |
+| 4 | Reconciles host configuration via `scripts/reconcile.sh` — the data tree, systemd units, I²C/ddcutil, WiFi power saving, port 80→8080, Samba, captive portal and linger |
+| 5 | Applies boot configuration via `scripts/configure_boot.sh` (KMS overlay, `gpu_mem`) |
+
+Installer answers (channel, WiFi country) are written to
+`/opt/metixel/data/init.json` — a partial config overlay. The application and
+`reconcile.sh` each read it, and the app consumes it once on first start
+(renaming it to `init.json.applied`), so `config.json` remains solely the
+application's to create and own.
 
 ### 4. Reboot
 

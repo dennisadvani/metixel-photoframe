@@ -13,21 +13,46 @@
 #   2. Install:   install system + pip packages (NEW deps). STRICT — any
 #                 failure (e.g. no internet) ABORTS here, deletes the staging
 #                 dir, and leaves the live release untouched.
-#   3. Remove:    uninstall Metixel-managed packages no longer required by the
+#   3. Units:     reconcile /etc/systemd/system with the units shipped by the
+#                 release (backed up first).  /etc/systemd/system is NOT part
+#                 of the Blue/Green swap, so without this step an upgrade would
+#                 run NEW code under OLD unit files.
+#   4. Remove:    uninstall Metixel-managed packages no longer required by the
 #                 new manifests (apt remove + pip uninstall).
-#   4. Config:    back up the live config before the swap (rollback safety).
-#   5. Swap:      ln -sfn releases/<version> live  (atomic flip).
-#   6. Restart + health-check: restart services, poll the health endpoint.
+#   5. Config:    back up the live config (and the unit files) before the swap
+#                 for rollback safety.
+#   6. Swap:      ln -sfn releases/<version> live  (atomic flip).
+#   7. Restart + health-check: restart services, poll the health endpoint.
 #                 On failure, flip live back to the previous release, restore
-#                 the config, and restart.
-#   7. Record:    update installed_packages.json to the new manifest set.
+#                 the config AND the unit files, and restart.
+#   8. Record:    update installed_packages.json to the new manifest set.
 #
 # Rollback (crucial): if any step before the symlink swap fails, the staging
 # folder is deleted and the live system remains on the OLD (working) release.
+# After the swap, a failed health-check restores both the config and units.
 #
-# Usage: sudo bash scripts/update.sh <version|git-ref> [REPO_URL]
-#   <version|git-ref>   Release folder name + tag/branch (e.g. v2.0.0)
+# Usage: sudo bash scripts/update.sh <version|git-ref> [REPO_URL] [--dry-run] [--staged-dir DIR]
+#   <version|git-ref>   Release folder name + tag/branch/commit (e.g. v2.0.0)
 #   REPO_URL            Git remote to clone from (default: origin of live repo)
+#
+# Flags:
+#   --dry-run           Print what would happen and exit without touching the
+#                       device.  Nothing is cloned, installed, swapped or
+#                       restarted — safe to run anywhere to inspect the plan.
+#   --staged-dir DIR    Use an ALREADY-CLONED checkout at DIR instead of
+#                       cloning.  Used by scripts/bootstrap.sh, which must
+#                       clone anyway (it needs this script to exist before it
+#                       can run), and by local development to install a
+#                       working tree without pushing.  DIR is moved into
+#                       ${RELEASES_DIR}/<name>, so it must be on the same
+#                       filesystem as the install root.
+#
+# NOTE ON CLONE DEPTH: the clone is deliberately FULL, not shallow.  The
+# application relies on a real git repository on the device:
+#   * update_manager._resolve_repo_root() looks for .git to locate the repo;
+#   * `git reset --hard` / `git fetch` are used for in-place operations; and
+#   * a shallow clone cannot be used for local debugging patches (`git push`).
+# A shallow clone would silently break all three, so depth is not constrained.
 set -euo pipefail
 
 INSTALL_ROOT="${METIXEL_INSTALL_ROOT:-/opt/metixel}"
@@ -38,20 +63,69 @@ PACKAGE_STATE="${DATA_DIR}/installed_packages.json"
 BACKUP_DIR="${DATA_DIR}/backups"
 CONFIG_FILE="${DATA_DIR}/config.json"
 LOG_FILE="${DATA_DIR}/cache/metixel-update.log"
+# Backups of the systemd units replaced by this update.  Lives OUTSIDE the
+# install root on purpose: /opt/metixel is recreated on a re-image/reinstall,
+# whereas /etc/systemd/system survives — and it is exactly the directory whose
+# units must be restorable when a rollback is needed.
+UNIT_BACKUP_DIR="${METIXEL_UNIT_BACKUP_DIR:-/etc/systemd/system/.metixel-backup}"
 
 # Health-check tuning (override via env)
 HEALTH_URL="${METIXEL_HEALTH_URL:-http://127.0.0.1:8080/api/health}"
 HEALTH_TIMEOUT="${METIXEL_HEALTH_TIMEOUT:-60}"   # seconds to wait for healthy boot
 HEALTH_INTERVAL="${METIXEL_HEALTH_INTERVAL:-3}"  # poll interval
 
-exec > >(tee -a "${LOG_FILE}") 2>&1
+# safedir helper
+_die() {
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+# Echo a command instead of running it while in dry-run mode.
+_run() {
+    if [ "${DRY_RUN:-no}" = "yes" ]; then
+        printf '      [dry-run] %s\n' "$*"
+        return 0
+    fi
+    "$@"
+}
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <version|git-ref> [REPO_URL]" >&2
+    echo "Usage: $0 <version|git-ref> [REPO_URL] [--dry-run] [--staged-dir DIR]" >&2
     exit 1
 fi
 VERSION="$1"
-REPO_URL="${2:-}"
+shift
+
+# Parse the remaining arguments (order-independent).
+REPO_URL=""
+DRY_RUN="no"
+STAGED_DIR=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY_RUN="yes" ;;
+        --staged-dir)
+            [ $# -ge 2 ] || _die "--staged-dir requires a directory"
+            STAGED_DIR="$2"
+            shift
+            ;;
+        --staged-dir=*) STAGED_DIR="${1#*=}" ;;
+        --*) _die "unknown flag: $1" ;;
+        *)
+            # First positional after the ref is the repo URL.
+            [ -z "${REPO_URL}" ] || _die "unexpected argument: $1"
+            REPO_URL="$1"
+            ;;
+    esac
+    shift
+ done
+export DRY_RUN
+
+# In dry-run mode nothing is written, so the root check is relaxed and the log
+# tee is skipped (there may be no data dir to write it to yet).
+if [ "${DRY_RUN}" = "no" ]; then
+    [ "$(id -u)" -eq 0 ] || _die "Must run as root"
+    exec > >(tee -a "${LOG_FILE}") 2>&1
+fi
 
 # Normalise a git ref (`refs/tags/v1.2.0`, `origin/main`, …) to a bare tag or
 # branch name that `git clone --branch` accepts. Raw SHAs are passed through
@@ -66,20 +140,44 @@ STAGING_VERSION="${VERSION}"
 RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"
 STAGING_DIR="${RELEASES_DIR}/.staging-${STAGING_VERSION}"
 
-# safedir helper
-_die() {
-    echo "ERROR: $*" >&2
-    exit 1
+# ── systemd unit helpers ───────────────────────────────────────────────────
+# /etc/systemd/system is NOT covered by the Blue/Green symlink swap, so units
+# must be reconciled explicitly on every update.  Without this an upgrade runs
+# NEW code against OLD unit files (e.g. a cage unit still launching python
+# directly instead of scripts/cage_launch.sh).
+#
+# The units themselves are installed by scripts/reconcile.sh — the single
+# source of truth for host configuration, shared with fresh installs.  Only
+# backup/restore live here, because they are specific to this update's rollback.
+
+# Restore the units replaced earlier in this run (rollback path).
+_restore_units() {
+    [ -d "${UNIT_BACKUP_DIR}" ] || return 0
+    local restored=0
+    local bak
+    for bak in "${UNIT_BACKUP_DIR}"/*.service; do
+        [ -f "${bak}" ] || continue
+        cp -a "${bak}" "/etc/systemd/system/$(basename "${bak}")"
+        restored=$((restored + 1))
+    done
+    if [ "${restored}" -gt 0 ]; then
+        echo "  Restored ${restored} systemd unit(s) from ${UNIT_BACKUP_DIR}"
+    fi
 }
 
-# ── Guard: root + not already present ──────────────────────────────────────
-[ "$(id -u)" -eq 0 ] || _die "Must run as root"
+# ── Guard: not already present ─────────────────────────────────────────────
 if [ -e "${RELEASE_DIR}" ]; then
     _die "Release already exists at ${RELEASE_DIR} — aborting"
 fi
 
 echo "=== Metixel OTA Update (Blue/Green) ==="
 echo "Target : ${VERSION}"
+if [ "${DRY_RUN}" = "yes" ]; then
+    echo "Mode   : DRY RUN (nothing will be changed)"
+fi
+if [ -n "${STAGED_DIR}" ]; then
+    echo "Staged : ${STAGED_DIR}"
+fi
 echo "Started: $(date)"
 echo ""
 
@@ -103,31 +201,62 @@ echo "Previous live: ${PREV_LIVE:-<none>}"
 # ── 1) STAGING ─────────────────────────────────────────────────────────────
 echo ""
 echo "[1/7] Staging ${VERSION}…"
-rm -rf "${STAGING_DIR}"
-git clone --branch "${VERSION}" --depth 1 "${REPO_URL}" "${STAGING_DIR}"
+if [ -n "${STAGED_DIR}" ]; then
+    # An already-cloned checkout supplied by the caller (bootstrap.sh, or a
+    # local working tree).  Validate it before trusting it.
+    [ -d "${STAGED_DIR}" ] || _die "--staged-dir ${STAGED_DIR} does not exist"
+    [ -f "${STAGED_DIR}/scripts/ota_install.sh" ] \
+        || _die "--staged-dir ${STAGED_DIR} is not a Metixel checkout"
+    if [ "${DRY_RUN}" = "yes" ]; then
+        echo "  [dry-run] would move ${STAGED_DIR} → ${RELEASE_DIR}"
+    else
+        rm -rf "${STAGING_DIR}"
+        mv "${STAGED_DIR}" "${STAGING_DIR}"
+    fi
+elif [ "${DRY_RUN}" = "yes" ]; then
+    echo "  [dry-run] would clone ${REPO_URL} @ ${VERSION} → ${STAGING_DIR}"
+else
+    rm -rf "${STAGING_DIR}"
+    # FULL clone on purpose — see the note in the header.  A shallow clone
+    # breaks the app's .git-based update checks and local debugging patches.
+    git clone --branch "${VERSION}" "${REPO_URL}" "${STAGING_DIR}"
+fi
 # For the dev branch there is no single tag, so name the release folder after
 # the checked-out commit id. Every dev upgrade then gets its own folder (no
 # overlap with a previous dev release), while stable/beta keep their tag names.
-if [ "${VERSION}" = "dev" ]; then
+if [ "${VERSION}" = "dev" ] && [ "${DRY_RUN}" = "no" ]; then
     COMMIT="$(git -C "${STAGING_DIR}" rev-parse --short HEAD)"
     STAGING_VERSION="${COMMIT}"
     RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"
     echo "  dev staging → release folder: ${STAGING_VERSION}"
 fi
-mv "${STAGING_DIR}" "${RELEASE_DIR}"
-git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
+if [ "${DRY_RUN}" = "no" ]; then
+    mv "${STAGING_DIR}" "${RELEASE_DIR}"
+    git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
+fi
 
 # ── Cleanup trap: on ANY failure before swap, delete the staging release ───
 # Fires on ERR (a command fails) AND on EXIT while still pre-swap, so an
 # interrupted update never leaves a half-staged release behind. Cleared after
 # the swap (trap - ERR / trap - EXIT) so the rollback path owns the outcome.
+# Disarmed entirely in dry-run mode: nothing was created, so nothing may be
+# deleted.
 _cleanup_staging() {
     echo ""
     echo "--- Update failed — removing staging release ${RELEASE_DIR} ---"
     rm -rf "${RELEASE_DIR}"
     echo "Live release (${PREV_LIVE:-none}) left untouched."
 }
-trap _cleanup_staging ERR EXIT
+if [ "${DRY_RUN}" = "no" ]; then
+    trap _cleanup_staging ERR EXIT
+else
+    echo ""
+    echo "=== dry-run complete: no changes were made ==="
+    echo "Would have: cloned ${VERSION}, installed packages, reconciled host"
+    echo "            config, swapped ${LIVE_LINK} → ${RELEASE_DIR}, restarted +"
+    echo "            health-checked services (rolling back on failure)."
+    exit 0
+fi
 
 # ── 2) INSTALL (strict) ────────────────────────────────────────────────────
 echo "[2/7] Running install steps for ${VERSION} (system + pip)…"
@@ -181,8 +310,29 @@ for pkg in sorted(prev_pip - new_pip):
                    capture_output=True)
 PYEOF
 
-# ── 4) CONFIG BACKUP (pre-swap) ────────────────────────────────────────────
-echo "[4/7] Backing up config before swap…"
+# ── 4) RECONCILE HOST CONFIGURATION (pre-swap) ─────────────────────────────
+# Host state (systemd units, I²C/ddcutil, networking, Samba values, boot
+# config) is NOT covered by the Blue/Green swap: the symlink flip changes the
+# code, but /etc stays behind.  Without this step a release that changes a unit
+# would run NEW code under OLD units indefinitely.
+#
+# scripts/reconcile.sh is the single source of truth for host configuration and
+# is executed from THIS release, so an upgrade always applies the new release's
+# definition of a correct host.  It is idempotent and only touches
+# Metixel-owned files/values, so a converged device is a silent no-op.
+#
+# Runs BEFORE the swap so a failure aborts while the live release is still the
+# old, working one.  Replaced units are backed up first so the rollback path
+# (step 7) can restore them.
+echo "[4/8] Reconciling host configuration…"
+rm -rf "${UNIT_BACKUP_DIR}"
+mkdir -p "${UNIT_BACKUP_DIR}"
+if ! bash "${RELEASE_DIR}/scripts/reconcile.sh" --unit-backup-dir="${UNIT_BACKUP_DIR}"; then
+    _die "host configuration reconciliation failed — refusing to swap"
+fi
+
+# ── 5) CONFIG BACKUP (pre-swap) ────────────────────────────────────────────
+echo "[5/8] Backing up config before swap…"
 mkdir -p "${BACKUP_DIR}"
 if [ -f "${CONFIG_FILE}" ]; then
     CFG_BACKUP="${BACKUP_DIR}/config-${VERSION}-$(date +%Y%m%d%H%M%S).json"
@@ -200,18 +350,18 @@ for old in "${OLD_BACKUPS[@]:-}"; do
     [ -n "${old}" ] && rm -f -- "${old}"
 done
 
-# ── 5) ATOMIC SWAP ─────────────────────────────────────────────────────────
-echo "[5/7] Swapping live symlink → ${RELEASE_DIR}…"
+# ── 6) ATOMIC SWAP ────────────────────────────────────────────────────────
+echo "[6/8] Swapping live symlink → ${RELEASE_DIR}…"
 ln -sfn "${RELEASE_DIR}" "${LIVE_LINK}"
 chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
 # From here failures are handled by the rollback path, not the staging cleanup.
 trap - ERR EXIT
 
-# ── 6) RESTART + HEALTH-CHECK ──────────────────────────────────────────────
-echo "[6/7] Restarting services…"
+# ── 7) RESTART + HEALTH-CHECK ─────────────────────────────────────────────
+echo "[7/8] Restarting services…"
 systemctl restart metixel-backend 2>/dev/null || true
 systemctl restart metixel-cage 2>/dev/null || true
-systemctl restart metixel-frontend 2>/dev/null || true
+systemctl restart metixel-cursor-hider 2>/dev/null || true
 
 echo "  Waiting up to ${HEALTH_TIMEOUT}s for health endpoint…"
 elapsed=0
@@ -237,9 +387,13 @@ else
             echo "  Restoring config from ${CFG_BACKUP}"
             cp "${CFG_BACKUP}" "${CONFIG_FILE}"
         fi
+        # Restore the units replaced in step [4/8] — otherwise the OLD release
+        # would run against NEW unit files (e.g. a launcher script the old
+        # release does not ship).
+        _restore_units
+        systemctl daemon-reload
         systemctl restart metixel-backend 2>/dev/null || true
         systemctl restart metixel-cage 2>/dev/null || true
-        systemctl restart metixel-frontend 2>/dev/null || true
         echo "  Rollback complete — live point to ${PREV_LIVE}"
         # Keep the failed release on disk for diagnosis (do NOT delete).
         exit 1
@@ -249,27 +403,18 @@ else
     fi
 fi
 
-# ── 6b) PROVISION any NEW systemd service shipped by this release ───────────
-# The Blue/Green swap runs the NEW code, but /etc/systemd/system only receives
-# units at install/migration time.  If a release adds a service (e.g.
-# metixel-cursor-hider in 1.2.5), an upgraded device would never run it without
-# this step.  Runs AFTER the health check so a failure here cannot influence
-# the rollback decision above (the new release is already healthy).
-if [ -f "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" ] \
-   && grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"; then
-    echo "  Installing new systemd service metixel-cursor-hider.service…"
-    cp "${RELEASE_DIR}/systemd/metixel-cursor-hider.service" /etc/systemd/system/
-    systemctl daemon-reload
-    systemctl enable metixel-cursor-hider.service 2>/dev/null || true
+# The hider parks the cursor off-screen.  It was enabled in step [4/8], but
+# cage may have started before the service existed; start it and fire an
+# explicit trigger so the cursor is hidden immediately rather than at the next
+# reboot.  Best-effort — a failure here must not fail an otherwise healthy
+# update (the service is enabled and will run on the next boot regardless).
+if systemctl is-enabled --quiet metixel-cursor-hider.service 2>/dev/null; then
     systemctl start metixel-cursor-hider.service 2>/dev/null || true
-    # Trigger it now — cage_launch.sh already ran during the step [6/7] restart
-    # (before this service existed), so without an explicit trigger the cursor
-    # would stay visible until the next cage restart or reboot.
     /usr/bin/env python3 "${RELEASE_DIR}/scripts/trigger_cursor_hider.py" 2>/dev/null || true
 fi
 
-# ── 7) RECORD installed packages for future removal ─────────────────────────
-echo "[7/7] Recording installed package manifest…"
+# ── 8) RECORD installed packages for future removal ─────────────────────────
+echo "[8/8] Recording installed package manifest…"
 python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" <<'PYEOF'
 import json, os, sys
 

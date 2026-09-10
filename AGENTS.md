@@ -81,7 +81,13 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `testing/unit_tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
-15. **OTA is a thin bootstrap + atomic Blue/Green hand-off + startup self-heal.** The runtime pip
+15. **Host configuration has exactly ONE owner: `scripts/reconcile.sh`.** Anything describing *what a Metixel host should look like* — the data tree, systemd units, I²C/ddcutil, networking, Samba values, boot config — lives there and nowhere else. It is idempotent, runs on **every** update (from the NEW release's copy) **and** on fresh install, and supports `--dry-run`.
+    - **Never duplicate host config in `setup_trixie_metixel.sh` or in a systemd unit.** Duplication is what let a device run NEW code under OLD units, and a unit create a `data/config` directory that does not exist by design.
+    - **Only append** to shared user-editable files (`smb.conf`, `/etc/default/hostapd`); never rewrite them wholesale. `hostapd.conf`/`dnsmasq.conf` are written only when absent, so a user's customisations survive.
+    - **Dir/ownership rules live here, not in Python.** The app runs as `pi` and cannot `chown` a root-owned dir left by an installer, so `reconcile.sh` (root) owns creation + ownership. `paths.ensure_data_dirs()` was removed for exactly this reason; `__main__.py` keeps only a best-effort `mkdir` for desktop runs.
+    - Convergent state belongs here, **not** in `scripts/fixups/`. Fixups run *once ever*, so a mistake in one can never be corrected — they are reserved for one-way data migrations and destructive/ambiguous edits that depend on device history. See `scripts/fixups/README.md`.
+
+16. **OTA is a thin bootstrap + atomic Blue/Green hand-off + startup self-heal.** The runtime pip
     deps (`requirements-pip.txt`) and system deps (`requirements-system.txt`) must be applied on
     every upgrade:
     - **Thin bootstrap (`update_manager._build_update_script`):** the generated OTA script only
@@ -259,12 +265,6 @@ cage -- python3 -m metixel --mode frontend --config etc/config.json
 # Run tests
 python -m pytest testing/unit_tests/ -v
 
-# Build Phase 1 OS image
-sudo bash scripts/build_phase1.sh
-
-# Build Phase 2 OS image
-sudo bash scripts/build_phase2.sh
-
 # Lint
 ruff check src/metixel/
 
@@ -287,7 +287,8 @@ mypy src/metixel/
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue + startup dependency self-heal |
 | `src/metixel/backend/dependencies.py` | Startup dependency self-heal — detects/installs missing `requirements-pip.txt` deps as root via `sudo systemd-run` |
 | `src/metixel/backend/update_manager.py` | OTA updates — thin bootstrap script delegating to `scripts/update.sh`, launched via `systemd-run` |
-| `scripts/update.sh` | Atomic Blue/Green updater — staging → strict install → remove obsolete → config backup → symlink swap → health-check → rollback |
+| `scripts/update.sh` | Atomic Blue/Green updater — staging → strict install → host reconcile → config backup → symlink swap → health-check → rollback |
+| `scripts/reconcile.sh` | **Single owner of Metixel-managed host state** — data tree, systemd units, I²C/ddcutil, networking, Samba values, boot config. Idempotent; runs on every update AND on fresh install. Supports `--dry-run`. Never rewrite shared user files wholesale. |
 | `scripts/migrate_to_atomic.sh` | Migration of an old monolithic install to the `/data` + `/releases` + `/live` layout — invoked automatically by `ota_install.sh` on the first Blue/Green upgrade |
 | `scripts/ota_install.sh` | OTA/system install steps (system packages + `pip install -e .` + `requirements-pip.txt`, strict by default) — run from the NEW checkout |
 | `src/metixel/shared/paths.py` | Central path resolution: `install_root`/`data_dir`/`releases_dir`/`live_dir`/`resolve_install_path` |

@@ -3,22 +3,25 @@
 
 #!/bin/bash
 # =============================================================================
-# Metixel Photoframe — Trixie Setup Script (Self-Bootstrapping)
+# Metixel Photoframe - Trixie setup (run from inside a checkout)
 #
 # Complete setup for a fresh Trixie Lite install on Raspberry Pi 2/3/Zero 2 W.
 #
-# ONE-STEP USAGE (download & run):
-#   wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/setup_trixie_metixel.sh
-#   sudo bash setup_trixie_metixel.sh
+# USAGE
+#   git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel
+#   cd /opt/metixel
+#   sudo bash scripts/setup_trixie_metixel.sh
 #
-# The script auto-detects if it's running standalone and will:
-#   1. Install git
-#   2. Clone the repository to /opt/metixel
-#   3. Run the full setup from the cloned location
-#   4. Reboot when complete
+# This script has NO self-bootstrap phase on purpose.  It used to be
+# downloadable from main and clone the repository itself, which meant the
+# installer had to be committed and promoted to main before it could be
+# tested - so the version a user ran and the version being worked on could
+# differ.  It now operates on the checkout it lives in, so whatever branch you
+# cloned is exactly what you are testing.
 #
-# If already inside the cloned repo, it runs the setup directly:
-#   sudo bash /opt/metixel/scripts/setup_trixie_metixel.sh
+# The one-line wget-pipe-bash convenience install was removed with it.  For an
+# unattended install, clone first and run this script with METIXEL_CHANNEL and
+# METIXEL_WIFI_COUNTRY set to skip the interactive prompts.
 # =============================================================================
 
 set -euo pipefail
@@ -29,103 +32,34 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# ============================================================================
-# PHASE 0: BOOTSTRAP — Detect if we're running standalone (outside the repo)
-# ============================================================================
-# If this script is NOT inside a cloned Metixel repo, we need to clone first.
+# -- Locate the checkout -----------------------------------------------------
+# The script installs the very code it lives in, so it must run from inside a
+# cloned repository: later steps reference sibling files (systemd/, other
+# scripts/, requirements*.txt) relative to this root.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
-INSIDE_REPO=false
 
 if [ -f "${REPO_ROOT}/pyproject.toml" ]; then
-    INSIDE_REPO=true
     METIXEL_DIR="${REPO_ROOT}"
-elif [ -f "/opt/metixel/pyproject.toml" ]; then
-    INSIDE_REPO=true
+elif [ -f "/opt/metixel/pyproject.toml" ] \
+     && [ -f "/opt/metixel/scripts/setup_trixie_metixel.sh" ]; then
+    # Invoked from a copy outside the checkout (e.g. a synced temp file) while a
+    # checkout already exists at the canonical location.
     METIXEL_DIR="/opt/metixel"
-fi
-
-if [ "${INSIDE_REPO}" = false ]; then
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     Metixel Photoframe — Setup                               ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-
-    # ── Ask questions BEFORE touching the system ──────────────────
-    # Nothing is installed or modified until the user confirms below.
-
-    echo "Release channel:"
-    echo "  stable = Latest stable release (recommended)"
-    echo "  beta   = Pre-release with latest features"
-    echo "  dev    = Development branch (latest commits, unstable)"
-    read -p "  Channel [stable]: " RELEASE_CHANNEL
-    RELEASE_CHANNEL="${RELEASE_CHANNEL:-stable}"
-    case "$RELEASE_CHANNEL" in
-        stable|beta|dev) ;;
-        *)
-            echo "  Invalid choice '${RELEASE_CHANNEL}' — using stable."
-            RELEASE_CHANNEL="stable"
-            ;;
-    esac
-    echo "  → Using ${RELEASE_CHANNEL} channel"
-    echo ""
-
-    echo "WiFi country code (e.g. AU, US, GB, DE, NZ):"
-    echo "  This sets the regulatory domain for correct channel availability."
-    read -p "  Country code [AU]: " WIFI_COUNTRY
-    WIFI_COUNTRY="${WIFI_COUNTRY:-AU}"
-    WIFI_COUNTRY=$(echo "$WIFI_COUNTRY" | tr '[:lower:]' '[:upper:]')
-    echo "  → WiFi country: ${WIFI_COUNTRY}"
-    echo ""
-
-    echo "Ready to install. This will take 30–60 minutes."
-    read -p "Press Enter to continue or Ctrl+C to cancel..."
-    echo ""
-
-    echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║     Cloning repository and running full setup...             ║"
-    echo "╚══════════════════════════════════════════════════════════════╝"
-    echo ""
-
-    # -- Install git if not present --
-    if ! command -v git &>/dev/null; then
-        echo "[bootstrap] Installing git..."
-        apt-get update -qq
-        apt-get install -y git
-    else
-        echo "[bootstrap] git already installed."
-    fi
-
-    # -- Prepare /opt/metixel --
-    if [ -d "/opt/metixel/.git" ]; then
-        echo "[bootstrap] Repository already exists at /opt/metixel — updating..."
-        cd /opt/metixel
-        git pull --ff-only || true
-    elif [ -d "/opt/metixel" ] && [ "$(ls -A /opt/metixel 2>/dev/null)" ]; then
-        echo "[bootstrap] /opt/metixel exists but is not a git repository."
-        echo "[bootstrap] Moving existing content to /opt/metixel.bak..."
-        mv /opt/metixel /opt/metixel.bak.$(date +%s)
-        mkdir -p /opt/metixel
-        echo "[bootstrap] Cloning Metixel Photoframe..."
-        git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel
-    else
-        mkdir -p /opt/metixel
-        echo "[bootstrap] Cloning Metixel Photoframe..."
-        git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel
-    fi
-
-    echo "[bootstrap] Repository ready. Running full setup..."
-    echo ""
-    # Pass answers through environment variables so Phase 1 doesn't re-prompt
-    exec env METIXEL_CHANNEL="${RELEASE_CHANNEL}" \
-             METIXEL_WIFI_COUNTRY="${WIFI_COUNTRY}" \
-        bash /opt/metixel/scripts/setup_trixie_metixel.sh
-    # exec replaces this process — we never reach here
-    exit 0
+else
+    echo "ERROR: this script must be run from inside a Metixel checkout." >&2
+    echo "" >&2
+    echo "  git clone https://github.com/dennisadvani/metixel-photoframe.git /opt/metixel" >&2
+    echo "  cd /opt/metixel" >&2
+    echo "  sudo bash scripts/setup_trixie_metixel.sh" >&2
+    echo "" >&2
+    echo "Refusing to run: it would install a checkout that does not exist." >&2
+    exit 1
 fi
 
 # ============================================================================
-# PHASE 1: MAIN SETUP (running from inside the cloned repo)
+# MAIN SETUP
 # ============================================================================
+
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║     Metixel Photoframe — Trixie Setup                        ║"
@@ -136,8 +70,8 @@ echo ""
 
 # -- Release channel & WiFi country (from env or prompt) --------------------
 
-# If passed via environment from Phase 0 bootstrap, use those values.
-# Otherwise prompt (e.g. when running the script directly from the repo).
+# Values may come from the environment (METIXEL_CHANNEL /
+# METIXEL_WIFI_COUNTRY) for unattended installs; otherwise prompt.
 RELEASE_CHANNEL="${METIXEL_CHANNEL:-}"
 WIFI_COUNTRY="${METIXEL_WIFI_COUNTRY:-}"
 
@@ -215,10 +149,10 @@ fi
 
 # -- System packages ---------------------------------------------------------
 # -- System packages ---------------------------------------------------------
-echo "[1/9] Updating package lists..."
+echo "[1/7] Updating package lists..."
 apt-get update -qq
 
-echo "[2/9] Installing system packages..."
+echo "[2/7] Installing system packages..."
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3-pip \
     python3-pil \
@@ -255,7 +189,7 @@ if ! iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 
 fi
 
 # -- Python packages ---------------------------------------------------------
-echo "[3/9] Installing Python packages..."
+echo "[3/7] Installing Python packages..."
 cd "${METIXEL_DIR}"
 
 # Use --ignore-installed to skip packages already provided by apt
@@ -277,13 +211,17 @@ pip3 install ${PIP_IGNORE} ruff mypy pytest pytest-cov 2>/dev/null || \
 
 # -- Git safe.directory (OTA updates run as root via systemd-run) ------------
 # Marks the canonical install location AND the release dir (added in step 4).
-echo "[3b/9] Marking repository as safe for git..."
+echo "[3b/7] Marking repository as safe for git..."
 git config --system --add safe.directory /opt/metixel 2>/dev/null || true
 git config --system --add safe.directory /opt/metixel/releases 2>/dev/null || true
 
 # -- Directory structure (atomic Blue/Green layout) --------------------------
-echo "[4/9] Creating directory structure (data / releases / live)..."
-mkdir -p /opt/metixel/data/logs /opt/metixel/data/media/sync/immich /opt/metixel/data/media/my_media /opt/metixel/data/cache /opt/metixel/data/cache/ddcutil /opt/metixel/data/backups /opt/metixel/releases /run/metixel
+# The DATA tree (data/logs, data/media, data/cache, data/etc …) is owned by
+# scripts/reconcile.sh — the single source of truth for it — which is invoked
+# near the end of setup.  Only the layout directories that reconcile.sh does
+# not know about are created here.
+echo "[4/7] Creating directory structure (releases / live)..."
+mkdir -p /opt/metixel/releases /run/metixel
 
 # Move the cloned app code into a versioned release folder, and put config in
 # /data (persistent). The app runs from the live symlink.
@@ -343,15 +281,39 @@ if [ -d "${METIXEL_DIR}/data/media/sample_media" ]; then
     cp -rn "${METIXEL_DIR}"/data/media/sample_media/. /opt/metixel/data/media/sample_media/ 2>/dev/null || true
 fi
 
-# Persist config.json + logging.conf into /data (user-editable). __main__.py
-# resolves logging.conf as data_dir()/etc/logging.conf, so it lives at
-# /opt/metixel/data/etc/logging.conf alongside config.json.
+# logging.conf is the one config file the application does NOT create, and it is
+# a documented user-editable surface (data/etc/logging.conf), so it is still
+# seeded here.  Never overwrite an existing one.
 mkdir -p /opt/metixel/data/etc
-# etc/ stays at METIXEL_DIR (excluded from the release move) — read the
-# default templates from there.
-cp "${METIXEL_DIR}/etc/config.example.json" /opt/metixel/data/config.json 2>/dev/null || true
 cp -n "${METIXEL_DIR}/etc/logging.conf" /opt/metixel/data/etc/logging.conf 2>/dev/null || true
+
+# Config is NOT created here.  The application owns the config schema and
+# creates data/config.json from its own DEFAULT_CONFIG on first start (see
+# Config.load), which also randomises the auto-update schedule.
+#
+# Installer answers are written to data/init.json instead — a partial overlay
+# using the same schema as config.json.  The application merges and consumes it
+# on first start (renaming it to init.json.applied), and reconcile.sh reads it
+# for host state (e.g. the WiFi regulatory domain) BEFORE the app has run.
+# This keeps the config schema in one place (Python) instead of duplicating it
+# in shell, and makes the flow order-independent.
+echo ""
+echo "Writing provisioning answers to /opt/metixel/data/init.json..."
+python3 -c "
+import json, os
+path = '/opt/metixel/data/init.json'
+overlay = {
+    'network': {'wifi_country': '${WIFI_COUNTRY}'},
+    'update': {'channel': '${RELEASE_CHANNEL}'},
+}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, 'w') as f:
+    json.dump(overlay, f, indent=2)
+print('  -> wrote', path)
+" 2>/dev/null || echo "  ! could not write init.json (non-fatal)"
+
 chown -R pi:pi "${RELEASE_DIR}" /opt/metixel/data /run/metixel 2>/dev/null || true
+chown pi:pi /opt/metixel/data/init.json 2>/dev/null || true
 
 # Create the live symlink → active release.
 ln -sfn "${RELEASE_DIR}" /opt/metixel/live
@@ -359,7 +321,7 @@ chown -h pi:pi /opt/metixel/live 2>/dev/null || true
 git config --system --add safe.directory "${RELEASE_DIR}" 2>/dev/null || true
 
 # -- systemd services --------------------------------------------------------
-echo "[5/9] Installing systemd services..."
+echo "[5/7] Installing systemd services..."
 # The app code (including systemd/) now lives in the release dir.
 cp "${RELEASE_DIR}/systemd/metixel-backend.service" /etc/systemd/system/
 cp "${RELEASE_DIR}/systemd/metixel-cage.service" /etc/systemd/system/
@@ -382,13 +344,8 @@ if [ "${CURSOR_HIDER_PRESENT}" = true ]; then
     systemctl enable metixel-cursor-hider
 fi
 
-# Enable linger for the pi user so systemd-logind creates
-# /run/user/1000 at boot even without a user login.
-# Required for cage (Wayland compositor) to start on headless boots.
-loginctl enable-linger pi
-
 # -- Enable Wi-Fi -----------------------------------------------------------
-echo "[6/9] Enabling Wi-Fi..."
+echo "[6/7] Enabling Wi-Fi..."
 # Raspberry Pi Imager disables WiFi at the OS level if you skip Wi-Fi
 # configuration during imaging.  Re-enable it before configuring hostapd
 # so the wireless interface is available for the captive portal.
@@ -399,182 +356,33 @@ if command -v nmcli &>/dev/null; then
     nmcli radio wifi on 2>/dev/null || true
 fi
 
-# Disable Wi-Fi power management — Pi 3 WiFi is flakey with power saving
-# enabled (failed beacons, missed connections).  NetworkManager's default
-# is to enable powersave, which causes the captive portal AP to be
-# unreliable and client connections to drop.
-echo "     Disabling Wi-Fi power management..."
-mkdir -p /etc/NetworkManager/conf.d
-tee /etc/NetworkManager/conf.d/wifi-powersave-off.conf > /dev/null <<'NMPOWEREOF'
-[connection]
-wifi.powersave = 2
-NMPOWEREOF
-
-# Apply WiFi regulatory domain — prompted upfront, applied here
+# Apply WiFi regulatory domain.
+# The value is recorded in init.json (above, as network.wifi_country) and
+# reconcile.sh (step 7) applies it from there — reading the config rather than
+# being told the value keeps one code path for install and OTA.  `iw reg set`
+# here only avoids waiting for the reboot that ends this script.
 if command -v iw &>/dev/null; then
     iw reg set "$WIFI_COUNTRY" 2>/dev/null || true
     echo "     WiFi regulatory domain set to: $WIFI_COUNTRY"
 fi
-# Also set via cfg80211 module parameter for persistence across reboots
-if [ -f /etc/modprobe.d/cfg80211.conf ]; then
-    sed -i "s/^options cfg80211 ieee80211_regdom=.*/options cfg80211 ieee80211_regdom=$WIFI_COUNTRY/" /etc/modprobe.d/cfg80211.conf 2>/dev/null || true
-else
-    echo "options cfg80211 ieee80211_regdom=$WIFI_COUNTRY" > /etc/modprobe.d/cfg80211.conf
+
+# The Samba share definition, service enablement and the pi account are all
+# owned by reconcile.sh (step 7) — see that script for the single definition.
+
+# -- Host configuration (I²C, ddcutil, networking, data tree, boot config) ---
+# scripts/reconcile.sh is the SINGLE owner of Metixel-managed host state.  It
+# is the same script the OTA updater runs, so a fresh install and an upgraded
+# device converge to exactly the same host — no duplicated lists to drift.
+echo "[7/7] Reconciling host configuration..."
+bash "${METIXEL_DIR}/scripts/reconcile.sh"
+
+# Boot configuration is NOT part of reconciliation (config.txt is the device's
+# file and changes need a reboot), so it is applied explicitly here.  The same
+# script is invoked by the one-time v1.2.1-gpu-mem.sh fixup, so both paths share
+# one implementation.  Guarded on the Raspberry Pi boot config existing.
+if [ -d /boot/firmware ]; then
+    bash "${METIXEL_DIR}/scripts/configure_boot.sh"
 fi
-# Write to Metixel config so the Web UI reflects it
-python3 -c "
-import json, os
-cfg_path = '/opt/metixel/data/config.json'
-if os.path.exists(cfg_path):
-    with open(cfg_path) as f:
-        cfg = json.load(f)
-    cfg.setdefault('network', {})['wifi_country'] = '$WIFI_COUNTRY'
-    cfg.setdefault('update', {})['channel'] = '$RELEASE_CHANNEL'
-    with open(cfg_path, 'w') as f:
-        json.dump(cfg, f, indent=2)
-" 2>/dev/null || true
-
-# -- Captive Portal (AP mode) -----------------------------------------------
-echo "[7/9] Configuring Wi-Fi captive portal (AP fallback)..."
-# Configure hostapd (open network "Metixel-Setup")
-tee /etc/hostapd/hostapd.conf > /dev/null <<'HOSTAPDEOF'
-interface=wlan0
-driver=nl80211
-ssid=Metixel-Setup
-hw_mode=g
-channel=6
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=0
-HOSTAPDEOF
-sed -i 's|^#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd 2>/dev/null || true
-# Replace the entire file with a clean version to avoid quoting issues
-tee /etc/default/hostapd > /dev/null <<'HOSTAPDDEF'
-# Defaults for hostapd — managed by Metixel Photoframe
-DAEMON_CONF=/etc/hostapd/hostapd.conf
-DAEMON_OPTS=
-HOSTAPDDEF
-
-# Configure dnsmasq (DHCP + captive DNS)
-tee /etc/dnsmasq.conf > /dev/null <<'DNSMASQEOF'
-interface=wlan0
-dhcp-range=192.168.42.10,192.168.42.100,12h
-dhcp-option=3,192.168.42.1
-dhcp-option=6,192.168.42.1
-address=/#/192.168.42.1
-no-resolv
-DNSMASQEOF
-
-# Disable auto-start — the Metixel NetworkMonitor controls these services.
-# If disable fails, log it but don't stop the install — the service may
-# not be fully registered yet (first install).  The NetworkMonitor
-# explicitly stops hostapd before taking control.
-if ! systemctl disable hostapd dnsmasq; then
-    echo "WARNING: Could not disable hostapd/dnsmasq auto-start — may need manual fix"
-fi
-systemctl unmask hostapd dnsmasq 2>/dev/null || true
-
-# -- Samba share (media only) ------------------------------------------------
-# Only shares /opt/metixel/data/media so users can add/remove photos/videos.
-# Dev & testing tools (pytest, ruff, mypy) are installed as part of the base
-# install (see the Python packages step above), so no separate dev-env script
-# is needed. For full-project Samba access during development, add a [metixel]
-# share pointing to /opt/metixel manually.
-echo "[8/9] Configuring Samba share (/opt/metixel/data/media as 'metixel-media')..."
-
-# Add 'invalid users = nobody' to the [homes] section so the system
-# 'nobody' user doesn't get an auto-share (don't comment out [homes]
-# itself — orphaned lines will corrupt smb.conf).
-# Also disable printer sharing in [global] (don't comment out [printers]
-# / [print$] headers for the same reason).
-SMB_CONF="/etc/samba/smb.conf"
-if grep -q '^\[homes\]' "${SMB_CONF}" 2>/dev/null; then
-    if ! grep -A10 '^\[homes\]' "${SMB_CONF}" | grep -q 'invalid users'; then
-        sed -i '/^\[homes\]/a\   invalid users = nobody' "${SMB_CONF}"
-    fi
-fi
-if ! grep -q 'load printers = no' "${SMB_CONF}" 2>/dev/null; then
-    sed -i '/^\[global\]/a\   load printers = no' "${SMB_CONF}"
-fi
-if ! grep -q 'disable spoolss = yes' "${SMB_CONF}" 2>/dev/null; then
-    sed -i '/^\[global\]/a\   disable spoolss = yes' "${SMB_CONF}"
-fi
-
-# Append share definition to smb.conf if not already present
-if ! grep -q '\[metixel-media\]' "${SMB_CONF}" 2>/dev/null; then
-    tee -a "${SMB_CONF}" > /dev/null <<'SMBEOF'
-[metixel-media]
-   comment = Metixel Photoframe Media Share
-   path = /opt/metixel/data/media
-   browseable = yes
-   read only = no
-   guest ok = no
-   valid users = pi
-   create mask = 0664
-   directory mask = 0775
-   force user = pi
-   force group = pi
-SMBEOF
-fi
-
-# Set Samba password for user pi (non-interactive)
-echo -e "raspberry\nraspberry" | smbpasswd -a -s pi 2>/dev/null || true
-
-systemctl enable smbd
-systemctl restart smbd
-
-# -- Boot config -------------------------------------------------------------
-echo "[9/9] Configuring boot..."
-
-BOOT_CONFIG="/boot/firmware/config.txt"
-if [ -f "${BOOT_CONFIG}" ]; then
-    # ── GPU memory: 128 MB for all Pi models.
-    # Pi 2/3/Zero2W need a static GPU partition — 128 MB provides room
-    # for the KMS framebuffer (~8 MB) plus ~30 pi3d textures at 1080p
-    # RGB565 (~4 MB each) with fragmentation headroom.
-    # Pi 4/5 use CMA dynamic allocation and ignore gpu_mem entirely, so
-    # setting it to 128 is harmless on those models.  A single value
-    # avoids model-detection complexity and keeps the base image portable.
-    GPU_MEM=128
-
-    # Ensure KMS overlay is enabled
-    if ! grep -q "dtoverlay=vc4-kms-v3d" "${BOOT_CONFIG}"; then
-        echo "" | tee -a "${BOOT_CONFIG}"
-        echo "# Metixel Photoframe — KMS driver for GPU" | tee -a "${BOOT_CONFIG}"
-        echo "dtoverlay=vc4-kms-v3d" | tee -a "${BOOT_CONFIG}"
-        echo "gpu_mem=${GPU_MEM}" | tee -a "${BOOT_CONFIG}"
-    fi
-
-    # If KMS overlay is already present, still ensure gpu_mem is set.
-    if grep -q "^gpu_mem=" "${BOOT_CONFIG}"; then
-        CURRENT_GPU_MEM=$(grep "^gpu_mem=" "${BOOT_CONFIG}" | head -1 | cut -d= -f2)
-        if [ "${CURRENT_GPU_MEM}" -ne "${GPU_MEM}" ] 2>/dev/null; then
-            echo "  Setting gpu_mem to ${GPU_MEM} (was ${CURRENT_GPU_MEM})"
-            sed -i "s/^gpu_mem=.*/gpu_mem=${GPU_MEM}/" "${BOOT_CONFIG}"
-        fi
-    else
-        echo "  Adding gpu_mem=${GPU_MEM}"
-        echo "gpu_mem=${GPU_MEM}" | tee -a "${BOOT_CONFIG}"
-    fi
-fi
-
-# -- I²C (ddcutil) -----------------------------------------------------------
-# ddcutil talks DDC/CI to the monitor over the I²C bus.  The i2c-dev kernel
-# module must be loaded.  Persist it via modules-load.d so it loads on every
-# boot, and load it now so ddcutil works without a reboot.
-echo "Configuring I²C (ddcutil)…"
-echo "i2c-dev" > /etc/modules-load.d/metixel-i2c.conf
-modprobe i2c-dev 2>/dev/null || true
-echo "  + Enabled i2c-dev module (persistent via /etc/modules-load.d/metixel-i2c.conf)"
-# ddcutil caches performance stats + capabilities under $XDG_CACHE_HOME
-# (else $HOME/.cache).  The backend service runs with ProtectHome=yes, so
-# /home is read-only — point ddcutil at a writable dir under the data dir
-# (the adapter sets XDG_CACHE_HOME to this path).  Created now so it exists
-# and is pi-owned from the first boot.
-mkdir -p /opt/metixel/data/cache/ddcutil
-echo "  + Created ddcutil cache dir /opt/metixel/data/cache/ddcutil"
 
 # ============================================================================
 # SETUP COMPLETE — Reboot

@@ -9,10 +9,42 @@ change — e.g. an incorrect `gpu_mem=` in `/boot/firmware/config.txt`, a stale
 sysctl, or a boot-config tweak. Fixups are small, self-contained scripts that
 repair these on existing devices as part of an upgrade.
 
+## Reconcile vs. fixup
+
+| | `scripts/reconcile.sh` | `scripts/fixups/` |
+|---|---|---|
+| Runs | Every update | **Once ever** per device |
+| Target state | Derivable from the repo | Depends on device history |
+| Safe to correct later | Yes — just change the script | **No** — never runs again |
+| Use for | Units, modules-load, ddcutil cache, WiFi powersave, Samba values, 80→8080 redirect, linger | One-way data migrations, destructive/ambiguous edits to user-owned files, **boot config** |
+
+If you can write “the desired end state” declaratively, it belongs in
+`reconcile.sh`.  If you need to know *what the device used to be* (e.g. “only
+rewrite this value if it is specifically the old default”), it belongs here.
+
+### Why boot config is NOT reconciled
+
+`/boot/firmware/config.txt` is deliberately excluded from `reconcile.sh`, even
+though it looks declarative:
+
+- it is the **device's own file** — re-asserting `gpu_mem=128` on every update
+  would silently override a value a user deliberately chose; and
+- a change **only takes effect after a reboot**, so an unrelated update would
+  schedule a behaviour change that manifests later, detached from its cause.
+
+It is applied at provisioning (`setup_trixie_metixel.sh`) and by a one-time
+fixup (`v1.2.1-gpu-mem.sh`).  Both call the shared
+`scripts/configure_boot.sh`, so there is still exactly one implementation.
+
+### Retiring a fixup
+
+Removing an entry from `manifest.txt` does **not** undo it: already-repaired
+devices stay repaired, because `installed_fixups.json` records what has run.
+
 ## How it works
 
 - Each fixup is a script in this directory, named by the version that
-  introduced it, e.g. `v1.3.0-gpu-mem.sh`.
+  introduced it, e.g. `v1.2.1-gpu-mem.sh`.
 - `scripts/fixups/manifest.txt` lists the fixups in the order they must run
   (one filename per line, `#` comments allowed).
 - `ota_install.sh` runs each fixup **exactly once per device**, tracking which
