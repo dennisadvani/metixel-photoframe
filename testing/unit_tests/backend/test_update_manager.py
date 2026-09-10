@@ -710,6 +710,90 @@ class TestReconcileScript:
         assert "recursive" in content
 
 
+class TestUpdateChannelConsistency:
+    """The UI channel selector must match the channels the backend populates.
+
+    Regression guard: the UI once offered a "main" channel while the backend
+    only ever populated "stable"/"beta"/"dev". Selecting it showed no version
+    and no install button — indistinguishable from being up to date.
+    """
+
+    def _code_lines(self, text: str) -> str:
+        return "\n".join(
+            ln
+            for ln in text.splitlines()
+            if ln.strip() and not ln.strip().startswith(("//", "#", "*", "/*"))
+        )
+
+    def test_backend_never_populates_main(self) -> None:
+        mgr = _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        content = mgr.read_text(encoding="utf-8")
+
+        # The channels the backend publishes.
+        assert 'available["stable"]' in content
+        assert 'available["beta"]' in content
+        assert 'available["dev"]' in content
+        assert 'available["main"]' not in content, (
+            "backend populates a 'main' channel that nothing else supports"
+        )
+
+    def test_valid_channels_match_published_channels(self) -> None:
+        mgr = _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        content = mgr.read_text(encoding="utf-8")
+
+        # set_channel must not accept a channel that is never populated.
+        assert 'valid = {"stable", "beta", "dev"}' in content
+        assert '"main"' not in content.split("def set_channel")[1].split("def ")[0]
+
+    def test_ui_dropdown_offers_only_real_channels(self) -> None:
+        html = (
+            _REPO_ROOT / "src" / "metixel" / "backend" / "web" / "templates" / "index.html"
+        ).read_text(encoding="utf-8")
+
+        # Isolate the channel <select>.
+        select = html.split('id="cfg-update-channel"')[1].split("</select>")[0]
+        for ch in ("stable", "beta", "dev"):
+            assert f'value="{ch}"' in select, f"UI is missing the {ch} channel"
+        assert 'value="main"' not in select, (
+            "UI offers a 'main' channel the backend never populates"
+        )
+
+    def test_ui_js_channel_list_matches_backend(self) -> None:
+        js = (
+            _REPO_ROOT
+            / "src"
+            / "metixel"
+            / "backend"
+            / "web"
+            / "static"
+            / "js"
+            / "updates-page.js"
+        ).read_text(encoding="utf-8")
+
+        assert 'var channels = ["stable", "beta", "dev"];' in js
+        # The description table must have an entry for every offered channel —
+        # a missing key renders an empty hint under the selector.
+        code = self._code_lines(js)
+        for ch in ("stable", "beta", "dev"):
+            assert f'"{ch}":' in code, f"missing channel description for {ch}"
+        assert '"main":' not in code, "stale 'main' channel description remains"
+
+    def test_installer_channels_match_backend(self) -> None:
+        """bootstrap.sh and setup_trixie_metixel.sh offer the same channels.
+
+        Match the case-statement arm specifically — a bare "main)" search would
+        also match ordinary prose such as "(e.g. the repo on main) when no".
+        """
+        for name in ("bootstrap.sh", "setup_trixie_metixel.sh"):
+            content = (_REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+            assert "stable|beta|dev)" in content, (
+                f"{name} channel validation drifted from the backend"
+            )
+            assert "stable|beta|dev|main)" not in content, (
+                f"{name} still offers the phantom 'main' channel"
+            )
+
+
 class TestAutoUpdateSchedule:
     """Weekly auto-update schedule parsing logic."""
 

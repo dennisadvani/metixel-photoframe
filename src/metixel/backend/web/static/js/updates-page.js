@@ -109,7 +109,7 @@ function _updateChannelDesc(channel) {
     var descs = {
         "stable": "Stable releases are thoroughly tested and recommended for most users.",
         "beta": "Beta releases include new features ready for wider testing. May have minor issues.",
-        "main": "Latest commits from the main branch. Bleeding edge — use for testing only."
+        "dev": "Latest commits from the development branch. Bleeding edge — use for testing only."
     };
     el.textContent = descs[channel] || "";
 }
@@ -135,7 +135,7 @@ function _renderAvailableVersions(status) {
         return;
     }
     var html = "";
-    var channels = ["stable", "beta", "main"];
+    var channels = ["stable", "beta", "dev"];
     var installed = status.installed_version || "";
 
     channels.forEach(function (ch) {

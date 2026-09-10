@@ -581,9 +581,14 @@ rm -f "$0"
     def set_channel(self, channel: str) -> dict[str, Any]:
         """Switch the update channel.
 
-        Valid channels: ``stable``, ``beta``, ``dev``, ``main``.
+        Valid channels: ``stable``, ``beta``, ``dev``.
+
+        NOTE: keep this set in sync with the channels ``check_for_updates``
+        populates AND with the UI selector in ``templates/index.html``.  A
+        channel offered by the UI but never populated shows no version and no
+        install button, which is indistinguishable from "up to date".
         """
-        valid = {"stable", "beta", "dev", "main"}
+        valid = {"stable", "beta", "dev"}
         if channel not in valid:
             return {
                 "status": "error",
@@ -1172,8 +1177,5 @@ rm -f "$0"
 
         elif channel == "dev":
             return "origin/dev"
-
-        elif channel == "main":
-            return "origin/main"
 
         return None

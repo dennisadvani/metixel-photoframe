@@ -49,6 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **The "Dev (latest commits)" update channel was missing from the UI.** The
+  dropdown, the channel list and the description table had been renamed to a
+  `main` channel that the backend never populates — it publishes
+  `stable`/`beta`/`dev`. Selecting it therefore showed no version, no "Install
+  Update" button and no description, which is indistinguishable from being up to
+  date. The UI now offers `dev` again, and the phantom `main` channel was removed
+  from `set_channel`'s accepted set and from the version-ref resolver so it can
+  no longer be selected or silently accepted. Added a consistency test pinning
+  the UI selector, the JS channel list, the installer scripts and the backend's
+  published channels to one another so this drift cannot recur.
 - **Stale systemd units on upgrade.** `/etc/systemd/system` is not part of the
   Blue/Green symlink swap, so a device could run NEW code under OLD units — a
   `metixel-cage.service` still launching `python3 -m metixel` directly instead
@@ -153,8 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Install, rollback and OS upgrades from the UI** — the Updates card lists
   available releases for manual install, can roll back to any previously
   installed release (switches the live symlink — no re-download), and adds
-  an "Upgrade OS & Reboot" action that runs a full `apt upgrade`. The old
-  `dev` update channel is now labelled **Main (latest commits)**.
+  an "Upgrade OS & Reboot" action that runs a full `apt upgrade`.
 - **Redesigned web UI** — the dashboard is rebuilt on Tailwind CSS and the
   former Settings/Image Sync/Advanced pages are reorganised into
   purpose-based pages: **Sources** (folders + Immich), **Playback**
