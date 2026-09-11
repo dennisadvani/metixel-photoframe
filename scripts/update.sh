@@ -124,6 +124,11 @@ export DRY_RUN
 # tee is skipped (there may be no data dir to write it to yet).
 if [ "${DRY_RUN}" = "no" ]; then
     [ "$(id -u)" -eq 0 ] || _die "Must run as root"
+    # The log lives under data/cache, which does NOT exist yet on a fresh
+    # device (reconcile.sh creates the data tree, but only much later in this
+    # script).  Create it BEFORE the tee, or `tee` fails and the whole run
+    # loses its log — including any error that caused the failure.
+    mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null || true
     exec > >(tee -a "${LOG_FILE}") 2>&1
 fi
 
@@ -198,9 +203,25 @@ if [ -L "${LIVE_LINK}" ]; then
 fi
 echo "Previous live: ${PREV_LIVE:-<none>}"
 
+# A fresh install has no live symlink and no releases dir.  Track it so the
+# messaging and the rollback decision are honest (there is nothing to restore).
+FRESH_INSTALL="no"
+if [ -z "${PREV_LIVE}" ] || [ ! -d "${PREV_LIVE}" ]; then
+    FRESH_INSTALL="yes"
+fi
+
+# ── Ensure the Blue/Green layout exists ────────────────────────────────
+# On a fresh install /opt/metixel may be absent or empty, so there is no
+# releases/ dir to stage into.  reconcile.sh creates the data tree, but that
+# runs much later — staging needs releases/ NOW.  mkdir -p is idempotent.
+# Skipped in dry-run: nothing is written and the root may not even be writable.
+if [ "${DRY_RUN}" = "no" ]; then
+    mkdir -p "${RELEASES_DIR}" "${DATA_DIR}" "${BACKUP_DIR}"
+fi
+
 # ── 1) STAGING ─────────────────────────────────────────────────────────────
 echo ""
-echo "[1/7] Staging ${VERSION}…"
+echo "[1/8] Staging ${VERSION}…"
 if [ -n "${STAGED_DIR}" ]; then
     # An already-cloned checkout supplied by the caller (bootstrap.sh, or a
     # local working tree).  Validate it before trusting it.
@@ -240,11 +261,23 @@ fi
 # interrupted update never leaves a half-staged release behind. Cleared after
 # the swap (trap - ERR / trap - EXIT) so the rollback path owns the outcome.
 # Disarmed entirely in dry-run mode: nothing was created, so nothing may be
-# deleted.
+# deleted.  Guarded against running TWICE: a failing command fires the ERR trap
+# and then the EXIT trap, which produced confusing duplicate output.
+_CLEANUP_DONE="no"
 _cleanup_staging() {
+    [ "${_CLEANUP_DONE}" = "yes" ] && return 0
+    _CLEANUP_DONE="yes"
     echo ""
     echo "--- Update failed — removing staging release ${RELEASE_DIR} ---"
     rm -rf "${RELEASE_DIR}"
+    # On a fresh install we point `live` at the staged release BEFORE running
+    # the installer (so ota_install.sh skips its legacy migration).  If we now
+    # remove that release, `live` would be left DANGLING — systemd units resolve
+    # /opt/metixel/live, so remove the symlink too and leave the device clean.
+    if [ "${FRESH_INSTALL}" = "yes" ] && [ -L "${LIVE_LINK}" ]; then
+        rm -f "${LIVE_LINK}"
+        echo "Removed dangling ${LIVE_LINK} (fresh install did not complete)."
+    fi
     echo "Live release (${PREV_LIVE:-none}) left untouched."
 }
 if [ "${DRY_RUN}" = "no" ]; then
@@ -258,13 +291,29 @@ else
     exit 0
 fi
 
+# ── Fresh install: establish 'live' BEFORE installing ──────────────────────
+# ota_install.sh self-migrates whenever there is no valid `live` symlink, and
+# that migration targets the OLD flat monolithic layout.  On a fresh device it
+# would create an EMPTY release and re-point the install at it, breaking the
+# pip step.  Pointing `live` at the staged release first makes ota_install see
+# a normal Blue/Green device, so migration is correctly skipped.
+#
+# This is safe: no service is started until the restart step below, and
+# PREV_LIVE is empty, so a later health failure reports "no previous release to
+# roll back to" rather than pretending to restore one.
+if [ "${FRESH_INSTALL}" = "yes" ]; then
+    echo "  Fresh install — establishing 'live' at ${RELEASE_DIR}"
+    ln -sfn "${RELEASE_DIR}" "${LIVE_LINK}"
+    chown -h pi:pi "${LIVE_LINK}" 2>/dev/null || true
+fi
+
 # ── 2) INSTALL (strict) ────────────────────────────────────────────────────
-echo "[2/7] Running install steps for ${VERSION} (system + pip)…"
+echo "[2/8] Running install steps for ${VERSION} (system + pip)…"
 # 'set -e' is active: any apt/pip failure aborts before the swap.
 bash "${RELEASE_DIR}/scripts/ota_install.sh" "${RELEASE_DIR}"
 
 # ── 3) REMOVE obsolete Metixel-managed packages ────────────────────────────
-echo "[3/7] Removing obsolete managed packages…"
+echo "[3/8] Removing obsolete managed packages…"
 APPS_SYS="${RELEASE_DIR}/requirements-system.txt"
 APPS_PIP="${RELEASE_DIR}/requirements-pip.txt"
 python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" <<'PYEOF'
