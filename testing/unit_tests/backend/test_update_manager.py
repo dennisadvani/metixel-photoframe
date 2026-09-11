@@ -74,6 +74,47 @@ class TestInstallScript:
         assert "requirements-system.txt" in content
         assert "apt-get install" in content
 
+    def test_system_package_install_is_noninteractive(self) -> None:
+        """apt installs MUST be noninteractive.
+
+        Regression guard: `iptables-persistent` (and `samba`) raise debconf
+        questions — "Save current IPv4 rules?" — which BLOCK an unattended
+        install on a TUI prompt with no timeout, hanging a headless first
+        install forever.  Every apt invocation in the install path needs
+        DEBIAN_FRONTEND=noninteractive.
+        """
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "DEBIAN_FRONTEND=noninteractive" in content, (
+            "apt-get install would block on a debconf prompt"
+        )
+        # It must be attached to the apt invocation itself, not merely present
+        # somewhere in the file.
+        apt_lines = [
+            ln.strip()
+            for ln in content.splitlines()
+            if "apt-get install" in ln and not ln.strip().startswith("#")
+        ]
+        assert apt_lines, "no apt-get install invocation found"
+        # Walk back from each apt line to find its env prefix.
+        lines = content.splitlines()
+        for idx, ln in enumerate(lines):
+            if "apt-get install" in ln and not ln.strip().startswith("#"):
+                window = "\n".join(lines[max(0, idx - 4) : idx + 1])
+                assert "DEBIAN_FRONTEND=noninteractive" in window, (
+                    f"apt-get install at line {idx + 1} is not noninteractive:\n{window}"
+                )
+
+    def test_apt_install_keeps_existing_conffiles(self) -> None:
+        """Package upgrades must not prompt on (or replace) host-owned config.
+
+        `--force-confold` keeps an existing conffile, so a package upgrade
+        cannot silently overwrite a user's smb.conf/hostapd.conf — the same
+        principle as reconcile.sh only *appending* to shared files.
+        """
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+        assert "--force-confold" in content
+
     def test_install_script_strict_by_default(self) -> None:
         """The install script must FAIL (not warn-and-continue) by default so
         the Blue/Green swap never happens on an incomplete install (e.g. when

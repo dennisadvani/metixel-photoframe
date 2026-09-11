@@ -75,9 +75,42 @@ fi
 
 echo "=== Metixel install steps (repo: $REPO, strict=$([ "${CONTINUE_ON_ERROR}" = yes ] && echo off || echo on)) ==="
 
+# ── Refresh package lists ──
+# Run once, up front, ONLY when something actually needs installing.  Without
+# this, a device with stale lists can fail to resolve a package that has since
+# been updated — and the failure would abort the whole update (strict mode).
+# Skipped entirely when every requirement is already satisfied, so a normal
+# upgrade does not pay for an apt update or touch the network.
+_needs_apt=0
+if [ -f "$REPO/requirements-system.txt" ]; then
+    while IFS= read -r pkg; do
+        [ -z "$pkg" ] && continue
+        [[ "$pkg" =~ ^# ]] && continue
+        if ! dpkg -s "$pkg" >/dev/null 2>&1; then
+            _needs_apt=1
+            break
+        fi
+    done < "$REPO/requirements-system.txt"
+fi
+if [ "${_needs_apt}" -eq 1 ]; then
+    echo "Refreshing apt package lists…"
+    # Deliberately non-fatal: a failing index refresh (one repo unreachable)
+    # must not abort an update whose packages are already IN the local apt
+    # cache.  The install below is the real test — if a package genuinely
+    # cannot be resolved, that step fails loudly and aborts (strict mode).
+    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -qq \
+        || echo "  WARNING: apt-get update failed — continuing with existing lists"
+fi
+
 # ── Install missing system packages ──
 # New releases may require additional apt packages (e.g. python3-evdev).
 # This is idempotent — already-installed packages are skipped.
+#
+# DEBIAN_FRONTEND=noninteractive is REQUIRED, not cosmetic: some packages ask
+# debconf questions that BLOCK an unattended install.  `iptables-persistent`
+# asks "Save current IPv4 rules?" and waits on a TUI prompt, which hangs the
+# install forever with no timeout (worst on a headless first install).
+# Mentioned in requirements-system.txt; keep this set for any future package.
 if [ -f "$REPO/requirements-system.txt" ]; then
     echo "Checking system packages…"
     while IFS= read -r pkg; do
@@ -85,7 +118,13 @@ if [ -f "$REPO/requirements-system.txt" ]; then
         [[ "$pkg" =~ ^# ]] && continue
         if ! dpkg -s "$pkg" >/dev/null 2>&1; then
             echo "  Installing: $pkg"
-            sudo -n apt-get install -y -qq "$pkg" \
+            # `-o Dpkg::Options` forces existing conffiles to be kept, so a
+            # package upgrade never prompts or silently replaces a config the
+            # host already owns (e.g. a user's smb.conf or hostapd.conf).
+            sudo -n env DEBIAN_FRONTEND=noninteractive \
+                apt-get install -y -qq \
+                -o Dpkg::Options::="--force-confold" \
+                "$pkg" \
                 || _fail "failed to install system package $pkg"
         fi
     done < "$REPO/requirements-system.txt"
