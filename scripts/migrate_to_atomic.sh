@@ -144,18 +144,18 @@ mkdir -p "${DATA_DIR}/backups"
 mkdir -p "${RELEASES_DIR}"
 
 # ── Move persistent data → /data ────────────────────────────────────────────
-# config.json AND logging.conf move into /data (data/etc for logging.conf).
-# __main__.py resolves logging.conf as data_dir()/etc/logging.conf, so it must
-# live under /data/etc — all persistent config lives under /data.
+# config.json moves into /data.  There is no `data/etc` any more: that directory
+# existed only to hold logging.conf, which is retired (logging is configured in
+# code with one file per process under data/logs).
 echo "[4/8] Moving persistent data (config, logs, media, cache) → /data…"
-mkdir -p "${DATA_DIR}/etc"
 # Idempotent moves: only move if the source still exists AND the target is not
 # already present (re-entry on a partial migration must not fail or clobber).
 if [ -e "${INSTALL_ROOT}/etc/config.json" ] && [ ! -e "${DATA_DIR}/config.json" ]; then
     mv "${INSTALL_ROOT}/etc/config.json" "${DATA_DIR}/config.json"
 fi
-# (logging.conf was retired — logging is configured in code with one file per
-# process; the fixup v1.3.0-retire-logging-conf.sh removes it from devices.)
+# A left-over logging.conf (from an older release) is deliberately NOT migrated:
+# it is retired, and the v1.3.0-retire-logging-conf.sh fixup removes it.  Moving
+# it here would re-seed a file the app no longer reads.
 # Move the ENTIRE media, logs and cache folders (not file-by-file) so every
 # subfolder the user may have added to the watched local folders is preserved.
 # Do NOT pre-create data/{media,cache,logs} — the `mv` of the whole top-level

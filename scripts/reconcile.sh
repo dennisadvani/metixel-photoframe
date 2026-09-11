@@ -190,12 +190,13 @@ _ensure_dir() {
 # cannot chown a root-owned directory, so ownership must be reconciled here as
 # root.
 #
-# NOTE: there is no `data/config` — config.json lives at data/config.json and
-# logging.conf at data/etc/logging.conf.
+# NOTE: there is no `data/config` — config.json lives directly at
+# data/config.json.  There is also no `data/etc`: that directory existed only to
+# hold logging.conf, which has been retired (logging is configured in code, one
+# file per process under data/logs).  Do not recreate it.
 #
-# Ownership is fixed NON-recursively except where a root-created *file* is the
-# actual failure mode (data/etc holds logging.conf).  A recursive chown over
-# data/media would walk the entire library on every update.
+# Ownership is fixed NON-recursively: a recursive chown over data/media would
+# walk the entire library on every update.
 echo "== Directory layout =="
 # The root itself must be pi-owned: atomic config writes create a temp file
 # directly in this directory before os.replace() into place.
@@ -203,7 +204,10 @@ _ensure_dir "${DATA_DIR}" "pi:pi"
 for d in logs media media/my_media media/sync/immich cache backups; do
     _ensure_dir "${DATA_DIR}/${d}" "pi:pi"
 done
-_ensure_dir "${DATA_DIR}/etc" "pi:pi" recursive
+# ddcutil's cache lives under data/cache (the backend unit points
+# XDG_CACHE_HOME at it) — created with its parent loop above, but asserted here
+# because the service cannot create it itself under ProtectHome/ProtectSystem.
+_ensure_dir "${DATA_DIR}/cache/ddcutil" "pi:pi"
 # Run dir for the IPC socket — the backend unit's RuntimeDirectory also covers
 # this for the service, but manual/desktop runs need it too.
 _ensure_dir /run/metixel

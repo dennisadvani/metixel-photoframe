@@ -216,7 +216,7 @@ git config --system --add safe.directory /opt/metixel 2>/dev/null || true
 git config --system --add safe.directory /opt/metixel/releases 2>/dev/null || true
 
 # -- Directory structure (atomic Blue/Green layout) --------------------------
-# The DATA tree (data/logs, data/media, data/cache, data/etc …) is owned by
+# The DATA tree (data/logs, data/media, data/cache, data/backups …) is owned by
 # scripts/reconcile.sh — the single source of truth for it — which is invoked
 # near the end of setup.  Only the layout directories that reconcile.sh does
 # not know about are created here.
@@ -270,16 +270,10 @@ fi
 # Recreate an empty 'etc' for any code-side default templates (config in /data).
 mkdir -p "${METIXEL_DIR}/etc"
 
-# Seed sample media into /data/media (persistent). The repo ships sample media
-# under data/media/sample_media/ (tracked in git); copy it into the device's
-# data/media so a fresh install has content to display. Never overwrite an
-# existing sample_media (user may have replaced it).
-if [ -d "${METIXEL_DIR}/data/media/sample_media" ]; then
-    mkdir -p /opt/metixel/data/media/sample_media
-    # Copy the landscape/portrait subfolders recursively (never overwrite
-    # existing sample_media the user may have replaced).
-    cp -rn "${METIXEL_DIR}"/data/media/sample_media/. /opt/metixel/data/media/sample_media/ 2>/dev/null || true
-fi
+# NOTE: sample media is seeded by update.sh (fresh-install path only).  The
+# demo gallery travels inside the release at data/media/sample_media, and only
+# an INSTALL should add it: an update must never re-add it, or a user who
+# deleted the samples would find them back after every release.
 
 # logging.conf is deliberately NOT seeded: logging is now configured in code,
 # with one log file per process (metixel-backend.log / metixel-frontend.log)

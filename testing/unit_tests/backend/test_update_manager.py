@@ -196,36 +196,37 @@ class TestInstallScript:
         # Re-points the working repo at the migrated release.
         assert "MIGRATED_RELEASE_DIR" in content
 
-    def test_migrate_script_moves_logging_conf_to_data_etc(self) -> None:
+    def test_migrate_script_does_not_carry_logging_conf(self) -> None:
         """logging.conf was retired — logging is configured in code with one
-        file per process, so the migration must NOT move or recreate it."""
+        file per process, so the migration must NOT move it, nor create the
+        `data/etc` directory that existed only to hold it."""
         mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
-        # The move was removed; only an explanatory comment remains.
+        # It must not MOVE logging.conf into /data...
         assert 'mv "${INSTALL_ROOT}/etc/logging.conf"' not in content
-        assert "logging.conf was retired" in content
+        # ...nor create the directory that existed only to hold it.
+        assert 'mkdir -p "${DATA_DIR}/etc"' not in content
+        # The omission is deliberate and explained in a comment.
+        assert "logging.conf" in content
 
         # The app no longer LOADS it either.  Check the parsed source rather
-        # than raw text: "logging.conf" also appears inside "logging.config"
-        # (an import), in comments, and in docstrings that explain the removal.
+        # than raw text: "logging.conf" is a substring of "logging.config"
+        # (an import), and appears in docstrings explaining the removal.
         import ast
 
-        main_path = _REPO_ROOT / "src" / "metixel" / "__main__.py"
-        main = main_path.read_text(encoding="utf-8")
+        main = (_REPO_ROOT / "src" / "metixel" / "__main__.py").read_text(encoding="utf-8")
         assert "fileConfig" not in main
 
         tree = ast.parse(main)
-        string_literals = [
+        literals = [
             node.value
             for node in ast.walk(tree)
             if isinstance(node, ast.Constant) and isinstance(node.value, str)
         ]
-        # No docstring or literal may name the retired file...
-        assert not any("logging.conf" in s for s in string_literals), (
+        assert not any("logging.conf" in s for s in literals), (
             "no string literal (incl. docstrings) may reference logging.conf"
         )
-        # ...and the module must not import logging.config any more.
         assert not any(
             isinstance(node, ast.Import)
             and any(alias.name == "logging.config" for alias in node.names)
@@ -854,13 +855,19 @@ class TestReconcileScript:
         directory that does not exist by design."""
         content = self._content()
 
-        for sub in ("logs", "media", "cache", "backups", "etc"):
+        for sub in ("logs", "media", "cache", "backups", "cache/ddcutil"):
             assert sub in content, f"reconcile.sh must provision data/{sub}"
         # data/config is not a real directory — config.json lives at data/.
         assert '"${DATA_DIR}/config"' not in content
+        # data/etc is GONE: it existed only to hold logging.conf, which is
+        # retired (logging is configured in code).  Recreating it would be the
+        # same "directory that does not exist by design" bug as data/config.
+        assert '"${DATA_DIR}/etc"' not in content, (
+            "reconcile.sh must not recreate data/etc — logging.conf is retired"
+        )
         # Ownership is repaired, and the chown is non-recursive except where a
-        # root-created file is the failure mode (recursive flag only used for
-        # small dirs).
+        # root-created file is the failure mode (recursive flag only for small
+        # dirs — never over the media tree).
         assert 'chown "${owner}" "${path}"' in content
         assert "recursive" in content
 

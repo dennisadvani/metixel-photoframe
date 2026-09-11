@@ -38,6 +38,34 @@ def _log_file_for_mode(mode: str | None) -> Path:
     return data_dir() / "logs" / name
 
 
+def _read_persisted_log_level(config_path: Path) -> int:
+    """Return the file-handler level from ``system.log_level``.
+
+    Read BEFORE any handler is created, because the level must be applied at
+    handler-construction time.  A fresh device has NO ``config.json`` yet
+    (``Config.load`` creates it later, in the daemon), so defaulting to ``NONE``
+    here is the documented default — not a fallback for an error.
+    """
+    file_levels = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "NONE": _LOG_LEVEL_NONE,  # Above CRITICAL — disables disk logging
+    }
+    try:
+        import json as _json
+
+        if config_path.exists():
+            raw = _json.loads(config_path.read_text(encoding="utf-8"))
+            persisted = str(raw.get("system", {}).get("log_level", "NONE")).upper()
+            return file_levels.get(persisted, _LOG_LEVEL_NONE)
+    except Exception:
+        # Unreadable/corrupt config: fall through to the safe default.
+        pass
+    return _LOG_LEVEL_NONE
+
+
 def _setup_logging(
     config_path: Path,
     log_level: int,
@@ -84,6 +112,18 @@ def _setup_logging(
         log_dir = data_dir() / "logs"
         log_file = _log_file_for_mode(mode)
 
+        # Resolve the level FIRST and set it at construction time below.
+        #
+        # This ordering is load-bearing.  On a fresh device config.json does not
+        # exist yet (Config.load creates it in the daemon, AFTER logging is
+        # configured), so applying the level *after* adding the handler raced
+        # that creation: handlers were built with DEBUG, then the level was
+        # applied only if the file happened to exist already.  Result: a device
+        # configured `log_level: NONE` still wrote a full log on its first run,
+        # and the frontend (starting second, when the file did exist) honoured
+        # NONE — so the two processes disagreed.
+        file_level = _read_persisted_log_level(config_path)
+
         try:
             # On the Pi, scripts/reconcile.sh owns the data tree and has
             # already created data/logs.  This mkdir is a BEST-EFFORT
@@ -97,7 +137,7 @@ def _setup_logging(
                 maxBytes=10_485_760,
                 backupCount=5,
             )
-            file_handler.setLevel(logging.DEBUG)
+            file_handler.setLevel(file_level)
             file_handler.setFormatter(fmt)
             root.addHandler(file_handler)
         except OSError as exc:
@@ -114,26 +154,10 @@ def _setup_logging(
                 exc,
             )
 
-        # Apply the persisted file-handler level from config.json.  This is the
-        # ONLY thing that controls on-disk verbosity — the ring buffer stays at
-        # DEBUG so the dashboard can always filter the full stream.
-        try:
-            import json as _json
-
-            if config_path.exists():
-                raw = _json.loads(config_path.read_text(encoding="utf-8"))
-                persisted_level = raw.get("system", {}).get("log_level", "NONE").upper()
-                file_levels = {
-                    "DEBUG": logging.DEBUG,
-                    "INFO": logging.INFO,
-                    "WARNING": logging.WARNING,
-                    "ERROR": logging.ERROR,
-                    "NONE": _LOG_LEVEL_NONE,  # Above CRITICAL — disables disk logging
-                }
-                file_level = file_levels.get(persisted_level, _LOG_LEVEL_NONE)
-                _apply_file_handler_levels(file_level)
-        except Exception:
-            pass  # Config file may not exist yet or be unreadable
+        # Re-apply across the hierarchy: modules that configured a logger before
+        # this ran still need the level, and the web UI changes it at runtime
+        # through the same helper, so startup and runtime cannot diverge.
+        _apply_file_handler_levels(file_level)
 
     # 3. Ring buffer for web UI — attach to BOTH root and metixel loggers.
     #    The web API reads from the metixel logger's handlers, but non-
