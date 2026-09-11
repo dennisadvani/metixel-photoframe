@@ -217,16 +217,30 @@ class TestInstallScript:
         """
         repo = Path(__file__).resolve().parents[3]
         assert not (repo / "scripts" / "migrate_to_atomic.sh").exists()
-        # The legacy monolithic test helper that exercised the migration is
-        # gone too — there is no migration left to test.
-        assert not (repo / "scripts" / "legacy_setup_trixie_metixel.sh").exists()
+        # ...and no hand-off protocol survives it either.
+        install = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+        assert "MIGRATED_RELEASE_DIR" not in install
+
+    def test_legacy_monolithic_setup_helper_is_retained(self) -> None:
+        """`scripts/legacy_setup_trixie_metixel.sh` is deliberately KEPT.
+
+        It builds a monolithic (pre-Blue/Green) install on a real device, which
+        is still how the atomic layout is exercised for image builds and manual
+        verification.  It is a TESTING helper, not an end-user installer, so
+        deleting it with the migration would have removed a capability we still
+        rely on.
+        """
+        repo = Path(__file__).resolve().parents[3]
+        assert (repo / "scripts" / "legacy_setup_trixie_metixel.sh").is_file()
 
     def test_setup_script_is_retired(self) -> None:
-        """The standalone installer has been deleted.
+        """The end-user standalone installer has been deleted.
 
         Installing and updating now run ONE code path (bootstrap.sh →
         update.sh), so a separate fresh-install script is both redundant and a
         drift risk: it had to be re-tested and promoted to main on every change.
+        (The LEGACY monolithic helper is a different thing and stays — see
+        test_legacy_monolithic_setup_helper_is_retained.)
         """
         repo = Path(__file__).resolve().parents[3]
         assert not (repo / "scripts" / "setup_trixie_metixel.sh").exists()
@@ -238,8 +252,15 @@ class TestInstallScript:
         a reader ends up looking for a file that no longer exists.  Only
         comments are allowed to mention them (e.g. explaining the retirement).
         """
+        import re
+
         repo = Path(__file__).resolve().parents[3]
-        deleted = ("setup_trixie_metixel.sh", "migrate_to_atomic.sh")
+        # The negative lookbehind matters: "setup_trixie_metixel.sh" is a
+        # SUBSTRING of the retained "legacy_setup_trixie_metixel.sh", so a plain
+        # `in` check would flag the test helper we deliberately keep.
+        deleted_re = re.compile(
+            r"(?<!legacy_)setup_trixie_metixel\.sh|migrate_to_atomic\.sh"
+        )
         offenders: list[str] = []
         for script in sorted((repo / "scripts").rglob("*.sh")):
             for lineno, line in enumerate(
@@ -248,11 +269,10 @@ class TestInstallScript:
                 stripped = line.strip()
                 if not stripped or stripped.startswith("#"):
                     continue
-                for name in deleted:
-                    if name in line:
-                        offenders.append(
-                            f"{script.relative_to(repo)}:{lineno}: {stripped}"
-                        )
+                if deleted_re.search(line):
+                    offenders.append(
+                        f"{script.relative_to(repo)}:{lineno}: {stripped}"
+                    )
         assert not offenders, (
             "executable code still references a deleted installer:\n"
             + "\n".join(offenders)
