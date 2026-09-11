@@ -142,6 +142,95 @@ class TestPaths:
 # ---------------------------------------------------------------------------
 
 
+class TestRuntimeState:
+    """Transient state lives in tmpfs, not config.json (SD-card wear)."""
+
+    def test_write_then_read_roundtrip(self, tmp_path, monkeypatch):
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        assert runtime_state.write_runtime_state({"last_check": "2026-01-01T00:00:00+00:00"})
+        assert runtime_state.read_runtime_state()["last_check"] == "2026-01-01T00:00:00+00:00"
+
+    def test_missing_file_returns_empty(self, tmp_path, monkeypatch):
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        assert runtime_state.read_runtime_state() == {}
+
+    def test_corrupt_file_does_not_raise(self, tmp_path, monkeypatch):
+        """A truncated file (power loss on tmpfs) must not break the caller."""
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        (tmp_path / runtime_state.UPDATE_STATE_FILE).write_text("{ not json", encoding="utf-8")
+        assert runtime_state.read_runtime_state() == {}
+
+    def test_writes_are_throttled(self, tmp_path, monkeypatch):
+        """Repeated writes of the same key are suppressed within the interval."""
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+
+        assert runtime_state.write_runtime_state({"k": 1}, min_interval=60) is True
+        assert runtime_state.write_runtime_state({"k": 2}, min_interval=60) is False
+        # force=True bypasses the throttle.
+        assert runtime_state.write_runtime_state({"k": 3}, min_interval=60, force=True) is True
+        assert runtime_state.read_runtime_state()["k"] == 3
+
+    def test_throttle_is_per_key(self, tmp_path, monkeypatch):
+        """Writing one key must not suppress an unrelated key."""
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+
+        assert runtime_state.write_runtime_state({"a": 1}, min_interval=60) is True
+        assert runtime_state.write_runtime_state({"b": 2}, min_interval=60) is True
+        assert runtime_state.write_runtime_state({"a": 1}, min_interval=60) is False
+
+    def test_merge_preserves_other_keys(self, tmp_path, monkeypatch):
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+
+        runtime_state.write_runtime_state({"a": 1}, force=True)
+        runtime_state.write_runtime_state({"b": 2}, force=True)
+        assert runtime_state.read_runtime_state() == {"a": 1, "b": 2}
+
+    def test_null_values_are_dropped(self, tmp_path, monkeypatch):
+        """Storing None clears a key rather than persisting a null."""
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        runtime_state.write_runtime_state({"a": 1}, force=True)
+        runtime_state.write_runtime_state({"a": None}, force=True)
+        assert "a" not in runtime_state.read_runtime_state()
+
+    def test_unwritable_run_dir_is_not_fatal(self, tmp_path, monkeypatch):
+        """Graceful degradation: a write failure must never raise.
+
+        NOTE: we cannot rely on a missing directory to trigger this —
+        ``atomic_write_json`` creates parents (``mkdir(parents=True)``), so a
+        bad path would simply succeed.  Patch the writer to raise instead.
+        """
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+
+        def _boom(*args, **kwargs):
+            raise OSError(13, "Permission denied")
+
+        monkeypatch.setattr(runtime_state, "atomic_write_json", _boom)
+        runtime_state._last_write.clear()
+        # Returns False rather than raising.
+        assert runtime_state.write_runtime_state({"a": 1}, force=True) is False
+
+
 class TestMediaExtensions:
     def test_sets_are_distinct(self):
         """Image and video extension sets should not overlap."""

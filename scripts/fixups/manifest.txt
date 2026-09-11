@@ -29,3 +29,8 @@
 # and a change needs a reboot, so re-asserting it every update would override a
 # user's deliberate value.  It stays a one-time repair.
 v1.2.1-gpu-mem.sh
+
+# logging.conf: ONE-WAY REMOVAL.  The target state ("the file is gone") cannot
+# be derived from the release — a device that never had it looks identical to
+# one already cleaned.  Runs exactly once per device.
+v1.3.0-retire-logging-conf.sh

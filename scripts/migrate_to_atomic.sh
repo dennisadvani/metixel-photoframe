@@ -154,9 +154,8 @@ mkdir -p "${DATA_DIR}/etc"
 if [ -e "${INSTALL_ROOT}/etc/config.json" ] && [ ! -e "${DATA_DIR}/config.json" ]; then
     mv "${INSTALL_ROOT}/etc/config.json" "${DATA_DIR}/config.json"
 fi
-if [ -e "${INSTALL_ROOT}/etc/logging.conf" ] && [ ! -e "${DATA_DIR}/etc/logging.conf" ]; then
-    mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"
-fi
+# (logging.conf was retired — logging is configured in code with one file per
+# process; the fixup v1.3.0-retire-logging-conf.sh removes it from devices.)
 # Move the ENTIRE media, logs and cache folders (not file-by-file) so every
 # subfolder the user may have added to the watched local folders is preserved.
 # Do NOT pre-create data/{media,cache,logs} — the `mv` of the whole top-level

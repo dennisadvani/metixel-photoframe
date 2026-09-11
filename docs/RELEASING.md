@@ -342,11 +342,16 @@ The tag name after stripping the leading `v` must match the
     "auto_check": true,
     "check_interval_hours": 6,
     "github_repo": "dennisadvani/metixel-photoframe",
-    "last_check": null,
-    "last_update": null
+    "last_auto_update": null
   }
 }
 ```
+
+> **Note:** `last_check` is *not* in `config.json` — it lives in tmpfs at
+> `/run/metixel/update_state.json`, because rewriting config every few minutes
+> wore the SD card. `last_update` and `last_rollback` were removed (nothing read
+> them). Only `channel` and `last_auto_update` are persisted, both because they
+> must survive a reboot.
 
 ### Files Involved in a Release
 

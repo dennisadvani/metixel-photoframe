@@ -1206,7 +1206,7 @@
                     <div class="setting-row">
                         <div class="setting-label">
                             <span class="text-[0.85rem] font-medium text-text-secondary">File Log Level</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">Controls what gets written to <code>/opt/metixel/logs/metixel.log</code>. The dashboard always captures all levels — use the severity checkboxes above to filter the view.</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Controls what gets written to <code>/opt/metixel/data/logs/</code> (<code>metixel-backend.log</code> and <code>metixel-frontend.log</code>). The dashboard always captures all levels — use the severity checkboxes above to filter the view.</span>
                         </div>
                         <div class="setting-control">
                             <select id="cfg-log-level" class="select-premium input-premium w-44">
@@ -1570,7 +1570,7 @@
                         <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Diagnostics</span>
                     </div>
                     <div class="mt-5 border-t border-border/60"></div>
-                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Log file: <code>/opt/metixel/logs/metixel.log</code> — file level controlled above in System.</p>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Log files: <code>/opt/metixel/data/logs/</code> (one per process) — file level controlled above in System.</p>
                     <div id="log-viewer">
                         <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;flex-wrap:wrap;align-items:center">
                             <input id="log-search" class="search log-search" type="text" placeholder="Search logs…" style="flex:1;min-width:140px;padding:0.3rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);font-size:0.82rem">
@@ -1643,6 +1643,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=65"></script>
+    <script type="module" src="/static/js/main.js?v=66"></script>
 </body>
 </html>

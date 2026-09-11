@@ -29,6 +29,7 @@ from metixel.backend.state import StateManager
 from metixel.shared.adapters import RequestsHttpGateway
 from metixel.shared.paths import data_dir, install_root, live_dir, release_dir, releases_dir
 from metixel.shared.ports import HttpGateway
+from metixel.shared.runtime_state import read_runtime_state, write_runtime_state
 from metixel.shared.subprocess import run_sudo
 
 logger = logging.getLogger(__name__)
@@ -41,14 +42,27 @@ GITHUB_API_BASE = "https://api.github.com"
 RELEASES_ENDPOINT = "/repos/{repo}/releases"
 COMMITS_ENDPOINT = "/repos/{repo}/commits"
 
-# How long to cache GitHub API responses before re-fetching
+# How long to cache GitHub API responses before re-fetching.
+#
+# This ALSO bounds how often `last_check` is written (to tmpfs — see
+# metixel.shared.runtime_state).  The background loop runs every
+# SCHEDULE_POLL_SECONDS; without this guard the timestamp was rewritten on every
+# cycle, which wore the SD card and fired an inotify event each time.
 API_CACHE_TTL_SECONDS = 300  # 5 minutes
 
 # Semver regex: matches v1.2.3, v1.2.3-beta.4, v1.2.3-rc1
 _SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-.](beta|rc|alpha|pre)\.?(\d+))?$")
 
-# Time between update check cycles (when auto_check is enabled)
-MIN_CHECK_INTERVAL = 600  # 10 minutes minimum
+# How long to wait between GitHub API *attempts* when auto_check is on.
+#
+# Previously this was a dead constant: the loop called check_for_updates() every
+# SCHEDULE_POLL_SECONDS and relied on the response cache, so the effective
+# interval was the cache TTL rather than the configured
+# `update.check_interval_hours` the UI advertises.  It is now enforced.
+#
+# Command typing is strict on purpose: this is an int, and writing `600` rather
+# than `600.0` keeps mypy from widening it to float in comparisons.
+MIN_CHECK_INTERVAL: int = 600  # 10 minutes minimum between API attempts
 
 # The earliest atomic (Blue/Green) release.  Releases older than this used the
 # monolithic layout and cannot be installed/rolled-back via the release dirs.
@@ -165,7 +179,13 @@ class UpdateManager:
             try:
                 update_cfg = self._state.config.updates
 
-                if update_cfg.get("auto_check", True):
+                # Honour the configured interval.  The UI advertises
+                # `check_interval_hours` ("Checks every N hours"), but nothing
+                # enforced it — the loop called check_for_updates() every
+                # SCHEDULE_POLL_SECONDS and merely relied on the 5-minute
+                # response cache, so the effective interval was the cache TTL.
+                # A manual "Check for Updates" bypasses this (force=True).
+                if update_cfg.get("auto_check", True) and self._check_due(update_cfg):
                     self.check_for_updates()
 
                 # Weekly auto-update: install the latest available version
@@ -175,9 +195,7 @@ class UpdateManager:
 
                 # Sleep in small chunks so we can respond to shutdown quickly.
                 # Poll the schedule every SCHEDULE_POLL_SECONDS so the weekly
-                # auto-update window is entered promptly.  check_for_updates()
-                # is itself cache-bounded (API_CACHE_TTL_SECONDS), so frequent
-                # polling does not hammer the GitHub API.
+                # auto-update window is entered promptly.
                 deadline = time.monotonic() + SCHEDULE_POLL_SECONDS
                 while self._running and time.monotonic() < deadline:
                     time.sleep(5)
@@ -187,6 +205,33 @@ class UpdateManager:
                     time.sleep(60)
 
         logger.info("UpdateManager stopped")
+
+    def _check_due(self, update_cfg: dict[str, Any]) -> bool:
+        """Return True when enough time has passed for the next auto check.
+
+        Uses the persisted ``check_interval_hours`` (default 6, matching the
+        UI) floored at :data:`MIN_CHECK_INTERVAL` — a user-set value below the
+        floor cannot turn the loop into a GitHub-polling hammer.  The reference
+        point is ``last_check`` in tmpfs; if it is absent (fresh boot, cleared
+        /run) a check is due immediately, which is the desired cold-start
+        behaviour.
+        """
+        try:
+            hours = float(update_cfg.get("check_interval_hours", 6) or 6)
+        except (TypeError, ValueError):
+            hours = 6.0
+        interval = max(hours * 3600.0, float(MIN_CHECK_INTERVAL))
+
+        last_check = read_runtime_state().get("last_check")
+        if not isinstance(last_check, str) or not last_check:
+            return True
+        try:
+            last_dt = datetime.fromisoformat(last_check)
+        except ValueError:
+            return True
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=UTC)
+        return (datetime.now(UTC) - last_dt).total_seconds() >= interval
 
     def shutdown(self) -> None:
         """Signal the background thread to stop."""
@@ -219,7 +264,6 @@ class UpdateManager:
         - current_channel
         - available: dict of channel -> {version, tag, url, is_newer}
         - last_check: ISO timestamp or None
-        - last_update: ISO timestamp or None
         - check_in_progress
         - update_in_progress
         - last_error
@@ -228,12 +272,15 @@ class UpdateManager:
         with self._lock:
             update_cfg = self._state.config.updates
             available = self._cache.get("available", {})
+            # last_check lives in tmpfs (see metixel.shared.runtime_state) — it
+            # is transient telemetry, not configuration, and is intentionally
+            # absent from config.json.
+            runtime = read_runtime_state()
             return {
                 "installed_version": self.installed_version,
                 "current_channel": self.channel,
                 "available": available,
-                "last_check": update_cfg.get("last_check"),
-                "last_update": update_cfg.get("last_update"),
+                "last_check": runtime.get("last_check"),
                 "check_in_progress": self._check_in_progress,
                 "update_in_progress": self._update_in_progress,
                 "last_error": self._last_error,
@@ -337,11 +384,11 @@ class UpdateManager:
                 self._cache_time = time.monotonic()
                 self._check_in_progress = False
 
-            # Persist last_check timestamp
-            try:
-                self._state.update_config("update", {"last_check": now_iso})
-            except Exception:
-                logger.debug("Could not persist last_check timestamp", exc_info=True)
+            # Persist last_check to TMPFS, not config.json.  This value is
+            # fleeting telemetry — a fresh boot re-derives it by checking — so
+            # it must never cost flash wear.  Only reached on a cache MISS, so it
+            # is written at most once per API_CACHE_TTL_SECONDS.
+            write_runtime_state({"last_check": now_iso})
 
             # Log findings
             for ch, info in available.items():
@@ -439,18 +486,13 @@ class UpdateManager:
             logger.info("Applying update: channel=%s target=%s", target_channel, target_ref)
             self._write_and_launch_update_script(target_ref, target_channel)
 
-            # Record the update attempt
-            now_iso = datetime.now(UTC).isoformat()
+            # Record the chosen channel (a USER preference — persistent).  The
+            # former `last_update` write was removed: it was exposed on the API
+            # but no client ever read it.
             try:
-                self._state.update_config(
-                    "update",
-                    {
-                        "last_update": now_iso,
-                        "channel": target_channel,
-                    },
-                )
+                self._state.update_config("update", {"channel": target_channel})
             except Exception:
-                logger.debug("Could not persist last_update timestamp", exc_info=True)
+                logger.debug("Could not persist update channel", exc_info=True)
 
             with self._lock:
                 self._update_in_progress = False
@@ -698,18 +740,9 @@ rm -f "$0"
             self._flip_live_symlink(target)
             self._restart_services()
 
-            now_iso = datetime.now(UTC).isoformat()
-            try:
-                self._state.update_config(
-                    "update",
-                    {
-                        "last_update": now_iso,
-                        "last_rollback": now_iso,
-                        "channel": self.channel,
-                    },
-                )
-            except Exception:
-                logger.debug("Could not persist rollback timestamp", exc_info=True)
+            # The former `last_update`/`last_rollback` writes were removed:
+            # `last_rollback` was never read by anything, and `last_update` was
+            # exposed on the API but unused by the UI.
 
             logger.info("Rollback to '%s' complete", version)
             return {

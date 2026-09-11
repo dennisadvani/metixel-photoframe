@@ -281,11 +281,11 @@ if [ -d "${METIXEL_DIR}/data/media/sample_media" ]; then
     cp -rn "${METIXEL_DIR}"/data/media/sample_media/. /opt/metixel/data/media/sample_media/ 2>/dev/null || true
 fi
 
-# logging.conf is the one config file the application does NOT create, and it is
-# a documented user-editable surface (data/etc/logging.conf), so it is still
-# seeded here.  Never overwrite an existing one.
-mkdir -p /opt/metixel/data/etc
-cp -n "${METIXEL_DIR}/etc/logging.conf" /opt/metixel/data/etc/logging.conf 2>/dev/null || true
+# logging.conf is deliberately NOT seeded: logging is now configured in code,
+# with one log file per process (metixel-backend.log / metixel-frontend.log)
+# and the level coming solely from `system.log_level`.  A user-editable
+# logging.conf hardcoded a shared log path, which made two processes rotate the
+# same file and truncate each other's output.
 
 # Config is NOT created here.  The application owns the config schema and
 # creates data/config.json from its own DEFAULT_CONFIG on first start (see

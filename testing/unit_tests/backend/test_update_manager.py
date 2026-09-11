@@ -112,18 +112,40 @@ class TestInstallScript:
         assert "MIGRATED_RELEASE_DIR" in content
 
     def test_migrate_script_moves_logging_conf_to_data_etc(self) -> None:
-        """logging.conf must move into /data/etc (not stay at /opt/metixel/etc) —
-        __main__.py resolves it as data_dir()/etc/logging.conf, so all persistent
-        config lives under /data."""
+        """logging.conf was retired — logging is configured in code with one
+        file per process, so the migration must NOT move or recreate it."""
         mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
         content = mig.read_text(encoding="utf-8")
 
-        # Both config.json and logging.conf move into /data.
-        assert "config.json" in content
-        assert "logging.conf" in content
-        assert 'mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"' in content
-        # No live/etc symlink is created (logging.conf is under /data now).
-        assert 'ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc"' not in content
+        # The move was removed; only an explanatory comment remains.
+        assert 'mv "${INSTALL_ROOT}/etc/logging.conf"' not in content
+        assert "logging.conf was retired" in content
+
+        # The app no longer LOADS it either.  Check the parsed source rather
+        # than raw text: "logging.conf" also appears inside "logging.config"
+        # (an import), in comments, and in docstrings that explain the removal.
+        import ast
+
+        main_path = _REPO_ROOT / "src" / "metixel" / "__main__.py"
+        main = main_path.read_text(encoding="utf-8")
+        assert "fileConfig" not in main
+
+        tree = ast.parse(main)
+        string_literals = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        # No docstring or literal may name the retired file...
+        assert not any("logging.conf" in s for s in string_literals), (
+            "no string literal (incl. docstrings) may reference logging.conf"
+        )
+        # ...and the module must not import logging.config any more.
+        assert not any(
+            isinstance(node, ast.Import)
+            and any(alias.name == "logging.config" for alias in node.names)
+            for node in ast.walk(tree)
+        ), "logging.config import should have been removed"
 
     def test_migrate_script_reads_manifests_from_release_dir(self) -> None:
         """The installed_packages.json recorder must read the requirements
@@ -242,9 +264,17 @@ class TestSetupScript:
         # systemd units are copied from the release (where the code moved).
         assert 'cp "${RELEASE_DIR}/systemd/metixel-backend.service"' in content
         assert 'cp "${RELEASE_DIR}/systemd/metixel-cage.service"' in content
-        # logging.conf is the one config file the app does not create, so it is
-        # still seeded from etc/ (which stays at METIXEL_DIR).
-        assert 'cp -n "${METIXEL_DIR}/etc/logging.conf"' in content
+        # logging.conf is retired: logging is configured in code, one file per
+        # process.  The installer must not reference the file in executable
+        # code (a comment explaining the retirement is fine and expected).
+        code_lines = [
+            ln
+            for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        assert not any("logging.conf" in ln for ln in code_lines), (
+            "setup must not seed or reference logging.conf any more"
+        )
         # config.json is NOT seeded — the app owns the schema and creates it.
         assert "config.example.json" not in content
         # Installer answers are written as a partial overlay instead.
@@ -792,6 +822,116 @@ class TestUpdateChannelConsistency:
             assert "stable|beta|dev|main)" not in content, (
                 f"{name} still offers the phantom 'main' channel"
             )
+
+
+class TestCheckInterval:
+    """The configured check interval is actually enforced (it used to be dead).
+
+    `MIN_CHECK_INTERVAL` was unreferenced and `check_interval_hours` was only
+    ever displayed, so the UI advertised "Checks every 6 hours" while the code
+    polled every 60 s.
+    """
+
+    def _mgr(self) -> UpdateManager:
+        return UpdateManager.__new__(UpdateManager)  # skip __init__
+
+    def test_due_when_no_previous_check(self, tmp_path, monkeypatch):
+        """Fresh boot / cleared tmpfs ⇒ check immediately."""
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        assert self._mgr()._check_due({"check_interval_hours": 6}) is True
+
+    def test_not_due_immediately_after_a_check(self, tmp_path, monkeypatch):
+        from datetime import UTC, datetime
+
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        runtime_state.write_runtime_state(
+            {"last_check": datetime.now(UTC).isoformat()}, force=True
+        )
+        assert self._mgr()._check_due({"check_interval_hours": 6}) is False
+
+    def test_due_once_interval_elapsed(self, tmp_path, monkeypatch):
+        from datetime import UTC, datetime, timedelta
+
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        old = (datetime.now(UTC) - timedelta(hours=7)).isoformat()
+        runtime_state.write_runtime_state({"last_check": old}, force=True)
+        assert self._mgr()._check_due({"check_interval_hours": 6}) is True
+
+    def test_user_cannot_undercut_the_floor(self, tmp_path, monkeypatch):
+        """A tiny configured interval must not turn the loop into a hammer."""
+        from datetime import UTC, datetime, timedelta
+
+        from metixel.shared import runtime_state
+        from metixel.backend.update_manager import MIN_CHECK_INTERVAL
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        # 1 minute ago: below MIN_CHECK_INTERVAL (600s), so still not due even
+        # though the requested interval is 0.01 hours (36 s).
+        recent = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        runtime_state.write_runtime_state({"last_check": recent}, force=True)
+        assert MIN_CHECK_INTERVAL >= 600
+        assert self._mgr()._check_due({"check_interval_hours": 0.01}) is False
+
+    def test_garbage_timestamp_is_treated_as_due(self, tmp_path, monkeypatch):
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        runtime_state.write_runtime_state({"last_check": "not-a-date"}, force=True)
+        assert self._mgr()._check_due({}) is True
+
+    def test_last_check_is_not_persisted_to_config(self) -> None:
+        """Regression: last_check must never be written to config.json again.
+
+        It lived there and was rewritten every few minutes, wearing the SD card
+        and firing an inotify event that made the frontend reload its config.
+        """
+        mgr_src = (
+            _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        ).read_text(encoding="utf-8")
+        assert '"last_check"' in mgr_src  # still tracked...
+        assert 'update_config("update", {"last_check"' not in mgr_src  # ...not in config
+        assert 'write_runtime_state({"last_check"' in mgr_src
+
+    def test_dead_update_fields_removed(self) -> None:
+        """`last_update` was unused by the UI and `last_rollback` was never read
+        by anything — both writes were removed rather than left to rot."""
+        mgr_src = (
+            _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        ).read_text(encoding="utf-8")
+        cfg_src = (_REPO_ROOT / "src" / "metixel" / "shared" / "config.py").read_text(
+            encoding="utf-8"
+        )
+
+        # Assert on EXECUTABLE lines: the comments intentionally name the fields
+        # they explain the removal of, so a raw substring search would match the
+        # explanation rather than the code.
+        def _code(text: str) -> str:
+            return "\n".join(
+                ln
+                for ln in text.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            )
+
+        mgr_code = _code(mgr_src)
+        assert "last_rollback" not in mgr_code
+        assert '"last_update": now_iso' not in mgr_code
+        assert '"last_update"' not in _code(cfg_src)
+        assert "last_rollback" not in _code(cfg_src)
+
+        # The persistent, READ fields must survive.
+        assert '"last_auto_update": None' in cfg_src
+        assert '"channel": "stable"' in cfg_src
 
 
 class TestAutoUpdateSchedule:

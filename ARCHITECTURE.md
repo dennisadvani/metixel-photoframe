@@ -789,15 +789,16 @@ together, and the separation is imposed at install time:
 | | Git repository (source) | Device (runtime) |
 |---|---|---|
 | Code | `src/`, `scripts/`, `systemd/` | `releases/<ver>/` (reached via `live`) |
-| Templates | `etc/logging.conf` | copied into the release, then seeded |
 | Runtime data | *(never committed)* | `/opt/metixel/data/` (config, logs, media, cache) |
 
-`config.json` has no template: the application owns the schema in Python
-(`shared/config.py` → `DEFAULT_CONFIG`) and **creates the file itself** on first
-start. The installer writes its answers to `data/init.json` — a partial overlay
-using the same schema — which the app merges and consumes once, renaming it to
-`init.json.applied`. `scripts/reconcile.sh` reads the same value for host state
-before the app has run, so neither depends on the other's ordering.
+There are **no config templates**. `config.json` has no template: the
+application owns the schema in Python (`shared/config.py` → `DEFAULT_CONFIG`)
+and **creates the file itself** on first start. The installer writes its answers
+to `data/init.json` — a partial overlay using the same schema — which the app
+merges and consumes once, renaming it to `init.json.applied`. `scripts/reconcile.sh`
+reads the same value for host state before the app has run, so neither depends on
+the other's ordering. Logging is likewise configured in code, with one log file
+per process under `data/logs/`.
 
 `etc/` stays in git at the repo root because it holds **templates**, not user
 data. The setup/build scripts copy `etc/` into each release folder, then seed

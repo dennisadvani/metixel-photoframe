@@ -204,8 +204,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "auto_update_time": "04:30",
         "check_interval_hours": 6,
         "github_repo": "dennisadvani/metixel-photoframe",
-        "last_check": None,
-        "last_update": None,
+        # NOTE: `last_check` is deliberately absent — it lives in tmpfs
+        # (metixel.shared.runtime_state) because rewriting config.json every few
+        # minutes wore the SD card.  `last_auto_update` MUST stay here: it gates
+        # the weekly schedule, so losing it on reboot would re-fire the window.
         "last_auto_update": None,
     },
     "timeouts": {
@@ -446,8 +448,6 @@ class Config:
                 "auto_update_time": "04:30",
                 "check_interval_hours": 6,
                 "github_repo": "dennisadvani/metixel-photoframe",
-                "last_check": None,
-                "last_update": None,
                 "last_auto_update": None,
             }
             self._data["update"] = u

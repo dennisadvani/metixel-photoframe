@@ -9,9 +9,7 @@ Usage:
 """
 
 import argparse
-import contextlib
 import logging
-import logging.config
 import logging.handlers
 import sys
 from pathlib import Path
@@ -19,12 +17,39 @@ from pathlib import Path
 from metixel import __version__
 from metixel.shared.paths import data_dir
 
+#: Sentinel level above CRITICAL (50): no log record can pass this filter, so
+#: setting it on the file handler effectively disables on-disk logging.
+_LOG_LEVEL_NONE = 100
 
-def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = True) -> None:
+
+def _log_file_for_mode(mode: str | None) -> Path:
+    """Return the per-process log file for *mode*.
+
+    Each process gets its OWN file.  They previously shared one path, so two
+    independent ``RotatingFileHandler`` instances (backend + frontend) each kept
+    their own byte counter and raced to rotate the same file — a rollover in
+    one process truncated the other's output, which is why lines visible in the
+    web UI never appeared in the log file.
+    """
+    name = {
+        "backend": "metixel-backend.log",
+        "frontend": "metixel-frontend.log",
+    }.get(mode or "", "metixel.log")
+    return data_dir() / "logs" / name
+
+
+def _setup_logging(
+    config_path: Path,
+    log_level: int,
+    *,
+    file_logging: bool = True,
+    mode: str | None = None,
+) -> None:
     """Set up logging: file + console + in-memory ring buffer.
 
-    Tries to load ``etc/logging.conf`` for file-based logging.
-    Falls back to console-only if the config file is missing.
+    File logging is configured entirely in code: one file per process (see
+    :func:`_log_file_for_mode`), with rotation decided here.  There is no
+    user-editable logging config file.
     Also attaches a ``LogRingBuffer`` for the web UI.
 
     The **file handler** level is read from ``config.json`` →
@@ -50,53 +75,48 @@ def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = Tr
     root.addHandler(console)
 
     if file_logging:
-        # 2. File handler — use logging.conf if available, else default path.
-        #    logging.conf lives in the persistent data dir (data/etc), alongside
-        #    config.json — NOT derived from config_path.parent.parent arithmetic.
-        log_conf = data_dir() / "etc" / "logging.conf"
+        # File handler — path and rotation are decided in code, NOT read from a
+        # user-editable logging.conf.  That file hardcoded a single shared log
+        # path, so the backend and frontend each attached their own
+        # RotatingFileHandler to the SAME file and truncated each other's
+        # output; its handler level also overrode `system.log_level`, so
+        # choosing INFO in the web UI still wrote DEBUG lines to disk.
         log_dir = data_dir() / "logs"
-        log_file = log_dir / "metixel.log"
+        log_file = _log_file_for_mode(mode)
 
-        if log_conf.exists():
-            with contextlib.suppress(Exception):
-                # Fall through to manual setup on failure
-                logging.config.fileConfig(str(log_conf), disable_existing_loggers=False)
+        try:
+            # On the Pi, scripts/reconcile.sh owns the data tree and has
+            # already created data/logs.  This mkdir is a BEST-EFFORT
+            # fallback for desktop/dev runs where no installer exists (and
+            # it is harmless when the dir already exists: exist_ok=True).
+            # It is not a second source of truth for the tree — reconcile.sh
+            # owns the directory LIST and the ownership rules.
+            log_dir.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.handlers.RotatingFileHandler(
+                str(log_file),
+                maxBytes=10_485_760,
+                backupCount=5,
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(fmt)
+            root.addHandler(file_handler)
+        except OSError as exc:
+            # Log file unwritable (missing dir, bad ownership/perms, or a
+            # read-only/full filesystem) → run console + ring buffer only.
+            # Never crash the daemon over a log file (graceful degradation,
+            # core rule 7) — this is the same failure mode as a root-owned
+            # metixel.log crash-looping the pi backend.  The console handler
+            # is attached above, so this warning is still visible at boot.
+            logging.getLogger("metixel").warning(
+                "%s not writable at %s; disabling file logging (%s)",
+                log_file.name,
+                log_file,
+                exc,
+            )
 
-        # Ensure file handler exists (may have been added by fileConfig, or add manually)
-        has_file_handler = any(isinstance(h, logging.FileHandler) for h in root.handlers)
-        if not has_file_handler:
-            try:
-                # On the Pi, scripts/reconcile.sh owns the data tree and has
-                # already created data/logs.  This mkdir is a BEST-EFFORT
-                # fallback for desktop/dev runs where no installer exists (and
-                # it is harmless when the dir already exists: exist_ok=True).
-                # It is not a second source of truth for the tree — reconcile.sh
-                # owns the directory LIST and the ownership rules.
-                log_dir.mkdir(parents=True, exist_ok=True)
-                file_handler = logging.handlers.RotatingFileHandler(
-                    str(log_file),
-                    maxBytes=10_485_760,
-                    backupCount=5,
-                )
-                file_handler.setLevel(logging.DEBUG)
-                file_handler.setFormatter(fmt)
-                root.addHandler(file_handler)
-            except OSError as exc:
-                # metixel.log unwritable (missing dir, bad ownership/perms, or a
-                # read-only/full filesystem) → run console + ring buffer only.
-                # Never crash the daemon over a log file (graceful degradation,
-                # core rule 7) — this is the same failure mode as a root-owned
-                # metixel.log crash-looping the pi backend.  The console handler
-                # is attached above, so this warning is still visible at boot.
-                logging.getLogger("metixel").warning(
-                    "metixel.log not writable at %s; disabling file logging (%s)",
-                    log_file,
-                    exc,
-                )
-
-        # 2b. Apply persisted file-handler log level from config.json.
-        #     Only file handlers are changed — the ring buffer stays at
-        #     DEBUG so the dashboard can always filter the full stream.
+        # Apply the persisted file-handler level from config.json.  This is the
+        # ONLY thing that controls on-disk verbosity — the ring buffer stays at
+        # DEBUG so the dashboard can always filter the full stream.
         try:
             import json as _json
 
@@ -108,9 +128,9 @@ def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = Tr
                     "INFO": logging.INFO,
                     "WARNING": logging.WARNING,
                     "ERROR": logging.ERROR,
-                    "NONE": 100,  # Above CRITICAL (50) — effectively disables disk logging
+                    "NONE": _LOG_LEVEL_NONE,  # Above CRITICAL — disables disk logging
                 }
-                file_level = file_levels.get(persisted_level, 100)
+                file_level = file_levels.get(persisted_level, _LOG_LEVEL_NONE)
                 _apply_file_handler_levels(file_level)
         except Exception:
             pass  # Config file may not exist yet or be unreadable
@@ -136,21 +156,43 @@ def _setup_logging(config_path: Path, log_level: int, *, file_logging: bool = Tr
 def _apply_file_handler_levels(level: int) -> None:
     """Set every ``FileHandler`` across all loggers to *level*.
 
-    Does **not** touch console handlers or ring buffers — only
-    file-based handlers are affected.  This is the mechanism that
-    lets the web UI control log file verbosity independently of
-    the dashboard view.
+    Walks the logger hierarchy explicitly instead of iterating
+    ``Logger.manager.loggerDict``.  That dict only holds *named* loggers that
+    exist as direct values — handlers attached directly to a named logger such
+    as ``metixel.backend.state`` were skipped, so those escaped the level set
+    at startup and wrote DEBUG lines even when the user had selected INFO.  The
+    root logger is included for completeness.
+
+    Does **not** touch console handlers or ring buffers — only file-based
+    handlers are affected.  This is the mechanism that lets the web UI control
+    log file verbosity independently of the dashboard view.
     """
-    for logger_obj in logging.Logger.manager.loggerDict.values():
-        if not isinstance(logger_obj, logging.Logger):
-            continue
+    seen: set[int] = set()
+
+    def _apply(logger_obj: logging.Logger) -> None:
+        if id(logger_obj) in seen:
+            return
+        seen.add(id(logger_obj))
         for handler in logger_obj.handlers:
             if isinstance(handler, logging.FileHandler):
                 handler.setLevel(level)
-    # Root logger
-    for handler in logging.getLogger().handlers:
-        if isinstance(handler, logging.FileHandler):
-            handler.setLevel(level)
+
+    # Every logger in the manager, plus the root, plus (defensively) the
+    # metixel package logger and each already-instantiated metixel.* logger.
+    for logger_obj in logging.Logger.manager.loggerDict.values():
+        if isinstance(logger_obj, logging.Logger):
+            _apply(logger_obj)
+        elif isinstance(logger_obj, logging.PlaceHolder):
+            continue
+    _apply(logging.getLogger())
+    _apply(logging.getLogger("metixel"))
+
+    # Handlers can also be attached to a logger that was created lazily and is
+    # therefore not yet in loggerDict at call time; walk the known metixel
+    # namespaces to catch those.
+    for name in list(logging.Logger.manager.loggerDict):
+        if name == "metixel" or name.startswith("metixel."):
+            _apply(logging.getLogger(name))
 
 
 def _wants_file_logging(mode: str | None) -> bool:
@@ -209,7 +251,7 @@ def main() -> None:
     # must never open it: a root-created metixel.log makes the pi backend
     # crash-loop with PermissionError (see metixel-backend.service ExecStartPre).
     file_logging = _wants_file_logging(args.mode)
-    _setup_logging(args.config, log_level, file_logging=file_logging)
+    _setup_logging(args.config, log_level, file_logging=file_logging, mode=args.mode)
 
     logger = logging.getLogger("metixel")
 

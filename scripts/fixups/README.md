@@ -41,6 +41,13 @@ fixup (`v1.2.1-gpu-mem.sh`).  Both call the shared
 Removing an entry from `manifest.txt` does **not** undo it: already-repaired
 devices stay repaired, because `installed_fixups.json` records what has run.
 
+### Current fixups
+
+| Fixup | Why it is a fixup, not reconciliation |
+|---|---|
+| `v1.2.1-gpu-mem.sh` | `config.txt` is the device's own file and needs a reboot — re-asserting it every update would override a user's choice. |
+| `v1.3.0-retire-logging-conf.sh` | One-way removal. `data/etc/logging.conf` is gone from the repo, so a device that never had it is indistinguishable from one already cleaned — the target state cannot be derived. |
+
 ## How it works
 
 - Each fixup is a script in this directory, named by the version that

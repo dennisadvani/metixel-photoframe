@@ -463,8 +463,9 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("update.auto_update_time", "04:30"),
     ("update.check_interval_hours", 6),
     ("update.github_repo", "dennisadvani/metixel-photoframe"),
-    ("update.last_check", None),
-    ("update.last_update", None),
+    # NOTE: `last_check` is NOT in config.json — it lives in tmpfs
+    # (metixel.shared.runtime_state) so frequent checks don't wear the SD card.
+    # `last_update` and `last_rollback` were removed entirely: nothing read them.
     ("update.last_auto_update", None),
     # timeouts
     ("timeouts.ffprobe_probe", 120),
