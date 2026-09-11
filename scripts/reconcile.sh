@@ -37,8 +37,37 @@
 #   * Anything requiring a reboot to *validate* (it may write boot config, but
 #     it reports REBOOT_REQUIRED rather than rebooting).
 #
+# OFFLINE MODE (--offline)
+# ------------------------
+# Provisioning tools (e.g. an image builder) need to converge a root filesystem
+# that is NOT running: it is mounted/chrooted, with no PID 1, no logind, and a
+# kernel that belongs to the BUILD host rather than the target device.  Two
+# classes of step are impossible or actively dangerous there:
+#
+#   * impossible  — systemctl daemon-reload/restart/is-active, loginctl,
+#                   netfilter-persistent (nothing is running to talk to);
+#   * dangerous   — iptables, modprobe, rfkill, iw reg set (these would change
+#                   the BUILD HOST's netfilter/modules/hardware, not the image).
+#
+# --offline re-expresses each of those as its PERSISTENT EQUIVALENT — the file
+# that the running system would consume on next boot — so the resulting image
+# converges to the same state without touching the build host:
+#
+#   iptables … REDIRECT        → /etc/iptables/rules.v4
+#   loginctl enable-linger     → /var/lib/systemd/linger/<user>
+#   modprobe i2c-dev           → /etc/modules-load.d/metixel-i2c.conf  (always)
+#   iw reg set                 → /etc/modprobe.d/cfg80211.conf         (always)
+#
+# Runtime-only steps with no persistent equivalent (rfkill unblock) are
+# reported and skipped — see the note in §8.  Everything else in this script is
+# already pure file/dir work and behaves identically offline.
+#
 # Usage:
-#   sudo bash scripts/reconcile.sh [--dry-run] [--unit-backup-dir DIR]
+#   sudo bash scripts/reconcile.sh [--dry-run] [--offline] [--unit-backup-dir DIR]
+#
+#   --dry-run   Print what would change; modify nothing.
+#   --offline   Converge a non-running root filesystem (image build): skip
+#               runtime-only calls and write their persistent equivalents.
 #
 # Exit codes: 0 = converged (or dry-run), 1 = a change could not be applied.
 
@@ -54,16 +83,18 @@ LIVE_LINK="${INSTALL_ROOT}/live"
 UNIT_BACKUP_DIR="/etc/systemd/system/.metixel-backup"
 
 DRY_RUN="no"
+OFFLINE="no"
 for arg in "$@"; do
     case "${arg}" in
         --dry-run) DRY_RUN="yes" ;;
+        --offline) OFFLINE="yes" ;;
         --unit-backup-dir=*) UNIT_BACKUP_DIR="${arg#*=}" ;;
         --unit-backup-dir)
             echo "ERROR: --unit-backup-dir requires a value (use --unit-backup-dir=DIR)" >&2
             exit 1
             ;;
         -h|--help)
-            sed -n '2,40p' "$0"
+            sed -n '2,72p' "$0"
             exit 0
             ;;
         *)
@@ -104,6 +135,10 @@ CHANGES=0
 FAILURES=0
 NEEDS_REBOOT="no"
 
+# Appended to the summary line so a build log makes the mode obvious.
+OFFLINE_SUFFIX=""
+[ "${OFFLINE}" = "yes" ] && OFFLINE_SUFFIX=" (offline)"
+
 # ── Output helpers ─────────────────────────────────────────────────────────
 _say()  { printf '  %s\n' "$*"; }
 _plus() { CHANGES=$((CHANGES + 1)); printf '  + %s\n' "$*"; }
@@ -120,11 +155,135 @@ _run() {
     "$@"
 }
 
+# ── Offline (image-build) helpers ──────────────────────────────────────────
+# $OFFLINE means: converge a NON-RUNNING root filesystem.  Runtime calls that
+# would otherwise touch the BUILD host are replaced with their persistent
+# equivalents, and calls that have no persistent form are skipped.
+
+# True when the step should be executed (i.e. we are NOT offline).
+# Usage: if _online; then … runtime-only step …; fi
+_online() { [ "${OFFLINE}" != "yes" ]; }
+
+# Report a runtime-only step that has no persistent equivalent, so an offline
+# run is explicit about what it deliberately did not do.
+_skip_offline() {
+    printf '  ~ offline: skipped — %s\n' "$*"
+}
+
+# Merge the NAT PREROUTING redirect into /etc/iptables/rules.v4 (the file
+# iptables-persistent replays at boot).  Written only when the rule is not
+# already present, so repeated runs are no-ops.
+#
+# Non-destructive, matching this script's rule #2:
+#   * no file            → write the stock tables (fresh image)
+#   * file has the rule  → no-op
+#   * file lacks it      → INSERT after the `*nat` header, so any other rules
+#                          the device already had are preserved.  Only when
+#                          there is no `*nat` table at all do we append one.
+_iptables_redirect_offline() {
+    local rules="/etc/iptables/rules.v4" rule
+    rule="-A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080"
+    if [ "${DRY_RUN}" = "yes" ]; then
+        printf '      [dry-run] write %s with %s\n' "${rules}" "${rule}"
+        CHANGES=$((CHANGES + 1))
+        return 0
+    fi
+    if [ -f "${rules}" ] && grep -qF -- "${rule}" "${rules}"; then
+        _same "iptables 80 → 8080 redirect (in ${rules})"
+        return 0
+    fi
+    _run mkdir -p /etc/iptables
+    if [ ! -f "${rules}" ]; then
+        cat > "${rules}" <<'IPTEOF'
+*nat
+:PREROUTING ACCEPT [0:0]
+:INPUT ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+-A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+COMMIT
+*filter
+:INPUT ACCEPT [0:0]
+:FORWARD ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+COMMIT
+IPTEOF
+        chmod 0644 "${rules}"
+        _plus "wrote ${rules} (80 → 8080 redirect)"
+        return 0
+    fi
+    # File exists without the rule — insert into the existing nat table.
+    # The rule must come AFTER the chain-policy declarations (:PREROUTING …):
+    # iptables-restore requires every chain to be declared before any rule that
+    # targets it, so we insert immediately before the nat table's COMMIT.
+    #
+    # Pure bash (read/printf) on purpose: `awk` is not part of the essential
+    # toolset and is not guaranteed in every environment this runs in (a
+    # constrained provisioning chroot), whereas a read loop needs no external
+    # command at all.
+    if grep -q '^\*nat' "${rules}"; then
+        local in_nat=0 inserted=0 line
+        : > "${rules}.metixel-new"
+        while IFS= read -r line || [ -n "${line}" ]; do
+            case "${line}" in
+                '*nat') in_nat=1 ;;
+                'COMMIT')
+                    if [ "${in_nat}" = "1" ] && [ "${inserted}" = "0" ]; then
+                        printf '%s\n' "${rule}" >> "${rules}.metixel-new"
+                        inserted=1
+                    fi
+                    in_nat=0
+                    ;;
+            esac
+            printf '%s\n' "${line}" >> "${rules}.metixel-new"
+        done < "${rules}"
+        mv -f "${rules}.metixel-new" "${rules}" \
+            && _plus "inserted 80 → 8080 redirect into ${rules} (existing rules preserved)"
+    else
+        cat >> "${rules}" <<'IPTEOF'
+
+*nat
+:PREROUTING ACCEPT [0:0]
+:INPUT ACCEPT [0:0]
+:OUTPUT ACCEPT [0:0]
+:POSTROUTING ACCEPT [0:0]
+-A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+COMMIT
+IPTEOF
+        _plus "appended nat table with 80 → 8080 redirect to ${rules}"
+    fi
+}
+
+# Enable systemd linger by writing the marker file directly.  This is exactly
+# what `loginctl enable-linger <user>` does (systemd-logind reads this dir at
+# boot), and it needs no running logind.
+_linger_offline() {
+    local user="$1" dir="/var/lib/systemd/linger"
+    if [ "${DRY_RUN}" = "yes" ]; then
+        printf '      [dry-run] write %s/%s (linger)\n' "${dir}" "${user}"
+        CHANGES=$((CHANGES + 1))
+        return 0
+    fi
+    _run mkdir -p "${dir}"
+    if [ -f "${dir}/${user}" ]; then
+        _same "linger enabled for ${user} (${dir}/${user})"
+        return 0
+    fi
+    : > "${dir}/${user}"
+    _plus "enabled linger for ${user} (wrote ${dir}/${user})"
+}
+
 # Write stdin to a file only when the content differs (idempotent + atomic).
 # Usage: _ensure_file <path> <mode> <<'EOF' ... EOF
+#
+# Creates the parent directory when missing: some targets (/etc/modprobe.d,
+# /etc/modules-load.d, /etc/NetworkManager/conf.d) are created by packages that
+# may not have been installed yet on a fresh image, and `install` fails on a
+# missing parent.  A failed write is REPORTED as a failure — without this it was
+# silently reported as success (no `set -e`), so a broken write could ship.
 _ensure_file() {
     local path="$1" mode="${2:-0644}"
-    local tmp
+    local tmp parent
     tmp="$(mktemp)"
     cat > "${tmp}"
     if [ -f "${path}" ] && cmp -s "${tmp}" "${path}"; then
@@ -138,7 +297,15 @@ _ensure_file() {
         rm -f "${tmp}"
         return 0
     fi
-    install -m "${mode}" "${tmp}" "${path}"
+    parent="$(dirname "${path}")"
+    if [ ! -d "${parent}" ]; then
+        mkdir -p "${parent}" || { _fail "could not create ${parent}"; rm -f "${tmp}"; return 1; }
+    fi
+    if ! install -m "${mode}" "${tmp}" "${path}"; then
+        _fail "could not write ${path}"
+        rm -f "${tmp}"
+        return 1
+    fi
     rm -f "${tmp}"
     _plus "wrote ${path}"
 }
@@ -153,16 +320,17 @@ _ensure_file() {
 # (e.g. a root-owned metixel.log crash-looping the pi-run service).
 _ensure_dir() {
     local path="$1" owner="${2:-}" recursive="${3:-}"
+    local cur
     if [ ! -d "${path}" ]; then
         _run mkdir -p "${path}"
         if [ -n "${owner}" ] && [ "${DRY_RUN}" = "no" ]; then
-            chown "${owner}" "${path}" 2>/dev/null || true
+            chown "${owner}" "${path}" 2>/dev/null \
+                || _warn "could not chown ${path} → ${owner} (does the user exist yet?)"
         fi
         _plus "created ${path}"
         return 0
     fi
     [ -n "${owner}" ] || return 0
-    local cur
     cur="$(stat -c '%U:%G' "${path}" 2>/dev/null || echo '')"
     if [ "${cur}" = "${owner}" ]; then
         _same "${path} (${owner})"
@@ -174,9 +342,11 @@ _ensure_dir() {
         return 0
     fi
     if [ "${recursive}" = "recursive" ]; then
-        chown -R "${owner}" "${path}" && _plus "chowned ${path} → ${owner} (recursive)"
+        chown -R "${owner}" "${path}" && _plus "chowned ${path} → ${owner} (recursive)" \
+            || _warn "could not chown -R ${path} → ${owner}"
     else
-        chown "${owner}" "${path}" && _plus "chowned ${path} → ${owner}"
+        chown "${owner}" "${path}" && _plus "chowned ${path} → ${owner}" \
+            || _warn "could not chown ${path} → ${owner}"
     fi
 }
 
@@ -272,7 +442,14 @@ else
             CHANGES=$((CHANGES + 1))
         else
             cp -a /etc/systemd/system/metixel-cursor-hider.service "${UNIT_BACKUP_DIR}/" 2>/dev/null || true
-            systemctl disable --now metixel-cursor-hider.service >/dev/null 2>&1 || true
+            # --now also STOPS the unit, which needs a running systemd; offline
+            # the symlink removal alone is the persistent change (the unit is
+            # gone before the image ever boots).
+            if _online; then
+                systemctl disable --now metixel-cursor-hider.service >/dev/null 2>&1 || true
+            else
+                systemctl disable metixel-cursor-hider.service >/dev/null 2>&1 || true
+            fi
             rm -f /etc/systemd/system/metixel-cursor-hider.service
             _plus "removed stale metixel-cursor-hider.service (mode not shipped)"
             _units_changed=1
@@ -286,7 +463,12 @@ if [ -f /etc/systemd/system/metixel-frontend.service ]; then
         printf '      [dry-run] remove obsolete metixel-frontend.service\n'
         CHANGES=$((CHANGES + 1))
     else
-        systemctl disable --now metixel-frontend.service >/dev/null 2>&1 || true
+        # See the cursor-hider note above: --now needs running systemd.
+        if _online; then
+            systemctl disable --now metixel-frontend.service >/dev/null 2>&1 || true
+        else
+            systemctl disable metixel-frontend.service >/dev/null 2>&1 || true
+        fi
         rm -f /etc/systemd/system/metixel-frontend.service
         _plus "removed obsolete metixel-frontend.service"
         _units_changed=1
@@ -294,7 +476,13 @@ if [ -f /etc/systemd/system/metixel-frontend.service ]; then
 fi
 
 if [ "${_units_changed}" -eq 1 ] && [ "${DRY_RUN}" = "no" ]; then
-    systemctl daemon-reload && _say "systemd reloaded"
+    # daemon-reload only refreshes the RUNNING manager's view.  Offline there is
+    # no manager; the units are read fresh when the image first boots.
+    if _online; then
+        systemctl daemon-reload && _say "systemd reloaded"
+    else
+        _say "systemd units changed (daemon-reload skipped offline)"
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -307,7 +495,14 @@ if [ "$(cat /etc/modules-load.d/metixel-i2c.conf 2>/dev/null | tr -d '\n')" = "i
 else
     _ensure_file /etc/modules-load.d/metixel-i2c.conf 0644 <<<'i2c-dev'
 fi
-_run modprobe i2c-dev >/dev/null 2>&1 || true
+# modprobe loads the module into the RUNNING kernel — the build host's, when
+# offline.  The modules-load.d file above is the persistent equivalent and is
+# already written, so the module loads on the target's next boot.
+if _online; then
+    _run modprobe i2c-dev >/dev/null 2>&1 || true
+else
+        _skip_offline "modprobe i2c-dev — persisted via /etc/modules-load.d/metixel-i2c.conf"
+fi
 
 # ddcutil persists its cache under $XDG_CACHE_HOME.  The backend unit sets that
 # to a writable path inside the data dir (ProtectHome=yes makes /home
@@ -340,21 +535,30 @@ EOF
 
 # Redirect port 80 → 8080 so the dashboard is reachable without a port number
 # and captive-portal detection works.  The Flask app binds 8080 as user pi.
-if iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null; then
-    _same "iptables 80 → 8080 redirect"
-else
-    if [ "${DRY_RUN}" = "yes" ]; then
-        printf '      [dry-run] add iptables 80 → 8080 redirect\n'
-        CHANGES=$((CHANGES + 1))
+#
+# Online this is applied live via iptables and saved by netfilter-persistent.
+# Offline iptables would edit the BUILD host's netfilter, so we write the same
+# rule into iptables-persistent's rules file instead — the file the target
+# replays at boot.
+if _online; then
+    if iptables -t nat -C PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080 2>/dev/null; then
+        _same "iptables 80 → 8080 redirect"
     else
-        if iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080; then
-            _plus "added iptables 80 → 8080 redirect"
-            netfilter-persistent save >/dev/null 2>&1 \
-                || _warn "could not persist iptables rule (netfilter-persistent)"
+        if [ "${DRY_RUN}" = "yes" ]; then
+            printf '      [dry-run] add iptables 80 → 8080 redirect\n'
+            CHANGES=$((CHANGES + 1))
         else
-            _fail "could not add iptables 80 → 8080 redirect"
+            if iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080; then
+                _plus "added iptables 80 → 8080 redirect"
+                netfilter-persistent save >/dev/null 2>&1 \
+                    || _warn "could not persist iptables rule (netfilter-persistent)"
+            else
+                _fail "could not add iptables 80 → 8080 redirect"
+            fi
         fi
     fi
+else
+    _iptables_redirect_offline
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -479,6 +683,9 @@ fi
 
 # The backend's NetworkMonitor starts/stops these explicitly, so they must not
 # auto-start.  Ensure they are unmasked + disabled.
+#
+# `systemctl unmask`/`disable` are symlink operations and work offline.  The
+# state is persistent, so the target boots with them disabled either way.
 if [ "${DRY_RUN}" = "no" ]; then
     systemctl unmask hostapd dnsmasq >/dev/null 2>&1 || true
     if systemctl is-enabled hostapd >/dev/null 2>&1; then
@@ -498,19 +705,27 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 echo "== Session =="
 # cage needs XDG_RUNTIME_DIR (/run/user/1000) at boot even with no login.
+#
+# Online, `loginctl enable-linger` does this via logind.  Offline there is no
+# logind to talk to, so we write the marker file logind itself reads
+# (/var/lib/systemd/linger/<user>) — byte-for-byte the same end state.
 if [ "$(loginctl show-user pi -p Linger --value 2>/dev/null)" = "yes" ]; then
     _same "linger enabled for pi"
 else
     if [ "${DRY_RUN}" = "yes" ]; then
         printf '      [dry-run] loginctl enable-linger pi\n'
         CHANGES=$((CHANGES + 1))
-    else
+    elif _online; then
         systemctl enable user@1000.service >/dev/null 2>&1 || true
         if _run loginctl enable-linger pi >/dev/null 2>&1; then
             _plus "enabled linger for pi"
         else
             _fail "could not enable linger for pi"
         fi
+    else
+        # systemd-logind starts on boot anyway; only the linger marker matters.
+        systemctl enable user@1000.service >/dev/null 2>&1 || true
+        _linger_offline pi
     fi
 fi
 
@@ -573,14 +788,18 @@ if [ -n "${WIFI_COUNTRY}" ]; then
     if [ "${#WIFI_COUNTRY}" -ne 2 ]; then
         _warn "ignoring invalid wifi_country '${WIFI_COUNTRY}' (expected 2 letters)"
     else
-        # Runtime: affects the radio immediately (no reboot).
+        # Runtime: affects the radio immediately (no reboot).  `iw reg set`
+        # programs the BUILD host's radio when offline, so it is skipped — the
+        # modprobe.d file below is the persistent equivalent the target uses.
         if command -v iw >/dev/null 2>&1; then
             if [ "${DRY_RUN}" = "yes" ]; then
                 printf '      [dry-run] iw reg set %s\n' "${WIFI_COUNTRY}"
-            else
+            elif _online; then
                 iw reg set "${WIFI_COUNTRY}" 2>/dev/null \
                     && _plus "set WiFi regulatory domain to ${WIFI_COUNTRY}" \
                     || _warn "iw reg set ${WIFI_COUNTRY} failed"
+            else
+                _skip_offline "iw reg set ${WIFI_COUNTRY} — persisted via /etc/modprobe.d/cfg80211.conf"
             fi
         fi
         # Persistence: cfg80211 module parameter (takes effect on the next boot).
@@ -600,13 +819,20 @@ fi
 # Raspberry Pi Imager can disable WiFi at the OS level when the user skips WiFi
 # configuration during imaging.  Unblocking is idempotent and harmless when the
 # radio is already up, so it is safely convergent.
+#
+# `rfkill unblock` acts on the RUNNING kernel's radio state — offline that is
+# the build host's, which must not be touched.  There is no persistent file
+# form of this (rfkill state is kernel memory), so offline it is reported and
+# skipped.
 if command -v rfkill >/dev/null 2>&1; then
     if [ "${DRY_RUN}" = "yes" ]; then
         printf '      [dry-run] rfkill unblock wifi/wlan\n'
-    else
+    elif _online; then
         _run rfkill unblock wifi >/dev/null 2>&1 || true
         _run rfkill unblock wlan >/dev/null 2>&1 || true
         _same "wifi radio unblocked"
+    else
+            _skip_offline "rfkill unblock wifi/wlan — kernel runtime state, not persistable"
     fi
 fi
 
@@ -624,10 +850,16 @@ if [ -f /etc/samba/smb.conf ] || command -v smbd >/dev/null 2>&1; then
         else
             systemctl enable smbd >/dev/null 2>&1 && _plus "enabled smbd"
         fi
-        if systemctl is-active --quiet smbd; then
-            _same "smbd running"
+        # `restart` needs a running systemd; offline the enable above is the
+        # persistent change and the target starts smbd on its next boot.
+        if _online; then
+            if systemctl is-active --quiet smbd; then
+                _same "smbd running"
+            else
+                systemctl restart smbd >/dev/null 2>&1 && _plus "started smbd"
+            fi
         else
-            systemctl restart smbd >/dev/null 2>&1 && _plus "started smbd"
+            _skip_offline "smbd restart — smbd starts at boot"
         fi
     fi
     # Only seed the credential when Samba has NO entry for pi, so a password the
@@ -642,10 +874,22 @@ if [ -f /etc/samba/smb.conf ] || command -v smbd >/dev/null 2>&1; then
             else
                 # Default credential for a fresh device; change it via the web
                 # UI (System → Security), which keeps shadow + Samba in sync.
-                if printf 'raspberry\nraspberry\n' | smbpasswd -a -s pi >/dev/null 2>&1; then
+                # smbpasswd writes the passdb directly and needs no running
+                # smbd, so it works offline.  Bounded by a timeout because it
+                # runs under QEMU emulation during an image build — a hang there
+                # would stall the whole build rather than fail it.
+                smb_out=""
+                if [ "${OFFLINE}" = "yes" ]; then
+                    smb_out="$(printf 'raspberry\nraspberry\n' \
+                        | timeout 60 smbpasswd -a -s pi 2>&1)" || smb_out=""
+                else
+                    smb_out="$(printf 'raspberry\nraspberry\n' \
+                        | smbpasswd -a -s pi 2>&1)" || smb_out=""
+                fi
+                if pdbedit -L 2>/dev/null | grep -q '^pi:'; then
                     _plus "created samba account for pi (default password)"
                 else
-                    _warn "could not create samba account for pi"
+                    _warn "could not create samba account for pi${smb_out:+ (${smb_out})}"
                 fi
             fi
         fi
@@ -676,9 +920,9 @@ if [ "${FAILURES}" -gt 0 ]; then
     exit 1
 fi
 if [ "${CHANGES}" -eq 0 ]; then
-    echo "=== reconcile.sh: host already converged (no changes) ==="
+    echo "=== reconcile.sh${OFFLINE_SUFFIX}: host already converged (no changes) ==="
 else
-    echo "=== reconcile.sh: ${CHANGES} change(s) applied ==="
+    echo "=== reconcile.sh${OFFLINE_SUFFIX}: ${CHANGES} change(s) applied ==="
 fi
 if [ "${NEEDS_REBOOT}" = "yes" ]; then
     echo "REBOOT_REQUIRED: boot config changed; reboot to apply"
