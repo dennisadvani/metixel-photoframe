@@ -64,7 +64,51 @@ class TestInstallScript:
         assert "requirements-pip.txt" in content
         assert '-r "$REPO/requirements-pip.txt"' in content
         # The package reinstall step is still present.
-        assert 'pip install --break-system-packages -e "$REPO"' in content
+        assert 'pip install --break-system-packages --ignore-installed -e "$REPO"' in content
+
+    def test_pip_installs_ignore_apt_owned_packages(self) -> None:
+        """pip must NEVER try to uninstall an apt-provided package.
+
+        Regression guard: `numpy` is installed by apt (python3-numpy) AND listed
+        in requirements-pip.txt.  A constraint that excluded the apt version
+        made pip attempt a downgrade, which failed with
+          error: uninstall-no-record-file ("The package's contents are unknown")
+        and aborted the entire update.  `--ignore-installed` leaves the apt copy
+        alone instead of attempting a removal.
+        """
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        # Only actual INVOCATIONS: skip comments and continuations such as
+        # `|| _fail "pip install -e failed"`, which merely mention the phrase.
+        pip_lines = [
+            ln.strip()
+            for ln in content.splitlines()
+            if ln.strip().startswith("pip install")
+        ]
+        assert pip_lines, "no pip install invocation found"
+        for ln in pip_lines:
+            assert "--ignore-installed" in ln, (
+                f"pip install would attempt to uninstall an apt package: {ln}"
+            )
+
+    def test_pip_manifest_does_not_exclude_apt_numpy(self) -> None:
+        """requirements-pip.txt must not cap numpy below the apt version.
+
+        Debian Trixie ships numpy 2.x.  An upper bound like `<2.0` guarantees
+        the uninstall conflict above, so the pin must stay open.
+        """
+        req = (_REPO_ROOT / "requirements-pip.txt").read_text(encoding="utf-8")
+        code_lines = [
+            ln.strip()
+            for ln in req.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        numpy_lines = [ln for ln in code_lines if ln.lower().startswith("numpy")]
+        assert numpy_lines, "numpy should be declared in requirements-pip.txt"
+        for ln in numpy_lines:
+            assert "<" not in ln, (
+                f"numpy must not have an upper bound (conflicts with apt): {ln}"
+            )
 
     def test_installs_system_packages(self) -> None:
         """The install script must also handle requirements-system.txt so new

@@ -4,7 +4,12 @@
 pi3d>=2.47
 Pillow>=10.0
 pillow-heif>=0.16
-numpy>=1.24,<2.0
+# NOTE: numpy is provided by apt (requirements-system.txt → python3-numpy) and
+# Debian Trixie ships numpy 2.x.  Do NOT add an upper bound that excludes it
+# (e.g. `<2.0`): pip would then try to DOWNGRADE numpy, fail to uninstall the
+# apt-owned package (`no RECORD file`), and abort the whole install.  The code
+# uses no numpy-2.0-removed APIs, and pi3d declares no numpy ceiling.
+numpy>=1.24
 Flask>=3.0
 watchdog>=3.0
 paho-mqtt>=1.6

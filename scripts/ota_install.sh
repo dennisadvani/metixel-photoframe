@@ -131,8 +131,11 @@ if [ -f "$REPO/requirements-system.txt" ]; then
 fi
 
 # ── Reinstall Python package ──
+# `--ignore-installed` here too: `-e .` pulls in the same apt-provided runtime
+# deps (numpy, Pillow), so the same "cannot uninstall an apt package" failure
+# applies.  See the note on the requirements install below.
 echo "Reinstalling Python package…"
-pip install --break-system-packages -e "$REPO" \
+pip install --break-system-packages --ignore-installed -e "$REPO" \
     || _fail "pip install -e failed"
 
 # ── Install / update runtime pip dependencies ──
@@ -140,17 +143,29 @@ pip install --break-system-packages -e "$REPO" \
 # deps live in the phase1/phase2 optional extras, not main [project]
 # dependencies — so it never applies new/changed deps (e.g. pillow-heif).
 # Install the canonical requirements-pip.txt so upgrades also update deps.
+#
+# `--ignore-installed` is LOAD-BEARING, not a preference: several pip deps are
+# ALSO provided by apt (numpy via python3-numpy, Pillow via python3-pil).  Those
+# Debian packages have no RECORD file, so if a requirement ever conflicts with
+# the apt version, pip tries to "uninstall" it and dies with
+#   error: uninstall-no-record-file  ("The package's contents are unknown")
+# which aborts the entire update.  With this flag pip leaves the apt copy alone
+# and satisfies the requirement without attempting a removal.  It was present
+# in the original setup script and was lost when pip moved here — restoring it.
 if [ -f "$REPO/requirements-pip.txt" ]; then
     echo "Installing Python dependencies…"
-    pip install --break-system-packages -r "$REPO/requirements-pip.txt" \
+    pip install --break-system-packages --ignore-installed \
+        -r "$REPO/requirements-pip.txt" \
         || _fail "pip dependency install failed"
 fi
 
 # ── Install dev & testing tools (pytest, pytest-cov, ruff, mypy) ──────────
 # Installed as part of the base install so no separate dev-env script is
 # needed. Mirrors the [dev] extra in pyproject.toml.
+# `--ignore-installed` for the same reason as above: these pull in deps that apt
+# may already own, and pip must not try to uninstall a Debian package.
 echo "Installing dev & testing tools…"
-pip install --break-system-packages ruff mypy pytest pytest-cov \
+pip install --break-system-packages --ignore-installed ruff mypy pytest pytest-cov \
     || _fail "pip dev-tools install failed"
 
 # ── Run versioned device fixups (exactly once per device) ──────────────────
