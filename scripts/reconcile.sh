@@ -310,6 +310,34 @@ _ensure_file() {
     _plus "wrote ${path}"
 }
 
+# Chown root-owned ancestors of <dir> up to (but never including) DATA_DIR.
+#
+# _ensure_dir chowns only the LEAF it is asked about, but `mkdir -p` creates the
+# whole missing chain. If an INTERMEDIATE directory is missing, that
+# intermediate is created by root and never chowned, so the pi-run backend
+# cannot create anything inside it. That is exactly what broke the image build:
+#   * data/media already existed (pi-owned), so _ensure_dir skipped it and
+#     never descended into it;
+#   * data/media/sync did not exist, so the mkdir -p for media/sync/immich
+#     created `sync` as ROOT and chowned only `immich`;
+#   * the Immich worker could then not create album_<id>/ or download an asset
+#     into it, because pi cannot write inside a root-owned directory.
+#
+# Running this on EVERY _ensure_dir call (not only when creating) also HEALS an
+# already-broken tree on the next reconcile instead of needing a fresh install.
+#
+# The walk goes UP and stops at the first ancestor that is not root-owned, or at
+# DATA_DIR itself: /opt/metixel is root-owned by design and must stay that way.
+# Non-recursive chowns only - this never walks a media library.
+_fix_ancestors() {
+    local dir="${1%/*}" owner="$2"
+    while [ "${dir#"${DATA_DIR}"/}" != "${dir}" ]; do
+        [ "$(stat -c '%u' "${dir}" 2>/dev/null)" = "0" ] || break
+        chown "${owner}" "${dir}" 2>/dev/null || true
+        dir="${dir%/*}"
+    done
+}
+
 # Create a directory (and optionally fix its ownership) only when needed.
 # Usage: _ensure_dir <path> [owner] [recursive]
 #
@@ -321,9 +349,17 @@ _ensure_file() {
 _ensure_dir() {
     local path="$1" owner="${2:-}" recursive="${3:-}"
     local cur
+    # Repair root-owned ancestors of ${path}. Called BOTH before and after the
+    # mkdir below: beforehand it heals an already-broken tree, afterwards it
+    # fixes the intermediate directories `mkdir -p` has just created as root.
+    # See _fix_ancestors for why this is needed at all.
+    if [ -n "${owner}" ] && [ "${DRY_RUN}" = "no" ]; then
+        _fix_ancestors "${path}" "${owner}"
+    fi
     if [ ! -d "${path}" ]; then
         _run mkdir -p "${path}"
         if [ -n "${owner}" ] && [ "${DRY_RUN}" = "no" ]; then
+            _fix_ancestors "${path}" "${owner}"
             chown "${owner}" "${path}" 2>/dev/null \
                 || _warn "could not chown ${path} → ${owner} (does the user exist yet?)"
         fi
