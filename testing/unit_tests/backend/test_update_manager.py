@@ -558,6 +558,46 @@ class TestUpdateScript:
         assert "is not a Metixel checkout" in content
         assert 'mv "${STAGED_DIR}" "${STAGING_DIR}"' in content
 
+    def test_sample_media_seeded_on_fresh_install_only(self) -> None:
+        """The demo gallery ships inside the release and is seeded ONCE.
+
+        Regression guard: bootstrap.sh never runs setup_trixie_metixel.sh, so
+        seeding it there alone meant the new install path shipped with an EMPTY
+        gallery — the issue that prompted this.  It must also be
+        fresh-install-only: re-adding samples on every update would resurrect a
+        gallery the user deliberately deleted.
+        """
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        assert "sample_media" in content, "sample media is never seeded"
+        # Gated on a fresh install.
+        seed_block = content.split("seed the sample media")[1].split("[8/8]")[0]
+        assert 'if [ "${FRESH_INSTALL}" = "yes" ]; then' in seed_block, (
+            "sample media must only be seeded on a fresh install"
+        )
+        # Sourced from the release (where the clone's data/ lands).
+        assert 'SAMPLE_SRC="${RELEASE_DIR}/data/media/sample_media"' in content
+        # Never overwrites what is already there.
+        assert 'if [ -e "${SAMPLE_DST}" ]' in content
+        assert 'cp -rn "${SAMPLE_SRC}/." "${SAMPLE_DST}/"' in content
+        # Must not be fatal to an otherwise healthy install.
+        assert '|| true' in seed_block
+
+    def test_setup_no_longer_seeds_sample_media(self) -> None:
+        """Seeding lives in update.sh so it cannot drift from the install path
+        (and so the update path can gate it on a fresh install)."""
+        repo = Path(__file__).resolve().parents[3]
+        setup = (repo / "scripts" / "setup_trixie_metixel.sh").read_text(encoding="utf-8")
+
+        code_lines = [
+            ln
+            for ln in setup.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        assert not any("sample_media" in ln for ln in code_lines), (
+            "setup must not seed sample media — update.sh owns that"
+        )
+
     def test_bootstrap_is_thin_and_delegates(self) -> None:
         """bootstrap.sh is the only downloadable file and must stay small and
         stable: it obtains a checkout and delegates ALL install logic to

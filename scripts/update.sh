@@ -462,6 +462,33 @@ if systemctl is-enabled --quiet metixel-cursor-hider.service 2>/dev/null; then
     /usr/bin/env python3 "${RELEASE_DIR}/scripts/trigger_cursor_hider.py" 2>/dev/null || true
 fi
 
+# ── Fresh install only: seed the sample media ──────────────────────────────
+# The repo ships a small demo gallery (data/media/sample_media, ~48 MB) so a new
+# frame has something to show immediately.  Only relevant on a fresh install:
+# an EXISTING device must never have it re-added, or a user who deliberately
+# deleted the samples would find them back after every update.
+#
+# Seeded from the staged release (it travels with the clone), never
+# overwritten, and best-effort — a failure must not fail a healthy install.
+if [ "${FRESH_INSTALL}" = "yes" ]; then
+    SAMPLE_SRC="${RELEASE_DIR}/data/media/sample_media"
+    SAMPLE_DST="${DATA_DIR}/media/sample_media"
+    if [ -d "${SAMPLE_SRC}" ]; then
+        if [ -e "${SAMPLE_DST}" ]; then
+            echo "  = sample media already present — leaving untouched"
+        else
+            echo "  Seeding sample media into ${SAMPLE_DST}…"
+            mkdir -p "${SAMPLE_DST}"
+            # -n: never overwrite; the user may have replaced these files.
+            cp -rn "${SAMPLE_SRC}/." "${SAMPLE_DST}/" 2>/dev/null || true
+            chown -R pi:pi "${SAMPLE_DST}" 2>/dev/null || true
+            echo "  + sample media seeded ($(find "${SAMPLE_DST}" -type f 2>/dev/null | wc -l) files)"
+        fi
+    else
+        echo "  ! no sample media shipped in this release — skipping"
+    fi
+fi
+
 # ── 8) RECORD installed packages for future removal ─────────────────────────
 echo "[8/8] Recording installed package manifest…"
 python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" <<'PYEOF'
