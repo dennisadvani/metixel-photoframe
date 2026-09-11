@@ -6,10 +6,10 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# Host configuration used to be applied by BOTH scripts/setup_trixie_metixel.sh
-# (fresh install) and scripts/migrate_to_atomic.sh / scripts/fixups/*.sh
-# (existing devices).  Every change had to be written twice, and the two copies
-# inevitably drifted — devices ended up running NEW code under OLD systemd
+# Host configuration used to be applied by BOTH the fresh-install script and
+# the one-time device fixups (scripts/fixups/*.sh).  Every change had to be
+# written twice, and the two copies inevitably drifted — devices ended up
+# running NEW code under OLD systemd
 # units, with an unusable ddcutil cache, because the "install-time only" path
 # was never re-run on upgrade.
 #

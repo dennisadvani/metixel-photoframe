@@ -121,9 +121,9 @@ apply_quiet_boot() {
 
     add_config_line "${BOOT_CONFIG}" "disable_splash=1"
     add_config_line "${BOOT_CONFIG}" "avoid_warnings=2"
-    # NOTE: do NOT set gpu_mem here.  The setup script (setup_trixie_metixel.sh)
-    # sets gpu_mem=128 for hardware video decode; forcing gpu_mem=16 here would
-    # override it (last line wins) and break the V4L2 hardware decoder.
+    # NOTE: do NOT set gpu_mem here.  gpu_mem=128 is set by scripts/configure_boot.sh
+    # for hardware video decode; forcing gpu_mem=16 here would override it (last
+    # line wins) and break the V4L2 hardware decoder.
 
     # -----------------------------------------------------------------------
     # 2. /boot/firmware/cmdline.txt — the critical piece
@@ -281,8 +281,8 @@ revert_quiet_boot() {
     if [ -f "${BOOT_CONFIG}" ]; then
         remove_config_line "${BOOT_CONFIG}" "disable_splash=1"
         remove_config_line "${BOOT_CONFIG}" "avoid_warnings=2"
-        # gpu_mem is intentionally NOT touched — it is managed by the
-        # setup script (setup_trixie_metixel.sh), not quiet boot.
+        # gpu_mem is intentionally NOT touched — it is managed by
+        # scripts/configure_boot.sh, not quiet boot.
     else
         echo "  ! ${BOOT_CONFIG} not found — skipping"
     fi

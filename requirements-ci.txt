@@ -7,9 +7,22 @@
 
 Pillow>=10.0
 pillow-heif>=0.16
-# Keep in step with requirements-pip.txt — CI must exercise the same numpy
-# range production actually runs (Debian Trixie ships 2.x).
-numpy>=1.24
+# numpy is capped below 2.5 in CI ONLY because of the type-checker, not because
+# of production.  mypy is deliberately pinned to python_version = "3.11" (the
+# minimum supported interpreter, see pyproject.toml), so it must be able to
+# PARSE every stub it follows.  numpy 2.5.0 requires Python >= 3.12 and its
+# stubs use PEP 695 `type X = ...` syntax, which mypy rejects at a 3.11 target:
+#   numpy/__init__.pyi:737: error: Type statement is only supported in
+#   Python 3.12 and greater  [syntax]
+# The 3.13 CI job would otherwise resolve numpy 2.5.x legitimately and then
+# fail the type check.  The whole 2.4.x series still supports Python 3.11 and
+# parses at a 3.11 target, so capping below 2.5 is the narrowest fix.  This cap
+# is CI-scoped and does NOT constrain production: requirements-pip.txt
+# intentionally leaves numpy uncapped because it is provided by apt (Debian
+# Trixie ships 2.2.4).  Do not "fix" the version skew by raising mypy's
+# python_version — that would hide genuine 3.11 incompatibilities in our own
+# code.
+numpy>=1.24,<2.5
 Flask>=3.0
 watchdog>=3.0
 paho-mqtt>=1.6

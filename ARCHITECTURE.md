@@ -862,27 +862,20 @@ current install steps — so a device upgrading from an older release applies th
 **new** version's install logic, including newly-required system and pip
 dependencies.
 
-#### Migrating an older monolithic install
+#### Blue/Green layout is a precondition
 
-A device still on the old flat layout (everything in `/opt/metixel`, no `/data`,
-no `/live`) cannot run `update.sh` yet. But its existing git-based OTA still
-works: the old bootstrap does `git reset --hard <ref>` and then runs the **new**
-`scripts/ota_install.sh` from the fresh flat checkout. `ota_install.sh` detects
-the flat layout (no `/data`, no `/live`) and, before installing, runs
-`scripts/migrate_to_atomic.sh --no-restart --no-backup` to:
+`update.sh` establishes the layout itself: it creates `releases/<version>`, and on
+a **fresh install** it points `/opt/metixel/live` at the staged release *before*
+running the install steps. Installing and updating therefore execute one identical
+path, and `ota_install.sh` always runs against the code that was just staged.
 
-1. move persistent data (config, logs, media, cache) into `/opt/metixel/data/`,
-2. move the application code into `/opt/metixel/releases/<version>/`,
-3. create the `live` symlink → the release, and rewrite the systemd units,
-4. record the managed package manifest.
-
-It then prints `MIGRATED_RELEASE_DIR=<new release path>`, which `ota_install.sh`
-captures to re-point the working tree at the moved code before running
-`pip install -e`. The old bootstrap's EXIT `trap` restarts services against the
-newly-written units, leaving the device permanently on the Blue/Green layout —
-one step, no operator action. `logging.conf` moves into `/opt/metixel/data/etc/`
-alongside `config.json`; `__main__.py` resolves it as `data_dir()/etc/logging.conf`
-(never `config_path.parent.parent` arithmetic).
+`ota_install.sh` **fails closed** if `/opt/metixel/live` is missing or dangling.
+It previously bridged a pre-Blue/Green device by invoking
+`scripts/migrate_to_atomic.sh`, but that bridge has been **retired** — the atomic
+layout has been the only install path since 1.2.2, and the last monolithic release
+(1.2.1) predates every script in the current flow. A device that old must be
+re-imaged. The invariant is deliberate: `live` is not something to auto-detect, so
+a missing symlink means the *caller* is wrong rather than the device.
 
 #### Versioned device fixups
 

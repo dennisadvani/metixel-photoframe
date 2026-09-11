@@ -364,7 +364,31 @@ class DdcutilAdapter(DdcController):
         *,
         check: bool = False,
     ) -> str | None:
-        cmd = [self._binary, *args]
+        # ``--syslog NEVER`` is LOAD-BEARING, not tidiness.  ddcutil writes its
+        # diagnostics via openlog()/syslog() — NOT to stderr — so they bypass
+        # our subprocess capture entirely and land in the systemd journal.
+        # ddcutil prints one ``is_sysfs_reliable_for_busno(<n>)`` line per
+        # candidate bus, on every invocation with a cold cache, so a single
+        # capabilities probe (detect + capabilities + one getvcp per
+        # user-facing code) emitted 18 journal lines.  Measured on a Pi 5
+        # (Raspberry Pi OS Trixie, ddcutil 2.2.0-dev): 18 lines → 0.
+        #
+        # Why this matters beyond log noise: /var/log/journal exists on the
+        # image, so journald persists to the SD card.  Metixel's own logs are
+        # kept empty at log_level=NONE precisely to spare flash, so routing
+        # ddcutil's chatter into a flash-backed journal defeats that.
+        # (Log level is also the wrong lever: ddcutil logs these at a level that
+        # ERROR — and even NONE — does not suppress; the flag is the fix.)
+        #
+        # The flag is placed AFTER the subcommand arguments deliberately: all
+        # four subcommands accept it there (verified on-device: rc=0), and it
+        # keeps cmd[1] as the subcommand so test fakes keyed on cmd[1:] still
+        # match.  stdout is byte-identical with and without it (verified via
+        # md5 for detect / capabilities / getvcp), so parsing is unaffected.
+        # The equivalent environment variable is NOT honoured by ddcutil —
+        # only the command-line option works, so it must be passed here rather
+        # than set once in the systemd unit.
+        cmd = [self._binary, *args, "--syslog", "NEVER"]
         env = self._subprocess_env()
         try:
             result = self._runner(

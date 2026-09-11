@@ -21,8 +21,8 @@
 #
 # So boot config is applied at exactly two lifecycle points:
 #
-#   * provisioning (scripts/setup_trixie_metixel.sh) — a fresh device has no
-#     user customisation to preserve.
+#   * provisioning (scripts/update.sh on a fresh install) — a fresh device has
+#     no user customisation to preserve.
 #   * a ONE-TIME fixup (scripts/fixups/v1.2.1-gpu-mem.sh) — repairs devices
 #     that predate the current value, exactly once, never again.
 #

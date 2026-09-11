@@ -32,8 +32,8 @@ though it looks declarative:
 - a change **only takes effect after a reboot**, so an unrelated update would
   schedule a behaviour change that manifests later, detached from its cause.
 
-It is applied at provisioning (`setup_trixie_metixel.sh`) and by a one-time
-fixup (`v1.2.1-gpu-mem.sh`).  Both call the shared
+It is applied at provisioning (the fresh-install path in `scripts/update.sh`) and
+by a one-time fixup (`v1.2.1-gpu-mem.sh`).  Both call the shared
 `scripts/configure_boot.sh`, so there is still exactly one implementation.
 
 ### Retiring a fixup

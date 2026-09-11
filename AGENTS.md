@@ -91,7 +91,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 15. **Tests mirror the package and use Protocol fakes.** Unit tests live in `testing/unit_tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
 16. **Host configuration has exactly ONE owner: `scripts/reconcile.sh`.** Anything describing *what a Metixel host should look like* — the data tree, systemd units, I²C/ddcutil, networking, Samba values, boot config — lives there and nowhere else. It is idempotent, runs on **every** update (from the NEW release's copy) **and** on fresh install, and supports `--dry-run`.
-    - **Never duplicate host config in `setup_trixie_metixel.sh` or in a systemd unit.** Duplication is what let a device run NEW code under OLD units, and a unit create a `data/config` directory that does not exist by design.
+    - **Never duplicate host config in an install script or in a systemd unit.** Duplication is what let a device run NEW code under OLD units, and a unit create a `data/config` directory that does not exist by design.
     - **Only append** to shared user-editable files (`smb.conf`, `/etc/default/hostapd`); never rewrite them wholesale. `hostapd.conf`/`dnsmasq.conf` are written only when absent, so a user's customisations survive.
     - **Dir/ownership rules live here, not in Python.** The app runs as `pi` and cannot `chown` a root-owned dir left by an installer, so `reconcile.sh` (root) owns creation + ownership. `paths.ensure_data_dirs()` was removed for exactly this reason; `__main__.py` keeps only a best-effort `mkdir` for desktop runs.
     - Convergent state belongs here, **not** in `scripts/fixups/`. Fixups run *once ever*, so a mistake in one can never be corrected — they are reserved for one-way data migrations and destructive/ambiguous edits that depend on device history. See `scripts/fixups/README.md`.
@@ -114,12 +114,16 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
     - **Package lifecycle:** Metixel-managed packages are tracked in
       `/opt/metixel/data/installed_packages.json`; an update removes obsolete managed packages
       (apt remove / pip uninstall) — never pre-existing ones.
-    - **Self-migrating first upgrade:** a device still on the old monolithic layout (no `/data`,
-      no `/live`) is bridged by `ota_install.sh`, which detects the flat layout and runs
-      `migrate_to_atomic.sh --no-restart --no-backup` BEFORE installing. Migration moves code
-      into `releases/<ver>`, creates the `live` symlink, and rewrites systemd units; then
-      `ota_install.sh` re-points the working repo at the migrated release (via the
-      `MIGRATED_RELEASE_DIR=` line it prints) so `pip install -e` targets the new location.
+    - **Blue/Green layout is a precondition; the migration bridge is retired.** `update.sh`
+      creates `releases/<version>` and flips `live` BEFORE invoking `ota_install.sh`, so a fresh
+      install and an upgrade run one identical path. `ota_install.sh` now **fails closed** when
+      `/opt/metixel/live` is missing or dangling, instead of guessing at the layout.
+      `scripts/migrate_to_atomic.sh` (and its `MIGRATED_RELEASE_DIR=` hand-off) has been
+      **deleted**: the atomic layout has been the only install path since 1.2.2, and the last
+      monolithic release (1.2.1) predates every script in the current flow. A pre-1.2.2 device
+      must be re-imaged rather than upgraded. Never reintroduce layout auto-detection — `live`
+      is an invariant, so a missing symlink means the *caller* is wrong, not that the device
+      needs migrating.
       `logging.conf` **no longer exists** — logging is configured in code with
       one file per process (`metixel-backend.log` / `metixel-frontend.log`) under
       `/opt/metixel/data/logs/`, and `system.log_level` is the only level
@@ -299,10 +303,10 @@ mypy src/metixel/
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue + startup dependency self-heal |
 | `src/metixel/backend/dependencies.py` | Startup dependency self-heal — detects/installs missing `requirements-pip.txt` deps as root via `sudo systemd-run` |
 | `src/metixel/backend/update_manager.py` | OTA updates — thin bootstrap script delegating to `scripts/update.sh`, launched via `systemd-run` |
-| `scripts/update.sh` | Atomic Blue/Green updater — staging → strict install → host reconcile → config backup → symlink swap → health-check → rollback |
+| `scripts/update.sh` | Atomic Blue/Green updater — staging → strict install → host reconcile → config backup → symlink swap → health-check → rollback. The ONLY entry point for install and upgrade. |
+| `scripts/bootstrap.sh` | The thin, downloadable installer — obtains a checkout and delegates to `update.sh` |
 | `scripts/reconcile.sh` | **Single owner of Metixel-managed host state** — data tree, systemd units, I²C/ddcutil, networking, Samba values, boot config. Idempotent; runs on every update AND on fresh install. Supports `--dry-run`. Never rewrite shared user files wholesale. |
-| `scripts/migrate_to_atomic.sh` | Migration of an old monolithic install to the `/data` + `/releases` + `/live` layout — invoked automatically by `ota_install.sh` on the first Blue/Green upgrade |
-| `scripts/ota_install.sh` | OTA/system install steps (system packages + `pip install -e .` + `requirements-pip.txt`, strict by default) — run from the NEW checkout |
+| `scripts/ota_install.sh` | OTA/system install steps (system packages + `pip install -e .` + `requirements-pip.txt`, strict by default) — run from the NEW release by `update.sh` |
 | `src/metixel/shared/paths.py` | Central path resolution: `install_root`/`data_dir`/`releases_dir`/`live_dir`/`resolve_install_path` |
 | `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
 | `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |

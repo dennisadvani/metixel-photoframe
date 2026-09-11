@@ -177,48 +177,101 @@ class TestInstallScript:
         assert "--continue-on-error" in content
         assert "WARNING" in content
 
-    def test_install_script_self_migrates_old_layout(self) -> None:
-        """The install script must detect the absence of a valid live symlink
-        (clean monolithic layout OR a partial/aborted migration) and self-migrate
-        to Blue/Green before installing."""
+    def test_install_script_fails_closed_without_live_symlink(self) -> None:
+        """The Blue/Green layout is a PRECONDITION of the install steps.
+
+        `ota_install.sh` used to bridge a pre-Blue/Green device by running
+        scripts/migrate_to_atomic.sh.  That bridge is retired — the atomic
+        layout has been the only install path since 1.2.2, and update.sh
+        creates `live` before invoking this script.  A missing/dangling `live`
+        therefore means the CALLER is wrong, so the script must abort rather
+        than guess at the layout (in strict mode a half-applied install is
+        worse than a clean failure).
+        """
         content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
 
-        assert "migrate_to_atomic.sh" in content
-        assert "No valid live symlink" in content
-        # Detection is based on a VALID live symlink (not merely data/ existence),
-        # so a partial migration state is also bridged.
+        # It validates a *valid* symlink (target must exist, not just -L)...
         assert "readlink -f" in content
-        assert "ALREADY_LIVE" in content
-        # Runs with --no-restart (the OTA bootstrap handles the restart) and
-        # --no-backup (the checkout just reset to the new code).
-        assert "--no-restart" in content
-        assert "--no-backup" in content
-        # Re-points the working repo at the migrated release.
-        assert "MIGRATED_RELEASE_DIR" in content
+        assert "no valid" in content
+        # ...and aborts through the strict-mode failure path.
+        assert "_fail" in content
+        # The migration must be gone, along with its hand-off protocol.  Only
+        # EXECUTABLE lines count: a comment explaining the retirement legitimately
+        # names the deleted script (and a raw substring search would match it).
+        code = "\n".join(
+            ln
+            for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        )
+        assert "migrate_to_atomic.sh" not in code
+        assert "MIGRATED_RELEASE_DIR" not in code
+        assert "ALREADY_LIVE" not in code
 
-    def test_migrate_script_does_not_carry_logging_conf(self) -> None:
-        """logging.conf was retired — logging is configured in code with one
-        file per process, so the migration must NOT move it, nor create the
-        `data/etc` directory that existed only to hold it."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
+    def test_migrate_script_is_retired(self) -> None:
+        """The monolithic → atomic migration has been deleted outright.
 
-        # It must not MOVE logging.conf into /data...
-        assert 'mv "${INSTALL_ROOT}/etc/logging.conf"' not in content
-        # ...nor create the directory that existed only to hold it.
-        assert 'mkdir -p "${DATA_DIR}/etc"' not in content
-        # The omission is deliberate and explained in a comment.
-        assert "logging.conf" in content
+        It existed only to bridge a pre-1.2.2 device.  Such a device now has to
+        be re-imaged, because the last monolithic release (1.2.1) predates every
+        script in the current install flow.  Never reintroduce layout
+        auto-detection: `live` is an invariant, not a property to sniff.
+        """
+        repo = Path(__file__).resolve().parents[3]
+        assert not (repo / "scripts" / "migrate_to_atomic.sh").exists()
+        # The legacy monolithic test helper that exercised the migration is
+        # gone too — there is no migration left to test.
+        assert not (repo / "scripts" / "legacy_setup_trixie_metixel.sh").exists()
 
-        # The app no longer LOADS it either.  Check the parsed source rather
-        # than raw text: "logging.conf" is a substring of "logging.config"
-        # (an import), and appears in docstrings explaining the removal.
+    def test_setup_script_is_retired(self) -> None:
+        """The standalone installer has been deleted.
+
+        Installing and updating now run ONE code path (bootstrap.sh →
+        update.sh), so a separate fresh-install script is both redundant and a
+        drift risk: it had to be re-tested and promoted to main on every change.
+        """
+        repo = Path(__file__).resolve().parents[3]
+        assert not (repo / "scripts" / "setup_trixie_metixel.sh").exists()
+
+    def test_no_script_references_deleted_installers(self) -> None:
+        """Nothing may reference the two deleted scripts in EXECUTABLE code.
+
+        Retired installers leave stale advice behind in comments, which is how
+        a reader ends up looking for a file that no longer exists.  Only
+        comments are allowed to mention them (e.g. explaining the retirement).
+        """
+        repo = Path(__file__).resolve().parents[3]
+        deleted = ("setup_trixie_metixel.sh", "migrate_to_atomic.sh")
+        offenders: list[str] = []
+        for script in sorted((repo / "scripts").rglob("*.sh")):
+            for lineno, line in enumerate(
+                script.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                for name in deleted:
+                    if name in line:
+                        offenders.append(
+                            f"{script.relative_to(repo)}:{lineno}: {stripped}"
+                        )
+        assert not offenders, (
+            "executable code still references a deleted installer:\n"
+            + "\n".join(offenders)
+        )
+
+    def test_logging_conf_is_fully_retired(self) -> None:
+        """logging.conf is gone — logging is configured in code, one file per
+        process.  Nothing may load it, and no string literal (including
+        docstrings, which is how stale guidance survives) may reference it."""
         import ast
 
         main = (_REPO_ROOT / "src" / "metixel" / "__main__.py").read_text(encoding="utf-8")
+        # The declarative loader must be gone.
         assert "fileConfig" not in main
 
         tree = ast.parse(main)
+        # Raw-text search is unusable here: "logging.conf" is a substring of
+        # "logging.config" (an import) and appears in prose explaining the
+        # retirement.  Check the parsed string literals instead.
         literals = [
             node.value
             for node in ast.walk(tree)
@@ -232,140 +285,6 @@ class TestInstallScript:
             and any(alias.name == "logging.config" for alias in node.names)
             for node in ast.walk(tree)
         ), "logging.config import should have been removed"
-
-    def test_migrate_script_reads_manifests_from_release_dir(self) -> None:
-        """The installed_packages.json recorder must read the requirements
-        manifests from RELEASE_DIR (the code has already moved there), not from
-        the now-empty INSTALL_ROOT."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
-
-        assert 'python3 - "${RELEASE_DIR}" "${DATA_DIR}"' in content
-        assert "release_dir, data_dir = sys.argv[1], sys.argv[2]" in content
-        assert 'os.path.join(release_dir, "requirements-system.txt")' in content
-        assert 'root = "/opt/metixel"' not in content
-
-    def test_migrate_script_copies_canonical_systemd_units(self) -> None:
-        """Migration must COPY the shipped systemd units from the release rather
-        than sed-mutating the old ones — the sed approach left some devices with
-        a stale PYTHONPATH (crash-loop) when the installed value didn't match."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
-
-        # Copies the canonical units from the release into /etc/systemd/system.
-        assert 'cp "${RELEASE_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"' in content
-        assert "metixel-backend.service metixel-cage.service" in content
-        # The obsolete pre-cage metixel-frontend unit is no longer shipped; the
-        # migration stops/removes a stale copy from aging devices.
-        assert "metixel-frontend.service" not in content.split("for unit in")[1].split(";")[0]
-        assert "rm -f /etc/systemd/system/metixel-frontend.service" in content
-        # The fragile per-value sed rewrite is gone (it left PYTHONPATH stale).
-        assert "PYTHONPATH=/opt/metixel$|PYTHONPATH" not in content
-        # The systemd units are copied, not sed-mutated (the only sed -i left is
-        # the Samba share path rewrite, which is unrelated to systemd).
-        assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
-        # The cursor-hider service (newer feature) is installed + enabled only
-        # when the release ships it — never against code that lacks the
-        # --mode cursor-hider entrypoint (that would crash-loop forever).
-        assert "metixel-cursor-hider.service" in content
-        assert 'grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"' in content
-        assert "CURSOR_HIDER_PRESENT" in content
-
-    def test_migrate_script_repairs_partial_state(self) -> None:
-        """A partial/aborted migration (data/ present but no valid live symlink)
-        must be REPAIRED on re-run, not treated as already-migrated."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
-
-        # Only a VALID live symlink counts as migrated.
-        assert 'if [ -L "${LIVE_LINK}" ] && [ -d "$(readlink -f "${LIVE_LINK}"' in content
-        # A stray data/ triggers a repair re-run, not a bail-out.
-        assert "Re-running migration to repair a partial/aborted previous run" in content
-        # The whole install root is chowned to pi so the service can write.
-        assert 'chown -R pi:pi "${INSTALL_ROOT}"' in content
-
-    def test_migrate_script_moves_whole_media_logs_cache_folders(self) -> None:
-        """The migration must move the ENTIRE media/logs/cache folders (not
-        file-by-file) so user-created custom watch folders are preserved, and
-        it must NOT pre-create data/media etc as placeholders that would block
-        the move."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
-
-        # Step 3 must NOT pre-create media/cache/logs placeholders (they come
-        # from the move), so the top-level folder isn't orphaned.  Only backups
-        # is scaffolded (no monolithic source); config files live directly in
-        # /data, so there is no data/config subdir.
-        assert 'mkdir -p "${DATA_DIR}/backups"' in content
-        assert '"${DATA_DIR}/media" "${DATA_DIR}/cache" "${DATA_DIR}/logs"' not in content
-        assert '"${DATA_DIR}/config"' not in content
-        # Step 4 moves the whole folder (mv) or copy-merges on re-entry.
-        assert "for item in media logs cache; do" in content
-        assert 'mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"' in content
-        assert 'cp -an "${INSTALL_ROOT}/${item}/." "${DATA_DIR}/${item}/"' in content
-
-    def test_migrate_script_updates_samba_share_path(self) -> None:
-        """The migration moves media/ to /data/media, so any Samba share pointing
-        at the old monolithic path must be rewritten to the new data location —
-        otherwise the share breaks after migration."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
-
-        # Rewrites the old install-root media path to the data path.
-        assert "path = ${INSTALL_ROOT}/media" in content
-        assert "path = ${DATA_DIR}/media" in content
-        assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
-        # Restarts smbd so the new path takes effect.
-        assert "systemctl restart smbd" in content
-
-
-class TestSetupScript:
-    """The fresh-install setup script must build the atomic layout correctly."""
-
-    def test_setup_script_moves_code_into_release_not_self_copy(self) -> None:
-        """Step [4/9] must MOVE the repo contents into releases/<tag> rather
-        than `cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"` — RELEASE_DIR lives
-        INSIDE METIXEL_DIR (/opt/metixel/releases/<tag>), so a self-copy fails
-        with 'cannot copy a directory into itself'."""
-        setup = Path(__file__).resolve().parents[3] / "scripts" / "setup_trixie_metixel.sh"
-        content = setup.read_text(encoding="utf-8")
-
-        # The buggy self-copy must be gone.
-        assert 'cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"' not in content
-        # The code is moved entry-by-entry, excluding the data/releases layer.
-        assert 'for entry in "${METIXEL_DIR}"/.* "${METIXEL_DIR}"/*; do' in content
-        assert 'mv "$entry" "${RELEASE_DIR}/" 2>/dev/null || true' in content
-        # The data/releases/live/cache/logs/media/etc dirs are excluded.
-        assert '"data"|"releases"|"live"|"cache"|"logs"|"media"|"etc"' in content
-        # The git checkout is preserved inside the release.
-        assert 'mv "${METIXEL_DIR}/.git" "${RELEASE_DIR}/"' in content
-
-    def test_setup_script_reads_moved_code_from_release_dir(self) -> None:
-        """After the code moves into RELEASE_DIR, later steps must read from
-        RELEASE_DIR (systemd units) — and etc/ stays at METIXEL_DIR (excluded
-        from the move), so config templates come from METIXEL_DIR/etc."""
-        setup = Path(__file__).resolve().parents[3] / "scripts" / "setup_trixie_metixel.sh"
-        content = setup.read_text(encoding="utf-8")
-
-        # systemd units are copied from the release (where the code moved).
-        assert 'cp "${RELEASE_DIR}/systemd/metixel-backend.service"' in content
-        assert 'cp "${RELEASE_DIR}/systemd/metixel-cage.service"' in content
-        # logging.conf is retired: logging is configured in code, one file per
-        # process.  The installer must not reference the file in executable
-        # code (a comment explaining the retirement is fine and expected).
-        code_lines = [
-            ln
-            for ln in content.splitlines()
-            if ln.strip() and not ln.strip().startswith("#")
-        ]
-        assert not any("logging.conf" in ln for ln in code_lines), (
-            "setup must not seed or reference logging.conf any more"
-        )
-        # config.json is NOT seeded — the app owns the schema and creates it.
-        assert "config.example.json" not in content
-        # Installer answers are written as a partial overlay instead.
-        assert "/opt/metixel/data/init.json" in content
-
 
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
@@ -562,9 +481,9 @@ class TestUpdateScript:
     def test_sample_media_seeded_on_fresh_install_only(self) -> None:
         """The demo gallery ships inside the release and is seeded ONCE.
 
-        Regression guard: bootstrap.sh never runs setup_trixie_metixel.sh, so
-        seeding it there alone meant the new install path shipped with an EMPTY
-        gallery — the issue that prompted this.  It must also be
+        Regression guard: the gallery was originally seeded only by the
+        standalone installer, so the bootstrap.sh install path shipped with an
+        EMPTY gallery — the issue that prompted this.  It must also be
         fresh-install-only: re-adding samples on every update would resurrect a
         gallery the user deliberately deleted.
         """
@@ -583,21 +502,6 @@ class TestUpdateScript:
         assert 'cp -rn "${SAMPLE_SRC}/." "${SAMPLE_DST}/"' in content
         # Must not be fatal to an otherwise healthy install.
         assert '|| true' in seed_block
-
-    def test_setup_no_longer_seeds_sample_media(self) -> None:
-        """Seeding lives in update.sh so it cannot drift from the install path
-        (and so the update path can gate it on a fresh install)."""
-        repo = Path(__file__).resolve().parents[3]
-        setup = (repo / "scripts" / "setup_trixie_metixel.sh").read_text(encoding="utf-8")
-
-        code_lines = [
-            ln
-            for ln in setup.splitlines()
-            if ln.strip() and not ln.strip().startswith("#")
-        ]
-        assert not any("sample_media" in ln for ln in code_lines), (
-            "setup must not seed sample media — update.sh owns that"
-        )
 
     def test_bootstrap_is_thin_and_delegates(self) -> None:
         """bootstrap.sh is the only downloadable file and must stay small and
@@ -749,66 +653,50 @@ class TestUpdateScript:
         assert "/etc/systemd/system/.metixel-backup" in content
 
     def test_setup_has_no_self_bootstrap(self) -> None:
-        """The installer must not clone the repository itself.
+        """bootstrap.sh must not clone the repository itself.
 
-        A self-bootstrapping script has to be committed and promoted to main
-        before it can be tested, so the version a user runs can differ from the
-        one being worked on.  It now installs the checkout it lives in.
+        It is the only downloadable file; it obtains a checkout and delegates
+        to update.sh.  A self-bootstrapping installer would have to be promoted
+        to main before it could be tested, so the version a user runs could
+        differ from the one being worked on.
         """
         repo = Path(__file__).resolve().parents[3]
-        setup = (repo / "scripts" / "setup_trixie_metixel.sh").read_text(encoding="utf-8")
+        bootstrap = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
 
-        # Only executable lines matter — the header legitimately documents the
-        # `git clone` command in its usage block.
         code_lines = [
             ln.strip()
-            for ln in setup.splitlines()
+            for ln in bootstrap.splitlines()
             if ln.strip() and not ln.strip().startswith("#")
         ]
         code = "\n".join(code_lines)
 
-        # No cloning, no re-exec of itself, no raw.githubusercontent fetch.
-        assert not any(ln.startswith("git clone") for ln in code_lines), (
-            "setup must not clone the repo"
-        )
+        # It may CLONE (that is how it obtains the repo), but it must never
+        # fetch and execute itself from raw.githubusercontent.
         assert "raw.githubusercontent.com" not in code
         assert "exec env METIXEL_CHANNEL" not in code
-        assert "INSIDE_REPO" not in code
-        # It refuses to run outside a checkout instead of fetching one.
-        assert "this script must be run from inside a Metixel checkout" in setup
 
-    def test_setup_accepts_unattended_env(self) -> None:
-        """Bootstrap removal must not remove unattended installs: the prompts
-        still read from the environment."""
+    def test_bootstrap_accepts_unattended_env(self) -> None:
+        """Unattended installs must stay possible: answers come from flags."""
         repo = Path(__file__).resolve().parents[3]
-        setup = (repo / "scripts" / "setup_trixie_metixel.sh").read_text(encoding="utf-8")
+        bootstrap = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
 
-        assert 'RELEASE_CHANNEL="${METIXEL_CHANNEL:-}"' in setup
-        assert 'WIFI_COUNTRY="${METIXEL_WIFI_COUNTRY:-}"' in setup
+        assert "--channel" in bootstrap
+        assert "--wifi-country" in bootstrap
 
-    def test_setup_delegates_host_config_to_reconcile(self) -> None:
-        """The installer must not duplicate host configuration — that is what
-        allowed the install-time and OTA paths to drift apart."""
+    def test_bootstrap_channel_validation_matches_backend(self) -> None:
+        """bootstrap.sh must offer exactly the channels the backend populates.
+
+        Match the case-statement arm specifically — a bare "main)" search would
+        also match ordinary prose such as "(e.g. the repo on main) when no".
+        """
         repo = Path(__file__).resolve().parents[3]
-        setup = (repo / "scripts" / "setup_trixie_metixel.sh").read_text(encoding="utf-8")
-
-        assert "scripts/reconcile.sh" in setup
-        # These are all owned by reconcile.sh now — the installer must not
-        # write them itself.  (Boot config is separate again: see above.)
-        for owned in (
-            "wifi-powersave-off.conf",
-            "hostapd.conf",
-            "dnsmasq.conf",
-            "metixel-media",
-            "enable-linger",
-        ):
-            assert owned not in setup, (
-                f"setup_trixie_metixel.sh still writes {owned} — "
-                "host config must live only in reconcile.sh"
-            )
-        # Boot config is delegated to the shared script, not inlined.
-        assert "configure_boot.sh" in setup
-        assert "gpu_mem" not in setup
+        content = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "stable|beta|dev)" in content, (
+            "bootstrap.sh channel validation drifted from the backend"
+        )
+        assert "stable|beta|dev|main)" not in content, (
+            "bootstrap.sh still offers the phantom 'main' channel"
+        )
 
 
 class TestReconcileScript:
@@ -941,19 +829,19 @@ class TestUpdateChannelConsistency:
         assert '"main":' not in code, "stale 'main' channel description remains"
 
     def test_installer_channels_match_backend(self) -> None:
-        """bootstrap.sh and setup_trixie_metixel.sh offer the same channels.
+        """bootstrap.sh — the only remaining installer — must offer exactly the
+        channels the backend populates.
 
         Match the case-statement arm specifically — a bare "main)" search would
         also match ordinary prose such as "(e.g. the repo on main) when no".
         """
-        for name in ("bootstrap.sh", "setup_trixie_metixel.sh"):
-            content = (_REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
-            assert "stable|beta|dev)" in content, (
-                f"{name} channel validation drifted from the backend"
-            )
-            assert "stable|beta|dev|main)" not in content, (
-                f"{name} still offers the phantom 'main' channel"
-            )
+        content = (_REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "stable|beta|dev)" in content, (
+            "bootstrap.sh channel validation drifted from the backend"
+        )
+        assert "stable|beta|dev|main)" not in content, (
+            "bootstrap.sh still offers the phantom 'main' channel"
+        )
 
 
 class TestCheckInterval:

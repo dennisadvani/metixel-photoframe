@@ -271,9 +271,9 @@ _cleanup_staging() {
     echo "--- Update failed — removing staging release ${RELEASE_DIR} ---"
     rm -rf "${RELEASE_DIR}"
     # On a fresh install we point `live` at the staged release BEFORE running
-    # the installer (so ota_install.sh skips its legacy migration).  If we now
-    # remove that release, `live` would be left DANGLING — systemd units resolve
-    # /opt/metixel/live, so remove the symlink too and leave the device clean.
+    # the installer.  If we now remove that release, `live` would be left
+    # DANGLING — systemd units resolve /opt/metixel/live — so remove the
+    # symlink too and leave the device clean.
     if [ "${FRESH_INSTALL}" = "yes" ] && [ -L "${LIVE_LINK}" ]; then
         rm -f "${LIVE_LINK}"
         echo "Removed dangling ${LIVE_LINK} (fresh install did not complete)."
@@ -292,11 +292,10 @@ else
 fi
 
 # ── Fresh install: establish 'live' BEFORE installing ──────────────────────
-# ota_install.sh self-migrates whenever there is no valid `live` symlink, and
-# that migration targets the OLD flat monolithic layout.  On a fresh device it
-# would create an EMPTY release and re-point the install at it, breaking the
-# pip step.  Pointing `live` at the staged release first makes ota_install see
-# a normal Blue/Green device, so migration is correctly skipped.
+# ota_install.sh REQUIRES a valid `live` symlink and fails closed without one:
+# it no longer bridges a pre-Blue/Green layout (that migration is retired).
+# Pointing `live` at the staged release first means the installer runs against
+# the code it just staged, which is exactly what the pip step expects.
 #
 # This is safe: no service is started until the restart step below, and
 # PREV_LIVE is empty, so a later health failure reports "no previous release to

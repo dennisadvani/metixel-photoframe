@@ -2,11 +2,11 @@
 #
 # Metixel OTA — install steps.
 #
-# This script is invoked by the (thin) OTA bootstrap AFTER the new code has
-# been checked out (git reset --hard). Because it lives IN the repository, it
-# always reflects the NEW version being installed — a device upgrading from an
-# older release therefore applies the current install logic (system packages +
-# runtime pip dependencies), not the logic baked into the old bootstrap.
+# This script is invoked by scripts/update.sh AFTER the new release has been
+# staged into releases/<version>. Because it lives IN the repository, it always
+# reflects the NEW version being installed — a device upgrading from an older
+# release therefore applies the current install logic (system packages + runtime
+# pip dependencies), not the logic baked into the code that was already running.
 #
 # Usage: bash scripts/ota_install.sh [REPO] [--continue-on-error]
 #   REPO                  Path to the repository checkout (default: /opt/metixel/live)
@@ -40,37 +40,23 @@ fi
 
 INSTALL_ROOT="${METIXEL_INSTALL_ROOT:-/opt/metixel}"
 
-# ── Self-migrate from the old monolithic layout (first Blue/Green upgrade) ──
-# A device still on the pre-Blue/Green layout has no working live symlink.
-# This is the FIRST upgrade that carries the new scripts, so we migrate in
-# place BEFORE installing: the code moves into releases/<ver>, the live symlink
-# is created, and the systemd units are rewritten. Only then do we install —
-# so `pip install -e` targets the NEW (post-migration) repo location.
+# ── Require a valid Blue/Green layout ──────────────────────────────────────
+# `ota_install.sh` relies on the atomic layout existing: it installs into the
+# release `live` points at, and the runtime config/data tree is resolved
+# relative to it.  This script used to bridge a pre-Blue/Green device by
+# invoking scripts/migrate_to_atomic.sh, but that migration has been retired —
+# the layout is now established by scripts/update.sh, which creates `live`
+# BEFORE calling here (see the "Fresh install: establish 'live'" step), and the
+# last monolithic release was 1.2.1.
 #
-# Detection matches migrate_to_atomic.sh's guard: migrate only if there is no
-# VALID live symlink. Both a clean monolithic install AND a partial/aborted
-# migration (data/ present but no live) are bridged here.
-ALREADY_LIVE="no"
-if [ -L "${INSTALL_ROOT}/live" ] && [ -d "$(readlink -f "${INSTALL_ROOT}/live" 2>/dev/null || true)" ]; then
-    ALREADY_LIVE="yes"
-fi
-if [ "${ALREADY_LIVE}" = "no" ]; then
-    echo "No valid live symlink — self-migrating to Blue/Green…"
-    MIG_OUT="$(bash "${INSTALL_ROOT}/scripts/migrate_to_atomic.sh" --no-restart --no-backup 2>&1)"
-    MIG_RC=$?
-    printf '%s\n' "$MIG_OUT"
-    if [ "${MIG_RC}" -ne 0 ]; then
-        _fail "auto-migration to Blue/Green layout failed"
-    fi
-    # Migration moved the code into releases/<ver> and created the live symlink.
-    # Re-point the repo at the migrated release so the install steps run against
-    # the moved code (the old flat path is now empty).
-    MIG_REL="$(printf '%s\n' "$MIG_OUT" | sed -n 's/^MIGRATED_RELEASE_DIR=//p' | tail -n1)"
-    if [ -n "${MIG_REL}" ] && [ -d "${MIG_REL}" ]; then
-        REPO="${MIG_REL}"
-    else
-        REPO="${INSTALL_ROOT}/live"
-    fi
+# Fail CLOSED rather than guess.  If `live` is missing or dangling we are being
+# run outside the supported flow; installing anyway would write packages
+# against a path that systemd cannot resolve, and in strict mode a half-applied
+# install is worse than a clean abort.  This mirrors update.sh's own
+# "is not a Metixel checkout" validation below.
+if ! { [ -L "${INSTALL_ROOT}/live" ] \
+       && [ -d "$(readlink -f "${INSTALL_ROOT}/live" 2>/dev/null || true)" ]; }; then
+    _fail "no valid ${INSTALL_ROOT}/live symlink — run scripts/update.sh (or bootstrap.sh) instead"
 fi
 
 echo "=== Metixel install steps (repo: $REPO, strict=$([ "${CONTINUE_ON_ERROR}" = yes ] && echo off || echo on)) ==="
