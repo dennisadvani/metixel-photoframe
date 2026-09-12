@@ -148,19 +148,53 @@ def test_config_survives_backend_restart() -> None:
             _api_put(f"/api/config/{_TEST_SECTION}", {_TEST_KEY: original})
 
 
-def _log_file_path() -> Path:
-    """Resolve the on-disk metixel.log path from the running backend.
+def _log_dir() -> Path:
+    """Resolve the on-disk log directory from the running backend.
 
-    The log file lives at ``<data dir>/logs/metixel.log``, and the config
-    file reported by the API lives directly in the data dir
-    (``<data dir>/config.json``).  Deriving it from the reported config path
-    keeps the test correct on any install layout (``/opt/metixel``, dev).
+    Logs live at ``<data dir>/logs/``, and the config file reported by the API
+    lives directly in the data dir (``<data dir>/config.json``).  Deriving the
+    path from the reported config path keeps the test correct on any install
+    layout (``/opt/metixel``, dev).
     """
-    return _config_path().parent / "logs" / "metixel.log"
+    return _config_path().parent / "logs"
+
+
+def _backend_log_path() -> Path:
+    """The backend's OWN log file.
+
+    Each process writes a SEPARATE file (``metixel-backend.log`` /
+    ``metixel-frontend.log``).  This test used to look for a shared
+    ``metixel.log``, but NO process writes that name any more — only the
+    ``None``-mode fallback in ``_log_file_for_mode`` would, and neither daemon
+    runs that way.  So the old assertion could only ever time out.
+    (``routes/logs.py`` still lists ``_LEGACY_LOG_NAME``, but purely so a
+    pre-split device's history stays readable in the dashboard.)
+    """
+    return _log_dir() / "metixel-backend.log"
+
+
+def _frontend_log_path() -> Path:
+    """The frontend's OWN log file — reported for diagnostics on failure."""
+    return _log_dir() / "metixel-frontend.log"
+
+
+def _log_dir_contents(backend_log: Path) -> str:
+    """List what is actually on disk, to make a failure actionable.
+
+    A bare "file not created" assertion cannot distinguish between "the config
+    round-trip produced no log records" and "the handler is writing a
+    different filename" — which is exactly the drift this test must catch.
+    """
+    log_dir = backend_log.parent
+    try:
+        present = sorted(p.name for p in log_dir.iterdir())
+    except OSError as exc:
+        present = [f"<unreadable: {exc}>"]
+    return f"contents of {log_dir}: {present}"
 
 
 def test_log_file_owned_by_pi_and_writes_logs() -> None:
-    """The backend's metixel.log must be owned by pi:pi and receive writes.
+    """The backend's OWN log must be owned by pi:pi and receive writes.
 
     The backend runs as the ``pi`` user, so a log file created by root (e.g.
     a one-off root invocation during install) would make the pi-run service
@@ -168,7 +202,7 @@ def test_log_file_owned_by_pi_and_writes_logs() -> None:
     INFO (from the current value, normally NONE), trigger an INFO log write
     via a harmless config round-trip, and confirm the file grows.
     """
-    log_path = _log_file_path()
+    backend_log = _backend_log_path()
 
     # Read the current level so we can restore it afterwards (normally NONE).
     current_level = "NONE"
@@ -182,7 +216,7 @@ def test_log_file_owned_by_pi_and_writes_logs() -> None:
 
         # Record the file size (creating the file if needed) so we can detect
         # growth.  Wait a moment for the handler to open the file.
-        size_before = log_path.stat().st_size if log_path.exists() else 0
+        size_before = backend_log.stat().st_size if backend_log.exists() else 0
 
         # Trigger INFO-level log lines with a harmless slideshow round-trip
         # (slideshow does NOT trigger a pipeline restart).
@@ -196,26 +230,30 @@ def test_log_file_owned_by_pi_and_writes_logs() -> None:
         deadline = time.monotonic() + 10
         size_after = size_before
         while time.monotonic() < deadline:
-            if log_path.exists():
-                size_after = log_path.stat().st_size
+            if backend_log.exists():
+                size_after = backend_log.stat().st_size
                 if size_after > size_before:
                     break
             time.sleep(0.5)
 
-        assert log_path.exists(), f"metixel.log was not created at {log_path}"
+        assert backend_log.exists(), (
+            f"metixel-backend.log was not created at {backend_log} "
+            f"(frontend log exists: {_frontend_log_path().exists()}) — "
+            f"{_log_dir_contents(backend_log)}"
+        )
         assert size_after > size_before, (
-            "metixel.log did not grow after enabling INFO logging + a config "
-            f"round-trip (size {size_before} → {size_after})"
+            "metixel-backend.log did not grow after enabling INFO logging + a "
+            f"config round-trip (size {size_before} → {size_after})"
         )
 
         # The file must still be owned by pi after being (re)opened by the
         # pi-run backend — this is the real ownership regression guard.
-        st = log_path.stat()
-        assert st.st_uid == 1000, f"metixel.log not owned by pi (uid {st.st_uid})"
-        assert st.st_gid == 1000, f"metixel.log not owned by group pi (gid {st.st_gid})"
+        st = backend_log.stat()
+        assert st.st_uid == 1000, f"metixel-backend.log not owned by pi (uid {st.st_uid})"
+        assert st.st_gid == 1000, f"metixel-backend.log not owned by group pi (gid {st.st_gid})"
 
         # Sanity check the content actually looks like a log line.
-        tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-1]
+        tail = backend_log.read_text(encoding="utf-8", errors="replace").splitlines()[-1]
         assert "[" in tail and "]" in tail, (
             f"last log line does not look like a log entry: {tail!r}"
         )

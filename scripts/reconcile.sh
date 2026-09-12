@@ -57,10 +57,10 @@
 #   loginctl enable-linger     → /var/lib/systemd/linger/<user>
 #   modprobe i2c-dev           → /etc/modules-load.d/metixel-i2c.conf  (always)
 #   iw reg set                 → /etc/modprobe.d/cfg80211.conf         (always)
+#   rfkill unblock wifi        → /var/lib/systemd/rfkill/<ID_PATH>:wlan = 0
 #
-# Runtime-only steps with no persistent equivalent (rfkill unblock) are
-# reported and skipped — see the note in §8.  Everything else in this script is
-# already pure file/dir work and behaves identically offline.
+# Everything else in this script is already pure file/dir work and behaves
+# identically offline.
 #
 # Usage:
 #   sudo bash scripts/reconcile.sh [--dry-run] [--offline] [--unit-backup-dir DIR]
@@ -853,22 +853,121 @@ fi
 
 # ── Radio enablement ───────────────────────────────────────────────────────
 # Raspberry Pi Imager can disable WiFi at the OS level when the user skips WiFi
-# configuration during imaging.  Unblocking is idempotent and harmless when the
-# radio is already up, so it is safely convergent.
+# configuration during imaging.  That leaves a rfkill SOFT block on the wlan
+# phy (visible as `nmcli radio` → WIFI-HW=enabled but WIFI=disabled), which
+# also makes NetworkManager report wlan0 as "unmanaged".  The result is a
+# device that boots with no WiFi and no AP — the exact failure this step
+# exists to prevent.  Unblocking is idempotent and harmless when the radio is
+# already up, so it is safely convergent.
 #
-# `rfkill unblock` acts on the RUNNING kernel's radio state — offline that is
-# the build host's, which must not be touched.  There is no persistent file
-# form of this (rfkill state is kernel memory), so offline it is reported and
-# skipped.
-if command -v rfkill >/dev/null 2>&1; then
-    if [ "${DRY_RUN}" = "yes" ]; then
-        printf '      [dry-run] rfkill unblock wifi/wlan\n'
-    elif _online; then
-        _run rfkill unblock wifi >/dev/null 2>&1 || true
-        _run rfkill unblock wlan >/dev/null 2>&1 || true
-        _same "wifi radio unblocked"
+# TWO traps this block handles, both of which silently defeated it before:
+#
+#   1. PATH.  The `rfkill` binary is package-installed at /usr/sbin/rfkill, and
+#      a non-login shell (how update.sh/systemd invoke this) has no /usr/sbin on
+#      PATH.  A `command -v rfkill` guard therefore FAILED on a perfectly
+#      healthy install, the whole block was skipped, and it printed nothing at
+#      all — not even an offline notice.  Resolve the binary explicitly instead.
+#
+#   2. OFFLINE.  `rfkill unblock` acts on the RUNNING kernel, so on an image
+#      build it would touch the BUILD HOST's radio.  The kernel state is not
+#      persistable, but the POLICY is: systemd-rfkill keeps the per-device soft
+#      block in /var/lib/systemd/rfkill/<device-path>:wlan (1 = blocked,
+#      0 = unblocked) and replays it at boot.  Offline we write that file, so a
+#      pi-gen image ships unblocked instead of merely warning that it could not
+#      help.
+RFKILL_BIN=""
+for _candidate in /usr/sbin/rfkill /sbin/rfkill /usr/bin/rfkill /bin/rfkill; do
+    if [ -x "${_candidate}" ]; then
+        RFKILL_BIN="${_candidate}"
+        break
+    fi
+done
+# Fall back to PATH for unusual layouts (e.g. a desktop dev machine).
+if [ -z "${RFKILL_BIN}" ]; then
+    RFKILL_BIN="$(command -v rfkill 2>/dev/null || true)"
+fi
+
+# Directory where systemd-rfkill persists per-device soft-block state.  The
+# filename is derived from the device's sysfs path with '/' → ':' (e.g.
+# platform-1001100000.mmc:wlan — the onboard SDIO WiFi on a Pi).
+RFKILL_STATE_DIR="/var/lib/systemd/rfkill"
+
+if [ "${DRY_RUN}" = "yes" ]; then
+    printf '      [dry-run] rfkill unblock wifi/wlan + nmcli radio wifi on\n'
+elif _online; then
+    if [ -z "${RFKILL_BIN}" ]; then
+        # Not fatal: a device with no rfkill radio simply has nothing to do.
+        _warn "rfkill binary not found (looked in /usr/sbin, /sbin, /usr/bin, /bin, PATH) — radio left as-is"
     else
-            _skip_offline "rfkill unblock wifi/wlan — kernel runtime state, not persistable"
+        # Unblock BOTH type names: `wifi` is an alias that some builds resolve
+        # only to the wlan type, while `wlan` is the raw type in sysfs.  Doing
+        # both means the step converges on every rfkill version.
+        _run "${RFKILL_BIN}" unblock wifi >/dev/null 2>&1 || true
+        _run "${RFKILL_BIN}" unblock wlan >/dev/null 2>&1 || true
+
+        # Clearing the rfkill block does NOT by itself re-enable the NetworkManager
+        # radio or re-adopt a device that was marked unmanaged while blocked.
+        # Both are needed for the radio to actually be usable.
+        if command -v nmcli >/dev/null 2>&1; then
+            _run nmcli radio wifi on >/dev/null 2>&1 || true
+            # wlan0 is the only WiFi interface Metixel supports; naming it keeps
+            # this a no-op on Ethernet-only devices (which have no wlan0).
+            if ip link show wlan0 >/dev/null 2>&1; then
+                _run nmcli device set wlan0 managed yes >/dev/null 2>&1 || true
+            fi
+        fi
+        _same "wifi radio unblocked + enabled"
+    fi
+else
+    # ── Offline: write the persistent form systemd-rfkill replays at boot ──
+    # The filename is NOT derived from the sysfs path.  systemd-rfkill uses the
+    # udev ID_PATH property, ':'-escaped, plus the rfkill type
+    # (src/rfkill/rfkill.c: determine_state_file() → cescape(ID_PATH) + ":" + type):
+    #
+    #   ID_PATH=platform-1001100000.mmc  +  type=wlan
+    #     → /var/lib/systemd/rfkill/platform-1001100000.mmc:wlan
+    #
+    # Using the sysfs path instead yields a long, wrong name
+    # (platform:axi:1001100000.mmc:mmc_host:…:rfkill1:wlan) that systemd never
+    # reads — the unblock would appear to succeed and silently do nothing.
+    # udevadm is the only reliable source of ID_PATH.  If it is unavailable we
+    # report rather than guess, because a wrong filename writes a dead file.
+    _offline_target=""
+    _offline_why=""
+    if ! command -v udevadm >/dev/null 2>&1; then
+        _offline_why="udevadm not available to resolve ID_PATH"
+    elif [ ! -d /sys/class/rfkill ]; then
+        _offline_why="no rfkill devices present"
+    else
+        for _rf in /sys/class/rfkill/*; do
+            [ -e "${_rf}" ] || continue
+            [ "$(cat "${_rf}/type" 2>/dev/null)" = "wlan" ] || continue
+            _id_path="$(udevadm info --query=property --path="${_rf}" 2>/dev/null \
+                | sed -n 's/^ID_PATH=//p')"
+            if [ -z "${_id_path}" ]; then
+                _offline_why="wlan device has no ID_PATH"
+                continue
+            fi
+            # systemd cescape()s the property.  ID_PATH contains no ':' in
+            # practice (it is '-' separated), so this is a no-op on a Pi, but
+            # keep the escaping so the name matches systemd exactly if it ever
+            # does contain one.
+            _escaped="$(printf '%s' "${_id_path}" | sed 's/:/\\x3a/g')"
+            _offline_target="${RFKILL_STATE_DIR}/${_escaped}:wlan"
+        done
+    fi
+
+    if [ -n "${_offline_target}" ]; then
+        if [ -f "${_offline_target}" ] && [ "$(cat "${_offline_target}" 2>/dev/null)" = "0" ]; then
+            _same "rfkill state already unblocked ($(basename "${_offline_target}"))"
+        elif mkdir -p "${RFKILL_STATE_DIR}" \
+            && printf '0' > "${_offline_target}"; then
+            _plus "rfkill state unblocked ($(basename "${_offline_target}"))"
+        else
+            _warn "could not write ${_offline_target} — radio may come up blocked"
+        fi
+    else
+        _skip_offline "rfkill — ${_offline_why:-no wlan device found to unblock}"
     fi
 fi
 

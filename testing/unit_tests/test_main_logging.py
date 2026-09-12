@@ -11,6 +11,7 @@ create it, or the file ends up owned by root and the pi backend crash-loops
 
 import logging
 import logging.handlers
+from pathlib import Path
 
 import pytest
 
@@ -166,6 +167,45 @@ class TestPerProcessLogFiles:
     def test_unknown_mode_falls_back_to_generic_name(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setattr(main_mod, "data_dir", lambda: tmp_path)
         assert main_mod._log_file_for_mode(None).name == "metixel.log"
+
+
+class TestLogRotation:
+    """Both per-process logs must be SIZE-ROTATED, never unbounded.
+
+    Regression guard for a silent gap: the rotation parameters previously had
+    no test at all.  Dropping ``maxBytes``/``backupCount`` from
+    ``_setup_logging`` would have left every test green — the handler is still
+    a ``RotatingFileHandler``, it simply never rotates — while the Pi's SD card
+    slowly filled.  A log that grows without bound beside the running app is
+    exactly the flash-wear failure mode core rule 9 forbids, so the bound is
+    asserted per process rather than assumed.
+    """
+
+    @pytest.mark.parametrize("mode", ["backend", "frontend"])
+    def test_both_logs_rotate_at_10_mib_keeping_5_backups(
+        self, clean_root_logger, tmp_path, monkeypatch, mode
+    ) -> None:
+        monkeypatch.setattr(main_mod, "data_dir", lambda: tmp_path)
+
+        main_mod._setup_logging(
+            tmp_path / "config.json", logging.INFO, file_logging=True, mode=mode
+        )
+
+        handlers = [
+            h for h in _root_file_handlers() if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert handlers, f"no rotating file handler attached for mode={mode!r}"
+        handler = handlers[0]
+
+        # 10 MiB per file, 5 backups → 60 MiB per process, bounded.
+        assert handler.maxBytes == 10_485_760
+        assert handler.backupCount == 5
+
+        # The handler must point at THIS process's own file: two processes
+        # rotating one shared path truncate each other's output, which is the
+        # bug the per-process split exists to prevent.
+        expected = main_mod._log_file_for_mode(mode).name
+        assert Path(handler.baseFilename).name == expected
 
 
 class TestSetupLoggingFileHandler:
