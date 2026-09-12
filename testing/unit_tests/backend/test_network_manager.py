@@ -173,3 +173,101 @@ class TestIsWifiConnected:
 
         monkeypatch.setattr(nm.subprocess, "run", boom)
         assert nm.is_wifi_connected() is False
+
+
+class TestFindRfkillBinary:
+    """The rfkill binary lives in /usr/sbin, which is NOT on the PATH of a
+    non-login shell — the original cause of a silent WiFi-enablement failure.
+    Well-known absolute paths must be probed before falling back to PATH."""
+
+    def test_prefers_usr_sbin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(nm.os, "access", lambda path, mode: path == "/usr/sbin/rfkill")
+        assert nm._find_rfkill_binary() == "/usr/sbin/rfkill"
+
+    def test_falls_back_to_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(nm.os, "access", lambda _p, _m: False)
+        monkeypatch.setattr(nm.shutil, "which", lambda _n: "/opt/bin/rfkill")
+        assert nm._find_rfkill_binary() == "/opt/bin/rfkill"
+
+    def test_none_when_absent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(nm.os, "access", lambda _p, _m: False)
+        monkeypatch.setattr(nm.shutil, "which", lambda _n: None)
+        assert nm._find_rfkill_binary() is None
+
+
+class TestSetWifiRadio:
+    """set_wifi_radio must report real failures (unlike is_wifi_radio_enabled,
+    which fails open) because callers persist a one-shot marker on success."""
+
+    def test_enable_runs_rfkill_then_radio_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, calls = _fake_run()
+        monkeypatch.setattr(nm, "_find_rfkill_binary", lambda: "/usr/sbin/rfkill")
+        monkeypatch.setattr(nm, "is_wifi_hardware_present", lambda: True)
+        monkeypatch.setattr("metixel.shared.subprocess.run_cmd", run)
+
+        assert nm.set_wifi_radio(True) is True
+
+        assert calls[0] == ["sudo", "-n", "/usr/sbin/rfkill", "unblock", "wifi"]
+        assert calls[1] == ["sudo", "-n", "/usr/sbin/rfkill", "unblock", "wlan"]
+        # The nmcli step is what actually matters and must come after rfkill.
+        assert calls[2] == ["sudo", "-n", "nmcli", "radio", "wifi", "on"]
+        assert calls[3] == ["sudo", "-n", "nmcli", "device", "set", "wlan0", "managed", "yes"]
+
+    def test_enable_survives_missing_rfkill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, calls = _fake_run()
+        monkeypatch.setattr(nm, "_find_rfkill_binary", lambda: None)
+        monkeypatch.setattr(nm, "is_wifi_hardware_present", lambda: True)
+        monkeypatch.setattr("metixel.shared.subprocess.run_cmd", run)
+
+        assert nm.set_wifi_radio(True) is True
+        # No rfkill calls, but nmcli still ran.
+        assert calls[0] == ["sudo", "-n", "nmcli", "radio", "wifi", "on"]
+
+    def test_enable_reports_nmcli_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, _ = _fake_run(returncode=1, stderr="Error: not authorised")
+        monkeypatch.setattr(nm, "_find_rfkill_binary", lambda: None)
+        monkeypatch.setattr(nm, "is_wifi_hardware_present", lambda: True)
+        monkeypatch.setattr("metixel.shared.subprocess.run_cmd", run)
+
+        assert nm.set_wifi_radio(True) is False
+
+    def test_enable_false_on_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(*_a: object, **_k: object) -> None:
+            raise FileNotFoundError("nmcli missing")
+
+        monkeypatch.setattr(nm, "_find_rfkill_binary", lambda: None)
+        monkeypatch.setattr("metixel.shared.subprocess.run_cmd", boom)
+        assert nm.set_wifi_radio(True) is False
+
+    def test_disable_is_single_nmcli_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, calls = _fake_run()
+        monkeypatch.setattr("metixel.shared.subprocess.run_cmd", run)
+
+        assert nm.set_wifi_radio(False) is True
+        # One call only — no rfkill, no managed re-adopt.
+        assert calls == [["sudo", "-n", "nmcli", "radio", "wifi", "off"]]
+
+    def test_disable_reports_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, _ = _fake_run(returncode=1, stderr="Error: not authorised")
+        monkeypatch.setattr("metixel.shared.subprocess.run_cmd", run)
+        assert nm.set_wifi_radio(False) is False
+
+
+class TestIsWifiRadioEnabled:
+    def test_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, _ = _fake_run(stdout="enabled\n")
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        assert nm.is_wifi_radio_enabled() is True
+
+    def test_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, _ = _fake_run(stdout="disabled\n")
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        assert nm.is_wifi_radio_enabled() is False
+
+    def test_fails_open_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def boom(*_a: object, **_k: object) -> None:
+            raise OSError("nmcli missing")
+
+        monkeypatch.setattr(nm.subprocess, "run", boom)
+        # Documented behaviour: a status check must not block the user.
+        assert nm.is_wifi_radio_enabled() is True

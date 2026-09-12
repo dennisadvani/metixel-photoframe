@@ -440,6 +440,7 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("messages.persistent", []),
     # network
     ("network.wifi_country", ""),
+    ("network.wifi_radio_first_run_done", False),
     ("network.ap_fallback_enabled", True),
     ("network.ap_timeout_seconds", 60),
     ("network.ap_grace_period_seconds", 300),

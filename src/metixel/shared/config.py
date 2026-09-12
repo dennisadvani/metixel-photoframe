@@ -175,6 +175,24 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "network": {
         "wifi_country": "",
+        # One-shot latch for the first-boot WiFi radio enablement.
+        #
+        # Written exactly ONCE per device, by the backend's first run (see
+        # `BackendDaemon._ensure_first_run_wifi_radio`).  It records that the
+        # first-run radio decision has been made — NOT that the radio is on, so
+        # a user who later disables WiFi is never overridden.
+        #
+        # This lives in config.json rather than tmpfs (runtime_state) on
+        # purpose: it is the ONLY thing preventing the app from re-enabling a
+        # radio the user deliberately turned off, so it must survive reboots
+        # and OTA updates.  A tmpfs marker would let every boot undo the user's
+        # choice.  It is written once ever, so the SD-card cost is nil.
+        #
+        # Note this is deliberately NOT the same flag as `system.first_run`
+        # (the welcome banner): that one is only ever cleared by clicking the
+        # dashboard banner's dismiss button, which is unreachable on a
+        # network-less first boot — exactly when this needs to fire.
+        "wifi_radio_first_run_done": False,
         "ap_fallback_enabled": True,
         "ap_timeout_seconds": 60,
         "ap_grace_period_seconds": 300,

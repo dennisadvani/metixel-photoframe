@@ -236,6 +236,12 @@ Metixel will show a PIN on screen and create a Wi-Fi hotspot called
 > go to `http://<ip>`. Configure Wi-Fi from the **Network** tab in the
 > dashboard.
 
+> **Wi-Fi disabled?** If the image was written with Wi-Fi switched off (Pi
+> Imager or pi-gen), Metixel turns the radio on automatically the first time the
+> backend starts, so the hotspot above still appears. After that first boot the
+> radio is yours — Metixel never changes it again. You can flip it at any time
+> with the **WiFi Radio** switch on the dashboard's **Network** page.
+
 For alternative Wi-Fi setup methods (SSH, raspi-config, etc.), see the
 **[User Guide](USER_GUIDE.md)**.
 

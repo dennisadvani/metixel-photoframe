@@ -128,13 +128,18 @@ def controller() -> NetworkController:
 
 def test_wifi_scan_finds_test_network(wifi_creds: dict[str, str]) -> None:
     """The configured test SSID must be visible in a live scan."""
-    # A disabled radio (e.g. pi-gen not enabling WiFi) makes every scan
-    # return empty — fail with a clear message rather than a confusing
-    # "SSID not found".  This is an OS-setup issue, not something the test
-    # should silently fix.
+    # A disabled radio makes every scan return empty.  Rather than a confusing
+    # "SSID not found", fail with a clear message.
+    #
+    # Note the backend deliberately does NOT re-enable the radio here: it is
+    # user-owned state, enabled once on first boot and then left alone (see
+    # BackendDaemon._ensure_first_run_wifi_radio).  On a test device that has
+    # already booted once, the radio being off means someone turned it off —
+    # so this is an environment problem, not something the test should fix.
     assert nm.is_wifi_radio_enabled(), (
         "Wi-Fi radio is disabled at the OS level (nmcli radio wifi). "
-        "Enable it via `sudo nmcli radio wifi on` or raspi-config."
+        "Turn it on from the web UI (Network -> WiFi Radio), or run "
+        "`sudo rfkill unblock wifi && sudo nmcli radio wifi on`."
     )
     networks = nm.scan_networks()
     ssids = {n["ssid"] for n in networks}

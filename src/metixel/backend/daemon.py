@@ -87,6 +87,7 @@ class BackendDaemon:
         )
 
         self._ensure_runtime_dependencies()
+        self._ensure_first_run_wifi_radio()
 
         self._start_optimisation_queue()
         self._start_sync_engine()
@@ -307,6 +308,76 @@ class BackendDaemon:
             t.start()
             self._threads.append(t)
             logger.info("Keyboard input handler started")
+
+    def _ensure_first_run_wifi_radio(self) -> None:
+        """Enable the WiFi radio once, on a device's very first boot.
+
+        WHY THIS EXISTS
+        --------------
+        A Raspberry Pi Imager image (or a pi-gen build) can arrive with WiFi
+        disabled at the OS level, which leaves an rfkill SOFT block on the wlan
+        phy and makes NetworkManager report wlan0 as "unmanaged".  The device
+        then boots with no network and — worse — the AP fallback cannot start
+        either, because hostapd needs a live radio.  The user is left with a
+        frame they cannot configure over the network at all.
+
+        WHY IT RUNS ONCE, AND ONLY ONCE
+        -------------------------------
+        `network.wifi_radio_first_run_done` is the latch.  This deliberately
+        runs exactly one time per device, so a user who turns WiFi off in the
+        web UI is never overridden — not on the next boot, and not by an OTA.
+        NetworkManager persists their `radio wifi off` choice itself, and once
+        the latch is set nothing here touches the radio again.
+
+        (This replaced a block in `scripts/reconcile.sh` that asserted the radio
+        ON on every update.  Convergent state and user-owned state are
+        contradictory; the radio is user-owned.)
+
+        WHY IT IS SYNCHRONOUS AND BEFORE THE NETWORK MONITOR
+        ---------------------------------------------------
+        It must complete before `_start_network_monitor()`, because the network
+        controller's first `tick()` may try to start the AP — which fails
+        without a live radio, and on a network-less device the web-UI toggle is
+        unreachable, so nothing could recover it.  It is a couple of subprocess
+        calls on the first boot and a single dict lookup afterwards.
+
+        Never raises: a failure is logged and retried on the next boot (the
+        latch is only set once the radio is confirmed on).
+        """
+        try:
+            if self._state.config.network.get("wifi_radio_first_run_done", False):
+                return
+
+            from metixel.backend.network_manager import (
+                is_wifi_hardware_present,
+                is_wifi_radio_enabled,
+                set_wifi_radio,
+            )
+
+            # No wlan0 (Pi 2, Ethernet-only, desktop dev): nothing to enable.
+            # The latch is deliberately NOT set here, so a device that later
+            # gains a WiFi interface is still covered.
+            if not is_wifi_hardware_present():
+                logger.debug("No WiFi hardware — skipping first-run radio enable")
+                return
+
+            if not is_wifi_radio_enabled():
+                logger.info("First run: WiFi radio is off — enabling it")
+                if not set_wifi_radio(True):
+                    # Do NOT set the latch: a transient nmcli failure should be
+                    # retried on the next boot rather than silently swallowed.
+                    logger.warning("First-run WiFi enable failed — will retry on next boot")
+                    return
+            else:
+                logger.debug("First run: WiFi radio already enabled")
+
+            # Exactly one write, ever, per device.  Recorded even when the radio
+            # was already on, because either way the first-run decision has now
+            # been made and the user owns the radio from here on.
+            self._state.update_config("network", {"wifi_radio_first_run_done": True})
+            logger.info("First-run WiFi radio check complete — radio now user-owned")
+        except Exception:
+            logger.warning("First-run WiFi radio check failed", exc_info=True)
 
     def _start_network_monitor(self) -> None:
         """Start the network monitor thread.

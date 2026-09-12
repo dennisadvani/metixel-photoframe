@@ -45,6 +45,11 @@ import {
                 _refreshNetworkAPStatus();
             });
 
+            // OS-level WiFi radio toggle
+            document.getElementById("cfg-wifi-radio")?.addEventListener("change", function () {
+                _setWifiRadio(this.checked);
+            });
+
             // AP fallback toggle
             document.getElementById("cfg-ap-enabled")?.addEventListener("change", async function () {
                 await apiPut("/config/network", { ap_fallback_enabled: this.checked });
@@ -106,13 +111,18 @@ import {
             return;
         }
 
+        // The radio toggle is rendered separately from the status blurb so it
+        // appears in every branch below (radio off, radio on, connected,
+        // not connected) without duplicating markup.  The AP-active flag
+        // disables it — you cannot turn the radio off mid-setup.
+        _renderRadioToggle(status);
+
         // ── WiFi radio is disabled at OS level ──────────────────────
         if (status.wifi_radio_enabled === false) {
             var wifiOffWarning =
                 '<div style="margin-top:6px;padding:6px 10px;background:rgba(240,160,48,0.12);border-radius:5px;font-size:0.8rem;color:#f0a030">'
-                + '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span> WiFi is disabled at the OS level.<br>'
-                + 'Enable it via <code>sudo raspi-config</code> → System Options → Wireless LAN, '
-                + 'or run <code>sudo nmcli radio wifi on</code>.</div>';
+                + '<span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span> '
+                + 'WiFi is disabled at the OS level. Use the switch above to turn it back on.</div>';
 
             if (status.connected && status.interface_type === "ethernet") {
                 // Ethernet works, but WiFi is off — note it
@@ -220,6 +230,77 @@ import {
                 + '<span style="font-size:0.82rem;color:var(--text-muted)">Use the captive portal or connect below</span>'
                 + '</div></div>';
         }
+    }
+
+    /**
+     * Render the OS-level WiFi radio switch.
+     *
+     * This is the only way to change the radio from the UI — the backend no
+     * longer re-asserts it on boot or on an update, so a user who turns WiFi
+     * off keeps it off.  The checkbox is disabled while the setup hotspot (AP)
+     * is active, because dropping the radio tears down hostapd and would strand
+     * someone mid-setup; the backend enforces the same rule with a 409.
+     */
+    function _renderRadioToggle(status) {
+        var row = document.getElementById("wifi-radio-row");
+        var box = document.getElementById("cfg-wifi-radio");
+        var note = document.getElementById("wifi-radio-note");
+        if (!row || !box) return;
+
+        // Hide entirely on a device with no WiFi hardware (e.g. Pi 2) —
+        // wifi_radio_enabled is absent from the status payload there.
+        if (status.wifi_radio_enabled === undefined || status.wifi_radio_enabled === null) {
+            row.style.display = "none";
+            return;
+        }
+        row.style.display = "";
+
+        box.checked = status.wifi_radio_enabled === true;
+
+        var apActive = status.ap_mode_active === true;
+        box.disabled = apActive;
+        if (note) {
+            note.textContent = apActive
+                ? "Unavailable while the setup hotspot is active"
+                : "Turn the WiFi radio on or off at the operating system level";
+            note.style.color = apActive ? "#f0a030" : "";
+        }
+    }
+
+    async function _setWifiRadio(enabled) {
+        var box = document.getElementById("cfg-wifi-radio");
+        if (!box) return;
+
+        if (!enabled) {
+            var ok = await confirmDialog(
+                "Turn off WiFi? The frame will lose its network connection and " +
+                "you may not be able to reach this dashboard until WiFi is " +
+                "turned back on at the device.",
+                { okText: "Turn off WiFi" }
+            );
+            if (!ok) {
+                box.checked = true;  // revert the optimistic UI flip
+                return;
+            }
+        }
+
+        box.disabled = true;
+        var result = await apiPost("/network/radio", { enabled: enabled });
+        box.disabled = false;
+
+        if (result && result.status === "ok") {
+            showToast(enabled ? "WiFi enabled" : "WiFi disabled", "info");
+        } else {
+            // apiPost returns null on any non-2xx, including the 409 the
+            // backend sends when the AP is active.
+            box.checked = !enabled;  // revert to the true state
+            showToast(
+                enabled ? "Failed to enable WiFi" : "Cannot turn off WiFi right now",
+                "error"
+            );
+        }
+        _refreshNetworkStatus();
+        _refreshNetworkAPStatus();
     }
 
     async function _refreshNetworkScan() {
