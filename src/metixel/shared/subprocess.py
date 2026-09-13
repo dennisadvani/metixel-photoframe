@@ -5,8 +5,7 @@
 Centralises the ``subprocess.run(capture_output, text, timeout)`` and the
 ``sudo`` + delayed-restart patterns that were previously hand-rolled (with
 divergent timeout handling and error shapes) across ``network_manager``,
-``dispmanx_backend``, ``state``, ``update_manager``, ``time.py``,
-``system.py`` and ``media.py``.
+``state``, ``update_manager``, ``time.py``, ``system.py`` and ``media.py``.
 """
 
 from __future__ import annotations

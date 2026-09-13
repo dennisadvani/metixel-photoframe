@@ -6,8 +6,8 @@ A comprehensive list of every feature in Metixel Photoframe, organized by subsys
 
 ## Display & Rendering
 
-- **Hardware-accelerated OpenGL ES 2.0** rendering via pi3d + Mesa EGL
-- **Automatic native resolution detection** — set `width: 0` in config, pi3d detects the display
+- **Hardware-accelerated OpenGL ES rendering** via PySide6 (Qt Quick/OpenGL widgets) under cage, with Mesa EGL
+- **Automatic native resolution detection** — set `width: 0` in config and the renderer takes the display's native mode
 - **Two-texture ping-pong GPU pipeline** — active slot displayed while inactive slot preloads the next image
 - **Smooth transitions** — crossfade, fade-through-black, or instant cut; configurable duration (default 2500ms)
 - **Configurable fit modes** — contain, cover, fill, with smart-cover for opposite-orientation images
@@ -52,11 +52,11 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 | Feature | Detail |
 |---|---|
-| **Playback** | VLC with hardware-accelerated H.264 decode on Pi 2/3 |
-| **Transcoding** | ffmpeg converts non-H.264 or oversized videos during OPTIMISE; CRF-based quality control |
+| **Playback** | mpv via the libmpv render API, embedded directly in the Qt scene — no subprocess, no separate window |
+| **Hardware decode** | Selected per board: `drm-copy` on Pi 4/5, `v4l2m2m` on Pi 2/3 (measured in GATE-1; see `docs/CHANGELOG.md`) |
+| **Transcoding** | ffmpeg converts non-H.265 or oversized videos during OPTIMISE; CRF-based quality control |
 | **Pre-extracted frames** | First frame (`.1.frame`) and last frame (`.2.frame`) JPEGs cached during OPTIMISE — frontend never runs ffmpeg |
-| **Non-blocking state machine** | VLC plays on top of the slideshow; frame swaps underneath are invisible |
-| **Last-frame swap** | VLC's window is covered by a cached last-frame JPEG at 80% of video duration for a seamless transition |
+| **In-scene compositing** | Video is one layer of the same scene as the slideshow, so overlays and transitions render above it — there is no window to cover |
 | **Guardrails** | Max duration filter, transcoding enabled/disabled toggle, playback enabled/disabled master switch |
 
 ---
@@ -150,7 +150,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | Tool | Purpose |
 |---|---|
 | **TkBackend** | tkinter-based software renderer for desktop development (no Pi hardware needed) |
-| **Pi3dBackend** | Production backend for Raspberry Pi (Mesa EGL via cage/XWayland) |
+| **PySide6Backend** | Production backend for Raspberry Pi (PySide6 + mpv under cage, Wayland-native) |
 | **WaylandBackend** | Future backend for Phase 2 (PyOpenGL + EGL on Wayland/DRM) |
 | **Backend auto-detection** | Factory in `metixel.display` selects the correct backend at runtime |
 | **pytest** | Test suite with coverage reporting |

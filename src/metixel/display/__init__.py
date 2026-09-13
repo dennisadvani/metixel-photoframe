@@ -99,17 +99,10 @@ def _backend_for_override(forced: str) -> DisplayBackend:
         from metixel.display.wayland_backend import WaylandBackend
 
         return WaylandBackend()
-    if forced in ("dispmanx", "pi3d"):
-        # Retired in 2.0.0. Constructing it raises with an explanation rather
-        # than silently selecting something else, so a stale override on a
-        # device is diagnosed instead of ignored.
-        from metixel.display.dispmanx_backend import Pi3dBackend
-
-        return Pi3dBackend()
 
     raise ValueError(
         f"Unknown METIXEL_DISPLAY_BACKEND value: {forced!r}. "
-        "Valid values: qt, tk, wayland, dispmanx (retired)."
+        "Valid values: qt, tk, wayland. (dispmanx/pi3d were retired in 2.0.0.)"
     )
 
 

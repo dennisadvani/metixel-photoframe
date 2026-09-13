@@ -13,17 +13,34 @@ python3-libcamera
 libopenblas0
 
 # Display / graphics stack
+# cage is the Wayland compositor; Qt runs as its client with
+# QT_QPA_PLATFORM=wayland pinned in metixel-cage.service.
 cage
-xwayland
 wlr-randr
 seatd
+# xwayland is retained for now. Nothing at runtime needs an X server any more —
+# mpv embeds via the libmpv render API and Qt uses the Wayland plugin — but it
+# is only removed once Wayland-native rendering is proven on hardware, because a
+# missing runtime package is unrecoverable on a wall-mounted frame.
+xwayland
+
+# Qt + mpv.  These MUST come from apt: the pip PySide6 wheel omits the GBM eglfs
+# plugin, and `ota_install.sh` uses --ignore-installed so a pip copy would shadow
+# the apt one under ~/.local and break the platform plugin lookup.
+# libqt6waylandclient6 provides the `wayland` QPA plugin that
+# QT_QPA_PLATFORM=wayland resolves to; without it Qt aborts on startup, which is
+# the intended loud failure rather than a silent xcb fallback.
+python3-pyside6.qtcore
+python3-pyside6.qtgui
+python3-pyside6.qtwidgets
+python3-pyside6.qtopenglwidgets
+libqt6waylandclient6
+python3-mpv
+mpv
+libmpv2
 
 # Media processing
 ffmpeg
-vlc-bin
-vlc-plugin-base
-vlc-plugin-video-output
-vlc-data
 cpulimit
 
 # Input / CEC / DDC

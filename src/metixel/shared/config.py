@@ -58,7 +58,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "slideshow": {
         "image_duration_seconds": 15,
         "video_playback_enabled": True,  # Legacy — prefer video.playback_enabled
-        "video_player_backend": "auto",  # Legacy — prefer video.player_backend
         "video_max_duration_seconds": 0,  # Legacy — prefer video.max_duration_seconds
         "transition_duration_ms": 2500,
         "transition_style": "crossfade",  # crossfade, fade_through_black, none
@@ -74,7 +73,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "video": {
         "playback_enabled": True,
-        "player_backend": "auto",  # auto, vlc
         "max_duration_seconds": 0,  # 0 = unlimited
         "transcoding_enabled": True,
         "transcoding_profile": "",  # pi2, pi3, pi4, pi5, custom — empty = auto-detect
@@ -240,8 +238,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "frame_extract_last": 120,  # last-frame JPEG extraction (decodes final 1s)
         "image_process": 120,  # image optimisation subprocess
         "transcode": 7200,  # video transcode (2 hours)
-        # ── Playback ─────────────────────────────────────────────────
-        "vlc_start": 30,  # VLC playback confirmation
     },
 }
 
@@ -308,9 +304,14 @@ class Config:
         """Video settings with backward-compatible defaults.
 
         If the ``video`` section is missing from the config (e.g. an older
-        config file), falls back to legacy keys in the ``slideshow`` section
-        for ``playback_enabled`` and ``max_duration_seconds``, then returns
-        the full merged dict.
+        config file), falls back to the legacy ``video_playback_enabled`` and
+        ``video_max_duration_seconds`` keys in the ``slideshow`` section, then
+        returns the full merged dict.
+
+        The legacy ``player_backend`` key is deliberately NOT carried across.
+        2.0.0 has exactly one player (mpv), so there is nothing to choose; a
+        resurrected key would be inert config a user could set and believe had
+        an effect.
         """
         v = self._data.get("video", {})
         s = self._data.get("slideshow", {})
@@ -318,7 +319,6 @@ class Config:
         if not v:
             v = {
                 "playback_enabled": s.get("video_playback_enabled", True),
-                "player_backend": s.get("video_player_backend", "auto"),
                 "max_duration_seconds": s.get("video_max_duration_seconds", 0),
                 "transcoding_enabled": True,
                 "transcoding_profile": "",

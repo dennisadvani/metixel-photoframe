@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Platform hardware adapters for the display backend.
 
-Extracts three platform-specific concerns out of ``dispmanx_backend.py``
+Extracts three platform-specific concerns out of the display backends
 so they are independently testable and their mutable state is thread-safe:
 
 * :class:`GpuInfo` — GPU memory introspection (``vcgencmd`` + DRM debugfs)
@@ -132,10 +132,10 @@ class GpuInfo:
     def flush() -> None:
         """Block until the GPU command queue drains (``glFinish``).
 
-        On VideoCore IV (Pi 2/3), pi3d's ``free_after_load=True`` can
-        release the CPU numpy array before the DMA upload completes,
-        causing black textures.  Uses ctypes to call ``glFinish`` from the
-        system GLESv2 library — no PyOpenGL dependency.
+        On VideoCore IV (Pi 2/3) a texture upload can still be in flight when
+        the CPU-side numpy array is released, which yields black textures.
+        Uses ctypes to call ``glFinish`` from the system GLESv2 library — no
+        PyOpenGL dependency.
         """
         try:
             from ctypes import cdll, util

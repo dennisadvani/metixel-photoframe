@@ -56,7 +56,7 @@ class FrontendRenderer:
     """Main frontend process — owns the GPU context and render loop.
 
     Responsibilities:
-    - Initialize the display backend (pi3d, wayland, or dev)
+    - Initialize the display backend (qt, wayland, or dev)
     - Run the render loop at a fixed tick rate
     - Drive the presentation engine (slideshow + transitions)
     - Render widget overlay layer
@@ -193,7 +193,7 @@ class FrontendRenderer:
         display_cfg = self._config.display
 
         # ── Initialize display backend immediately ───────────────────
-        # pi3d auto-detects native resolution when width=0 in config.
+        # The backend takes the display's native resolution when width=0.
         if self._backend is None:
             self._backend = detect_backend()
         self._backend.create(
@@ -579,7 +579,7 @@ class FrontendRenderer:
         # mode canvas composites in paint order, so there is no depth buffer for
         # the slideshow to write into and occlude the overlay with.
         if self._overlay:
-            # Pass video state so message timers pause during VLC playback
+            # Pass video state so message timers pause during video playback
             video_playing = (
                 self._presentation._video_state != 0  # _VIDEO_IDLE
                 if hasattr(self._presentation, "_video_state")

@@ -30,7 +30,6 @@ version = {attr = "metixel.__version__"}
 
 [project.optional-dependencies]
 phase1 = [
-    "pi3d>=2.47",
     "Pillow>=10.0",
     "pillow-heif>=0.16",
     "numpy>=1.24",
@@ -74,7 +73,7 @@ where = ["src"]
 include = ["metixel*"]
 
 [tool.setuptools.package-data]
-metixel = ["display/shaders/*.vs", "display/shaders/*.fs", "py.typed"]
+metixel = ["py.typed"]
 
 [tool.ruff]
 line-length = 100
@@ -92,8 +91,6 @@ disallow_untyped_defs = false
 # Third-party libraries without type stubs (Pi-only or untyped).
 [[tool.mypy.overrides]]
 module = [
-    "pi3d",
-    "pi3d.*",
     "evdev",
     # PySide6 is installed from apt on the Pi, never from pip, and is
     # deliberately absent from CI.  The Qt backend imports it lazily inside

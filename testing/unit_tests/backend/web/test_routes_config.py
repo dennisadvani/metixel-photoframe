@@ -132,7 +132,7 @@ class TestGetConfigSection:
         resp = client.get("/api/config/timeouts")
         assert resp.status_code == 200
         data = json.loads(resp.data)
-        assert data["vlc_start"] == 30
+        assert data["hw_codec_detect"] == 30
         assert data["transcode"] == 7200
         assert data["ffprobe_probe"] == 120
 

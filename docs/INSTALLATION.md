@@ -213,7 +213,7 @@ After answering, press Enter to begin. The installer runs for 30–60 minutes:
 |---|---|
 | 1 | Installs `git` (needed to obtain a checkout) |
 | 2 | Resolves the chosen channel to a tag/commit and clones it |
-| 3 | Hands off to `scripts/update.sh`, which installs system packages (cage, XWayland, Mesa, ffmpeg, VLC, Samba, hostapd, dnsmasq) and Python packages, stages the release, swaps `live`, then health-checks and rolls back on failure |
+| 3 | Hands off to `scripts/update.sh`, which installs system packages (cage, XWayland, Mesa, ffmpeg, PySide6, mpv, Samba, hostapd, dnsmasq) and Python packages, stages the release, swaps `live`, then health-checks and rolls back on failure |
 | 4 | Reconciles host configuration via `scripts/reconcile.sh` — the data tree, systemd units, I²C/ddcutil, WiFi power saving, port 80→8080, Samba, captive portal and linger |
 | 5 | Applies boot configuration via `scripts/configure_boot.sh` (KMS overlay, `gpu_mem`) |
 

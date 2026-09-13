@@ -25,10 +25,10 @@ fi
 
 # Refuse to measure on a busy system: Metixel running in the background was
 # exactly what invalidated the first attempt.
-busy=$(ps -eo comm | grep -cE '^(cage|metixel|vlc)$' || true)
+busy=$(ps -eo comm | grep -cE '^(cage|metixel|mpv|Xwayland)$' || true)
 if [ "$busy" -gt 0 ]; then
     echo "WARNING: Metixel processes are running — numbers will be inflated:"
-    ps -eo comm | grep -E '^(cage|metixel|vlc)$' | sed 's/^/    /'
+    ps -eo comm | grep -E '^(cage|metixel|mpv|Xwayland)$' | sed 's/^/    /'
     echo
 fi
 

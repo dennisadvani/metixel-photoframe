@@ -220,13 +220,29 @@ def get_system_info():
     # -- Python version ------------------------------------------------------
     info["python_version"] = _sys.version.split()[0]
 
-    # -- pi3d version --------------------------------------------------------
+    # -- Playback stack ------------------------------------------------------
+    # Replaces the retired pi3d probe. The dashboard's System card shows this, so
+    # it reports what actually renders the frame now: mpv (with libmpv, since the
+    # render API is what embeds it) and the Qt binding underneath it.
     try:
-        import pi3d
+        import mpv as _mpv
 
-        info["pi3d_version"] = getattr(pi3d, "__version__", "installed")
+        info["playback_lib"] = f"mpv {getattr(_mpv, '__version__', 'installed')}"
     except ImportError:
-        info["pi3d_version"] = "not installed"
+        info["playback_lib"] = "mpv not installed"
+    try:
+        from PySide6 import __version__ as _qt_version
+
+        info["qt_version"] = f"PySide6 {_qt_version}"
+    except ImportError:
+        info["qt_version"] = "PySide6 not installed"
+
+    # Which decoder mpv will use on this board.  Reported because a silent
+    # fallback to software decode is otherwise invisible — the frame just runs
+    # hot and stutters, which reads as "slow hardware" rather than "wrong hwdec".
+    from metixel.shared.platform import detect_pi_model, hwdec_for_model
+
+    info["hwdec"] = hwdec_for_model(detect_pi_model())
 
     # -- GPU memory ----------------------------------------------------------
     info["gpu_memory"] = read_vcgencmd_mem_str("gpu", fallback="unavailable")

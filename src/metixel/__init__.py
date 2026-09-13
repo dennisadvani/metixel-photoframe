@@ -3,7 +3,7 @@
 """
 Metixel Photoframe — Custom Digital Photo Frame OS and Application Suite.
 
-Raspberry Pi 2/3/4/5 (Mesa EGL via pi3d + cage/XWayland)
+Raspberry Pi 2/3/4/5 (PySide6 + mpv under cage, Wayland-native)
 
 """
 

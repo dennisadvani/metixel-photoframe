@@ -17,30 +17,35 @@
 
 ### 1.1 The Graphics Pipeline
 
-All Pi models use the same `Pi3dBackend`. The underlying driver is determined by the OS:
+All Pi models use the same `PySide6Backend`. The underlying driver is determined by the OS:
 
 | Concern | Trixie + KMS (Pi 2/3/Zero 2 W) | Pi 4/5 + KMS |
 |---|---|---|
 | **GPU** | VideoCore IV | VideoCore VI / VII |
 | **Kernel Driver** | Mainline Mesa + vc4 KMS/DRM | Mainline Mesa + v3d/vc4 KMS/DRM |
 | **Display API** | KMS/DRM via Wayland compositor (cage) | KMS/DRM via Wayland compositor (cage) |
-| **X11 Surface** | XWayland shim — pi3d gets an X11 window | XWayland shim — pi3d gets an X11 window |
-| **RAM Overhead** | ~120MB (app + cage + XWayland) | ~120MB (app + cage + XWayland) |
+| **Qt platform** | `QT_QPA_PLATFORM=wayland` (pinned in the unit) | `QT_QPA_PLATFORM=wayland` (pinned in the unit) |
+| **RAM Overhead** | ~150MB (app + cage) | ~150MB (app + cage) |
 | **OpenGL** | GLES 2.0 via Mesa | GLES 2.0/3.0 via Mesa |
 
 **Critical constraint**: Raspberry Pi OS **Bullseye** (Debian 11) was the last release supporting ARMv6 (Pi 1, original Pi Zero). Metixel now targets **Trixie** (Debian 13) as the baseline — Pi Zero 2 W and Pi 2+ are the minimum.
 
+**Why the platform is pinned, not auto-detected.** Qt selects a QPA platform plugin at startup, and with `QT_QPA_PLATFORM` unset it will silently fall back to `xcb` when it cannot find a native plugin. Under cage there is no X server, so `xcb` fails late and the symptom is a black screen with no obvious cause. Pinning `wayland` in `metixel-cage.service` turns a misconfiguration into a loud startup abort instead.
+
 ### 1.2 Application-Layer Abstraction
 
-The application does NOT import pi3d directly. It imports from a display backend interface:
+The application does NOT import PySide6 or mpv in presentation or widget code. It imports from a display backend interface:
 
 ```
 src/metixel/
 ├── display/
 │   ├── __init__.py          # Factory: auto-detect hardware, return correct backend
 │   ├── backend.py           # Abstract base class: DisplayBackend
-│   ├── hardware.py          # GpuInfo / WlrOutput / DisplayPower adapters (extracted from dispmanx_backend)
-│   ├── dispmanx_backend.py  # Phase 1: wraps pi3d, uses Mesa EGL via cage/XWayland
+│   ├── hardware.py          # GpuInfo / WlrOutput / DisplayPower adapters
+│   ├── qt_backend.py        # Production: PySide6 + mpv under cage (Wayland-native)
+│   ├── qt_canvas.py         # QOpenGLWidget canvas + boot screen
+│   ├── qt_mpv.py            # libmpv render-API widget (embedded video)
+│   ├── overlay_element.py   # Typed compositing contract (rect / image / text)
 │   ├── wayland_backend.py   # Phase 2: PyOpenGL + EGL on Wayland/DRM (future)
 │   └── tk_backend.py        # Desktop dev: tkinter-based software renderer
 ```
@@ -49,33 +54,34 @@ src/metixel/
 
 | Model | CPU | RAM | Image | Graphics Path | Display Surface |
 |---|---|---|---|---|---|
-| **Pi 5** | ARMv8 | 2–8GB | 64-bit `.img` | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
-| **Pi 4** | ARMv8 | 1–8GB | 64-bit `.img` | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
-| **Pi 3** | ARMv8 | 1GB | 64-bit `.img` | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
-| **Pi 2** | ARMv7 | 1GB | 32-bit manual install | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
-| **Pi Zero 2 W** | ARMv8 | 512MB | 32-bit manual install | Mesa → KMS/DRM → cage/XWayland → pi3d | Wayland + XWayland shim |
-| **Radxa Zero 3W** | ARMv8 | 1–4GB | Debian/Ubuntu | Mesa → KMS/DRM → cage/XWayland → pi3d or PyOpenGL | Wayland + XWayland shim |
+| **Pi 5** | ARMv8 | 2–8GB | 64-bit `.img` | Mesa → KMS/DRM → cage → Qt (wayland) + mpv | Wayland-native |
+| **Pi 4** | ARMv8 | 1–8GB | 64-bit `.img` | Mesa → KMS/DRM → cage → Qt (wayland) + mpv | Wayland-native |
+| **Pi 3** | ARMv8 | 1GB | 64-bit `.img` | Mesa → KMS/DRM → cage → Qt (wayland) + mpv | Wayland-native |
+| **Pi 2** | ARMv7 | 1GB | 32-bit manual install | Mesa → KMS/DRM → cage → Qt (wayland) + mpv | Wayland-native |
+| **Pi Zero 2 W** | ARMv8 | 512MB | 32-bit manual install | Mesa → KMS/DRM → cage → Qt (wayland) + mpv | Wayland-native |
+| **Radxa Zero 3W** | ARMv8 | 1–4GB | Debian/Ubuntu | Mesa → KMS/DRM → cage → Qt (wayland) + mpv | Wayland-native |
 
-**Key insight:** On Trixie, pi3d needs an X11 surface — but you don't need the full `xorg` server. Just `xwayland` (~10MB) plus a minimal Wayland compositor like `cage`. The compositor owns the display via DRM/KMS, XWayland provides the X11 compatibility layer pi3d needs, and pi3d renders via Mesa EGL.
+**Key insight:** the frontend is a Wayland client of `cage`, which owns the display via DRM/KMS. Nothing at runtime needs an X server. `xwayland` is still installed as a safety net, but the intended path is Wayland-native: Qt uses the `wayland` QPA plugin and mpv embeds through the libmpv render API rather than creating its own window. XWayland removal is deferred until Wayland-native rendering is proven on hardware, because a missing runtime package on a wall-mounted frame is unrecoverable.
 
 **Launch commands:**
 
 ```bash
 # All Trixie-based platforms (Pi Zero 2 W / Pi 2 / Pi 3 / Pi 4 / Pi 5):
 cage -- python3 -m metixel --mode frontend --config etc/config.json
-# cage starts a Wayland session + XWayland — pi3d gets its X11 surface
+# QT_QPA_PLATFORM=wayland is pinned in metixel-cage.service — do not rely on auto-detection
 ```
 
-The application code and `Pi3dBackend` are identical across all platforms. Only the launch wrapper changes.
+The application code and `PySide6Backend` are identical across all platforms. Only the launch wrapper changes.
 | **GPU Memory** | `dtoverlay=vc4-kms-v3d` + `gpu_mem=128` | `dtoverlay=vc4-kms-v3d` + `gpu_mem=128` |
 | **Kernel** | 6.6 LTS (Trixie default) | 6.6 LTS (Trixie default) |
 | **Init System** | systemd (stripped) | systemd or Busybox init (Buildroot) |
 
-### 1.4 Core Dependencies (Python 3.9+)
+### 1.4 Core Dependencies (Python 3.11+)
 
 | Package | Purpose | Phase 1 | Phase 2 |
 |---|---|---|---|
-| `pi3d` | OpenGL ES rendering (via Mesa EGL on Trixie) | Yes | No |
+| `PySide6` (apt) | OpenGL rendering, windowing and the event loop | Yes | No |
+| `python-mpv` + `libmpv` (apt) | Video playback via the libmpv render API | Yes | No |
 | `Pillow` | Image loading, EXIF parsing, resizing | Yes | Yes |
 | `numpy` | Array operations for image processing | Yes | Yes |
 | `Flask` | Lightweight HTTP server for web dashboard | Yes | Yes |
@@ -84,6 +90,8 @@ The application code and `Pi3dBackend` are identical across all platforms. Only 
 | `requests` | HTTP client for Immich API sync | Yes | Yes |
 | `python-cec` | HDMI-CEC control | Yes | Yes |
 | `lirc` | IR remote control | Yes | Yes |
+
+> PySide6 and the mpv stack are installed **from apt**, not pip — the pip PySide6 wheel omits the GBM eglfs plugin, and `ota_install.sh` uses `--ignore-installed`, so a pip copy would shadow the apt one under `~/.local` and break the platform plugin lookup. `requirements-pip.txt` is therefore deliberately Qt-free.
 
 ---
 
@@ -108,10 +116,12 @@ graph TB
         end
 
         subgraph "Frontend Renderer (Python, separate process)"
-            ENGINE[Presentation Engine<br/>Slideshow + Transitions]
+            ENGINE[Presenter<br/>Slideshow + Transitions]
             WIDGETS[Widget Layer<br/>Clock/Weather/Calendar]
+            OVERLAY[Overlay Manager<br/>boot / messages / widgets]
+            FRAMING[Framing Engine<br/>metixel.framing]
             DISPLAY[Display Backend<br/>Abstract Interface]
-            DBMX[DispmanxBackend<br/>pi3d — Phase 1]
+            QT[PySide6Backend<br/>Qt + mpv — Phase 1]
             WL[WaylandBackend<br/>PyOpenGL — Phase 2]
         end
 
@@ -256,34 +266,43 @@ metixel-photoframe/                           # Repository root
 │       │
 │       ├── frontend/                   # Display renderer
 │       │   ├── __init__.py
-│       │   ├── renderer.py             # Main render loop, frame timing
+│       │   ├── renderer.py             # Main render loop, frame timing, heartbeat
 │       │   ├── presentation/
 │       │   │   ├── __init__.py
-│       │   │   ├── engine.py           # Facade: PresentationEngine (mixins)
-│       │   │   ├── base.py             # BaseEngineState — shared engine state
-│       │   │   ├── queue.py            # Playlist controller mixin
-│       │   │   ├── scheduler.py        # Slideshow scheduler mixin
-│       │   │   ├── rendering.py        # Frame rendering + crossfade mixin
-│       │   │   ├── preload.py          # Texture preload mixin
-│       │   │   ├── video_state.py      # Video state machine mixin
-│       │   │   ├── transitions.py      # Fade, slide, zoom, Ken Burns math
-│       │   │   ├── layout.py           # Fit-to-screen, virtual matte, smart crop
-│       │   │   ├── video_player.py     # Facade: VlcVideoPlayer re-export
-│       │   │   └── vlc_player.py       # VLC subprocess video playback
-│       │   ├── widgets/
-│       │   │   ├── __init__.py
-│       │   │   ├── base.py             # Widget ABC
-│       │   │   ├── clock.py            # Digital & analog clock widget
-│       │   │   ├── weather.py          # Weather forecast widget
-│       │   │   └── calendar.py         # Calendar events widget
+│       │   │   ├── presenter.py        # Presenter: slideshow, transitions, video state
+│       │   │   ├── image_cache.py      # Bounded LRU + preload worker (bytes only)
+│       │   │   └── transitions.py      # Fade, slide, zoom, Ken Burns math
+│       │   └── overlay/
+│       │       ├── __init__.py
+│       │       ├── manager.py          # OverlayManager — composes layer elements
+│       │       ├── layer.py            # OverlayLayer base
+│       │       ├── boot_layer.py       # Animated Metixel boot screen
+│       │       └── message_layer.py    # Transient toast/notice messages
+│       │   └── widgets/
+│       │       ├── __init__.py
+│       │       ├── base.py             # Widget ABC
+│       │       └── clock.py            # Digital & analog clock widget
+│       │
+│       ├── framing/                    # Vendored framing engine (pure geometry)
+│       │   ├── __init__.py
+│       │   ├── __main__.py             # CLI for visualisation
+│       │   ├── framing_engine.py       # mm-in, rectangles-out geometry core
+│       │   ├── framing_templates.py    # Named mat/moulding style presets
+│       │   ├── resolve.py              # screen_for() / MediaSize / resolve()
+│       │   ├── layout.py               # LayoutEngine + RenderPlan dataclass
+│       │   └── visualize_framing.py    # Optional matplotlib preview (lazy import)
 │       │
 │       ├── display/                    # Display backend abstraction
 │       │   ├── __init__.py             # detect_backend() → returns correct Backend
 │       │   ├── backend.py              # DisplayBackend ABC
+│       │   ├── qt_backend.py           # PySide6Backend — production Qt + mpv
+│       │   ├── qt_canvas.py            # QOpenGLWidget canvas
+│       │   ├── qt_mpv.py               # libmpv render-API widget
+│       │   ├── overlay_element.py      # OverlayElement dataclass (compositing contract)
 │       │   ├── hardware.py             # GpuInfo / WlrOutput / DisplayPower adapters
-│       │   ├── dispmanx_backend.py     # Phase 1: pi3d wrapper
-│       │   ├── wayland_backend.py      # Phase 2: PyOpenGL on DRM/Wayland (future)
-│       │   └── tk_backend.py           # Desktop dev: tkinter-based
+│       │   ├── cursor_hider.py         # Hides the cage cursor via virtual absolute mouse
+│       │   ├── wayland_backend.py      # Phase 2: PyOpenGL + EGL (future)
+│       │   └── tk_backend.py           # Desktop dev: tkinter software renderer
 │       │
 │       └── shared/                     # Shared types and utilities
 │           ├── __init__.py
@@ -302,14 +321,14 @@ metixel-photoframe/                           # Repository root
 │           └── retry.py                # Retry with exponential backoff
 │
 ├── etc/                               # Configuration files
-│   ├── config.json                    # Main runtime configuration
-│   └── logging.conf                   # Python logging configuration
+│   └── config.json                    # Main runtime configuration
 │
 ├── scripts/                           # Build & deployment scripts
-│   ├── reconcile.sh                  # Idempotent host-config convergence
+│   ├── reconcile.sh                  # Idempotent host-config convergence (single owner)
+│   ├── update.sh                     # Atomic Blue/Green updater — the ONLY install entry point
+│   ├── bootstrap.sh                  # Thin downloadable installer → update.sh
+│   ├── ota_install.sh                # System + pip install steps (strict)
 │   ├── quiet_boot.sh                 # Splash screen + silent boot config
-│   ├── setup_ap.sh                   # Wi-Fi captive portal setup
-│   ├── setup_trixie.sh              # Install deps for Trixie Lite (cage + pi3d)
 │   └── run_trixie.sh                # Launch via cage (Wayland + XWayland) on Trixie
 │
 ├── systemd/                           # systemd unit files
@@ -422,20 +441,21 @@ Next frame reflects change
 - Plymouth splash screen with metixel logo (optional)
 - Debug mode: GPIO pin 17 HIGH or `/boot/debug` file → verbose boot
 
-#### Step 1.2: Display Backend (pi3d via cage/XWayland)
-- `dispmanx_backend.py` wrapping pi3d — pi3d auto-detects Mesa EGL on Trixie
+#### Step 1.2: Display Backend (PySide6 + mpv via cage, Wayland-native)
+- `qt_backend.py` implementing `PySide6Backend`; Qt selects the `wayland` QPA plugin
+  (pinned via `QT_QPA_PLATFORM` in `metixel-cage.service` — never left to auto-detect)
 - Hardware introspection (GPU memory, wlr-randr output, display power)
   lives in `display/hardware.py` (`GpuInfo` / `WlrOutput` / `DisplayPower`)
-- Memory: `Texture(free_after_load=True)`, `GL_RGB565` format, max 3 GPU textures
+- Video is embedded with the libmpv render API (`qt_mpv.py`) — no subprocess, no window
 - Verify 30 FPS on Pi 3 and Pi 5
-- Launch via `cage --` for Wayland + XWayland surface
+- Launch via `cage --` (the compositor owns the display via DRM/KMS)
 
-#### Step 1.3: Presentation Engine
+#### Step 1.3: Presentation Layer
 - Slideshow queue with configurable display duration
-- Transition effects using pi3d blend shaders
-- Ken Burns effect via texture coordinate animation
-- Virtual matte board and fit-to-screen layout
-- Video playback via ffmpeg → numpy → `Texture.update_ndarray()`
+- Transitions composited in-scene (crossfade, fade-through-black, cut)
+- Ken Burns effect via artwork source-rectangle animation
+- Virtual mat / moulding geometry from `metixel.framing` (`RenderPlan`)
+- Video playback via the embedded mpv render context
 
 #### Step 1.4: Backend Daemon
 - StateManager with atomic JSON writes
@@ -608,14 +628,15 @@ alongside its ``(mtime_ns, size)`` fingerprint and a ``failure_reason``.
 Images reach the screen through a double-buffered texture-slot swap, so the
 next slide is already on the GPU when the crossfade begins:
 
-1. **Preload** — ``TexturePreloader`` (background thread) decodes the next
-   image from disk into a numpy array.
-2. **Upload** — on the render thread, ``load_texture()`` copies the array into
-   the inactive GPU slot, then ``tex.load_opengl()`` forces the GL upload and
-   the backend ``flush_gpu()`` (``glFinish``) ensures the DMA transfer completes
-   before ``free_after_load`` releases the CPU buffer.
-3. **Crossfade** — at the slide boundary, ``FrameRenderer`` blends the two
-   slots in a single GPU pass (crossfade shader).
+1. **Preload** — ``ImageCache`` (single background thread, bounded LRU) decodes
+   the next image from disk. The worker produces **raw bytes only**: Qt objects
+   must not be constructed off the GUI thread.
+2. **Upload** — on the GUI thread, ``load_image()`` uploads those bytes into the
+   inactive texture slot. ``load_image`` accepts ``Path | np.ndarray | bytes``
+   precisely so the worker can hand over a thread-safe payload.
+3. **Crossfade** — at the slide boundary the presenter issues two ``present()``
+   calls at complementary alpha from ``TransitionEngine.get_alpha()``, so the
+   blend is a property of the render plan rather than a separate shader path.
 4. **Swap** — the slots swap; the old active slot becomes the preload target
    for the next image.
 
@@ -623,64 +644,77 @@ At most three textures are GPU-resident at any time (current, next, blend).
 
 ### Video Playback Architecture (Frontend)
 
-Video playback in the presentation engine follows a **guaranteed-no-black-screen** order.
-The last frame is fully loaded and verified on the GPU **before** VLC is launched.  VLC
-renders on top via its own X11 window, so the GPU upload is invisible.
+Video is rendered **into the same scene** as the slideshow, via the libmpv render
+API (``vo=libmpv``). mpv hands each decoded frame to a callback that draws into the
+Qt canvas's framebuffer object, so video is simply another layer — there is no
+second window, and therefore nothing to "cover".
+
+That removes the entire class of bug the previous design existed to work around:
+with no window-vs-underlay race there is no last-frame swap timer and no window
+ordering to get right. The last frame is still pre-extracted during OPTIMISE and
+used as the fallback if mpv fails to start.
 
 ```
-┌─ ① First frame already in active texture slot (normal preload → advance flow)
+┌─ ① First frame already in the artwork slot (normal preload → advance flow)
 
-│ ② LOAD last frame from disk → force GL upload → glFinish → verify GL texture
-│    If ANY step fails → skip video, advance.  No VLC launched = no black screen.
+│ ② Load the pre-extracted last frame if present — used as the fallback
 │
-│ ③ Draw first frame to BOTH pi3d buffers (overwrites GL state from step ②)
+│ ③ Create/attach the mpv render context, then play()
+│    hwdec is chosen per board (see the table below)
 │
-│ ④ Launch VLC subprocess with RC TCP interface (--extraintf rc --rc-host)
-│    VLC creates its own X11 window on top of the pi3d display.
+│ ④ mpv renders frames into the canvas FBO; overlays draw on top in z-order
 │
-│ ⑤ WAITING state: poll VLC's RC socket (is_playing) until VLC confirms
-│    playback has started.  No timers — real signal from VLC.
-│
-│ ⑥ PLAYING state: swap timer = now + (duration × 0.50)
-│
-│ ⑦ SWAP at 50 %: move preloaded last-frame texture into active slot under
-│    VLC.  No I/O, no GL work — just a pointer swap.  VLC covers everything.
-│
-│ ⑧ VLC exits → last frame revealed → crossfade to next slide
+│ ⑤ On end-of-file, advance to the next slide normally
 └───────────────────────────────────────────────────────────────
 
 Key invariants
-    • pi3d Texture objects do NOT create OpenGL textures eagerly.
-      ``load_texture(path)`` only loads the JPEG into a numpy array
-      (``disk_loaded=True, opengl_loaded=False``).  You MUST call
-      ``tex.load_opengl()`` to force the GPU upload, followed by
-      a backend ``flush_gpu()`` (``glFinish`` via ctypes) to ensure
-      the DMA transfer completes before pi3d's ``free_after_load``
-      releases the CPU buffer.  Without the flush, VideoCore IV DMA
-      can read freed memory → black texture.
+    • ``vo=libmpv`` is mandatory. Any other ``vo`` makes mpv create its own
+      window, which under a Wayland kiosk compositor means video appears
+      independently of the slideshow scene and overlays stop working.
 
-    • Never pass ``free_after_load=False`` to pi3d — it blocks eager
-      GL texture creation entirely (``_tex`` stays ``c_ulong(0)``).
+    • ``fbo`` must be the canvas's ``defaultFramebufferObject()``, **not** ``0``.
+      Qt renders into its own FBO; passing 0 draws to the window's default
+      framebuffer and the picture is invisible or misplaced.
 
-    • The VLC RC interface uses TCP (``--rc-host localhost:<port>``),
-      NOT Unix sockets.  VLC 3.x LUA CLI ignores ``--rc-unix``.
+    • ``ensure_gl_init()`` must run **before** ``play()``. mpv resolves its GL
+      entry points against a current context.
 
-    • ``_load_texture_for_slot`` loads the new texture BEFORE unloading
-      the old one.  If the load fails, the slot keeps its previous
-      texture rather than going black.
+    • ``locale.setlocale(LC_NUMERIC, "C")`` must be set **after** ``QApplication``
+      is constructed. Qt resets the C locale on construction, and mpv parses
+      numeric options with ``strtod`` — a comma-decimal locale silently
+      corrupts values such as ``--speed``.
+
+    • Do NOT swap the canvas and mpv widget with ``QStackedWidget``: hiding the
+      mpv widget tears down its GL context. Use sibling widgets in a plain
+      ``QStackedLayout`` container instead.
+
+    • Overlay elements paint in ascending ``z`` order (largest last).
+
+Hardware decode (measured per board — see ``hwdec_for_model`` in ``shared/platform.py``)
+    GATE-1 measured genuine HEVC and H.264 clips on idle hardware. The correct
+    ``hwdec`` value is *different* on each board, and ``auto`` picks wrong on both:
+
+    ``drm-copy``   hardware on Pi 4/5; on Pi 3 it silently falls back to software
+    ``v4l2m2m``    hardware on Pi 2/3 (``/dev/video10``); no device on Pi 5
+    ``auto``       wrong on both — on Pi 3 it was *worse* than ``--hwdec=no``
+
+    This is why the value is selected per board rather than left at ``auto``.
+    Pi 5 has no working H.264 decoder at all, which is why ``PROFILES["pi5"]``
+    transcodes to H.265: it is the only codec with a working hardware path there.
 
 GPU memory on Pi 2/3
-    Pi 2/3 use a STATIC GPU memory partition (``gpu_mem`` in config.txt).
-    Set ``gpu_mem=128`` for all Pi models — Pi 2/3 need the static
-    partition for the framebuffer (~8 MB at 1080p) plus pi3d textures
-    (~4 MB each RGB565).  Pi 4/5 use CMA dynamic allocation and ignore
-    ``gpu_mem`` entirely, so a single value keeps the base image portable.
+    Pi 2/3 use a STATIC GPU memory partition (``gpu_mem`` in config.txt).
+    Set ``gpu_mem=128`` for all Pi models — Pi 2/3 need the static partition for
+    the KMS framebuffer (~8 MB at 1080p) plus the v4l2m2m decoder buffers.
+    Pi 4/5 use CMA dynamic allocation and ignore ``gpu_mem`` entirely, so a
+    single value keeps the base image portable.
 ```
+
 
 **RAM budget for Phase 1 (512MB Pi Zero 2 W — untested):**
 - Linux + systemd: ~80MB
 - Backend daemon (Python): ~60MB
-- Frontend renderer (Python + pi3d): ~80MB
+- Frontend renderer (Python + Qt + mpv): ~110MB
 - GPU memory (gpu_mem=128): 128MB (separate pool)
 - Media processing (peak, one file): ~100MB
 - **Total**: ~320MB of 512MB — tight but workable
@@ -946,7 +980,7 @@ the composition root (`BackendDaemon(..., ports=Ports(...))`).
 | `MqttGateway` | `PahoMqttGateway` | Home Assistant broker |
 | `CecController` | `LibCecAdapter` | HDMI-CEC (TV remote) |
 | `IrSocket` | `LircSocketAdapter` | LIRC IR remote |
-| `DisplayDriver` | display factory (`detect_backend`) | pi3d / PyOpenGL / tkinter |
+| `DisplayDriver` | display factory (`detect_backend`) | PySide6 / PyOpenGL / tkinter |
 | `DdcController` | `DdcutilAdapter` | DDC/CI monitor control (`ddcutil`) |
 
 Every service constructor accepts its port with a **real default**, so existing

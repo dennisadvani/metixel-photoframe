@@ -263,29 +263,27 @@ def test_config_update_boolean_false_values(tmp_path):
     assert loaded.slideshow["video_playback_enabled"] is False
 
 
-def test_video_player_backend_persists(tmp_path):
-    """Verify video_player_backend saves and loads back correctly."""
+def test_retired_video_player_keys_are_gone(tmp_path):
+    """The VLC-era player-selection keys must not exist any more.
+
+    ``slideshow.video_player_backend`` (legacy) and ``video.player_backend`` both
+    chose between VLC and an ffmpeg fallback. 2.0.0 has exactly one player (mpv),
+    so the keys are deleted rather than left as inert config a user could set and
+    believe had an effect.
+
+    Asserted as absence, not migration: a stale key in an existing ``config.json``
+    is harmless because nothing reads it, and inventing a migration would keep the
+    concept alive for no benefit.
+    """
     from metixel.shared.config import Config
 
     config = Config()
-    config_path = tmp_path / "config.json"
 
-    # Default is "auto"
-    assert config.slideshow["video_player_backend"] == "auto"
-
-    # Switch to vlc
-    config.update("slideshow", {"video_player_backend": "vlc"})
-    config.save(config_path)
-
-    loaded = Config.load(config_path)
-    assert loaded.slideshow["video_player_backend"] == "vlc"
-
-    # Switch to ffmpeg
-    loaded.update("slideshow", {"video_player_backend": "ffmpeg"})
-    loaded.save(config_path)
-
-    loaded2 = Config.load(config_path)
-    assert loaded2.slideshow["video_player_backend"] == "ffmpeg"
+    assert "video_player_backend" not in config.slideshow, (
+        "slideshow.video_player_backend is a retired VLC-era key"
+    )
+    assert "player_backend" not in config.video, "video.player_backend is a retired VLC-era key"
+    assert "vlc_start" not in config.timeouts, "timeouts.vlc_start was VLC-specific"
 
 
 # ── New video config section tests ──────────────────────────────────────
@@ -298,7 +296,6 @@ def test_video_section_defaults():
     config = Config()
     v = config.video
     assert v["playback_enabled"] is True
-    assert v["player_backend"] == "auto"
     assert v["max_duration_seconds"] == 0  # unlimited
     assert v["transcoding_enabled"] is True
     assert v["transcode_max_width"] == 0  # use display width
@@ -351,8 +348,9 @@ def test_video_section_legacy_fallback():
     v = config.video
     # Should have picked up legacy values
     assert v["playback_enabled"] is False
-    assert v["player_backend"] == "auto"
     assert v["max_duration_seconds"] == 60
+    # The retired VLC-era key must NOT be resurrected by the fallback path
+    assert "player_backend" not in v
     # New keys should have defaults
     assert v["transcoding_enabled"] is True
     assert v["transcode_quality"] == 23
@@ -375,7 +373,6 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     # slideshow
     ("slideshow.image_duration_seconds", 15),
     ("slideshow.video_playback_enabled", True),
-    ("slideshow.video_player_backend", "auto"),
     ("slideshow.video_max_duration_seconds", 0),
     ("slideshow.transition_duration_ms", 2500),
     ("slideshow.transition_style", "crossfade"),
@@ -389,7 +386,6 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("image.optimise_max_height", 0),
     # video (subset — remainder in video section defaults test)
     ("video.playback_enabled", True),
-    ("video.player_backend", "auto"),
     ("video.max_duration_seconds", 0),
     ("video.transcoding_enabled", True),
     ("video.transcoding_profile", ""),
@@ -478,7 +474,7 @@ ALL_DEFAULTS: list[tuple[str, object]] = [
     ("timeouts.frame_extract_last", 120),
     ("timeouts.image_process", 120),
     ("timeouts.transcode", 7200),
-    ("timeouts.vlc_start", 30),
+    ("timeouts.hw_codec_detect", 30),
 ]
 
 
@@ -513,7 +509,7 @@ class TestConfigTimeout:
         from metixel.shared.config import Config
 
         cfg = Config()
-        assert cfg.timeout("vlc_start", 999) == 30
+        assert cfg.timeout("hw_codec_detect", 999) == 30
 
     def test_missing_key_returns_fallback(self) -> None:
         from metixel.shared.config import Config
@@ -525,30 +521,30 @@ class TestConfigTimeout:
         from metixel.shared.config import Config
 
         cfg = Config()
-        cfg.update("timeouts", {"vlc_start": 0})
-        assert cfg.timeout("vlc_start", 30) == 30
+        cfg.update("timeouts", {"hw_codec_detect": 0})
+        assert cfg.timeout("hw_codec_detect", 30) == 30
 
     def test_negative_value_returns_fallback(self) -> None:
         from metixel.shared.config import Config
 
         cfg = Config()
-        cfg.update("timeouts", {"vlc_start": -5})
-        assert cfg.timeout("vlc_start", 30) == 30
+        cfg.update("timeouts", {"hw_codec_detect": -5})
+        assert cfg.timeout("hw_codec_detect", 30) == 30
 
     def test_string_value_returns_fallback(self) -> None:
         from metixel.shared.config import Config
 
         cfg = Config()
-        cfg.update("timeouts", {"vlc_start": "not_a_number"})  # type: ignore[dict-item]
-        assert cfg.timeout("vlc_start", 30) == 30
+        cfg.update("timeouts", {"hw_codec_detect": "not_a_number"})  # type: ignore[dict-item]
+        assert cfg.timeout("hw_codec_detect", 30) == 30
 
     def test_float_value_truncated_to_int(self) -> None:
         from metixel.shared.config import Config
 
         cfg = Config()
-        cfg.update("timeouts", {"vlc_start": 30.7})
+        cfg.update("timeouts", {"hw_codec_detect": 30.7})
         # float 30.7 → int(30.7) = 30
-        assert cfg.timeout("vlc_start", 999) == 30
+        assert cfg.timeout("hw_codec_detect", 999) == 30
 
     def test_timeouts_section_fills_missing_keys(self) -> None:
         """timeouts property fills in keys missing from config."""
@@ -556,11 +552,11 @@ class TestConfigTimeout:
 
         cfg = Config()
         # Remove a key from timeouts
-        cfg.update("timeouts", {"vlc_start": 60})
+        cfg.update("timeouts", {"hw_codec_detect": 60})
         # The rest should still be filled by defaults
         tos = cfg.timeouts
         assert tos["ffprobe_probe"] == 120
-        assert tos["vlc_start"] == 60  # overridden
+        assert tos["hw_codec_detect"] == 60  # overridden
 
     def test_timeouts_property_does_not_mutate_defaults(self) -> None:
         """Accessing timeouts should not modify DEFAULT_CONFIG."""
@@ -582,7 +578,7 @@ class TestConfigTimeout:
         cfg = Config()
         cfg._data.pop("timeouts", None)
         # The timeouts property will re-create and backfill defaults
-        assert cfg.timeout("vlc_start", 999) == 30
+        assert cfg.timeout("hw_codec_detect", 999) == 30
 
 
 # ── resolve_watch_paths tests ──────────────────────────────────────────

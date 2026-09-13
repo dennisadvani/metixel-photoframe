@@ -38,10 +38,10 @@ BOOT="/boot/firmware/config.txt"
 
 # GPU memory: 128 MB for all Pi models.
 # Pi 2/3/Zero 2 W need a static GPU partition — 128 MB provides room for the
-# KMS framebuffer (~8 MB) plus pi3d textures at 1080p RGB565 with fragmentation
-# headroom.  Pi 4/5 use CMA dynamic allocation and ignore gpu_mem, so setting
-# 128 is harmless there.  A single value avoids model detection and keeps the
-# base image portable.
+# KMS framebuffer (~8 MB) plus the v4l2m2m hardware-decoder buffers used for
+# video, with fragmentation headroom.  Pi 4/5 use CMA dynamic allocation and
+# ignore gpu_mem, so setting 128 is harmless there.  A single value avoids
+# model detection and keeps the base image portable.
 GPU_MEM=128
 
 DRY_RUN="no"
@@ -67,7 +67,7 @@ CHANGED="no"
 
 # ── KMS overlay ────────────────────────────────────────────────────────────
 # Required for any rendering on Trixie: without vc4-kms-v3d there is no
-# KMS/DRM, so cage and pi3d have no display path.  Added only when absent.
+# KMS/DRM, so cage and the Qt frontend have no display path.  Added only when absent.
 if grep -q 'dtoverlay=vc4-kms-v3d' "${BOOT}" 2>/dev/null; then
     echo "  = dtoverlay=vc4-kms-v3d already present"
 else

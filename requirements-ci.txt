@@ -2,8 +2,8 @@
 # Installed by .github/workflows/ci.yml.  Mirrors the non-Pi packages from
 # requirements-pip.txt so CI stays in sync with production deps (e.g. new
 # packages like pillow-heif are picked up automatically).  Pi-only packages
-# (pi3d, pysdl2, python-vlc) are intentionally excluded — they are not needed
-# to lint/type-check/test and can be flaky to build on generic CI runners.
+# are intentionally excluded — they are not needed to lint/type-check/test and
+# can be flaky to build on generic CI runners.
 
 Pillow>=10.0
 pillow-heif>=0.16

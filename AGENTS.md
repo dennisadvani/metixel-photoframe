@@ -6,7 +6,7 @@
 - **Phase 1:** Raspberry Pi 2, 3, 4, 5, and Zero 2 W (Mesa/DRM on Trixie). Pi 5 (2GB+) is the recommended platform. Pi 4 is supported but untested. Pi 2 and Pi Zero 2 W are 32‑bit manual‑install only — no pre‑built image available. Pi Zero 2 W (512MB) is untested and image‑only (no video, optimisation, or transcoding).
 - **Phase 2:** Non-Pi SBCs like the Radxa Zero 3W (Mesa/DRM/Wayland)
 
-The application is written in **Python 3** with a display backend abstraction that isolates the rendering layer (pi3d on Phase 1, PyOpenGL on Phase 2) from the presentation logic. The `Pi3dBackend` works on any Pi with pi3d installed — it runs under cage (minimal Wayland compositor) + XWayland on Trixie/Bookworm.
+The application is written in **Python 3** with a display backend abstraction that isolates the rendering layer (PySide6 on Phase 1, PyOpenGL on Phase 2) from the presentation logic. The `PySide6Backend` works on any Pi with PySide6 + python-mpv installed — it runs under cage (minimal Wayland compositor) with `QT_QPA_PLATFORM=wayland`.
 
 ### Media Pipeline (4-Phase)
 
@@ -27,7 +27,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
    ```
    This file contains the complete system design, component relationships, and implementation roadmap.
 
-2. **Respect the display backend abstraction.** Never import `pi3d` directly in presentation or widget code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only file that may import pi3d is `src/metixel/display/dispmanx_backend.py`.
+2. **Respect the display backend abstraction.** Never import `PySide6` or `mpv` directly in presentation or widget code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only files that may import PySide6/mpv are `src/metixel/display/qt_backend.py`, `qt_canvas.py` and `qt_mpv.py`.
 
 3. **Respect the 4-phase media pipeline.** Media flows through four distinct phases:
    - **Phase 1 (Watch):** `FolderWatcher` gathers metadata only — file type, dimensions, video codec. Does NOT process, resize, or transcode. Pushes `MediaItem` stubs to the `OptimisationQueue`.
@@ -78,7 +78,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 13. **Phase 1 vs Phase 2 awareness.** When writing code:
     - Check `metixel.display.__init__.detect_backend()` to know which pipeline is active
-    - Phase 1: pi3d runs under cage + XWayland on Trixie (Mesa EGL)
+    - Phase 1: PySide6 + mpv run under cage with `QT_QPA_PLATFORM=wayland` pinned (Wayland-native)
     - Phase 2: uses Mesa EGL, Wayland compositor, or DRM/KMS directly
     - `/opt/vc/` paths only exist on legacy Bullseye; never assume them on Trixie
 
@@ -295,7 +295,7 @@ mypy src/metixel/
 |---|---|
 | `ARCHITECTURE.md` | **READ THIS FIRST** — complete system design |
 | `src/metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
-| `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
+| `src/metixel/display/qt_backend.py` | Phase 1 PySide6 + mpv implementation |
 | `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
 | `src/metixel/display/tk_backend.py` | Desktop dev: tkinter-based software renderer |
 | `src/metixel/display/cursor_hider.py` | Hides the cage/Wayland cursor via a persistent virtual absolute mouse (evdev) |

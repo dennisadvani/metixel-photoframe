@@ -152,7 +152,7 @@ class DisplayDriver(Protocol):
     """Rendering surface port — satisfied by :class:`metixel.display.backend.DisplayBackend`.
 
     This is the contract the presentation layer renders through; the concrete
-    implementation (pi3d / PyOpenGL / pygame / tkinter) is selected by the
+    implementation (PySide6 / Wayland / tkinter) is selected by the
     display factory and injected at the composition root.
     """
 

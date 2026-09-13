@@ -62,20 +62,25 @@ def test_detect_backend_env_override():
 def test_retired_pi3d_override_fails_loudly():
     """A stale ``dispmanx`` override must be diagnosed, not silently ignored.
 
-    pi3d was removed in 2.0.0. A device carrying the old override should say so
-    plainly, because the alternative — quietly selecting a different renderer —
-    leaves an operator believing they are running the pi3d path.
+    pi3d was removed in 2.0.0 along with the backend that implemented it. A device
+    carrying the old override should say so plainly, because the alternative —
+    quietly selecting a different renderer — leaves an operator believing they are
+    running the pi3d path when they are not.
+
+    The error is a ``ValueError`` listing the valid values, not a silent fallback:
+    the override is now simply not a recognised name.
     """
     import os
 
-    os.environ["METIXEL_DISPLAY_BACKEND"] = "dispmanx"
-    try:
-        from metixel.display import detect_backend
+    for stale in ("dispmanx", "pi3d"):
+        os.environ["METIXEL_DISPLAY_BACKEND"] = stale
+        try:
+            from metixel.display import detect_backend
 
-        with pytest.raises(RuntimeError, match="removed in Metixel 2.0.0"):
-            detect_backend()
-    finally:
-        del os.environ["METIXEL_DISPLAY_BACKEND"]
+            with pytest.raises(ValueError, match="retired in 2.0.0"):
+                detect_backend()
+        finally:
+            del os.environ["METIXEL_DISPLAY_BACKEND"]
 
 
 def test_unknown_backend_override_is_rejected():
