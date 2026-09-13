@@ -33,10 +33,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QWidget
 
+from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ class FrameCanvas(QWidget):
         self._plan: RenderPlan | None = None
         self._image: QImage | None = None
         self._background = QColor(0, 0, 0)
+        self._overlay: list[OverlayElement] = []
         # The canvas fully repaints every frame, so Qt does not need to erase
         # first — and skipping the erase avoids a visible flash on the video
         # path where the widget beneath is showing through.
@@ -88,6 +90,18 @@ class FrameCanvas(QWidget):
         r, g, b = (int(max(0.0, min(1.0, c)) * 255) for c in color[:3])
         self._background = QColor(r, g, b)
 
+    def update_overlay(self, elements: list[OverlayElement]) -> None:
+        """Store the overlay elements for the next repaint.
+
+        The list arrives already flattened and sorted (largest ``z`` first) from
+        the overlay manager, so the canvas only has to paint it in order.
+        """
+        self._overlay = list(elements)
+
+    def clear_overlay(self) -> None:
+        """Drop the overlay so the next frame paints only the slideshow."""
+        self._overlay = []
+
     # -- Painting ------------------------------------------------------------
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
@@ -95,34 +109,86 @@ class FrameCanvas(QWidget):
         try:
             painter.fillRect(self.rect(), self._background)
             plan = self._plan
-            if plan is None:
-                return
+            if plan is not None:
+                # 1. Ambient fill — the only full-rectangle layer.  Absent
+                #    whenever a mat ring exists, because the Mat Window is then
+                #    cut to the artwork and no residue is left for fill.
+                if plan.ambient is not None:
+                    self._fill(painter, plan.ambient, _qcolor(plan.ambient_colour))
 
-            # 1. Ambient fill — the only full-rectangle layer.  Absent whenever a
-            #    mat ring exists, because the Mat Window is then cut to the
-            #    artwork and no residue is left for fill to occupy.
-            if plan.ambient is not None:
-                self._fill(painter, plan.ambient, _qcolor(plan.ambient_colour))
+                # 2. Artwork.  Skipped for video (image is None), which is what
+                #    lets mpv's frames show through the Mat Window.
+                if self._image is not None:
+                    self._draw_artwork(painter, plan)
 
-            # 2. Artwork.  Skipped for video (image is None), which is what lets
-            #    mpv's frames show through the Mat Window.
-            if self._image is not None:
-                self._draw_artwork(painter, plan)
+                # 3–5. Ring layers, outermost last so the moulding reads as the
+                #      frame edge.  Annuli: disjoint from the artwork.
+                for rect in plan.whitespace:
+                    self._fill(painter, rect, _qcolor(plan.whitespace_colour))
+                for rect in plan.matte:
+                    self._fill(painter, rect, _qcolor(plan.matte_colour))
+                for rect in plan.moulding:
+                    self._fill(painter, rect, QColor(0, 0, 0))
 
-            # 3–5. The ring layers, outermost last so the moulding reads as the
-            #      frame edge.  These are annuli: disjoint from the artwork.
-            for rect in plan.whitespace:
-                self._fill(painter, rect, _qcolor(plan.whitespace_colour))
-            for rect in plan.matte:
-                self._fill(painter, rect, _qcolor(plan.matte_colour))
-            for rect in plan.moulding:
-                self._fill(painter, rect, QColor(0, 0, 0))
+            # Overlay last: boot screen, messages, widgets all paint above the
+            # slideshow.  Already z-sorted by the manager.
+            for element in self._overlay:
+                self._draw_element(painter, element)
         except Exception:
             # A paint error must never propagate into Qt's event loop, where it
             # would be swallowed and leave a blank window with no clue why.
             logger.exception("FrameCanvas paint failed")
         finally:
             painter.end()
+
+    def _draw_element(self, painter: QPainter, element: OverlayElement) -> None:
+        """Paint one overlay element.
+
+        Dispatches on ``kind`` rather than probing attributes, so a malformed
+        element is impossible: the dataclass validates at construction.
+        """
+        if element.alpha <= 0.01:
+            return
+
+        painter.setOpacity(element.alpha)
+        try:
+            if element.kind == "rect":
+                x, y, w, h = element.rect
+                if w > 0 and h > 0:
+                    painter.fillRect(QRectF(x, y, w, h), _qcolor(element.colour))
+
+            elif element.kind == "image":
+                if not isinstance(element.image, QImage):
+                    return
+                x, y, w, h = element.rect
+                if w <= 0 or h <= 0:
+                    return
+                target = QRectF(x, y, w, h)
+                source = QRectF(0, 0, element.image.width(), element.image.height())
+                if element.rotation:
+                    # Rotate about the element's centre — the boot spinner is the
+                    # only user of this, and it must spin in place.
+                    painter.save()
+                    painter.translate(x + w / 2.0, y + h / 2.0)
+                    painter.rotate(element.rotation)
+                    painter.translate(-(x + w / 2.0), -(y + h / 2.0))
+                    painter.drawImage(target, element.image, source)
+                    painter.restore()
+                else:
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+                    painter.drawImage(target, element.image, source)
+
+            elif element.kind == "text":
+                x, y, _w, _h = element.rect
+                font = painter.font()
+                font.setPointSize(element.size)
+                painter.setFont(font)
+                painter.setPen(_qcolor(element.colour))
+                # Baseline offset ≈ 0.8em so text sits where the old
+                # draw_text(x, y) anchored it, keeping widget layout unchanged.
+                painter.drawText(QPointF(x, y + element.size * 0.8), element.text)
+        finally:
+            painter.setOpacity(1.0)
 
     def _fill(
         self,

@@ -28,6 +28,7 @@ from typing import Any
 
 import numpy as np
 
+from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,20 @@ class DisplayBackend(ABC):
     def is_running(self) -> bool:
         """Whether the display loop is active."""
         ...
+
+    @property
+    def supports_video(self) -> bool:
+        """Whether this backend can play video.
+
+        ``False`` on software renderers (tkinter), which have no video pipeline.
+        The presentation layer filters video items out of the playlist rather
+        than attempting playback once per item per cycle.
+
+        Declared on the ABC, not merely on the implementations: the playlist
+        filter in ``presentation/queue.py`` reads it, so a backend that silently
+        omitted it would raise at the first video rather than degrading.
+        """
+        return True
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -132,12 +147,12 @@ class DisplayBackend(ABC):
 
     # -- Overlay -------------------------------------------------------------
 
-    def present_overlay(self, elements: list[dict[str, Any]]) -> None:  # noqa: B027
+    def present_overlay(self, elements: list[OverlayElement]) -> None:  # noqa: B027
         """Composite overlay elements on top of the current frame.
 
-        Elements are the declarative dicts produced by
-        :meth:`~metixel.frontend.overlay.layer.OverlayLayer.render`, already
-        flattened and sorted by the overlay manager (largest ``z`` first).
+        Elements are :class:`~metixel.display.overlay_element.OverlayElement`
+        instances, already flattened and sorted by the overlay manager (largest
+        ``z`` first).
 
         Kept separate from :meth:`present` on purpose: the slideshow frame is
         composed once per item, whereas overlay layers animate every frame

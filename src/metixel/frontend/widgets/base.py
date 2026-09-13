@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 
 
 class Widget(ABC):
@@ -93,7 +94,25 @@ class Widget(ABC):
 
     @abstractmethod
     def draw(self, backend: DisplayBackend) -> None:
-        """Render the widget using backend primitives."""
+        """Deprecated — widgets are composited via :meth:`render`.
+
+        Retained on the interface so every widget still declares its intent, but
+        the reduced backend no longer exposes drawing primitives, so an
+        implementation that issued ``draw_rect``/``draw_text`` calls would fail.
+        """
+
+    def render(self) -> list[OverlayElement]:
+        """Return this widget's elements for the current frame.
+
+        Uses the same typed
+        :class:`~metixel.display.overlay_element.OverlayElement` contract as the
+        overlay layers, so the frontend has one compositing vocabulary rather
+        than a typed model for geometry and an untyped one for chrome.
+
+        Default returns nothing, so a widget that has not been ported yet simply
+        does not draw instead of taking down the frame.
+        """
+        return []
 
     def needs_refresh(self) -> bool:
         """Whether the widget should refresh on this tick."""

@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 from metixel.frontend.overlay.layer import OverlayLayer
 
 logger = logging.getLogger(__name__)
@@ -253,7 +254,7 @@ class MessageLayer(OverlayLayer):
         """
         self._screen_w = backend.width
 
-    def render(self) -> list[dict[str, Any]]:
+    def render(self) -> list[OverlayElement]:
         """Return this frame's message elements.
 
         Ported from the old ``draw(backend)``: the slide animations, the
@@ -269,7 +270,7 @@ class MessageLayer(OverlayLayer):
             return []
 
         self.reset_z()
-        elements: list[dict[str, Any]] = []
+        elements: list[OverlayElement] = []
 
         bw = self._screen_w
         target_x = bw - MSG_WIDTH - MSG_MARGIN
@@ -289,7 +290,7 @@ class MessageLayer(OverlayLayer):
 
         return elements
 
-    def _render_one(self, m: _Message, bw: int, target_x: int) -> list[dict[str, Any]]:
+    def _render_one(self, m: _Message, bw: int, target_x: int) -> list[OverlayElement]:
         """Build the elements for one message, advancing its slide animation."""
         # Compute the x position (animated).
         if m.state == "sliding_in":
@@ -308,42 +309,39 @@ class MessageLayer(OverlayLayer):
         if alpha <= 0.01:
             return []
 
-        elements: list[dict[str, Any]] = []
+        elements: list[OverlayElement] = []
 
         # 1. Background panel.
         elements.append(
-            {
-                "kind": "rect",
-                "rect": (x, y, MSG_WIDTH, mh),
-                "colour": _hex(MSG_BG),
-                "alpha": MSG_BG_ALPHA * alpha,
-                "z": self.next_z(),
-            }
+            OverlayElement.rect_element(
+                (x, y, MSG_WIDTH, mh),
+                _hex(MSG_BG),
+                alpha=MSG_BG_ALPHA * alpha,
+                z=self.next_z(),
+            )
         )
 
         # 2. Accent bar down the left edge.
         elements.append(
-            {
-                "kind": "rect",
-                "rect": (x, y, MSG_ACCENT, mh),
-                "colour": _hex(ACCENT_COLOR),
-                "alpha": 1.0 * alpha,
-                "z": self.next_z(),
-            }
+            OverlayElement.rect_element(
+                (x, y, MSG_ACCENT, mh),
+                _hex(ACCENT_COLOR),
+                alpha=1.0 * alpha,
+                z=self.next_z(),
+            )
         )
 
         # 3. Icon.
         icon_x = int(x + MSG_ACCENT + MSG_PADDING)
         elements.append(
-            {
-                "kind": "text",
-                "text": m.icon,
-                "rect": (icon_x, int(y + 8), 0, 0),
-                "size": MSG_ICON_SIZE,
-                "colour": "#ffffff",
-                "alpha": MSG_TEXT_ALPHA * alpha,
-                "z": self.next_z(),
-            }
+            OverlayElement.text_element(
+                m.icon,
+                (icon_x, int(y + 8)),
+                size=MSG_ICON_SIZE,
+                colour="#ffffff",
+                alpha=MSG_TEXT_ALPHA * alpha,
+                z=self.next_z(),
+            )
         )
 
         text_x = int(icon_x + MSG_ICON_SIZE + MSG_PADDING)
@@ -351,15 +349,14 @@ class MessageLayer(OverlayLayer):
         # 4. Title.
         if m.title:
             elements.append(
-                {
-                    "kind": "text",
-                    "text": m.title,
-                    "rect": (text_x, int(y + 6), 0, 0),
-                    "size": MSG_TITLE_SIZE,
-                    "colour": "#ffffff",
-                    "alpha": MSG_TEXT_ALPHA * alpha,
-                    "z": self.next_z(),
-                }
+                OverlayElement.text_element(
+                    m.title,
+                    (text_x, int(y + 6)),
+                    size=MSG_TITLE_SIZE,
+                    colour="#ffffff",
+                    alpha=MSG_TEXT_ALPHA * alpha,
+                    z=self.next_z(),
+                )
             )
 
         # 5. Body, wrapped to the available width.
@@ -370,15 +367,14 @@ class MessageLayer(OverlayLayer):
             chars_per = max(20, int(avail_w / char_w))
             for li, line in enumerate(_wrap_text(m.body, chars_per)[:5]):
                 elements.append(
-                    {
-                        "kind": "text",
-                        "text": line,
-                        "rect": (text_x, body_start_y + li * (MSG_BODY_SIZE + 4), 0, 0),
-                        "size": MSG_BODY_SIZE,
-                        "colour": "#c7c7d1",
-                        "alpha": MSG_TEXT_ALPHA * 0.9 * alpha,
-                        "z": self.next_z(),
-                    }
+                    OverlayElement.text_element(
+                        line,
+                        (text_x, body_start_y + li * (MSG_BODY_SIZE + 4)),
+                        size=MSG_BODY_SIZE,
+                        colour="#c7c7d1",
+                        alpha=MSG_TEXT_ALPHA * 0.9 * alpha,
+                        z=self.next_z(),
+                    )
                 )
 
         return elements

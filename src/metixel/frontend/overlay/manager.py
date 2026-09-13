@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 from metixel.frontend.overlay.layer import OverlayLayer
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class OverlayManager:
         if not backend:
             return
 
-        elements: list[dict[str, Any]] = []
+        elements: list[OverlayElement] = []
         for layer in self._layers:
             if not layer.visible:
                 continue
@@ -81,7 +82,7 @@ class OverlayManager:
         # Descending z: the largest z paints first, the smallest last (closest to
         # the viewer).  Matches the old GL_LESS convention so existing z-offsets
         # in the layers keep their meaning.
-        elements.sort(key=lambda e: float(e.get("z", 0.0)), reverse=True)
+        elements.sort(key=lambda e: e.z, reverse=True)
         try:
             backend.present_overlay(elements)
         except AttributeError:

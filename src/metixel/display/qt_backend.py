@@ -49,6 +49,7 @@ from typing import Any
 
 from metixel.display.backend import DisplayBackend
 from metixel.display.hardware import DisplayPower, WlrOutput
+from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
 
 logger = logging.getLogger(__name__)
@@ -250,6 +251,26 @@ class PySide6Backend(DisplayBackend):
         # passing image=None, so mpv's frames show through the middle.
         self._canvas.raise_()
         self._canvas.update_plan(plan, image)
+        self._canvas.update()
+
+    # -- Overlay -------------------------------------------------------------
+
+    def present_overlay(self, elements: list[OverlayElement]) -> None:
+        """Composite the overlay elements on the canvas.
+
+        The canvas owns overlay compositing because the matte must paint over a
+        playing video, and both live in the same widget.  Elements arrive
+        already flattened and z-sorted by the overlay manager.
+        """
+        if self._canvas is None:
+            return
+        if not elements:
+            return
+        # Only force a raise when a video is up; otherwise the canvas is already
+        # on top and raising every frame would be wasted work.
+        if self._video_path is not None:
+            self._canvas.raise_()
+        self._canvas.update_overlay(elements)
         self._canvas.update()
 
     # -- Artwork -------------------------------------------------------------

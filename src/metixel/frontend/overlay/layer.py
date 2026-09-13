@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 
 
 class OverlayLayer(ABC):
@@ -125,28 +126,18 @@ class OverlayLayer(ABC):
         """
         ...
 
-    def render(self) -> list[dict[str, Any]]:
+    def render(self) -> list[OverlayElement]:
         """Return this layer's elements for the current frame.
 
-        Each element is a plain dict, so an overlay layer carries no rendering
-        dependency and stays testable without a backend or Qt:
+        Elements are :class:`~metixel.display.overlay_element.OverlayElement`
+        instances — a typed contract, so a mistyped colour or a missing image
+        handle is a static error rather than an element that silently fails to
+        draw on a device.
 
-            {
-                "kind": "rect",           # "rect" | "image" | "text"
-                "rect": (x, y, w, h),     # pixels, screen coordinates
-                "colour": "#rrggbb",      # rect only
-                "image": <handle>,        # image only
-                "alpha": 0.0..1.0,        # optional, default 1.0
-                "rotation": degrees,      # optional, images only
-                "text": "...",            # text only
-                "size": 24,               # text only, points
-                "z": 0.0,                 # paint order
-            }
-
-        Elements are composited in ascending ``z`` — the largest z paints first,
-        the smallest last (closest to the viewer).  That matches the convention
-        the pi3d backend used with GL_LESS depth testing, so existing z-offsets
-        keep their meaning unchanged.
+        Elements are composited in ascending ``z``: the largest paints first, the
+        smallest last (closest to the viewer).  That matches the convention the
+        pi3d backend used with GL_LESS depth testing, so existing z-offsets keep
+        their meaning unchanged.
 
         The default returns nothing, so a layer that has not been ported yet
         simply draws nothing instead of crashing the frame.  Deliberate: a

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 from metixel.frontend.overlay.layer import OverlayLayer
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ class BootLayer(OverlayLayer):
         if not self._layout_done:
             self._compute_layout(backend)
 
-    def render(self) -> list[dict[str, Any]]:
+    def render(self) -> list[OverlayElement]:
         """Return the boot screen's elements for this frame.
 
         Ported from the old ``draw(backend)``: the element geometry, alpha and
@@ -243,46 +244,38 @@ class BootLayer(OverlayLayer):
             return []
 
         self.reset_z()
-        elements: list[dict[str, Any]] = []
+        elements: list[OverlayElement] = []
 
         # Full-screen black background so the slideshow does not show through
         # while the boot screen is up.
         elements.append(
-            {
-                "kind": "rect",
-                "rect": (0, 0, self._screen_w, self._screen_h),
-                "colour": "#000000",
-                "alpha": self._alpha,
-                "z": self.next_z(),
-            }
+            OverlayElement.rect_element(
+                (0, 0, self._screen_w, self._screen_h),
+                "#000000",
+                alpha=self._alpha,
+                z=self.next_z(),
+            )
         )
 
         if self._logo_tex is not None:
             elements.append(
-                {
-                    "kind": "image",
-                    "image": self._logo_tex,
-                    "rect": (self._logo_x, self._logo_y, self._logo_w, self._logo_h),
-                    "alpha": self._alpha,
-                    "z": self.next_z(),
-                }
+                OverlayElement.image_element(
+                    self._logo_tex,
+                    (self._logo_x, self._logo_y, self._logo_w, self._logo_h),
+                    alpha=self._alpha,
+                    z=self.next_z(),
+                )
             )
 
         if self._spinner_tex is not None:
             elements.append(
-                {
-                    "kind": "image",
-                    "image": self._spinner_tex,
-                    "rect": (
-                        self._spinner_x,
-                        self._spinner_y,
-                        self._spinner_size,
-                        self._spinner_size,
-                    ),
-                    "alpha": self._alpha,
-                    "rotation": self._spinner_angle,
-                    "z": self.next_z(),
-                }
+                OverlayElement.image_element(
+                    self._spinner_tex,
+                    (self._spinner_x, self._spinner_y, self._spinner_size, self._spinner_size),
+                    alpha=self._alpha,
+                    rotation=self._spinner_angle,
+                    z=self.next_z(),
+                )
             )
 
         # Progress bar.  Rect elements rather than 1x1 textures: the old code
@@ -291,29 +284,22 @@ class BootLayer(OverlayLayer):
         if self._progress_pct > 0.0 and self._progress_pct <= 100.0 and not self._progress_hidden:
             pct = self._progress_pct / 100.0
             elements.append(
-                {
-                    "kind": "rect",
-                    "rect": (
-                        self._progress_x,
-                        self._progress_y,
-                        self._progress_w,
-                        self._progress_h,
-                    ),
-                    "colour": "#333333",
-                    "alpha": self._alpha,
-                    "z": self.next_z(),
-                }
+                OverlayElement.rect_element(
+                    (self._progress_x, self._progress_y, self._progress_w, self._progress_h),
+                    "#333333",
+                    alpha=self._alpha,
+                    z=self.next_z(),
+                )
             )
             if pct > 0.0:
                 fill_w = max(1, int(self._progress_w * pct))
                 elements.append(
-                    {
-                        "kind": "rect",
-                        "rect": (self._progress_x, self._progress_y, fill_w, self._progress_h),
-                        "colour": "#d92626",
-                        "alpha": self._alpha,
-                        "z": self.next_z(),
-                    }
+                    OverlayElement.rect_element(
+                        (self._progress_x, self._progress_y, fill_w, self._progress_h),
+                        "#d92626",
+                        alpha=self._alpha,
+                        z=self.next_z(),
+                    )
                 )
 
         return elements
