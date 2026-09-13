@@ -399,7 +399,17 @@ for pkg in sorted(prev_sys - new_sys):
 
 for pkg in sorted(prev_pip - new_pip):
     print(f"  removing pip pkg: {pkg}")
-    r = subprocess.run(["pip", "uninstall", "-y", pkg],
+    # --break-system-packages is REQUIRED, not a shortcut.  Debian 13 marks the
+    # system Python as externally managed (PEP 668), so a bare `pip uninstall`
+    # exits non-zero and removes nothing.  This is the exact mirror of how
+    # ota_install.sh installs these packages (--break-system-packages
+    # --ignore-installed); installing into the system dist-packages and then
+    # being unable to remove from it would strand every retired package.
+    #
+    # Found on hardware: the removal reported four vlc-* packages and three pip
+    # packages as removed, but the pip ones were failing with PEP 668 — visible
+    # only because this step now reports failures instead of swallowing them.
+    r = subprocess.run(["pip", "uninstall", "-y", "--break-system-packages", pkg],
                        check=False, capture_output=True, text=True)
     if r.returncode != 0:
         failures.append((pkg, (r.stderr or r.stdout or "").strip().splitlines()[-1:]))

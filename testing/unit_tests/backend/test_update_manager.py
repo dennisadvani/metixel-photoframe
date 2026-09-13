@@ -463,6 +463,39 @@ class TestObsoletePackageRemoval:
         assert "no previous manifest available" in script
         assert "the ledger will be seeded by step 8" in script
 
+    def test_pip_removal_breaks_system_packages(self) -> None:
+        """pip uninstall MUST pass --break-system-packages.
+
+        Debian 13 marks the system Python as externally managed (PEP 668), so a
+        bare `pip uninstall` exits non-zero and removes nothing.  Found on
+        hardware: the step reported four vlc-* packages and three pip packages as
+        removed, but the pip ones were silently no-op'ing with PEP 668.
+
+        This must mirror how the packages were INSTALLED — ota_install.sh uses
+        `--break-system-packages --ignore-installed`.  Installing into the system
+        dist-packages and then being unable to remove from it would strand every
+        retired package forever.
+        """
+        script = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert '"pip", "uninstall", "-y", "--break-system-packages"' in script, (
+            "pip uninstall needs --break-system-packages or PEP 668 blocks it"
+        )
+        # And the install side must still use it, or the two directions disagree.
+        install = (_REPO_ROOT / "scripts" / "ota_install.sh").read_text(encoding="utf-8")
+        assert "--break-system-packages" in install
+
+    def test_removal_is_filtered_to_metixel_managed_packages(self) -> None:
+        """Never blanket-uninstall: only what the previous manifest recorded.
+
+        A diff against "everything not in the new list" would remove packages the
+        user installed independently.
+        """
+        script = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert 'prev.get("apt", []) or []' in script
+        assert 'prev.get("pip", []) or []' in script
+        assert "prev_sys - new_sys" in script
+        assert "prev_pip - new_pip" in script
+
     def test_parser_pins_utf8_encoding(self) -> None:
         """The manifest parser must open files with an explicit UTF-8 encoding.
 
