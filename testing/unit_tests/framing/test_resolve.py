@@ -214,9 +214,7 @@ class TestResolve:
         lands on the same value the templates would have used.
         """
         via_resolve = resolve(SCREEN, MediaSize(3000, 2000))
-        direct = templates.build_request(
-            SCREEN, templates.MediaDescriptor(3000, 2000), "gallery"
-        )
+        direct = templates.build_request(SCREEN, templates.MediaDescriptor(3000, 2000), "gallery")
         assert via_resolve.edge_margin == direct.edge_margin
         assert via_resolve.moulding_width == direct.moulding_width
 
