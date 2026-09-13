@@ -10,13 +10,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from metixel.shared.ipc import ControlMessage
+
 
 class FakeIPC:
-    def __init__(self) -> None:
-        self.sent = []
+    """Satisfies the ``IPCSender`` port (see metixel.shared.ipc)."""
 
-    def send(self, msg) -> None:
+    def __init__(self) -> None:
+        self.sent: list[ControlMessage] = []
+
+    def send(self, msg: ControlMessage) -> bool:
         self.sent.append(msg)
+        return True
+
+    def close(self) -> None:
+        pass
 
 
 class FakeIrSocket:

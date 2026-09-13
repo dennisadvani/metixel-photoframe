@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [1.2.5]
 
+### Fixed
+
+- **The OTA health-check can now fail.** The updater's gate was a bare
+  `curl` of `/api/health`, and that endpoint only ever proved the **backend**
+  was listening. A release whose frontend crash-looped therefore passed the
+  gate, was declared a success, and left the frame on a black screen with no
+  rollback. The gate now probes `/api/health?require=render`, which returns
+  `503` unless the frontend is demonstrably alive, and the update log records
+  the endpoint's reason for the failure.
+
+  Liveness comes from a new frontend heartbeat
+  (`/run/metixel/frontend_heartbeat.json`, tmpfs, rewritten every ~10 s).
+  A fresh file is deliberately **not** sufficient: `metixel-cage.service` is
+  `Restart=always`, so a crash-looping frontend keeps the file fresh forever.
+  The check therefore requires the *same* `pid`/`boot_id` to persist, and
+  reports a restarting frontend as `churning` rather than healthy.
+
+  The default `/api/health` response is unchanged (`200`, never blocking the
+  dashboard); the strict behaviour is opt-in via the query parameter.
+
+- **Automatic updates no longer cross the 2.0.0 hardware floor on a Pi 3.**
+  2.0.0 runs best on a Raspberry Pi 4 or newer, so the weekly **auto-update**
+  now refuses to install 2.0.0+ on a Pi 2, Pi 3, Pi Zero 2 W, or a board whose
+  model cannot be detected.  The release is held back rather than partly
+  applied, and the weekly stamp is not written, so the schedule is not
+  consumed by an update that never ran.
+
+  **Manual installs are unaffected** — the Install button and the release
+  selector still work, so a user can read the changelog and upgrade by hand.
+
+  The Updates card shows an amber notice whenever a release is being
+  withheld, naming the version and linking to the changelog.  Releases
+  below 2.0.0 (i.e. all current 1.x updates) continue to install
+  automatically on every board.
+
 ### Features
 
 - **Wi-Fi radio toggle in the web UI (`POST /api/network/radio`).** The

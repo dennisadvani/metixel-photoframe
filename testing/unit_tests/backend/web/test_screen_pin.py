@@ -128,9 +128,7 @@ class TestScreenPinRoutes:
 
     def test_set_pin(self, client, mock_state):
         self._login(client, mock_state)
-        resp = client.post(
-            "/api/auth/screen-pin", json={"pin": "123456", "confirm": "123456"}
-        )
+        resp = client.post("/api/auth/screen-pin", json={"pin": "123456", "confirm": "123456"})
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data["status"] == "ok"
@@ -145,16 +143,12 @@ class TestScreenPinRoutes:
 
     def test_invalid_length(self, client, mock_state):
         self._login(client, mock_state)
-        resp = client.post(
-            "/api/auth/screen-pin", json={"pin": "123", "confirm": "123"}
-        )
+        resp = client.post("/api/auth/screen-pin", json={"pin": "123", "confirm": "123"})
         assert resp.status_code == 400
 
     def test_mismatch(self, client, mock_state):
         self._login(client, mock_state)
-        resp = client.post(
-            "/api/auth/screen-pin", json={"pin": "123456", "confirm": "654321"}
-        )
+        resp = client.post("/api/auth/screen-pin", json={"pin": "123456", "confirm": "654321"})
         assert resp.status_code == 400
 
     def test_status(self, client, mock_state):
@@ -167,7 +161,5 @@ class TestScreenPinRoutes:
     def test_requires_auth(self, client, mock_state):
         # Set a password but do NOT log in — the auth gate should block.
         mock_state.update_config("web", {"password": hash_secret("secret123")})
-        resp = client.post(
-            "/api/auth/screen-pin", json={"pin": "123456", "confirm": "123456"}
-        )
+        resp = client.post("/api/auth/screen-pin", json={"pin": "123456", "confirm": "123456"})
         assert resp.status_code == 401

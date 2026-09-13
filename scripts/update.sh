@@ -71,8 +71,18 @@ UNIT_BACKUP_DIR="${METIXEL_UNIT_BACKUP_DIR:-/etc/systemd/system/.metixel-backup}
 
 # Health-check tuning (override via env)
 HEALTH_URL="${METIXEL_HEALTH_URL:-http://127.0.0.1:8080/api/health}"
+# The gate probes the STRICT form: ?require=render makes /api/health answer 503
+# when the frontend is not demonstrably alive.  A bare /api/health only proves
+# the backend is listening, so a release whose frontend crash-loops would pass
+# the gate, be declared a success, and leave the frame on a black screen with
+# no rollback.  That was a real hole; do not "simplify" this back to HEALTH_URL.
+HEALTH_PROBE_URL="${HEALTH_URL}?require=render"
 HEALTH_TIMEOUT="${METIXEL_HEALTH_TIMEOUT:-60}"   # seconds to wait for healthy boot
 HEALTH_INTERVAL="${METIXEL_HEALTH_INTERVAL:-3}"  # poll interval
+
+# On failure the body carries the reason (e.g. the frontend liveness state);
+# capture it so the update log explains WHY the gate failed.
+HEALTH_BODY=""
 
 # safedir helper
 _die() {
@@ -415,8 +425,25 @@ echo "  Waiting up to ${HEALTH_TIMEOUT}s for health endpoint…"
 elapsed=0
 healthy=""
 while [ "${elapsed}" -lt "${HEALTH_TIMEOUT}" ]; do
-    # --fail-silent + -o /dev/null: only exit code matters.
-    if curl -fsS "${HEALTH_URL}" >/dev/null 2>&1; then
+    # The frontend is not required to be ACTIVE for the device to be usable in
+    # a deliberately headless setup, so the gate asks the endpoint rather than
+    # probing the unit.  systemd's verdict is logged alongside for diagnosis.
+    if ! systemctl is-active --quiet metixel-cage.service 2>/dev/null; then
+        echo "    note: metixel-cage.service is not active"
+    fi
+    # Deliberately NOT `curl -f`: that discards the error body, and the body is
+    # where the endpoint explains WHY it is unhealthy.  `--fail-with-body`
+    # would keep it but does not exist on older curl, and an unrecognised
+    # option would make the gate fail EVERY update — the wrong direction for a
+    # safety net.  Instead capture the status code and the body from any curl:
+    #   --max-time  bounds a stalled TCP connect (which would otherwise block
+    #               past HEALTH_TIMEOUT and defeat the loop's own budget)
+    #   -w          appends the status on its own final line
+    response="$(curl -sS --max-time "${HEALTH_INTERVAL}" --retry 0 \
+        -w $'\n%{http_code}' "${HEALTH_PROBE_URL}" 2>/dev/null || true)"
+    http_code="${response##*$'\n'}"
+    HEALTH_BODY="${response%$'\n'*}"
+    if [ "${http_code}" = "200" ]; then
         healthy="yes"
         break
     fi
@@ -428,6 +455,14 @@ if [ "${healthy}" = "yes" ]; then
     echo "  New release is healthy ✓"
 else
     echo "  New release did not come up healthy after ${HEALTH_TIMEOUT}s ✗"
+    # Print the endpoint's own explanation (e.g. the frontend liveness reason)
+    # so a failed upgrade is diagnosable without re-running it by hand.
+    if [ -n "${HEALTH_BODY}" ]; then
+        echo "    health response: ${HEALTH_BODY}"
+    fi
+    if ! systemctl is-active --quiet metixel-cage.service 2>/dev/null; then
+        echo "    metixel-cage.service is NOT active (frontend not running)"
+    fi
     if [ -n "${PREV_LIVE}" ] && [ -d "${PREV_LIVE}" ]; then
         echo "  ROLLING BACK to ${PREV_LIVE}…"
         ln -sfn "${PREV_LIVE}" "${LIVE_LINK}"

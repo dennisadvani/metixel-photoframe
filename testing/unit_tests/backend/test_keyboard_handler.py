@@ -16,16 +16,18 @@ no real keyboard or guest device is used.
 from __future__ import annotations
 
 import metixel.backend.input_handlers.keyboard as kb
+from metixel.shared.ipc import ControlMessage
 
 
 class FakeIPC:
-    """IPCClient stand-in that records sent ControlMessages."""
+    """Satisfies the ``IPCSender`` port (see metixel.shared.ipc)."""
 
     def __init__(self) -> None:
-        self.sent: list = []
+        self.sent: list[ControlMessage] = []
 
-    def send(self, msg) -> None:
+    def send(self, msg: ControlMessage) -> bool:
         self.sent.append(msg)
+        return True
 
     def close(self) -> None:
         pass
@@ -113,18 +115,14 @@ class TestConfigOverride:
         # __init__ is additive: mapping KEY_LEFT to "next" ADDS it to next but
         # keeps the default next (106) too; the default prev (105) binding is
         # overwritten because that code was re-mapped.
-        handler = kb.KeyboardHandler(
-            config={"keyboard_map": {"next": [KEY_LEFT]}}, ipc=FakeIPC()
-        )
+        handler = kb.KeyboardHandler(config={"keyboard_map": {"next": [KEY_LEFT]}}, ipc=FakeIPC())
         assert handler.key_map["next"] == [KEY_LEFT, KEY_RIGHT], handler.key_map
         # 105 is now "next", so the default "prev" command no longer has a key.
         assert handler.key_map.get("prev") is None
 
     def test_init_empty_list_leaves_default_intact(self) -> None:
         # __init__ never removes defaults, so an empty list has no effect here.
-        handler = kb.KeyboardHandler(
-            config={"keyboard_map": {"prev": []}}, ipc=FakeIPC()
-        )
+        handler = kb.KeyboardHandler(config={"keyboard_map": {"prev": []}}, ipc=FakeIPC())
         assert handler.key_map["prev"] == [KEY_LEFT]
 
     def test_set_key_map_replaces_command_keys(self) -> None:
@@ -199,6 +197,7 @@ class TestCustomKeys:
         handler._dispatch(handler._key_map[self.KEY_DOWN])
         assert calls == [True, False]
         # No IPC sent for screen commands.
+        assert isinstance(handler._ipc, FakeIPC)
         assert len(handler._ipc.sent) == 0
 
     def test_switch_album_dispatches(self) -> None:

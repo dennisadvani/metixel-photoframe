@@ -20,7 +20,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
-from conftest import wait_for_pipeline_idle
+from conftest import parse_json_object, wait_for_pipeline_idle
 
 pytestmark = pytest.mark.functional
 
@@ -43,7 +43,7 @@ _TINY_PNG = base64.b64decode(
 
 def _api_get(path: str) -> dict:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_post(path: str, payload: dict) -> dict:
@@ -54,7 +54,7 @@ def _api_post(path: str, payload: dict) -> dict:
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _read_json(path: str) -> dict | list | None:
@@ -73,7 +73,10 @@ def _playlist() -> list[dict]:
 
 
 def _current_media() -> dict | None:
-    return _read_json("/run/metixel/current_media.json")
+    data = _read_json("/run/metixel/current_media.json")
+    # Narrow explicitly: mypy cannot know the file holds an object, and the
+    # callers rely on dict access.
+    return data if isinstance(data, dict) else None
 
 
 def _wait_for_in_playlist(substring: str, timeout: int = _SCAN_WAIT) -> bool:

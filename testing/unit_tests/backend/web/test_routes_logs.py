@@ -86,9 +86,7 @@ class TestRecentLogs:
             encoding="utf-8",
         )
         monkeypatch.setattr(logs_mod, "_read_from_ring_buffer", lambda count: [])
-        monkeypatch.setattr(
-            logs_mod, "_log_files", lambda: [str(backend), str(frontend)]
-        )
+        monkeypatch.setattr(logs_mod, "_log_files", lambda: [str(backend), str(frontend)])
 
         resp = client.get("/api/logs/recent")
         data = json.loads(resp.data)

@@ -20,6 +20,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from conftest import parse_json_object
 
 pytestmark = pytest.mark.functional
 
@@ -36,7 +37,7 @@ _TEST_VALUE = 17
 
 def _api_get(path: str) -> dict:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_put(path: str, payload: dict) -> dict:
@@ -47,7 +48,7 @@ def _api_put(path: str, payload: dict) -> dict:
         method="PUT",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_post(path: str, payload: dict) -> dict:
@@ -58,7 +59,7 @@ def _api_post(path: str, payload: dict) -> dict:
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _config_path() -> Path:
@@ -69,7 +70,7 @@ def _config_path() -> Path:
 
 def _read_disk_config(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
-        return json.load(f)
+        return parse_json_object(f.read(), context="config file on disk")
 
 
 def test_config_save_persists_to_disk() -> None:

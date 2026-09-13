@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=42">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=43">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -1283,6 +1283,19 @@
 
                     <div id="update-status" class="mt-2 text-[0.82rem] text-text-muted"></div>
 
+                    <!-- Hardware hurdle: a pending release is being withheld
+                         from the AUTOMATIC update path because this board is
+                         below the new hardware floor.  The user can still
+                         install it by hand.  Populated by updates-page.js
+                         (always visible while such an update is pending). -->
+                    <div id="update-hurdle-notice" class="hidden mt-3 p-3 rounded border border-[#f0a030]/40 bg-[#f0a030]/10">
+                        <p class="text-[0.82rem] leading-relaxed text-[#f0a030]">
+                            <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span>
+                            <strong>Automatic update paused.</strong>
+                            <span id="update-hurdle-text"></span>
+                        </p>
+                    </div>
+
                     <div id="update-progress" class="hidden mt-2">
                         <div class="flex justify-between mb-1 text-[0.78rem]">
                             <span id="update-progress-phase">Installing…</span>
@@ -1652,6 +1665,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=67"></script>
+    <script type="module" src="/static/js/main.js?v=69"></script>
 </body>
 </html>

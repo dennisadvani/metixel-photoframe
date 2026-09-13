@@ -68,6 +68,28 @@ MIN_CHECK_INTERVAL: int = 600  # 10 minutes minimum between API attempts
 # monolithic layout and cannot be installed/rolled-back via the release dirs.
 MIN_ATOMIC_VERSION = (1, 2, 3)
 
+# ---------------------------------------------------------------------------
+# Hardware hurdle for automatic major upgrades
+# ---------------------------------------------------------------------------
+
+#: First release that requires a faster board than the Pi 2 / Pi 3 / Zero 2 W.
+#:
+#: 2.0.0 raised the hardware floor, so an AUTOMATIC upgrade to it (or anything
+#: above) must not run on the older boards — they would come up unusably slow
+#: or not at all.  The user can still install it by hand (see the Updates card
+#: and ``POST /api/updates/apply``); only the unattended weekly path is gated.
+MIN_SAFE_VERSION = (2, 0, 0)
+
+#: Transcode-profile keys this hurdle considers capable of 2.0.0+.
+#:
+#: ``detect_pi_model()`` collapses the Zero 2 W into ``pi3`` (both are
+#: VideoCore IV), so listing model keys keeps that mapping authoritative and
+#: needs no separate board probe here.  Anything else — ``pi2``, ``pi3``,
+#: ``None`` on a non-Pi or an unreadable model — is NOT auto-upgradable, which
+#: is the safe direction: an undetected board is assumed incapable.
+MIN_SAFE_PI_MODELS = frozenset({"pi4", "pi5"})
+
+
 # How often the background loop re-evaluates the schedule (seconds).
 SCHEDULE_POLL_SECONDS = 60
 
@@ -254,6 +276,88 @@ class UpdateManager:
         """Currently installed Metixel version."""
         return __version__
 
+    # -- Automatic-upgrade hurdle -------------------------------------------
+
+    def auto_update_hurdle(self, version: str | None = None) -> dict[str, Any]:
+        """Describe whether the AUTOMATIC path may install *version* here.
+
+        The weekly auto-update is blocked when the candidate release is at or
+        above :data:`MIN_SAFE_VERSION` **and** this board is not in
+        :data:`MIN_SAFE_PI_MODELS`.  Everything else (no candidate, a release
+        below the floor, capable hardware) is permitted.
+
+        This is a *guard on the unattended path only*.  ``apply_update()`` is
+        deliberately not gated, so the user can always install the release by
+        hand from the Updates card after reading the changelog.
+
+        Returns a JSON-serialisable dict:
+
+        ``applies``       - True when a pending update is being held back
+        ``hardware_ok``   - whether this board may auto-upgrade to 2.0.0+
+        ``model``         - detected transcode-profile key, or None
+        ``min_safe_version`` - the floor for automatic major upgrades
+        ``candidate``     - the version that is being withheld, if any
+        ``reason``        - user-facing explanation (empty when not blocking)
+        """
+        if version is None:
+            with self._lock:
+                available = self._cache.get("available", {})
+            version = str((available.get(self.channel) or {}).get("version") or "")
+        return self._auto_update_hurdle_for(version)
+
+    @staticmethod
+    def _auto_update_hurdle_for(version: str) -> dict[str, Any]:
+        """The hurdle verdict for *version* as a pure, lock-free function.
+
+        Split out of :meth:`auto_update_hurdle` because ``get_status()`` already
+        holds ``self._lock`` while it assembles the status payload — calling a
+        lock-taking method from there would deadlock on the non-reentrant lock.
+        """
+        from metixel.shared.platform import detect_pi_model
+
+        model = detect_pi_model()
+        hardware_ok = model in MIN_SAFE_PI_MODELS
+        parsed = _parse_semver(version) if version else None
+        needs_newer_hardware = parsed is not None and parsed[:3] >= MIN_SAFE_VERSION
+
+        floor = ".".join(str(part) for part in MIN_SAFE_VERSION)
+        applies = needs_newer_hardware and not hardware_ok
+        if applies:
+            logger.debug(
+                "Hardware hurdle: model=%r not in %s — %s withheld from auto-update",
+                model,
+                sorted(MIN_SAFE_PI_MODELS),
+                version,
+            )
+            # The reason is the COMPLETE user-facing sentence, so the dashboard
+            # renders it verbatim.  Keeping it whole (rather than letting the JS
+            # splice a version prefix onto it) avoids the version being named
+            # twice, which read as "Metixel 2.0.0 Metixel 2.0.0 and later…".
+            #
+            # "runs best on" rather than "requires": the board is withheld from
+            # the UNATTENDED path only, and the user can still install it by
+            # hand — so the message should not read as a hard incompatibility.
+            #
+            # The closing "read the changelog" prompt is deliberately NOT
+            # repeated here; the dashboard appends it as an emphasised line,
+            # because it needs to hyperlink the word "changelog".
+            reason = (
+                f"Metixel {version} runs best on a Raspberry Pi 4 or newer, and this "
+                f"device reports '{model or 'unknown'}' — so it will not install "
+                "automatically."
+            )
+        else:
+            reason = ""
+
+        return {
+            "applies": applies,
+            "hardware_ok": hardware_ok,
+            "model": model,
+            "min_safe_version": floor,
+            "candidate": version or None,
+            "reason": reason,
+        }
+
     # -- Status --------------------------------------------------------------
 
     def get_status(self) -> dict[str, Any]:
@@ -295,6 +399,15 @@ class UpdateManager:
                 "releases": self._cache.get("releases", []),
                 "local_releases": self._list_local_releases(),
                 "current_release": self._current_release(),
+                # Whether a pending release is being withheld from the
+                # AUTOMATIC path because this board is below the hardware
+                # floor.  The dashboard renders this as a notice in the
+                # Updates card; it never blocks a manual install.
+                # NOTE: the lock-free variant is used because this method
+                # already holds self._lock (the lock is NOT reentrant).
+                "auto_update_hurdle": self._auto_update_hurdle_for(
+                    str((available.get(self.channel) or {}).get("version") or "")
+                ),
             }
 
     # -- Check for Updates ---------------------------------------------------
@@ -855,6 +968,23 @@ rm -f "$0"
                 "Auto-update time reached but no newer %s version available — skipping",
                 self.channel,
             )
+            return
+
+        # Hardware hurdle: never auto-install a hardware-floor-raising release
+        # on a board that cannot run it.  This is checked HERE and not inside
+        # apply_update() on purpose — the manual install from the Updates card
+        # shares apply_update(), and the user must remain able to upgrade by
+        # hand after reading the changelog.
+        hurdle = self.auto_update_hurdle(str(ch_info.get("version") or ""))
+        if hurdle["applies"]:
+            logger.warning(
+                "Auto-update to %s withheld: %s",
+                ch_info.get("version"),
+                hurdle["reason"],
+            )
+            # Deliberately do NOT record last_auto_update.  The update has not
+            # been applied, and stamping the week would suppress a later manual
+            # window — the user's explicit action is what should move the device.
             return
 
         result = self.apply_update(channel=self.channel)

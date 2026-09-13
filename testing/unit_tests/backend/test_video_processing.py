@@ -649,7 +649,7 @@ class TestProcessCacheMissLogging:
 
     def _mock_seams(self, proc: VideoProcessor, tmp_path, cached: Path | None) -> None:
         """Wire up mocks so ``process()`` can run without external tools."""
-        proc._hash_file = mock.Mock(return_value=self.FILE_HASH)
+        proc._hash_file = mock.Mock(return_value=self.FILE_HASH)  # type: ignore[method-assign]
 
         def fake_probe(path):
             # The cached file probes as already-optimal H.264; the source is HEVC.
@@ -657,12 +657,12 @@ class TestProcessCacheMissLogging:
                 return dict(self.H264_CACHED)
             return dict(self.HEVC_SOURCE)
 
-        proc._probe = mock.Mock(side_effect=fake_probe)
-        proc._extract_thumbnail = mock.Mock(return_value=None)
-        proc._extract_video_frames = mock.Mock(
+        proc._probe = mock.Mock(side_effect=fake_probe)  # type: ignore[method-assign]
+        proc._extract_thumbnail = mock.Mock(return_value=None)  # type: ignore[method-assign]
+        proc._extract_video_frames = mock.Mock(  # type: ignore[method-assign]
             return_value=(tmp_path / "f1.jpg", tmp_path / "f2.jpg")
         )
-        proc._resolve_profile = mock.Mock(
+        proc._resolve_profile = mock.Mock(  # type: ignore[method-assign]
             return_value={
                 "codec": "h264",
                 "max_width": 1920,
@@ -674,9 +674,9 @@ class TestProcessCacheMissLogging:
                 "h264_level": "4.0",
             }
         )
-        proc._validate_cached_video = mock.Mock(return_value=True)
-        proc._transcode = mock.Mock()
-        proc._build_item = mock.Mock(return_value="built-item")
+        proc._validate_cached_video = mock.Mock(return_value=True)  # type: ignore[method-assign]
+        proc._transcode = mock.Mock()  # type: ignore[method-assign]
+        proc._build_item = mock.Mock(return_value="built-item")  # type: ignore[method-assign]
 
     def test_cache_miss_logs_no_cached_video(self, tmp_path, caplog):
         source = tmp_path / "clip.mp4"
@@ -741,11 +741,11 @@ class TestVideoScanTranscode:
                 "transcoding_profile": "custom",
             },
         )
-        p._hash_file = mock.Mock(return_value="feedface12345678")
-        p._probe = mock.Mock(return_value=dict(self.H264_SOURCE))
-        p._extract_thumbnail = mock.Mock()
-        p._extract_video_frames = mock.Mock(return_value=(Path("/tmp/f1.jpg"), Path("/tmp/f2.jpg")))
-        p._resolve_profile = mock.Mock(return_value=profile)
+        p._hash_file = mock.Mock(return_value="feedface12345678")  # type: ignore[method-assign]
+        p._probe = mock.Mock(return_value=dict(self.H264_SOURCE))  # type: ignore[method-assign]
+        p._extract_thumbnail = mock.Mock()  # type: ignore[method-assign]
+        p._extract_video_frames = mock.Mock(return_value=(Path("/tmp/f1.jpg"), Path("/tmp/f2.jpg")))  # type: ignore[method-assign]
+        p._resolve_profile = mock.Mock(return_value=profile)  # type: ignore[method-assign]
         return p
 
     def test_h264_source_on_h265_profile_needs_transcode(self, tmp_path) -> None:
@@ -784,7 +784,7 @@ class TestVideoScanTranscode:
 
     def test_scan_records_missing_frames_error(self, tmp_path) -> None:
         p = self._make_proc(tmp_path, None)
-        p._extract_video_frames = mock.Mock(return_value=(None, None))
+        p._extract_video_frames = mock.Mock(return_value=(None, None))  # type: ignore[method-assign]
         scan = p.scan(tmp_path / "clip.mp4")
         assert scan is not None
         assert scan.has_frames is False
@@ -793,7 +793,7 @@ class TestVideoScanTranscode:
     def test_scan_returns_none_when_unreadable(self, tmp_path) -> None:
 
         p = self._make_proc(tmp_path, None)
-        p._probe = mock.Mock(side_effect=RuntimeError("boom"))
+        p._probe = mock.Mock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
         assert p.scan(tmp_path / "clip.mp4") is None
 
     def test_transcode_no_transcode_returns_not_transcoded(self, tmp_path) -> None:
@@ -883,6 +883,6 @@ class TestVideoScanTranscode:
                 }
             return dict(self.H264_SOURCE)
 
-        p._validate_cached_video = mock.Mock(return_value=True)
-        p._probe = mock.Mock(side_effect=fake_probe)
+        p._validate_cached_video = mock.Mock(return_value=True)  # type: ignore[method-assign]
+        p._probe = mock.Mock(side_effect=fake_probe)  # type: ignore[method-assign]
         assert p.requires_encode(scan) is False

@@ -204,16 +204,29 @@ cd /opt/metixel && python -m pytest testing/unit_tests/ -v
 ### Lint & type checks
 
 ```bash
-# Lint (ruff) — line-length 100, target py39
-ruff check src/metixel/
+# Lint (ruff) — line-length 100, target py311
+ruff check src/metixel/ testing/
 
-# Type check (mypy)
-mypy src/metixel/
+# Format check
+ruff format --check src/metixel/ testing/
+
+# Type check (mypy) — BOTH trees
+mypy src/metixel/ testing/
 ```
 
 Both are configured in `pyproject.toml` (dev dependencies: `ruff`, `mypy`,
-`pytest`, `pytest-cov`). The project has a small pre-existing mypy baseline —
-don't introduce *new* errors.
+`pytest`, `pytest-cov`).
+
+**`testing/` is type-checked too** (as of 1.2.5) — keep it at zero errors.
+This is deliberate: the tests are where the Protocol fakes live
+(`IPCSender`, `HttpGateway`, `MqttGateway`, …), and those fakes only stay
+honest if mypy is comparing them against the real interfaces. Type-checking
+the tests is what catches a fake whose `send()` returns `None` while the port
+promises `bool`.
+
+If you must suppress something, use a **narrow** code-specific ignore with a
+comment explaining why — `# type: ignore[method-assign]` when patching a
+method with a mock, never a bare `# type: ignore`.
 
 ### Web UI tests (Playwright)
 
@@ -277,7 +290,7 @@ Full details in [`testing/web-tests/README.md`](testing/web-tests/README.md).
 ## Code style
 
 - **Python:** `ruff` is the canonical formatter and linter — run
-  `ruff format` / `ruff check src/metixel/` before submitting. Follow the
+  `ruff format` / `ruff check src/metixel/ testing/` before submitting. Follow the
   existing clean-architecture layout (`src/` + `typing.Protocol` ports in
   `src/metixel/shared/ports.py`, adapters in `src/metixel/shared/adapters.py`).
 - **Line endings:** all repo files are **CRLF**. Normalise to CRLF when adding

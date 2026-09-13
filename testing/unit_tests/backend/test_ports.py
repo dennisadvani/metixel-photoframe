@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import socket
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
+
+from metixel.shared.ipc import ControlMessage
 
 
 class TestAdapterConformance:
@@ -89,13 +92,14 @@ class TestPortsBundle:
 
 
 class _FakeIPC:
-    """Minimal IPCClient stand-in (the real one uses a Pi-only Unix socket)."""
+    """Satisfies the ``IPCSender`` port (the real one needs a Pi-only socket)."""
 
     def __init__(self) -> None:
-        self.sent = []
+        self.sent: list[ControlMessage] = []
 
-    def send(self, *args, **kwargs) -> None:
-        self.sent.append(args[0] if args else None)
+    def send(self, msg: ControlMessage) -> bool:
+        self.sent.append(msg)
+        return True
 
     def close(self) -> None:
         pass
@@ -142,6 +146,8 @@ class TestCompositionRoots:
         import metixel.frontend.renderer as renderer_mod
 
         monkeypatch.setattr(renderer_mod, "IPCServer", _FakeIPCServer)
-        fake_backend = object()
+        # A bare object() stands in for the display backend; build_renderer only
+        # stores it, so the concrete type is irrelevant here.
+        fake_backend = cast(Any, object())
         renderer = renderer_mod.build_renderer(self._write_config(tmp_path), backend=fake_backend)
         assert renderer._backend is fake_backend

@@ -512,9 +512,9 @@
         },
         {
             "label": "[Local] Type Check",
-            "detail": "Runs mypy on src/metixel/ on this PC using the .venv interpreter.",
+            "detail": "Runs mypy on src/metixel/ and testing/ on this PC using the .venv interpreter.",
             "type": "shell",
-            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m mypy src/metixel/",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe -m mypy src/metixel/ testing/",
             "options": {
                 "cwd": "${workspaceFolder}",
                 "shell": {
@@ -529,6 +529,50 @@
             "group": {
                 "kind": "build"
             },
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Simulate Blocked Update (Pi 3)",
+            "detail": "Runs the local backend with a fake Pi 3 and a fake 2.0.0 release, so the Updates card shows the 'automatic update paused' notice. No network calls; nothing is installed. Open http://127.0.0.1:8080/ -> Advanced -> Updates.",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe scripts/dev/simulate_update.py --model pi3 --version 2.0.0",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONPATH": "src"
+                },
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "[Local] Simulate Allowed Update (Pi 5)",
+            "detail": "Same simulation but with a capable board, so the notice stays hidden and the Install button is offered — useful for checking the notice is not shown when it should not be.",
+            "type": "shell",
+            "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe scripts/dev/simulate_update.py --model pi5 --version 2.0.0",
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONPATH": "src"
+                },
+                "shell": {
+                    "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                    "args": [
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass"
+                    ]
+                }
+            },
+            "isBackground": true,
             "problemMatcher": []
         }
     ],

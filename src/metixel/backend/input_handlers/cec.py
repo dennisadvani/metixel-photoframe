@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 
 from metixel.backend.state import StateManager
-from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.ipc import ControlMessage, IPCSender
 from metixel.shared.ports import CecController
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class CECHandler:
     def __init__(
         self,
         state: StateManager,
-        ipc: IPCClient,
+        ipc: IPCSender,
         cec: CecController | None = None,
         display_power: Callable[[bool], None] | None = None,
     ) -> None:

@@ -602,6 +602,35 @@ a new version is available.
 
 You can also toggle **automatically check for updates**.
 
+### Hardware requirement for 2.0.0 and later
+
+**Metixel 2.0.0 runs best on a Raspberry Pi 4 or newer.** A Pi 2, Pi 3, or
+Pi Zero 2 W does not have the memory or graphics performance to run it well.
+
+Because of that, the **automatic** update will not install 2.0.0 or later on
+those boards. When such an update is waiting, the Updates card shows an amber
+notice naming the version:
+
+> **Automatic update paused.** Metixel 2.0.0 runs best on a Raspberry Pi 4 or
+> newer, and this device reports 'pi3' — so it will not install automatically.
+> **Read the [changelog](https://github.com/dennisadvani/metixel-photoframe/blob/main/docs/CHANGELOG.md)
+> before installing.**
+
+What this means in practice:
+
+- **Nothing breaks and nothing is skipped.** Your frame keeps working on the
+  version it is running, and it continues to receive *automatic* updates for
+  every release below 2.0.0 (i.e. all 1.x updates, including fixes).
+- **You can still upgrade by hand.** The **Install Update** button and the
+  release selector are never blocked — the notice only explains why the
+  unattended path stopped. Read `docs/CHANGELOG.md` first, then install
+  manually if you accept the trade-off.
+- **The schedule is not consumed.** A withheld update does not mark the week
+  as "done", so your auto-update slot is not silently used up.
+
+If you see the notice and want 2.0.0, move the SD card to a Pi 4 or Pi 5 —
+the frame's data lives in `/opt/metixel/data/`, so it moves with the card.
+
 ---
 
 ## 9. Everyday Use & Care

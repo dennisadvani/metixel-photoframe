@@ -8,6 +8,7 @@ and watches for config changes.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -24,10 +25,22 @@ from metixel.shared.config import Config
 from metixel.shared.io import atomic_write_json
 from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
-from metixel.shared.paths import run_dir, run_path
+from metixel.shared.paths import frontend_heartbeat_path, run_dir, run_path
+from metixel.shared.platform import boot_identity
 from metixel.shared.system_stats import format_gpu_stats, read_system_stats
 
 logger = logging.getLogger(__name__)
+
+#: How often the render loop republishes its heartbeat, in seconds.
+#:
+#: This is a periodic write from the render loop, which the project's
+#: "minimise SD-card writes" rule normally forbids.  It is justified because
+#: the file lives in ``run_dir()`` (a tmpfs mount on the Pi), so the cost is
+#: RAM rather than flash erase cycles — the same contract as
+#: ``current_media.json``.  The write is also deliberately throttled and
+#: bounded: one small file every HEARTBEAT_INTERVAL, never per frame.  See
+#: ``metixel.backend.frontend_liveness`` for the consumer.
+HEARTBEAT_INTERVAL = 10.0
 
 
 def _show_feedback(overlay: OverlayManager | None, title: str, body: str, duration: float) -> None:
@@ -69,6 +82,13 @@ class FrontendRenderer:
         # FPS tracking
         self._fps_last_time: float = 0.0
         self._fps_frame_snapshot: int = 0
+        # Liveness heartbeat (see _write_heartbeat).  The boot id is captured
+        # once so a heartbeat is attributable to THIS boot; the render loop
+        # only starts writing after the display backend has initialised.
+        self._heartbeat_path: Path = frontend_heartbeat_path()
+        self._last_heartbeat: float = 0.0
+        self._heartbeat_start: float = time.monotonic()
+        self._boot_id: str = boot_identity()
 
     # -- Main loop -----------------------------------------------------------
 
@@ -350,11 +370,47 @@ class FrontendRenderer:
 
             self._frame_count += 1
 
+            # Publish liveness for the OTA health-check.  Deliberately AFTER
+            # the frame has been rendered and presented: if rendering throws,
+            # the loop unwinds to the outer handler and the heartbeat stops,
+            # which is exactly the signal /api/health?require=render needs.
+            self._write_heartbeat()
+
             # Log FPS every 5 seconds
             self._log_fps()
 
             # Log system resources every 30 seconds (debug builds only)
             self._log_resources()
+
+    def _write_heartbeat(self) -> None:
+        """Publish frontend liveness to ``run_dir()`` for the health check.
+
+        The file's existence and mtime are the liveness proof, so there is no
+        cheaper mechanism; writes are throttled to HEARTBEAT_INTERVAL and land
+        on tmpfs rather than the SD card.  ``pid`` + ``boot_id`` let the
+        consumer detect a *restarting* frontend — a crash loop keeps the file
+        fresh, but the identity flips, so it must not be read as healthy.
+        """
+        now = time.monotonic()
+        if now - self._last_heartbeat < HEARTBEAT_INTERVAL:
+            return
+        self._last_heartbeat = now
+        try:
+            atomic_write_json(
+                self._heartbeat_path,
+                {
+                    "pid": os.getpid(),
+                    "boot_id": self._boot_id,
+                    # Seconds this render loop has been running, for the log.
+                    "uptime": round(now - self._heartbeat_start, 1),
+                    "queue_len": len(self._presentation._queue) if self._presentation else 0,
+                },
+            )
+        except OSError:
+            # Best-effort telemetry: a read-only or full run dir must never
+            # take down the slideshow.  A missing heartbeat is reported as
+            # "missing" by the consumer, which is the honest answer.
+            logger.debug("Could not write frontend heartbeat", exc_info=True)
 
     def _log_fps(self) -> None:
         """Log the actual frames-per-second every 5 seconds."""
@@ -861,6 +917,12 @@ class FrontendRenderer:
             os.getpid(),
             time.strftime("%Y-%m-%d %H:%M:%S"),
         )
+
+        # Remove the heartbeat so a cleanly stopped frontend is reported as
+        # "missing" immediately, rather than looking stale for 30 seconds.
+        # Best-effort: the file is tmpfs telemetry, never worth failing over.
+        with contextlib.suppress(OSError):
+            self._heartbeat_path.unlink()
 
         if self._ipc_server:
             self._ipc_server.stop()

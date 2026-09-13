@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.ipc import ControlMessage, IPCSender
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class KeyboardHandler:
     def __init__(
         self,
         config: dict[str, Any] | None = None,
-        ipc: IPCClient | None = None,
+        ipc: IPCSender | None = None,
         display_power: Callable[[bool], None] | None = None,
     ) -> None:
         self._ipc = ipc

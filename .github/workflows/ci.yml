@@ -28,13 +28,16 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Lint (ruff check)
-        run: ruff check src/metixel/
+        run: ruff check src/metixel/ testing/
 
       - name: Format (ruff format)
-        run: ruff format --check src/metixel/
+        run: ruff format --check src/metixel/ testing/
 
       - name: Type check (mypy)
-        run: mypy src/metixel/
+        # Both trees.  The tests are type-checked too so the Protocol fakes
+        # (IPCSender, HttpGateway, ...) cannot silently drift away from the
+        # real interfaces they stand in for.
+        run: mypy src/metixel/ testing/
 
       - name: Tests (pytest)
         run: pytest testing/unit_tests/ -q --no-cov

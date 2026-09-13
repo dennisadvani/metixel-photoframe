@@ -69,3 +69,5 @@ etc/config.json
 # Test videos (large files, not source code)
 scripts/video_benchmark/source
 scripts/video_benchmark/out
+
+prototypes/

@@ -13,13 +13,21 @@ import json
 from pathlib import Path
 from typing import Any
 
+from metixel.shared.ipc import ControlMessage
+
 
 class FakeIPC:
-    def __init__(self) -> None:
-        self.sent = []
+    """Satisfies the ``IPCSender`` port (see metixel.shared.ipc)."""
 
-    def send(self, msg) -> None:
+    def __init__(self) -> None:
+        self.sent: list[ControlMessage] = []
+
+    def send(self, msg: ControlMessage) -> bool:
         self.sent.append(msg)
+        return True
+
+    def close(self) -> None:
+        pass
 
 
 class FakeMsg:
@@ -33,7 +41,7 @@ class FakeMqttGateway:
 
     def __init__(self) -> None:
         self.topics: list[str] = []
-        self.published: list[tuple[str, str]] = []
+        self.published: list[tuple[str, str, bool]] = []
         self.credentials: tuple[str, str] | None = None
 
     def connect(self, host: str, port: int, *, keepalive: int = 60) -> None:
@@ -110,6 +118,9 @@ class TestMQTTClient:
         from metixel.shared.ports import MqttGateway
 
         client, _ipc, mqtt = self._make(tmp_path)
+        # The gateway IS the fake here; assert on the concrete type so the
+        # fake's recording attributes are visible (the port has no `topics`).
+        assert isinstance(mqtt, FakeMqttGateway)
         assert isinstance(mqtt, MqttGateway)
 
         client._on_connect(None, None, None, 0)
@@ -261,7 +272,9 @@ class TestMQTTDiscovery:
         def _first_device(mqtt) -> dict:
             for t, p, _r in mqtt.published:
                 if t.startswith("homeassistant/"):
-                    return json.loads(p)["device"]
+                    device = json.loads(p)["device"]
+                    assert isinstance(device, dict)
+                    return device
             return {}
 
         assert _first_device(mqtt_a)["identifiers"] != _first_device(mqtt_b)["identifiers"]

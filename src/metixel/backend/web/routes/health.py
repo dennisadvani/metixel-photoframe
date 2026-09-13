@@ -8,8 +8,9 @@ import json
 import logging
 import os
 from datetime import UTC, datetime
+from typing import Any
 
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, current_app, jsonify, request
 
 from metixel.shared.paths import run_path
 
@@ -35,7 +36,27 @@ def _read_json(path: str) -> dict | None:
 
 @health_bp.route("", methods=["GET"])
 def health_check():
-    """System health endpoint."""
+    """System health endpoint.
+
+    Returns the system metrics the dashboard renders, plus a ``liveness``
+    block and an overall ``healthy`` flag.
+
+    By DEFAULT this answers 200 whenever the backend can serve the request,
+    because the dashboard (``apiGet``) treats any non-2xx as a hard failure
+    and would blank itself, and because a device deliberately run without a
+    frontend must not look permanently broken.
+
+    Pass ``?require=render`` to make the endpoint FAIL (503) when the
+    frontend is not demonstrably alive.  That is the form the OTA health gate
+    uses — a release whose frontend crash-loops must not pass the gate.  The
+    query form is used (rather than a separate endpoint or a config flag) so
+    the strict contract is opt-in, testable, and extensible
+    (``?require=render,network`` later) without breaking existing callers.
+
+    Note the backend cannot be checked here for liveness by construction: a
+    200 response already proves the backend answered.  This check is
+    specifically about the half the old gate could never see — the frontend.
+    """
     state = current_app.config["METIXEL_STATE"]
     health = state.get_system_health()
     # Read current media info from the frontend's state file
@@ -45,7 +66,79 @@ def health_check():
     # the actual state (e.g. when the schedule turns it off).
     daemon = current_app.config.get("METIXEL_DAEMON")
     health["display_on"] = getattr(daemon, "_display_on", True) if daemon else True
+
+    # Frontend liveness.  Not an error to be absent: the /api/health contract
+    # predates this signal, so a daemon that does not expose a tracker (or a
+    # test app built without one) reports "unknown" rather than "unhealthy".
+    liveness = _frontend_liveness(daemon)
+    health["liveness"] = {"frontend": liveness}
+
+    required = _required_checks()
+    # Fail-closed on the strict form: "require render" means a live renderer is
+    # required, so anything other than a demonstrated `alive is True` fails —
+    # including `None` ("cannot tell").  Do not relax this to `is False`: that
+    # would let an unknown state through, which is the exact hole this closes.
+    # In production the tracker is built in BackendDaemon.__init__ before the
+    # web server starts, so `None` there means a wiring bug, not a healthy
+    # device.  The LENIENT default (no query param) still returns 200.
+    unhealthy = [name for name in required if name == "render" and liveness["alive"] is not True]
+    health["required"] = required
+    health["healthy"] = not unhealthy
+    health["status"] = "healthy" if not unhealthy else "unhealthy"
+    if unhealthy:
+        # The reason is surfaced in the body (the OTA script logs the body on
+        # failure) so a failed upgrade says WHY, not just that it failed.
+        health["unhealthy_checks"] = unhealthy
+        return jsonify(health), 503
     return jsonify(health)
+
+
+def _required_checks() -> list[str]:
+    """Return the checks the caller demanded via ``?require=``.
+
+    ``?require=render`` (or ``?require=any``) enables the frontend check;
+    anything unrecognised is ignored so a typo cannot silently disable the
+    gate it was meant to enable.
+    """
+    raw = request.args.get("require", "")
+    wanted = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    if "render" in wanted or "any" in wanted or "all" in wanted:
+        return ["render"]
+    return []
+
+
+def _frontend_liveness(daemon: object | None) -> dict[str, Any]:
+    """Return the frontend liveness verdict, or a safe "unknown".
+
+    Never raises: liveness is diagnostics on a health endpoint, so a broken
+    tracker must degrade to "unknown" rather than take the endpoint down.
+    """
+    tracker = getattr(daemon, "frontend_liveness", None)
+    snapshot = getattr(tracker, "snapshot", None)
+    if snapshot is None:
+        return {
+            "alive": None,
+            "state": "unknown",
+            "reason": "frontend liveness tracking unavailable",
+        }
+    try:
+        verdict = snapshot()
+    except Exception:  # pragma: no cover - defensive, never break /health
+        logger.debug("Could not determine frontend liveness", exc_info=True)
+        return {
+            "alive": None,
+            "state": "unknown",
+            "reason": "frontend liveness check failed",
+        }
+    return (
+        verdict
+        if isinstance(verdict, dict)
+        else {
+            "alive": None,
+            "state": "unknown",
+            "reason": "frontend liveness returned an unexpected value",
+        }
+    )
 
 
 @health_bp.route("/display/info", methods=["GET"])

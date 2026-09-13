@@ -31,9 +31,7 @@ LAN by default — the password is the access boundary.
 - `GET /api/health` — OTA update.sh health-check + monitoring
 - `POST /api/auth/login|logout|me` — the gate itself
 - `POST /api/slideshow-started` — frontend renderer loopback signal
-- `/api/network/*` — captive-portal Wi-Fi setup- `POST /api/control` — IPC control commands (trusted local process)
-
-### Configuration
+- `/api/network/*` — captive-portal Wi-Fi setup- `POST /api/control` — IPC control commands (trusted local process)### Configuration
 - `GET /api/config` — Full configuration
 - `GET /api/config/<section>` — Section config
 - `PUT /api/config/<section>` — Update section (triggers hot reload)
@@ -72,6 +70,28 @@ LAN by default — the password is the access boundary.
 
 ### Health & Diagnostics
 - `GET /api/health` — System health
+  - **Default (no query)** — always `200` while the backend can serve the
+    request.  This is the dashboard/monitoring contract; the SPA treats a
+    non-2xx as a hard failure, and a deliberately headless device must not
+    look permanently broken.
+  - **`?require=render`** (aliases: `any`, `all`) — the strict form used by
+    the OTA updater's gate.  Returns `503` unless the frontend is
+    demonstrably alive, so a release whose frontend crash-loops **fails** the
+    gate instead of being declared a success.
+  - The response always carries:
+    - `liveness.frontend` — `{alive, state, reason, age_seconds, pid, boot_id}`
+      where `state` is `alive` | `starting` | `churning` | `stale` | `missing`
+      | `unknown`.  `alive` is `null` when tracking is unavailable.
+    - `healthy` / `status` — the overall verdict for the *requested* checks.
+    - `required` — the checks this request enforced (`[]` by default).
+    - `unhealthy_checks` — present only on a `503`.
+  - Liveness comes from the frontend's heartbeat
+    (`/run/metixel/frontend_heartbeat.json`, rewritten every ~10 s).  Because
+    `metixel-cage.service` is `Restart=always`, a **fresh file is not
+    enough**: liveness means *the same `pid`/`boot_id` has been beating*, so a
+    crash loop is reported as `churning` rather than healthy.
+  - `POST /api/slideshow-started` remains a separate, one-shot signal and is
+    **not** a liveness source — a device with no media never sends it.
 - `GET /api/health/display/info` — Detected display resolution
 - `GET /api/health/processing` — Background processing status
 - `GET /api/health/processing-status` — Per-phase processing progress
@@ -98,6 +118,26 @@ LAN by default — the password is the access boundary.
     user-owned state: the backend enables it once on a device's first boot
     (latched by `network.wifi_radio_first_run_done`) and never re-asserts it on
     boot or on an OTA.  `scripts/reconcile.sh` intentionally does not manage it.
+
+### Updates
+- `GET /api/updates/status` — Version, channel, available releases, schedule
+  and progress.  Includes **`auto_update_hurdle`**:
+  ```json
+  {"applies": true, "hardware_ok": false, "model": "pi3",
+   "min_safe_version": "2.0.0", "candidate": "2.0.0", "reason": "…"}
+  ```
+  `applies` is `true` when a pending release is being withheld from the
+  **automatic** path because this board is below the 2.0.0 hardware floor
+  (a Pi 2/3/Zero 2 W, or an undetectable model).  It is informational only —
+  `POST /api/updates/apply` is deliberately **not** gated, so the manual
+  Install button keeps working.
+- `POST /api/updates/check` — Trigger a check.  `?force=true` bypasses the cache.
+- `POST /api/updates/apply` — Install a release (latest on channel, or
+  `{"version": "..."}`; `keep_existing` reuses a local copy).  Not affected by
+  `auto_update_hurdle`.
+- `POST /api/updates/rollback` — Flip the `live` symlink to a locally
+  installed release.
+- `POST /api/updates/os-upgrade` — Full `apt upgrade` + reboot.
 
 ### Processing
 - `POST /api/processing/retry` — Forget a failed/skipped journal entry so

@@ -25,15 +25,18 @@ from __future__ import annotations
 from pathlib import Path
 from unittest import mock
 
+from metixel.shared.ipc import ControlMessage
+
 
 class FakeIPC:
-    """IPCClient stand-in (avoids the Pi-only Unix socket)."""
+    """Satisfies the ``IPCSender`` port (see metixel.shared.ipc)."""
 
     def __init__(self) -> None:
-        self.sent: list = []
+        self.sent: list[ControlMessage] = []
 
-    def send(self, msg) -> None:
+    def send(self, msg: ControlMessage) -> bool:
         self.sent.append(msg)
+        return True
 
     def close(self) -> None:
         pass
@@ -51,7 +54,9 @@ def _make_daemon(tmp_path: Path, monkeypatch):
     return daemon_mod.BackendDaemon(config_path)
 
 
-def _patch_network(monkeypatch, *, hardware=True, radio_enabled=False, set_ok=True):
+def _patch_network(
+    monkeypatch, *, hardware=True, radio_enabled=False, set_ok: bool = True
+) -> list[bool]:
     """Patch the network_manager symbols the daemon imports lazily."""
     import metixel.backend.network_manager as nm
 
