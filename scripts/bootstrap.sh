@@ -116,8 +116,8 @@ fi
 # ── Ask the two questions up front ─────────────────────────────────────────
 if [ -z "${CHANNEL}" ]; then
     echo "Release channel:"
-    echo "  stable = Latest stable release (recommended)"
-    echo "  beta   = Latest pre-release"
+    echo "  stable = Newest release published as stable (recommended)"
+    echo "  beta   = Newest release published as a pre-release"
     echo "  dev    = Development branch (latest commits, unstable)"
     read -r -p "  Channel [stable]: " CHANNEL
     CHANNEL="${CHANNEL:-stable}"
@@ -163,25 +163,58 @@ else
             apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git
         fi
     }
-    # Resolve the ref for the channel from the remote (no checkout needed):
-    # stable/beta → newest matching tag, dev → the dev branch.
+    # Resolve the ref for the channel (no checkout needed):
+    #   stable → newest release NOT flagged pre-release
+    #   beta   → newest release that IS flagged pre-release
+    #   dev    → the dev branch
+    #
+    # This MUST come from the GitHub releases API, not from tag NAMES.  A
+    # pre-release is a property of the RELEASE (GitHub's `prerelease` flag), not
+    # of the tag string: `v1.2.5` contains no hyphen yet was published with
+    # `gh release create --prerelease`.  The previous heuristic ("no dash in the
+    # name => stable") therefore offered a pre-release to users who chose
+    # stable.  The API needs no authentication (60 req/h, and we make 1 call).
     if [ "${DRY_RUN}" = "yes" ]; then
-        echo "  [dry-run] git ls-remote --tags ${REPO_URL} (resolve ${CHANNEL})"
+        echo "  [dry-run] resolve ${CHANNEL} via the GitHub releases API"
         REF="<newest ${CHANNEL} ref>"
     else
-        case "${CHANNEL}" in
-            stable)
+        if [ "${CHANNEL}" != "dev" ]; then
+            REF="$(CH="${CHANNEL}" URL="${REPO_URL}" python3 -c '
+import json, os, re, sys, urllib.request
+m = re.search(r"github\.com[:/]+([^/]+)/([^/]+?)(?:\.git)?/?$", os.environ["URL"])
+if not m:
+    sys.exit(1)
+want = os.environ["CH"] == "beta"   # beta wants prerelease=True
+try:
+    u = f"https://api.github.com/repos/{m[1]}/{m[2]}/releases?per_page=100"
+    req = urllib.request.Request(u, headers={"User-Agent": "metixel-bootstrap"})
+    with urllib.request.urlopen(req, timeout=25) as r:
+        rels = json.load(r)
+except Exception:
+    sys.exit(1)                     # offline / rate-limited -> caller falls back
+for rel in rels:
+    if not rel.get("draft") and bool(rel.get("prerelease")) == want:
+        print((rel.get("tag_name") or "").strip())
+        break
+' 2>/dev/null || true)"
+
+            # Fallback when the API is unreachable or rate-limited: keep the
+            # old tag-name heuristic so an install still works offline-ish.
+            # It cannot see a no-hyphen pre-release, so warn rather than
+            # pretend the answer is authoritative.
+            if [ -z "${REF}" ]; then
+                echo "  WARNING: could not reach the GitHub releases API —" >&2
+                echo "           falling back to tag names (may pick a pre-release)." >&2
+                dash_grep='-Ev'
+                [ "${CHANNEL}" = "beta" ] && dash_grep='-E'
                 REF="$(git ls-remote --tags --refs "${REPO_URL}" 'v*' \
                     | sed 's#.*refs/tags/##' \
-                    | grep -Ev -- '-' \
-                    | sort -V | tail -1)" ;;
-            beta)
-                REF="$(git ls-remote --tags --refs "${REPO_URL}" 'v*' \
-                    | sed 's#.*refs/tags/##' \
-                    | grep -E -- '-' \
-                    | sort -V | tail -1)" ;;
-            dev) REF="dev" ;;
-        esac
+                    | grep "${dash_grep}" -- '-' \
+                    | sort -V | tail -1)"
+            fi
+        else
+            REF="dev"
+        fi
         [ -n "${REF}" ] || { echo "ERROR: could not resolve a '${CHANNEL}' ref from ${REPO_URL}" >&2; exit 1; }
         echo "  Resolved ${CHANNEL} → ${REF}"
     fi
