@@ -504,6 +504,43 @@ class TestObsoletePackageRemoval:
         assert "def names(path):" not in script
         assert "def names(" not in script
 
+    def test_pip_manifest_matches_the_phase1_extra(self) -> None:
+        """requirements-pip.txt and the ``phase1`` extra must list the same deps.
+
+        These serve different consumers — the OTA installs the requirements file,
+        a developer runs ``pip install -e ".[phase1]"`` — so drift means one of
+        them is missing a runtime dependency.  ``cec`` had drifted out of both
+        extras while remaining in the requirements file.
+
+        PySide6/python-mpv are deliberately absent from BOTH: they come from apt.
+        """
+        import re
+        import tomllib
+
+        pip = set(self._parser().names([str(_REPO_ROOT / "requirements-pip.txt")]))
+
+        data = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        extras = data["project"]["optional-dependencies"]
+
+        def bare(spec: str) -> str:
+            return re.split(r"[<>=!~\[; \t]", spec, maxsplit=1)[0].strip()
+
+        phase1 = {bare(dep) for dep in extras["phase1"]}
+        phase2 = {bare(dep) for dep in extras["phase2"]}
+
+        assert pip == phase1, (
+            f"requirements-pip.txt and the phase1 extra disagree: "
+            f"pip-only={sorted(pip - phase1)}, extra-only={sorted(phase1 - pip)}"
+        )
+        # phase2 is phase1 plus the Phase 2 renderer.
+        assert phase2 - phase1 == {"PyOpenGL"}
+        assert phase1 - phase2 in ({}, set())
+
+        # The Qt/mpv stack is apt-only; it must not creep into an extra.
+        for qt_dep in ("PySide6", "python-mpv", "mpv"):
+            assert qt_dep not in phase1
+            assert qt_dep not in phase2
+
 
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""

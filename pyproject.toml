@@ -14,7 +14,7 @@ authors = [
 ]
 keywords = ["digital-photo-frame", "raspberry-pi", "immich", "photo-frame"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: End Users/Desktop",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
@@ -29,6 +29,11 @@ classifiers = [
 version = {attr = "metixel.__version__"}
 
 [project.optional-dependencies]
+# NOTE: this extra deliberately does NOT pull PySide6 or python-mpv. Both are
+# installed from apt on the Pi (see requirements-system.txt): the pip PySide6
+# wheel omits the GBM eglfs plugin, and ota_install.sh uses --ignore-installed
+# so a pip copy would shadow the apt one and break the platform plugin lookup.
+# These extras are for a development machine, where the Qt backend is not used.
 phase1 = [
     "Pillow>=10.0",
     "pillow-heif>=0.16",
@@ -37,6 +42,7 @@ phase1 = [
     "watchdog>=3.0",
     "paho-mqtt>=1.6",
     "requests>=2.31",
+    "cec>=0.2.8",
 ]
 phase2 = [
     "PyOpenGL>=3.1",
@@ -47,6 +53,7 @@ phase2 = [
     "watchdog>=3.0",
     "paho-mqtt>=1.6",
     "requests>=2.31",
+    "cec>=0.2.8",
 ]
 # The framing visualiser (`python -m metixel.framing.visualize_framing`) is a
 # DEV TOOL.  matplotlib is deliberately NOT in requirements-pip.txt or
