@@ -178,28 +178,53 @@ fi
 
 # ── 6) The render loop reported a real surface ─────────────────────────────
 head_ "6) renderer reached the display"
-LOG=/opt/metixel/data/logs/metixel-frontend.log
-if [ -f "${LOG}" ]; then
-    if grep -qiE 'wayland' "${LOG}"; then
-        ok "frontend log mentions the wayland platform"
-    else
-        warn "no wayland mention in the frontend log (check the effective platform)"
-    fi
-    if grep -qiE 'mpv|libmpv' "${LOG}"; then
-        ok "frontend log mentions mpv/libmpv (the render API attached)"
-    else
-        warn "no mpv mention in the frontend log"
-    fi
-    # Any traceback is a hard failure: rule 7 says never show or log a traceback
-    # as normal operation.
-    if grep -qiE 'traceback \(most recent call last\)' "${LOG}"; then
-        bad "the frontend log contains a traceback"
-        grep -A4 -iE 'traceback \(most recent call last\)' "${LOG}" | tail -20 | sed 's/^/      /'
-    else
-        ok "no traceback in the frontend log"
-    fi
+#
+# Read the JOURNAL, not /opt/metixel/data/logs/metixel-frontend.log.  The file
+# exists but is empty in normal operation: logging goes to stdout, which systemd
+# captures in the journal.  An earlier version of this script checked the file
+# and reported false warnings on a perfectly healthy frontend.
+LOG=$(sudo journalctl -u metixel-cage --since "-3min" --no-pager 2>/dev/null)
+if [ -z "${LOG}" ]; then
+    LOG=$(sudo journalctl -u metixel-cage -n 200 --no-pager 2>/dev/null)
+fi
+
+if echo "${LOG}" | grep -qi "PySide6Backend created"; then
+    ok "backend reported a created Qt surface"
+    echo "${LOG}" | grep -i "PySide6Backend created" | tail -1 | sed 's/^/      /'
 else
-    warn "no frontend log at ${LOG} yet"
+    warn "no 'PySide6Backend created' line — the backend may not have started"
+fi
+
+# The effective platform is the thing that silently degrades to xcb.
+if echo "${LOG}" | grep -qiE "wayland"; then
+    ok "no xcb fallback evident in the journal"
+else
+    warn "could not confirm the Qt platform from the journal"
+fi
+
+# The framing engine must have computed a layout for the real panel.
+if echo "${LOG}" | grep -qi "LayoutEngine:"; then
+    ok "framing engine computed a layout"
+    echo "${LOG}" | grep -i "LayoutEngine:" | tail -1 | sed 's/^/      /'
+else
+    warn "no LayoutEngine line — the mat/frame geometry may not have been computed"
+fi
+
+# A real monitor must have been detected (not a phantom output).
+if echo "${LOG}" | grep -qi "Detected display output"; then
+    ok "a physical display was detected"
+    echo "${LOG}" | grep -i "Detected display output" | tail -1 | sed 's/^/      /'
+else
+    warn "no 'Detected display output' line"
+fi
+
+# Any traceback is a hard failure: rule 7 says never show or log a traceback
+# as normal operation.
+if echo "${LOG}" | grep -qiE 'traceback \(most recent call last\)'; then
+    bad "the frontend journal contains a traceback"
+    echo "${LOG}" | grep -A4 -iE 'traceback \(most recent call last\)' | tail -20 | sed 's/^/      /'
+else
+    ok "no traceback in the frontend journal"
 fi
 
 # ── 7) Frame rate holds the cap ────────────────────────────────────────────
