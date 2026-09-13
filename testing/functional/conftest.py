@@ -37,6 +37,40 @@ BACKEND_PORT = 8080
 BASE = f"http://127.0.0.1:{BACKEND_PORT}"
 
 
+def parse_json_object(raw: bytes | str, *, context: str = "") -> dict:
+    """Parse a JSON **object** from an API response body.
+
+    ``json.loads()`` returns ``Any``, so returning it directly from a function
+    annotated ``-> dict`` trips mypy's ``no-any-return`` on every API helper in
+    the functional suite.  Parsing through this helper keeps the annotation
+    honest AND asserts the shape we actually expect, so a response that is a
+    list or a bare scalar fails loudly here rather than confusingly further
+    down a test.
+    """
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        where = f" for {context}" if context else ""
+        raise AssertionError(f"expected a JSON object{where}, got {type(data).__name__}")
+    return data
+
+
+def parse_json_array(raw: bytes | str, *, context: str = "") -> list:
+    """Parse a JSON **array** from an API response body.
+
+    Companion to :func:`parse_json_object` for the handful of endpoints whose
+    top level is a list (e.g. ``GET /api/immich/albums`` returns an array of
+    ``{id, name, assetCount}``).  Keeping the two helpers separate — rather
+    than one helper returning ``dict | list`` — means each call site states
+    which shape it expects, so a route changing from one to the other is a
+    loud, localised failure instead of a confusing ``TypeError`` further down.
+    """
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        where = f" for {context}" if context else ""
+        raise AssertionError(f"expected a JSON array{where}, got {type(data).__name__}")
+    return data
+
+
 def pytest_configure(config: pytest.Config) -> None:
     """Register the ``functional`` marker.
 

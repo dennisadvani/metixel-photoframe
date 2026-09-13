@@ -32,6 +32,7 @@ import urllib.error
 import urllib.request
 
 import pytest
+from conftest import parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ _CONTRAST_TEST = 50
 
 def _api_get(path: str) -> dict:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=15) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_put(path: str, payload: dict) -> dict:
@@ -66,7 +67,7 @@ def _api_put(path: str, payload: dict) -> dict:
         method="PUT",
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_post(path: str) -> dict:
@@ -77,7 +78,7 @@ def _api_post(path: str) -> dict:
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 @pytest.fixture(scope="module")
@@ -113,8 +114,12 @@ def test_ddc_capabilities_expose_brightness(ddc_available: dict) -> None:
     assert caps.get("available") is True, caps
     features = caps.get("features", [])
     codes = {f.get("code") for f in features}
-    assert VCP_BRIGHTNESS in codes, f"brightness (0x{VCP_BRIGHTNESS:02X}) not in features: {sorted(codes)}"
-    assert VCP_CONTRAST in codes, f"contrast (0x{VCP_CONTRAST:02X}) not in features: {sorted(codes)}"
+    assert VCP_BRIGHTNESS in codes, (
+        f"brightness (0x{VCP_BRIGHTNESS:02X}) not in features: {sorted(codes)}"
+    )
+    assert VCP_CONTRAST in codes, (
+        f"contrast (0x{VCP_CONTRAST:02X}) not in features: {sorted(codes)}"
+    )
 
 
 def _read_vcp(code: int) -> dict:

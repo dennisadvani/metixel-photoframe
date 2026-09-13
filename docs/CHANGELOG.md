@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   failed attempts. Leave the password empty for the previous open dashboard;
   a forgotten password can be cleared from the console
   (`python -m metixel --clear-web-password`).
+- **Automatic updates no longer cross the 2.0.0 hardware floor on a Pi 3.**
+  The upcoming 2.0.0 runs best on a Raspberry Pi 4 or newer, so the weekly **auto-update**
+  now refuses to install 2.0.0+ on a Pi 2, Pi 3, Pi Zero 2 W, or a board whose
+  model cannot be detected.  The release is held back rather than partly
+  applied, and the weekly stamp is not written, so the schedule is not
+  consumed by an update that never ran.
+
+  **Manual installs are unaffected** — the Install button and the release
+  selector still work, so a user can read the changelog and upgrade by hand.
+
+  The Updates card shows an amber notice whenever a release is being
+  withheld, naming the version and linking to the changelog.  Releases
+  below 2.0.0 (i.e. all current 1.x updates) continue to install
+  automatically on every board.
 - **Synced device password** — changing the Device Password (System →
   Security) now updates the SSH console password and the Samba share password
   together, so the two stores can never drift apart. A partially failed change

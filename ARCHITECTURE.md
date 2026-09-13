@@ -848,9 +848,15 @@ runs in its own cgroup and survives the backend being stopped:
      `/opt/metixel/data/backups/` before the swap so a config-structure change
      in the new release can't break a rollback.
    - **Atomic swap** — `ln -sfn releases/<version> /opt/metixel/live`
-   - **Restart + health-check** — restart services and poll `/api/health`; on
-     failure, flip the symlink back to the previous release, restore the
-     config, and restart.
+   - **Restart + health-check** — restart services and poll
+     `/api/health?require=render`; on failure, flip the symlink back to the
+     previous release, restore the config, and restart.  The `?require=render`
+     form is essential: a bare `/api/health` returns `200` whenever the backend
+     is listening, so it cannot see a crash-looping frontend — the release
+     would be declared a success and left on a black screen with no rollback.
+     The strict form answers `503` unless the frontend heartbeat shows the
+     *same* process still beating (see §6.8), and the failure reason is printed
+     into the update log.
 3. A `trap` on EXIT guarantees `systemctl restart metixel-backend metixel-cage`
    runs whether the update succeeded or failed — the frame is never left black
 4. The script deletes itself; the transient unit is collected on exit

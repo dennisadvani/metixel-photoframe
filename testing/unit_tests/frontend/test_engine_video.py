@@ -326,7 +326,9 @@ class TestCurrentMediaStateFile:
         path = tmp_path / "run" / "current_media.json"
         if not path.exists():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert isinstance(data, dict)
+        return data
 
     @staticmethod
     def _image(item_id: str, path: Path) -> MediaItem:

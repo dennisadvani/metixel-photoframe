@@ -17,9 +17,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from metixel.backend.dependencies import ensure_runtime_dependencies
+from metixel.backend.frontend_liveness import FrontendLiveness
 from metixel.backend.state import StateManager
 from metixel.shared.ipc import IPCClient
-from metixel.shared.paths import live_dir
+from metixel.shared.paths import frontend_heartbeat_path, live_dir
 from metixel.shared.paths import run_dir as default_run_dir
 from metixel.shared.ports import Ports
 
@@ -65,6 +66,10 @@ class BackendDaemon:
         # Set by the web API when the frontend signals that the
         # slideshow has started — used to defer network checks.
         self._slideshow_started = threading.Event()
+        # Frontend liveness for /api/health (see backend/frontend_liveness.py).
+        # Built here so the tracker's identity-stability state survives across
+        # health polls; the route only ever reads its snapshots.
+        self.frontend_liveness = FrontendLiveness(frontend_heartbeat_path())
         # Display power state — read by Web UI / MQTT.  Initialised from the
         # schedule so HA gets the correct state on boot (MQTT starts before
         # the scheduler thread).  Falls back to True when schedule disabled.

@@ -25,6 +25,11 @@ var _updateBound = false;
 
 var _DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
+//: Canonical changelog, linked from the hardware-hurdle notice so a user can
+//: read what changed before deciding to install a withheld release by hand.
+var CHANGELOG_URL =
+    "https://github.com/dennisadvani/metixel-photoframe/blob/main/docs/CHANGELOG.md";
+
 /** Load and render the update status from the backend. */
 async function loadUpdateStatus() {
     var status = await apiGet("/updates/status");
@@ -46,6 +51,9 @@ async function loadUpdateStatus() {
     // ── Status line ────────────────────────────────────────────
     var statusEl = document.getElementById("update-status");
     if (!statusEl) return;
+
+    // ── Hardware hurdle notice ────────────────────────────────
+    _renderHurdleNotice(status);
 
     // Always show the actually-installed version first, so the UI never
     // misleads the user into thinking a different version is running.
@@ -100,6 +108,58 @@ async function loadUpdateStatus() {
         var hours = (status.check_interval_hours) ? status.check_interval_hours : 6;
         intervalHint.textContent = "Checks every " + hours + " hours";
     }
+}
+
+/** Render the hardware-hurdle notice for a withheld automatic update.
+ *
+ * Shown whenever the backend reports that a pending release is above this
+ * board's hardware floor, so the weekly auto-update will not install it.  The
+ * notice is purely informational: the manual Install button stays available,
+ * which is why the message points the user at the changelog rather than
+ * blocking them.  Hidden entirely when nothing is being withheld.
+ */
+function _renderHurdleNotice(status) {
+    var notice = document.getElementById("update-hurdle-notice");
+    if (!notice) return;
+
+    var hurdle = status.auto_update_hurdle;
+    if (!hurdle || !hurdle.applies) {
+        notice.classList.add("hidden");
+        return;
+    }
+
+    var text = document.getElementById("update-hurdle-text");
+    if (text) {
+        _renderHurdleText(text, hurdle.reason || "");
+    }
+    notice.classList.remove("hidden");
+}
+
+/**
+ * Render the hurdle notice body: backend sentence + emphasised changelog link.
+ *
+ * Built from DOM nodes rather than innerHTML so `reason` (server-provided) is
+ * inserted as text and can never be parsed as markup.
+ */
+function _renderHurdleText(text, reason) {
+    text.textContent = "";
+    // `reason` is the complete sentence from the backend, which already names
+    // the candidate version.  Render it verbatim — prefixing the version here
+    // would name it twice.
+    text.appendChild(document.createTextNode(" " + reason + " "));
+
+    var emphasis = document.createElement("strong");
+    emphasis.appendChild(document.createTextNode("Read the "));
+    var link = document.createElement("a");
+    link.href = CHANGELOG_URL;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "changelog";
+    link.style.color = "inherit";
+    link.style.textDecoration = "underline";
+    emphasis.appendChild(link);
+    emphasis.appendChild(document.createTextNode(" before installing."));
+    text.appendChild(emphasis);
 }
 
 /** Update the channel description text based on selection. */

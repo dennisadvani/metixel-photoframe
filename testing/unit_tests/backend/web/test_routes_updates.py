@@ -61,9 +61,7 @@ class TestUpdateApply:
 
 class TestUpdateReleases:
     def test_list_releases(self, client, mock_update_manager):
-        mock_update_manager.list_releases.return_value = [
-            {"version": "2.0.0", "prerelease": False}
-        ]
+        mock_update_manager.list_releases.return_value = [{"version": "2.0.0", "prerelease": False}]
         resp = client.get("/api/updates/releases")
         assert resp.status_code == 200
         data = json.loads(resp.data)

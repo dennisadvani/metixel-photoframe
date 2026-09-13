@@ -3,6 +3,7 @@
 """Tests for the ProcessingJournal single-writer state controller."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,6 +25,18 @@ def journal(tmp_path: Path) -> ProcessingJournal:
 
 def _fp(mtime: int = 1000, size: int = 2000) -> tuple[int, int]:
     return (mtime, size)
+
+
+def _entry(journal: ProcessingJournal, path: Path | str) -> dict[str, Any]:
+    """Return the journal entry for *path*, asserting it exists.
+
+    ``ProcessingJournal.get()`` is correctly ``Optional``; this narrows it so
+    tests can index the result directly.  A missing entry fails here with a
+    clear message rather than as a ``TypeError`` deeper in the assertion.
+    """
+    entry = journal.get(path)
+    assert entry is not None, f"no journal entry for {path}"
+    return entry
 
 
 class TestProcessingJournalBasics:
@@ -94,7 +107,7 @@ class TestProcessingJournalStates:
         p = Path("/opt/metixel/media/v.mp4")
         journal.mark_failed(p, "boom")
         journal.mark_ready(p, "transcoded")
-        entry = journal.get(p)
+        entry = _entry(journal, p)
         assert entry["state"] == STATE_READY
         assert entry["reason"] is None
         assert entry["transcode_status"] == "transcoded"
@@ -103,7 +116,7 @@ class TestProcessingJournalStates:
         p = Path("/opt/metixel/media/v.mp4")
         journal.mark_failed(p, "attempt 1")
         journal.mark_failed(p, "attempt 2")
-        assert journal.get(p)["attempts"] == 2
+        assert _entry(journal, p)["attempts"] == 2
 
 
 class TestProcessingJournalIssues:
@@ -160,9 +173,9 @@ class TestProcessingJournalPersistence:
 
         j2 = ProcessingJournal(path, save_after=0.0)
         assert len(j2.paths()) == 2
-        a = j2.get("/opt/metixel/media/a.jpg")
+        a = _entry(j2, "/opt/metixel/media/a.jpg")
         assert a["state"] == STATE_PENDING
-        b = j2.get("/opt/metixel/media/b.mp4")
+        b = _entry(j2, "/opt/metixel/media/b.mp4")
         assert b["state"] == STATE_FAILED
         assert b["reason"] == "encoder failed"
 
@@ -233,7 +246,7 @@ class TestStateManagerJournalIntegration:
         sm.add_playlist_items([item])
         # Adding the same item again is a no-op — still one ready entry
         sm.add_playlist_items([item])
-        assert sm.journal.get("/opt/metixel/media/a.jpg")["state"] == STATE_READY
+        assert _entry(sm.journal, "/opt/metixel/media/a.jpg")["state"] == STATE_READY
 
     def test_flush_journal_noop_when_unused(self, tmp_path: Path) -> None:
         sm = self._make_state(tmp_path)

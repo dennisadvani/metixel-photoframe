@@ -16,6 +16,7 @@ release runs the NEW version's install logic.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 from metixel.backend.update_manager import UpdateManager
 
@@ -46,6 +47,68 @@ class TestBuildUpdateScript:
         # shlex.quote() wraps the apostrophe in a quoted splice, so the raw
         # contiguous value must not appear in the script.
         assert "ref-with'quotes" not in script
+
+
+class TestHealthGateCanFail:
+    """The OTA health gate must be able to FAIL on a black-screen release.
+
+    Regression guard for a hole that shipped: the gate was a bare
+    ``curl -fsS /api/health``, and a 200 only ever proved the BACKEND was
+    listening.  A release whose frontend crash-looped therefore passed the
+    gate, was declared a success, and left the frame on a black screen with no
+    rollback.  The probe must stay on the strict ``?require=render`` form.
+
+    These assert on the script text (as ``test_first_run_wifi_radio.py`` does
+    for reconcile.sh) because the failure mode is a future "simplification"
+    that silently disarms the gate — something no behavioural unit test of the
+    app can catch.
+    """
+
+    def _script(self) -> str:
+        return _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+    def test_probe_demands_a_live_renderer(self) -> None:
+        content = self._script()
+
+        assert "HEALTH_PROBE_URL=" in content, "health probe URL must be defined"
+        assert "HEALTH_URL}?require=render" in content, (
+            "the gate must probe the strict ?require=render form — a bare "
+            "/api/health only proves the backend is up and would pass a "
+            "black-screen release"
+        )
+
+    def test_health_loop_uses_the_strict_probe(self) -> None:
+        content = self._script()
+
+        # The polling loop must curl the strict URL, not the lenient one.
+        assert '"${HEALTH_PROBE_URL}"' in content
+        assert 'curl -fsS "${HEALTH_URL}"' not in content, (
+            "the lenient URL must not be probed directly — that is the original bug"
+        )
+        assert '"${http_code}" = "200"' in content, (
+            "the gate must fail on a non-200 (the endpoint answers 503 when "
+            "the frontend is not alive)"
+        )
+
+    def test_curl_probe_is_time_bounded(self) -> None:
+        """A stalled connect must not defeat the loop's own timeout budget."""
+        content = self._script()
+
+        assert "--max-time" in content, (
+            "curl needs --max-time: without it a stalled TCP connect blocks "
+            "past HEALTH_TIMEOUT, so the wait loop cannot bound the gate"
+        )
+
+    def test_does_not_rely_on_fail_with_body(self) -> None:
+        """`--fail-with-body` is too new to depend on for a safety net.
+
+        An unrecognised option would make curl exit non-zero on EVERY probe,
+        so the gate would fail every update — the wrong direction for
+        something whose entire job is to protect the device.
+        """
+        # Non-comment lines only: the script explains this choice in a comment.
+        executable = [ln for ln in self._script().splitlines() if not ln.lstrip().startswith("#")]
+        assert not any("--fail-with-body" in ln for ln in executable)
 
 
 class TestInstallScript:
@@ -81,9 +144,7 @@ class TestInstallScript:
         # Only actual INVOCATIONS: skip comments and continuations such as
         # `|| _fail "pip install -e failed"`, which merely mention the phrase.
         pip_lines = [
-            ln.strip()
-            for ln in content.splitlines()
-            if ln.strip().startswith("pip install")
+            ln.strip() for ln in content.splitlines() if ln.strip().startswith("pip install")
         ]
         assert pip_lines, "no pip install invocation found"
         for ln in pip_lines:
@@ -99,16 +160,12 @@ class TestInstallScript:
         """
         req = (_REPO_ROOT / "requirements-pip.txt").read_text(encoding="utf-8")
         code_lines = [
-            ln.strip()
-            for ln in req.splitlines()
-            if ln.strip() and not ln.strip().startswith("#")
+            ln.strip() for ln in req.splitlines() if ln.strip() and not ln.strip().startswith("#")
         ]
         numpy_lines = [ln for ln in code_lines if ln.lower().startswith("numpy")]
         assert numpy_lines, "numpy should be declared in requirements-pip.txt"
         for ln in numpy_lines:
-            assert "<" not in ln, (
-                f"numpy must not have an upper bound (conflicts with apt): {ln}"
-            )
+            assert "<" not in ln, f"numpy must not have an upper bound (conflicts with apt): {ln}"
 
     def test_installs_system_packages(self) -> None:
         """The install script must also handle requirements-system.txt so new
@@ -199,9 +256,7 @@ class TestInstallScript:
         # EXECUTABLE lines count: a comment explaining the retirement legitimately
         # names the deleted script (and a raw substring search would match it).
         code = "\n".join(
-            ln
-            for ln in content.splitlines()
-            if ln.strip() and not ln.strip().startswith("#")
+            ln for ln in content.splitlines() if ln.strip() and not ln.strip().startswith("#")
         )
         assert "migrate_to_atomic.sh" not in code
         assert "MIGRATED_RELEASE_DIR" not in code
@@ -258,24 +313,17 @@ class TestInstallScript:
         # The negative lookbehind matters: "setup_trixie_metixel.sh" is a
         # SUBSTRING of the retained "legacy_setup_trixie_metixel.sh", so a plain
         # `in` check would flag the test helper we deliberately keep.
-        deleted_re = re.compile(
-            r"(?<!legacy_)setup_trixie_metixel\.sh|migrate_to_atomic\.sh"
-        )
+        deleted_re = re.compile(r"(?<!legacy_)setup_trixie_metixel\.sh|migrate_to_atomic\.sh")
         offenders: list[str] = []
         for script in sorted((repo / "scripts").rglob("*.sh")):
-            for lineno, line in enumerate(
-                script.read_text(encoding="utf-8").splitlines(), start=1
-            ):
+            for lineno, line in enumerate(script.read_text(encoding="utf-8").splitlines(), start=1):
                 stripped = line.strip()
                 if not stripped or stripped.startswith("#"):
                     continue
                 if deleted_re.search(line):
-                    offenders.append(
-                        f"{script.relative_to(repo)}:{lineno}: {stripped}"
-                    )
-        assert not offenders, (
-            "executable code still references a deleted installer:\n"
-            + "\n".join(offenders)
+                    offenders.append(f"{script.relative_to(repo)}:{lineno}: {stripped}")
+        assert not offenders, "executable code still references a deleted installer:\n" + "\n".join(
+            offenders
         )
 
     def test_logging_conf_is_fully_retired(self) -> None:
@@ -305,6 +353,7 @@ class TestInstallScript:
             and any(alias.name == "logging.config" for alias in node.names)
             for node in ast.walk(tree)
         ), "logging.config import should have been removed"
+
 
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
@@ -419,9 +468,7 @@ class TestFixups:
         assert "ExecStartPre" not in unit, (
             "the unit must not create the data tree — reconcile.sh owns it"
         )
-        assert "chown" not in unit, (
-            "the unit must not fix ownership — reconcile.sh owns it"
-        )
+        assert "chown" not in unit, "the unit must not fix ownership — reconcile.sh owns it"
         # It still owns the SYSTEMD-specific runtime dir, which must exist
         # before the service starts on every boot without an installer.
         assert "RuntimeDirectory=metixel" in unit
@@ -431,9 +478,7 @@ class TestFixups:
     def test_daemon_reads_ddc_cache_from_environment(self) -> None:
         """daemon.py must read XDG_CACHE_HOME instead of hardcoding the path."""
         repo = Path(__file__).resolve().parents[3]
-        daemon = (repo / "src" / "metixel" / "backend" / "daemon.py").read_text(
-            encoding="utf-8"
-        )
+        daemon = (repo / "src" / "metixel" / "backend" / "daemon.py").read_text(encoding="utf-8")
 
         assert 'os.environ.get("XDG_CACHE_HOME")' in daemon
         assert "cache_dir=cache_env or None" in daemon
@@ -521,7 +566,7 @@ class TestUpdateScript:
         assert 'if [ -e "${SAMPLE_DST}" ]' in content
         assert 'cp -rn "${SAMPLE_SRC}/." "${SAMPLE_DST}/"' in content
         # Must not be fatal to an otherwise healthy install.
-        assert '|| true' in seed_block
+        assert "|| true" in seed_block
 
     def test_bootstrap_is_thin_and_delegates(self) -> None:
         """bootstrap.sh is the only downloadable file and must stay small and
@@ -542,9 +587,7 @@ class TestUpdateScript:
         # The structural invariant that matters: bootstrap must NOT reimplement
         # install steps the release owns — it delegates to update.sh.
         for owned in ("reconcile.sh", "ota_install.sh"):
-            assert owned not in code, (
-                f"bootstrap must not run {owned} itself — update.sh owns that"
-            )
+            assert owned not in code, f"bootstrap must not run {owned} itself — update.sh owns that"
 
         # A loose sanity bound: the value is that it almost never changes, so a
         # grossly bloated bootstrap is the thing worth catching.
@@ -570,8 +613,7 @@ class TestUpdateScript:
         # Ordering must be checked on the actual DELEGATION call: the header
         # comment and the --local validation both mention update.sh earlier.
         code_lines = [
-            ln for ln in content.splitlines()
-            if ln.strip() and not ln.strip().startswith("#")
+            ln for ln in content.splitlines() if ln.strip() and not ln.strip().startswith("#")
         ]
         init_ln = next(i for i, ln in enumerate(code_lines) if "init.json" in ln)
         delegate_ln = next(
@@ -754,8 +796,8 @@ class TestReconcileScript:
         assert "grep -q '\\[metixel-media\\]'" in content
         assert 'tee -a "${SMB_CONF}"' in content
         # hostapd.conf / dnsmasq.conf are only written when absent.
-        assert '[ ! -f /etc/hostapd/hostapd.conf ]' in content
-        assert '[ ! -f /etc/dnsmasq.conf ]' in content
+        assert "[ ! -f /etc/hostapd/hostapd.conf ]" in content
+        assert "[ ! -f /etc/dnsmasq.conf ]" in content
 
     def test_data_tree_owner_matches_app_expectations(self) -> None:
         """reconcile.sh owns the data tree list; it must match what the
@@ -830,14 +872,7 @@ class TestUpdateChannelConsistency:
 
     def test_ui_js_channel_list_matches_backend(self) -> None:
         js = (
-            _REPO_ROOT
-            / "src"
-            / "metixel"
-            / "backend"
-            / "web"
-            / "static"
-            / "js"
-            / "updates-page.js"
+            _REPO_ROOT / "src" / "metixel" / "backend" / "web" / "static" / "js" / "updates-page.js"
         ).read_text(encoding="utf-8")
 
         assert 'var channels = ["stable", "beta", "dev"];' in js
@@ -890,9 +925,7 @@ class TestCheckInterval:
 
         monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
         runtime_state._last_write.clear()
-        runtime_state.write_runtime_state(
-            {"last_check": datetime.now(UTC).isoformat()}, force=True
-        )
+        runtime_state.write_runtime_state({"last_check": datetime.now(UTC).isoformat()}, force=True)
         assert self._mgr()._check_due({"check_interval_hours": 6}) is False
 
     def test_due_once_interval_elapsed(self, tmp_path, monkeypatch):
@@ -910,8 +943,8 @@ class TestCheckInterval:
         """A tiny configured interval must not turn the loop into a hammer."""
         from datetime import UTC, datetime, timedelta
 
-        from metixel.shared import runtime_state
         from metixel.backend.update_manager import MIN_CHECK_INTERVAL
+        from metixel.shared import runtime_state
 
         monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
         runtime_state._last_write.clear()
@@ -936,9 +969,9 @@ class TestCheckInterval:
         It lived there and was rewritten every few minutes, wearing the SD card
         and firing an inotify event that made the frontend reload its config.
         """
-        mgr_src = (
-            _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
-        ).read_text(encoding="utf-8")
+        mgr_src = (_REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py").read_text(
+            encoding="utf-8"
+        )
         assert '"last_check"' in mgr_src  # still tracked...
         assert 'update_config("update", {"last_check"' not in mgr_src  # ...not in config
         assert 'write_runtime_state({"last_check"' in mgr_src
@@ -946,9 +979,9 @@ class TestCheckInterval:
     def test_dead_update_fields_removed(self) -> None:
         """`last_update` was unused by the UI and `last_rollback` was never read
         by anything — both writes were removed rather than left to rot."""
-        mgr_src = (
-            _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
-        ).read_text(encoding="utf-8")
+        mgr_src = (_REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py").read_text(
+            encoding="utf-8"
+        )
         cfg_src = (_REPO_ROOT / "src" / "metixel" / "shared" / "config.py").read_text(
             encoding="utf-8"
         )
@@ -958,9 +991,7 @@ class TestCheckInterval:
         # explanation rather than the code.
         def _code(text: str) -> str:
             return "\n".join(
-                ln
-                for ln in text.splitlines()
-                if ln.strip() and not ln.strip().startswith("#")
+                ln for ln in text.splitlines() if ln.strip() and not ln.strip().startswith("#")
             )
 
         mgr_code = _code(mgr_src)
@@ -1039,6 +1070,7 @@ class TestReleaseManagement:
 
     def test_set_auto_update_accepts_any_time(self) -> None:
         """Users may pick any time of day, not just the 03:00–06:00 window."""
+
         class _FakeState:
             def __init__(self) -> None:
                 self.calls: list[tuple[str, dict]] = []
@@ -1047,10 +1079,11 @@ class TestReleaseManagement:
                 self.calls.append((section, values))
 
         mgr = UpdateManager.__new__(UpdateManager)
-        mgr._state = _FakeState()
+        fake = _FakeState()
+        mgr._state = cast(Any, fake)
         result = mgr.set_auto_update(time_str="12:00")
         assert result["status"] == "ok"
-        assert mgr._state.calls == [("update", {"auto_update_time": "12:00"})]
+        assert fake.calls == [("update", {"auto_update_time": "12:00"})]
 
     def test_set_auto_update_persists_valid_values(self) -> None:
         class _FakeState:
@@ -1061,9 +1094,10 @@ class TestReleaseManagement:
                 self.calls.append((section, values))
 
         mgr = UpdateManager.__new__(UpdateManager)
-        mgr._state = _FakeState()
+        fake = _FakeState()
+        mgr._state = cast(Any, fake)
         result = mgr.set_auto_update(enabled=False, day=3, time_str="04:30")
         assert result["status"] == "ok"
-        assert mgr._state.calls == [
+        assert fake.calls == [
             ("update", {"auto_update": False, "auto_update_day": 3, "auto_update_time": "04:30"})
         ]

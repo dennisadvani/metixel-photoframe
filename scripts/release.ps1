@@ -145,10 +145,102 @@ if ($Finalize) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to switch to main" }
     git pull origin main
     if ($LASTEXITCODE -ne 0) { throw "git pull main failed" }
-    git tag -a $Tag -m "Release $Finalize"
-    if ($LASTEXITCODE -ne 0) { throw "git tag failed" }
-    git push origin $Tag
-    if ($LASTEXITCODE -ne 0) { throw "git push tag failed" }
+
+    $MainHead = (git rev-parse main).Trim()
+
+    # -- Guard: has this version already been released? ----------------------
+    # If a "Release <version>" commit is already an ANCESTOR of main (i.e. an
+    # earlier release PR was merged and this run is a repeat), refuse to
+    # silently tag the newer main: the extra commits may not belong to this
+    # release at all.  Re-tagging an already-released version is only correct
+    # when the user explicitly asks for it - and because the tag is already
+    # published, that requires a force-push.
+    #
+    # Anchor the grep so it matches the final release commit only:
+    # `--grep="Release 1.2.5"` also matches "Release 1.2.5-beta.4", and taking
+    # `-1` would return the HEAD commit itself (always "newest"), masking the
+    # duplicate.  `^Release <version> \(` matches the squash-merge subject.
+    $ReleaseSubjectPattern = "^Release " + [regex]::Escape($Finalize) + " \("
+    $ReleaseCommits = @(git log --format="%H" --grep=$ReleaseSubjectPattern -E main)
+    if ($LASTEXITCODE -eq 0 -and $ReleaseCommits.Count -gt 1) {
+        # Oldest release commit for this version, excluding main HEAD.
+        $ExistingReleaseCommit = $ReleaseCommits[-1]
+        if ($ExistingReleaseCommit -ne $MainHead) {
+            Write-Host ""
+            Write-Host "WARNING: main already contains a release commit for ${Finalize}:" -ForegroundColor Yellow
+            Write-Host "  $ExistingReleaseCommit  $(git log -1 --format='%s' $ExistingReleaseCommit)"
+            Write-Host "  main HEAD is $MainHead  $(git log -1 --format='%s' $MainHead)"
+            Write-Host ""
+            Write-Host "  Commits on main since that release commit:"
+            git log --oneline "$ExistingReleaseCommit..$MainHead" | ForEach-Object { Write-Host "    $_" }
+            Write-Host ""
+            Write-Host "  This usually means TWO release PRs were merged for the same version," -ForegroundColor Yellow
+            Write-Host "  or -Finalize was run twice.  Continue only if those extra commits" -ForegroundColor Yellow
+            Write-Host "  genuinely belong to $Finalize." -ForegroundColor Yellow
+            Write-Host ""
+            if ($DryRun) {
+                Write-Host "[DryRun] Would prompt for confirmation here." -ForegroundColor Cyan
+            } else {
+                $Answer = Read-Host "Re-tag $Tag at main HEAD and force-push? (type 'yes' to confirm)"
+                if ($Answer -ne "yes") {
+                    Write-Host "Aborted - no tag changes made." -ForegroundColor Yellow
+                    exit 1
+                }
+            }
+        }
+    }
+
+    # -- Create or re-point the tag (idempotent) -----------------------------
+    # Determine the current local and remote state so a repeat run reports what
+    # it found instead of dying with a bare "tag already exists".
+    $LocalTagCommit = git rev-list -n 1 $Tag 2>$null
+    $LocalTagExists = ($LASTEXITCODE -eq 0 -and $LocalTagCommit)
+    if ($LocalTagExists) { $LocalTagCommit = $LocalTagCommit.Trim() }
+
+    $RemoteTagRef = git ls-remote --tags origin "refs/tags/$Tag" 2>$null
+    $RemoteTagExists = [bool]$RemoteTagRef
+
+    if ($LocalTagExists -and $LocalTagCommit -eq $MainHead) {
+        Write-Host "Local tag $Tag already points at main HEAD - nothing to re-point." -ForegroundColor Cyan
+    } else {
+        if ($LocalTagExists) {
+            Write-Host "Re-pointing local tag ${Tag}: $LocalTagCommit -> $MainHead" -ForegroundColor Yellow
+            git tag -d $Tag | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "git tag -d failed" }
+        }
+        git tag -a $Tag $MainHead -m "Release $Finalize"
+        if ($LASTEXITCODE -ne 0) { throw "git tag failed" }
+    }
+
+    # A published tag can only be moved with a force-push.  Detect it rather
+    # than emitting a confusing non-fast-forward error.
+    $RemoteMatches = $false
+    if ($RemoteTagExists) {
+        # Dereference the remote annotated tag to its commit for comparison.
+        $RemoteTagCommit = git rev-list -n 1 $Tag 2>$null
+        if ($LASTEXITCODE -eq 0) { $RemoteMatches = ($RemoteTagCommit.Trim() -eq $MainHead) }
+    }
+
+    if ($DryRun) {
+        if ($RemoteTagExists -and -not $RemoteMatches) {
+            Write-Host "[DryRun] Would force-push $Tag (remote tag differs from main HEAD)." -ForegroundColor Cyan
+        } else {
+            Write-Host "[DryRun] Would push $Tag to origin." -ForegroundColor Cyan
+        }
+        Write-Host "[DryRun] Would re-align dev to main." -ForegroundColor Cyan
+        exit 0
+    }
+
+    if ($RemoteTagExists -and -not $RemoteMatches) {
+        Write-Host "Remote tag $Tag already exists and points elsewhere - force-pushing." -ForegroundColor Yellow
+        git push origin $Tag --force
+        if ($LASTEXITCODE -ne 0) { throw "git push tag --force failed" }
+    } elseif ($RemoteTagExists) {
+        Write-Host "Remote tag $Tag already up to date." -ForegroundColor Cyan
+    } else {
+        git push origin $Tag
+        if ($LASTEXITCODE -ne 0) { throw "git push tag failed" }
+    }
 
     # -- Re-align dev to main ------------------------------------------------
     # The release PR is a squash-merge, so even though main and dev now have

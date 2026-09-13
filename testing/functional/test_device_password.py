@@ -96,7 +96,7 @@ def test_device_password_changes_both_stores(sudo_ok: bool) -> None:
     _run_sudo(["chpasswd"], input=f"{DEVICE_USER}:raspberry\n")
     _run_sudo(
         ["smbpasswd", "-a", "-s", DEVICE_USER],
-        input=f"raspberry\nraspberry\n",
+        input="raspberry\nraspberry\n",
     )
 
 

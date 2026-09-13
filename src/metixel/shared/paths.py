@@ -93,3 +93,17 @@ def run_dir() -> Path:
 def run_path(name: str) -> Path:
     """Return ``run_dir() / name`` for a runtime state file."""
     return run_dir() / name
+
+
+#: Filename of the frontend liveness heartbeat inside :func:`run_dir`.
+#:
+#: Written by the frontend render loop, read by the backend's
+#: ``FrontendLiveness`` tracker for ``/api/health``.  The contract lives here
+#: rather than beside either end so the writer (frontend) and the reader
+#: (backend) cannot drift, and so neither has to import the other's package.
+FRONTEND_HEARTBEAT_FILE = "frontend_heartbeat.json"
+
+
+def frontend_heartbeat_path() -> Path:
+    """Return the path of the frontend liveness heartbeat file."""
+    return run_path(FRONTEND_HEARTBEAT_FILE)

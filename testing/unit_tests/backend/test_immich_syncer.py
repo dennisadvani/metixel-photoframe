@@ -45,8 +45,8 @@ class FakeResponse:
     def __enter__(self):
         return self
 
-    def __exit__(self, *args: Any) -> bool:
-        return False
+    def __exit__(self, *args: Any) -> None:
+        return None
 
 
 class FakeHttpGateway:

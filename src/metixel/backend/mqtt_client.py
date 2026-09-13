@@ -22,7 +22,7 @@ from typing import Any
 
 from metixel import __version__
 from metixel.backend.state import StateManager
-from metixel.shared.ipc import ControlMessage, IPCClient
+from metixel.shared.ipc import ControlMessage, IPCSender
 from metixel.shared.paths import run_path
 from metixel.shared.platform import resolve_unique_id
 from metixel.shared.ports import MqttGateway
@@ -63,7 +63,7 @@ class MQTTClient:
     def __init__(
         self,
         state: StateManager,
-        ipc: IPCClient,
+        ipc: IPCSender,
         mqtt: MqttGateway | None = None,
         daemon: Any | None = None,
     ) -> None:

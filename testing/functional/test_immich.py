@@ -29,9 +29,11 @@ import logging
 import shutil
 import time
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from conftest import parse_json_array, parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,18 @@ _SYNC_WAIT = 600
 
 def _api_get(path: str) -> dict:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
+
+
+def _api_get_array(path: str) -> list:
+    """GET an endpoint whose top level is a JSON array.
+
+    Used for ``/api/immich/albums``, which returns a list rather than an
+    object.  Kept as its own helper so the expected shape is explicit at the
+    call site.
+    """
+    with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as resp:
+        return parse_json_array(resp.read(), context=path)
 
 
 def _api_post(path: str, payload: dict) -> dict:
@@ -59,7 +72,7 @@ def _api_post(path: str, payload: dict) -> dict:
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_put(path: str, payload: dict) -> dict:
@@ -70,7 +83,7 @@ def _api_put(path: str, payload: dict) -> dict:
         method="PUT",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _sync_dir() -> Path:
@@ -95,14 +108,16 @@ def _wait_for_sync_done(timeout: int = _SYNC_WAIT) -> dict:
     while time.monotonic() < deadline:
         status = _api_get("/api/immich/status")
         last = status.get("last_sync")
-        if last is not None and last.get("started_at", 0) >= trigger_time:
+        # Narrow explicitly: the API returns a nested object here, and mypy
+        # cannot know that from the outer `dict` annotation.
+        if isinstance(last, dict) and last.get("started_at", 0) >= trigger_time:
             return last
         time.sleep(3)
     pytest.fail("Immich sync did not complete within timeout")
 
 
 @pytest.fixture(scope="module")
-def immich_configured(immich_creds: dict[str, str]) -> dict[str, str]:
+def immich_configured(immich_creds: dict[str, str]) -> Iterator[dict[str, str]]:
     """Configure the running backend's Immich settings from ``.env``.
 
     Saves the original ``sync.immich`` config, applies the test server URL +
@@ -148,8 +163,13 @@ def immich_configured(immich_creds: dict[str, str]) -> dict[str, str]:
 
 
 def _album_ids_by_name(creds: dict[str, str]) -> dict[str, str]:
-    """Return {album_name: album_id} for the two configured test albums."""
-    albums = _api_get("/api/immich/albums")
+    """Return {album_name: album_id} for the two configured test albums.
+
+    ``GET /api/immich/albums`` is one of the few endpoints whose top level is a
+    JSON ARRAY (a list of ``{id, name, assetCount}``), so it goes through
+    :func:`parse_json_array` rather than the object helper.
+    """
+    albums = _api_get_array("/api/immich/albums")
     by_name = {a.get("name", ""): a.get("id", "") for a in albums}
     missing = [n for n in (creds["album_1"], creds["album_2"]) if n not in by_name]
     assert not missing, f"albums not found on server: {missing}; got: {sorted(by_name)}"

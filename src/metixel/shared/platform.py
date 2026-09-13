@@ -125,6 +125,48 @@ def resolve_unique_id() -> str:
     return socket.gethostname() or "metixel"
 
 
+def boot_identity() -> str:
+    """Return an identifier for the current boot of this machine.
+
+    Unlike :func:`resolve_unique_id` (which identifies the *device*), this
+    identifies the *boot*: it changes on every reboot and is stable in
+    between.  Combined with a process id it is the basis for the frontend
+    liveness check — a value that does NOT embed a timestamp, because such a
+    value would be ambiguous once the file it lives in is cleared by a reboot
+    (straight-after-reboot would be indistinguishable from stale).
+
+    Resolution order:
+
+    1. **``/proc/sys/kernel/random/boot_id``** — a fresh UUID per boot on
+       Linux, which is exactly the contract wanted here.
+    2. **Kernel boot time** (``btime`` in ``/proc/stat``) — also changes per
+       boot and needs no flag day, so an older kernel still works.
+    3. **``"unknown"``** — on systems exposing neither (desktop dev on
+       Windows/macOS).  Callers that need a stable identity outside Linux
+       fall back to the process id; see :class:`metixel.backend.frontend_liveness`.
+
+    Deliberately NOT read from ``/etc/machine-id``: that is per OS install,
+    not per boot, so every reboot would look like the same process.
+    """
+    try:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            boot_id = f.read().strip()
+        if boot_id:
+            return boot_id
+    except (OSError, FileNotFoundError):
+        pass
+
+    try:
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return line.split()[1]
+    except (OSError, FileNotFoundError):
+        pass
+
+    return "unknown"
+
+
 def read_vcgencmd_mem(unit: str) -> int | None:
     """Run ``vcgencmd get_mem <unit>`` and return the value in MB.
 

@@ -27,21 +27,29 @@ or service state involved).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
 import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
-
-from conftest import _load_env_file  # noqa: F401
+from conftest import (
+    _load_env_file,  # noqa: F401
+    parse_json_object,
+)
 
 # paho-mqtt is installed on the Pi (it is the real MQTT backend adapter).  We
 # import it lazily only in the connectivity test so the suite can still
 # collect/run on machines without it (e.g. a dev laptop pre-push).
+mqtt_client: Any
+_PAHO_AVAILABLE: bool
 try:
     import paho.mqtt.client as mqtt_client
+
     _PAHO_AVAILABLE = True
 except ImportError:
     mqtt_client = None
@@ -58,7 +66,9 @@ BASE = f"http://127.0.0.1:{BACKEND_PORT}"
 _CONNECT_WAIT = 30
 
 
-def _broker_connects(broker: str, port: int, username: str, password: str, timeout: int = _CONNECT_WAIT) -> str:
+def _broker_connects(
+    broker: str, port: int, username: str, password: str, timeout: int = _CONNECT_WAIT
+) -> str:
     """Attempt a direct TCP + MQTT connect to the broker as a client.
 
     Returns the CONNACK result: ``'connected'`` on success, ``'auth_error'``
@@ -100,16 +110,14 @@ def _broker_connects(broker: str, port: int, username: str, password: str, timeo
         time.sleep(0.2)
 
     client.loop_stop()  # type: ignore[attr-defined]
-    try:
+    with contextlib.suppress(Exception):
         client.disconnect()  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
-        pass
     return result[0]
 
 
 def _api_get(path: str) -> dict:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_put(path: str, payload: dict) -> dict:
@@ -120,7 +128,7 @@ def _api_put(path: str, payload: dict) -> dict:
         method="PUT",
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _mqtt_env() -> dict[str, str]:
@@ -144,7 +152,7 @@ def mqtt_creds() -> dict[str, str]:
 
 
 @pytest.fixture(scope="module")
-def mqtt_section(mqtt_creds: dict[str, str]) -> dict:
+def mqtt_section(mqtt_creds: dict[str, str]) -> Iterator[dict]:
     """Save the original MQTT config, apply the test settings, restore after.
 
     Modeled on test_immich.py's ``immich_configured`` fixture: the running
@@ -193,11 +201,10 @@ def test_mqtt_config_round_trips(mqtt_section: dict[str, str]) -> None:
         f"port not persisted: expected {mqtt_section['port']!r}, got {saved.get('port')!r}"
     )
     assert saved.get("username", "") == mqtt_section["username"], (
-        f"username not persisted: expected {mqtt_section['username']!r}, got {saved.get('username')!r}"
+        f"username not persisted: expected {mqtt_section['username']!r}, "
+        f"got {saved.get('username')!r}"
     )
-    assert saved.get("password", "") == mqtt_section["password"], (
-        f"password not persisted"
-    )
+    assert saved.get("password", "") == mqtt_section["password"], "password not persisted"
 
 
 def test_mqtt_status_shape(mqtt_creds: dict[str, str]) -> None:
@@ -251,7 +258,6 @@ def test_mqtt_connectivity_direct(mqtt_section: dict[str, str]) -> None:
         "fix METIXEL_TEST_MQTT_* in functional/.env"
     )
     assert outcome in ("connected",), (
-        f"Broker {broker}:{port} did not answer CONNACK 0 within {_CONNECT_WAIT}s "
-        f"(got {outcome!r})"
+        f"Broker {broker}:{port} did not answer CONNACK 0 within {_CONNECT_WAIT}s (got {outcome!r})"
     )
     logger.info("MQTT direct connect to %s:%s → %s", broker, port, outcome)

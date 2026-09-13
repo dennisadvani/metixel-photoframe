@@ -14,19 +14,23 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from typing import Any, cast
 from unittest import mock
 
 import pytest
 
+from metixel.shared.ipc import ControlMessage
+
 
 class FakeIPC:
-    """IPCClient stand-in that records sent ControlMessages."""
+    """Satisfies the ``IPCSender`` port (see metixel.shared.ipc)."""
 
     def __init__(self) -> None:
-        self.sent: list = []
+        self.sent: list[ControlMessage] = []
 
-    def send(self, msg) -> None:
+    def send(self, msg: ControlMessage) -> bool:
         self.sent.append(msg)
+        return True
 
     def close(self) -> None:
         pass
@@ -53,7 +57,7 @@ def _make_daemon(tmp_path: Path, monkeypatch, mqtt_client=None):
     monkeypatch.setattr(daemon_mod, "IPCClient", FakeIPC)
     monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path / "run"))
     daemon = daemon_mod.BackendDaemon(config_path)
-    daemon._mqtt_client = mqtt_client if mqtt_client is not None else FakeMqttClient()
+    daemon._mqtt_client = cast(Any, mqtt_client if mqtt_client is not None else FakeMqttClient())
     return daemon
 
 

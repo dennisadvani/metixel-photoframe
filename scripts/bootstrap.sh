@@ -21,13 +21,20 @@
 #
 # USAGE (on a fresh Raspberry Pi OS Lite / Trixie image)
 #
-#   curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.sh | sudo bash
+#   wget https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.sh
+#   sudo bash bootstrap.sh
 #
 #   # or, with answers supplied up front (no prompts):
-#   curl -fsSL .../bootstrap.sh | sudo bash -s -- --channel stable --wifi-country AU
+#   sudo bash bootstrap.sh --channel stable --wifi-country AU
 #
 #   # or, from a local checkout (development / testing without pushing):
 #   sudo bash scripts/bootstrap.sh --local /path/to/checkout
+#
+# NOTE: download first, then run the file.  Do NOT pipe this into `sudo bash`
+# (e.g. `curl ... | sudo bash`): bash reading its program from a non-seekable
+# stdin, while `sudo` does the exec, loses its read-ahead position and fails
+# with "syntax error near unexpected token `)'" partway through.  Running a
+# downloaded file avoids this entirely.
 #
 # Options:
 #   --channel stable|beta|dev   Release channel (default: prompt, else stable)

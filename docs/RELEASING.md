@@ -98,8 +98,11 @@ When the user clicks **Install**, the backend:
    - **Config backup** — snapshot `config.json` into
      `/opt/metixel/data/backups/` for rollback safety
    - **Atomic swap** — `ln -sfn releases/<version> /opt/metixel/live`
-   - **Restart + health-check** — poll `/api/health`; on failure flip the
-     symlink back to the previous release, restore the config, and restart
+   - **Restart + health-check** — poll `/api/health?require=render`; on failure
+     flip the symlink back to the previous release, restore the config, and
+     restart.  The strict probe returns `503` when the frontend is not
+     demonstrably alive, so a release with a crash-looping frontend rolls back
+     instead of being reported as a successful upgrade on a black screen.
 3. Restarts `metixel-backend.service` + `metixel-cage.service`
 
 > **Note:** Blue/Green OTA requires the device to run from a git clone in a

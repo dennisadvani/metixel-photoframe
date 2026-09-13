@@ -39,24 +39,32 @@ class TestCurrentMediaThumbnail:
         """The cache/thumbnails dir, resolved exactly as the route sees it."""
         from metixel.backend.web.routes.media import _resolve_cache_dir
 
-        cache_dir = _resolve_cache_dir(
-            type("S", (), {"config": type("C", (), {"system": {"cache_dir": str(tmp_path / "cache")}})})()
-        )
+        fake_state = type(
+            "S",
+            (),
+            {"config": type("C", (), {"system": {"cache_dir": str(tmp_path / "cache")}})()},
+        )()
+        cache_dir = _resolve_cache_dir(fake_state)
         return cache_dir / "thumbnails"
 
     def _current_media(self, client) -> dict:
         resp = client.get("/api/health")
         assert resp.status_code == 200
-        return json.loads(resp.data)["current_media"]
+        media = json.loads(resp.data)["current_media"]
+        assert isinstance(media, dict)
+        return media
 
     def test_publishes_url_when_thumbnail_exists(self, client, tmp_path):
         thumb_dir = self._thumbs_dir(tmp_path)
         thumb_dir.mkdir(parents=True)
         (thumb_dir / "abc123.jpg").write_bytes(b"\xff\xd8\xff")
 
-        self._write_current_media(tmp_path, {"file": "a.jpg", "thumbnail_path": str(thumb_dir / "abc123.jpg")})
+        self._write_current_media(
+            tmp_path,
+            {"file": "a.jpg", "thumbnail_path": str(thumb_dir / "abc123.jpg")},
+        )
 
-        assert self._current_media(client)["thumbnail_url"] == "/api/media/thumbnail/abc123.jpg"
+        assert self._current_media(client)["thumbnail_url"] == ("/api/media/thumbnail/abc123.jpg")
 
     def test_omits_url_when_thumbnail_missing(self, client, tmp_path):
         # State file names a hash that no longer exists in the cache.
@@ -78,7 +86,9 @@ class TestCurrentMediaThumbnail:
 
         self._write_current_media(tmp_path, {"file": "clip.mp4", "thumbnail_path": str(frame)})
 
-        assert self._current_media(client)["thumbnail_url"] == "/api/media/thumbnail/clip.mp4.1.frame"
+        assert self._current_media(client)["thumbnail_url"] == (
+            "/api/media/thumbnail/clip.mp4.1.frame"
+        )
 
 
 class TestDisplayModes:

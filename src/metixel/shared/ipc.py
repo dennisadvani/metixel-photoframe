@@ -13,7 +13,7 @@ import logging
 import os
 import socket
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +132,27 @@ class IPCClient:
         if self._socket:
             self._socket.close()
             self._socket = None
+
+
+@runtime_checkable
+class IPCSender(Protocol):
+    """Port for anything that can send control messages to the frontend.
+
+    This exists so the input handlers and the MQTT client accept a *capability*
+    rather than the concrete :class:`IPCClient`.  Tests inject duck-typed fakes
+    (a recording stub with ``send``/``close``) without having to build a real
+    AF_UNIX socket — which is unavailable on Windows and would otherwise force
+    every such test to subclass the concrete client.
+
+    ``@runtime_checkable`` matters here: ``isinstance(fake, IPCSender)`` lets a
+    test assert its fake genuinely satisfies the port, so the fake cannot
+    silently drift away from the real interface.
+    """
+
+    def send(self, message: ControlMessage) -> bool:  # pragma: no cover - Protocol
+        """Send *message*; return True on success."""
+        ...
+
+    def close(self) -> None:  # pragma: no cover - Protocol
+        """Release any underlying resources."""
+        ...

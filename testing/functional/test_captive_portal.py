@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 
 import pytest
+from conftest import parse_json_object
 
 pytestmark = pytest.mark.functional
 
@@ -28,7 +29,7 @@ BASE = f"http://127.0.0.1:{BACKEND_PORT}"
 
 def _api_get(path: str) -> dict:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=10) as resp:
-        return json.loads(resp.read().decode())
+        return parse_json_object(resp.read())
 
 
 def _api_post(path: str, payload: dict) -> tuple[int, dict]:

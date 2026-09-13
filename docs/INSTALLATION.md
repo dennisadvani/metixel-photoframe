@@ -149,11 +149,20 @@ and power. Log in as `pi` (or via SSH).
 
 ### 3. Run the bootstrap installer
 
-On a fresh Raspberry Pi OS Lite (Trixie) image, run the one-line installer:
+On a fresh Raspberry Pi OS Lite (Trixie) image, download the installer and run
+it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/bootstrap.sh | sudo bash
+wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/bootstrap.sh
+sudo bash bootstrap.sh
 ```
+
+> **Download first, then run the file.** Do not pipe the script into `sudo bash`
+> (`curl ... | sudo bash`). bash reading its program from a non-seekable stdin,
+> while `sudo` performs the exec, loses its read-ahead position and aborts
+> partway through with `syntax error near unexpected token ')'`. Running a
+> downloaded file avoids this entirely. To be certain the download is intact,
+> `bash -n bootstrap.sh` first — it parses without running anything.
 
 Or, to install from a checkout you already have (development):
 
@@ -171,10 +180,20 @@ The installer asks two questions before changing anything:
 Supply them up front to skip the prompts entirely:
 
 ```bash
-curl -fsSL .../bootstrap.sh | sudo bash -s -- --channel stable --wifi-country AU
+sudo bash bootstrap.sh --channel stable --wifi-country AU
 ```
 
-Add `--dry-run` to print exactly what would happen without changing anything.
+Other flags, if you need them:
+
+| Flag | What it does |
+|---|---|
+| `--dry-run` | Print exactly what would happen, then exit without changing anything. Safe to run anywhere. |
+| `--repo URL` | Install from a different git remote (e.g. your own fork). |
+| `--skip-boot-config` | Skip `scripts/configure_boot.sh`. Use it if you manage `/boot/firmware/config.txt` yourself — the installer then does not need a reboot. |
+
+> There is deliberately **no** uninstaller flag on `bootstrap.sh`: it refuses to
+> run over an existing installation. To remove Metixel, use
+> `scripts/uninstall_metixel.sh`.
 
 > **Why `bootstrap.sh` is a separate, tiny script.** It only obtains a
 > checkout and then delegates to `scripts/update.sh` — the *same* script that

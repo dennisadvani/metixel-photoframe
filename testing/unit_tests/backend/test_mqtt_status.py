@@ -12,11 +12,14 @@ class TestMQTTClientStatus:
         from metixel.backend.mqtt_client import MQTTClient
         from metixel.backend.state import StateManager
         from metixel.shared.config import Config
+        from metixel.shared.ipc import IPCClient
 
         config_path = tmp_path / "config.json"
         Config().save(config_path)
         state = StateManager(config_path, tmp_path / "run")
-        return MQTTClient(state, None)
+        # IPC is unused by status(); pass a real client rather than None so the
+        # IPCSender port contract is honoured.
+        return MQTTClient(state, IPCClient())
 
     def test_status_disabled(self, tmp_path: Path) -> None:
         client = self._make(tmp_path)
