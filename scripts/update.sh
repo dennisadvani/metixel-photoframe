@@ -325,47 +325,54 @@ bash "${RELEASE_DIR}/scripts/ota_install.sh" "${RELEASE_DIR}"
 echo "[3/8] Removing obsolete managed packages…"
 APPS_SYS="${RELEASE_DIR}/requirements-system.txt"
 APPS_PIP="${RELEASE_DIR}/requirements-pip.txt"
-python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" <<'PYEOF'
+python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" "${RELEASE_DIR}" <<'PYEOF'
 import json, os, sys, subprocess
 
-state_path, req_sys, req_pip = sys.argv[1], sys.argv[2], sys.argv[3]
+state_path, req_sys, req_pip, release_dir = sys.argv[1:5]
 
-def names(path):
-    out = []
-    if not path or not os.path.isfile(path):
-        return out
-    for ln in open(path):
-        ln = ln.strip()
-        if not ln or ln.startswith("#"):
-            continue
-        nm = ln.split(";", 1)[0].strip().split("[", 1)[0].strip()
-        for ch in "=<>~! \t":
-            nm = nm.split(ch, 1)[0].strip()
-        if nm:
-            out.append(nm)
-    return out
+# The name parser is shared with step 8 via a helper file so the two cannot
+# drift apart.  It pins UTF-8 explicitly: this heredoc runs under systemd-run
+# with no locale, where open() would otherwise depend on the ambient platform
+# default to read files that contain UTF-8 in their comments.
+sys.path.insert(0, os.path.join(release_dir, "scripts"))
+from requirements_names import names
 
 if not os.path.isfile(state_path):
     sys.exit(0)  # nothing recorded to remove
 
-with open(state_path) as f:
+with open(state_path, encoding="utf-8") as f:
     prev = json.load(f)
 
-new_sys = set(names(req_sys))
-new_pip = set(names(req_pip))
+new_sys = set(names([req_sys]))
+new_pip = set(names([req_pip]))
 
 # Only remove packages Metixel previously recorded as installing.
 prev_sys = set(prev.get("apt", []) or [])
 prev_pip = set(prev.get("pip", []) or [])
+failures = []
 for pkg in sorted(prev_sys - new_sys):
     print(f"  removing system pkg: {pkg}")
-    subprocess.run(["apt-get", "remove", "-y", "--purge", pkg],
-                   check=False, capture_output=True)
+    r = subprocess.run(["apt-get", "remove", "-y", "--purge", pkg],
+                       check=False, capture_output=True, text=True)
+    if r.returncode != 0:
+        # Warn, don't abort: a package the user has come to rely on (or one
+        # held by dpkg) failing to purge must not block the release.  But it
+        # IS reported, because silently claiming success is how a retired
+        # player lingers on a device for months.
+        failures.append((pkg, (r.stderr or r.stdout or "").strip().splitlines()[-1:]))
 
 for pkg in sorted(prev_pip - new_pip):
     print(f"  removing pip pkg: {pkg}")
-    subprocess.run(["pip", "uninstall", "-y", pkg], check=False,
-                   capture_output=True)
+    r = subprocess.run(["pip", "uninstall", "-y", pkg],
+                       check=False, capture_output=True, text=True)
+    if r.returncode != 0:
+        failures.append((pkg, (r.stderr or r.stdout or "").strip().splitlines()[-1:]))
+
+if failures:
+    print("  ! the following obsolete packages could NOT be removed:")
+    for pkg, why in failures:
+        print(f"      {pkg}: {' '.join(why) if why else 'no output'}")
+    print("      (harmless to leave installed, but the disk space is not reclaimed)")
 PYEOF
 
 # ── 4) RECONCILE HOST CONFIGURATION (pre-swap) ─────────────────────────────
@@ -525,29 +532,18 @@ fi
 
 # ── 8) RECORD installed packages for future removal ─────────────────────────
 echo "[8/8] Recording installed package manifest…"
-python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" <<'PYEOF'
+python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" "${RELEASE_DIR}" <<'PYEOF'
 import json, os, sys
 
-state_path, req_sys, req_pip = sys.argv[1], sys.argv[2], sys.argv[3]
+state_path, req_sys, req_pip, release_dir = sys.argv[1:5]
 
-def names(path):
-    out = []
-    if not path or not os.path.isfile(path):
-        return out
-    for ln in open(path):
-        ln = ln.strip()
-        if not ln or ln.startswith("#"):
-            continue
-        nm = ln.split(";", 1)[0].strip().split("[", 1)[0].strip()
-        for ch in "=<>~! \t":
-            nm = nm.split(ch, 1)[0].strip()
-        if nm:
-            out.append(nm)
-    return out
+# Same shared parser as step 3 (encoding pinned to UTF-8) — see the comment there.
+sys.path.insert(0, os.path.join(release_dir, "scripts"))
+from requirements_names import names
 
-data = {"apt": names(req_sys), "pip": names(req_pip)}
+data = {"apt": names([req_sys]), "pip": names([req_pip])}
 os.makedirs(os.path.dirname(state_path), exist_ok=True)
-with open(state_path, "w") as f:
+with open(state_path, "w", encoding="utf-8") as f:
     json.dump(data, f, indent=2)
 print("  recorded", len(data["apt"]), "apt and", len(data["pip"]), "pip packages")
 PYEOF

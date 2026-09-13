@@ -355,6 +355,156 @@ class TestInstallScript:
         ), "logging.config import should have been removed"
 
 
+class TestObsoletePackageRemoval:
+    """An upgrade must uninstall packages the new release no longer needs.
+
+    2.0.0 replaced pi3d/VLC with PySide6/mpv.  Dropping the old packages from the
+    requirements files is what triggers their removal: ``update.sh`` diffs the
+    previously-recorded manifest against the new one.  If that diff or the parser
+    feeding it breaks, every device silently keeps the retired player forever.
+
+    These are mostly structural assertions over the scripts (matching the
+    convention of the retirement tests above).  The one behavioural check runs the
+    real parser as a subprocess; there is no end-to-end test of the apt/pip
+    removal itself, because doing that honestly would require a disposable
+    package-manager sandbox.
+    """
+
+    def _parser(self) -> Any:
+        """Import scripts/requirements_names.py as a module."""
+        import importlib.util
+
+        path = _REPO_ROOT / "scripts" / "requirements_names.py"
+        spec = importlib.util.spec_from_file_location("requirements_names", path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_update_script_removes_obsolete_packages(self) -> None:
+        """The updater must actually diff old vs new manifests."""
+        script = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        assert "prev_sys - new_sys" in script
+        assert "prev_pip - new_pip" in script
+        assert "apt-get" in script and "remove" in script
+        assert "pip" in script and "uninstall" in script
+        # Removal is filtered to packages Metixel itself recorded — never a
+        # blanket "removed anything not in the new list", which would uninstall
+        # packages the user installed independently.
+        assert 'prev.get("apt", [])' in script
+        assert 'prev.get("pip", [])' in script
+
+    def test_retired_playback_packages_are_absent_from_manifests(self) -> None:
+        """pi3d/VLC/pygame must not appear in the shipped manifests."""
+        for name in ("requirements-pip.txt", "requirements-system.txt"):
+            text = (_REPO_ROOT / name).read_text(encoding="utf-8")
+            lines = [
+                ln.strip()
+                for ln in text.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            for retired in ("pi3d", "pysdl2", "python-vlc", "vlc-bin", "vlc-data"):
+                assert not any(ln.startswith(retired) for ln in lines), (
+                    f"{retired} must be gone from {name} — its absence is what "
+                    f"triggers removal on upgrade"
+                )
+
+    def test_removal_failures_are_reported(self) -> None:
+        """A failed apt/pip removal must be surfaced, not swallowed.
+
+        The design is deliberately warn-and-continue (a purge failure must not
+        block a release), but it must never claim success silently — that is how
+        a retired player lingers on a device unnoticed.
+        """
+        script = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert "could NOT be removed" in script
+        assert "failures.append" in script
+        # Still non-fatal: the inline python must not use check=True.
+        assert "check=True" not in script
+
+    def test_parser_pins_utf8_encoding(self) -> None:
+        """The manifest parser must open files with an explicit UTF-8 encoding.
+
+        ``update.sh`` runs its inline python under ``systemd-run``, which supplies
+        a minimal environment with no locale.  In that environment ``open()``
+        falls back to the platform default, which on Linux with ``LC_ALL=C`` is
+        pure ASCII — and the requirements files contain UTF-8 em-dashes in their
+        comments, so a bare ``open()`` there is a latent ``UnicodeDecodeError``
+        in the middle of an update.
+
+        NOTE: this is asserted structurally, not by reproducing the failure.  On
+        the Windows dev host the C-locale default is ``cp1252``, which decodes
+        those bytes without error, so the fault cannot be triggered here even
+        though it can be on the target platform.  The test therefore pins the
+        invariant (explicit encoding) rather than the symptom.
+        """
+        import ast
+
+        parser = _REPO_ROOT / "scripts" / "requirements_names.py"
+        tree = ast.parse(parser.read_text(encoding="utf-8"))
+
+        opens = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "open"
+        ]
+        assert opens, "the parser must open the requirements files"
+        for call in opens:
+            keywords = {kw.arg for kw in call.keywords}
+            assert "encoding" in keywords, (
+                "every open() in requirements_names.py must pass encoding= — "
+                "relying on the platform default breaks under a locale-less "
+                "systemd environment"
+            )
+
+    def test_parser_survives_a_minimal_locale(self) -> None:
+        """The parser must run under the env systemd-run actually provides."""
+        import subprocess
+        import sys
+
+        parser = _REPO_ROOT / "scripts" / "requirements_names.py"
+        proc = subprocess.run(
+            [sys.executable, str(parser), "requirements-system.txt"],
+            capture_output=True,
+            text=True,
+            cwd=_REPO_ROOT,
+            env={"PATH": "", "LC_ALL": "C"},
+        )
+        assert proc.returncode == 0, f"parser failed under C locale: {proc.stderr}"
+        assert "python3-pyside6.qtcore" in proc.stdout
+        assert "cage" in proc.stdout
+
+    def test_parser_handles_real_requirement_syntax(self) -> None:
+        """Extras, markers, specifiers and comments must all parse correctly."""
+        mod = self._parser()
+
+        assert mod.package_name("numpy>=1.24") == "numpy"
+        assert mod.package_name("pillow-heif>=0.16") == "pillow-heif"
+        assert mod.package_name("uvicorn[standard]>=0.30") == "uvicorn"
+        assert mod.package_name("tomli>=1.0; python_version < '3.11'") == "tomli"
+        assert mod.package_name("  python3-pil  ") == "python3-pil"
+        assert mod.package_name("") == ""
+        assert mod.package_name("   ") == ""
+        assert mod.package_name("# a comment") == ""
+        # Dots in package names must survive (Qt modules).
+        assert mod.package_name("python3-pyside6.qtcore") == "python3-pyside6.qtcore"
+
+    def test_both_step3_and_step8_share_one_parser(self) -> None:
+        """Steps 3 and 8 must not drift apart via duplicated parsers.
+
+        They were previously copy-pasted, so a fix to one would silently miss the
+        other.  Both now import the shared helper.
+        """
+        script = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert script.count("from requirements_names import names") == 2
+        # The old inline definition must be gone entirely.
+        assert "def names(path):" not in script
+        assert "def names(" not in script
+
+
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
 
