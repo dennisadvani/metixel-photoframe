@@ -328,12 +328,20 @@ metixel-photoframe/                           # Repository root
 │   ├── update.sh                     # Atomic Blue/Green updater — the ONLY install entry point
 │   ├── bootstrap.sh                  # Thin downloadable installer → update.sh
 │   ├── ota_install.sh                # System + pip install steps (strict)
+│   ├── requirements_names.py         # Shared requirements parser (update.sh steps 3 + 8)
+│   ├── configure_boot.sh             # Boot config (KMS overlay, gpu_mem)
+│   ├── cage_launch.sh                # Launch the frontend under cage
 │   ├── quiet_boot.sh                 # Splash screen + silent boot config
-│   └── run_trixie.sh                # Launch via cage (Wayland + XWayland) on Trixie
+│   ├── uninstall_metixel.sh          # Removes Metixel, reports orphaned packages
+│   ├── fixups/                       # One-time device repairs (manifest.txt drives the list)
+│   └── gates/                        # Hardware validation — NOT part of install/runtime
+│       ├── README.md                 # Why each gate exists + the measured results
+│       ├── pi_gate1_*.{sh,py}        # GATE-1: which hwdec actually uses hardware
+│       └── pi_gate2_smoke.sh         # GATE-2: full-stack smoke on a real display
 │
 ├── systemd/                           # systemd unit files
 │   ├── metixel-backend.service       # Backend daemon (all platforms)
-│   └── metixel-cage.service          # Frontend under cage (Trixie/KMS)
+│   └── metixel-cage.service          # Frontend under cage (Wayland-native)
 │
 ├── testing/                           # All test suites
 │   ├── unit_tests/                    # Automated unit tests (mirrors src/metixel domains)

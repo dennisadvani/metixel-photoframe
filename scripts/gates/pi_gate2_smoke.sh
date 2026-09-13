@@ -27,8 +27,8 @@
 # edit config, and it restores the service state it found.
 #
 # Usage:
-#   sudo bash scripts/pi_gate2_smoke.sh            # full run
-#   sudo bash scripts/pi_gate2_smoke.sh --no-video # skip the video stage
+#   sudo bash scripts/gates/pi_gate2_smoke.sh            # full run
+#   sudo bash scripts/gates/pi_gate2_smoke.sh --no-video # skip the video stage
 #
 # Exit status is 0 only if every REQUIRED stage passed.  Advisory stages report
 # but do not fail the run.
