@@ -26,14 +26,33 @@ def _write_heartbeat(
     path: Path,
     *,
     pid: int,
-    boot_id: str = "boot-A",
+    boot_id: str | None = None,
     age: float = 0.0,
     uptime: float = 1.0,
 ) -> None:
-    """Write a heartbeat file, optionally back-dating its mtime by *age*."""
+    """Write a heartbeat file, optionally back-dating its mtime by *age*.
+
+    ``boot_id`` defaults to the HOST's real boot identity.  That matters: on
+    Linux the tracker compares the heartbeat's boot id against
+    ``/proc/sys/kernel/random/boot_id``, so a hard-coded fake like ``"boot-A"``
+    is rejected as "from an earlier boot" and every test sees ``missing``.  The
+    tests passed on Windows (where the identity is the ``"unknown"`` stub and
+    the comparison is skipped) and failed on Linux CI.  Defaulting to the real
+    value keeps the tests honest on both platforms; pass an explicit value only
+    where the test is about a boot-id MISMATCH.
+    """
+    from metixel.shared.platform import boot_identity
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"pid": pid, "boot_id": boot_id, "uptime": uptime, "queue_len": 3}),
+        json.dumps(
+            {
+                "pid": pid,
+                "boot_id": boot_identity() if boot_id is None else boot_id,
+                "uptime": uptime,
+                "queue_len": 3,
+            }
+        ),
         encoding="utf-8",
     )
     if age:
