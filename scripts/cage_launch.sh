@@ -1,24 +1,29 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
-# cage client launcher for the Metixel frontend (Phase 1 / Trixie).
+# cage client launcher for the Metixel frontend (Trixie).
 #
 # WHY THIS EXISTS
 # --------------
 # cage starts the Wayland compositor with every output the DRM layer
 # reports as "connected" enabled.  A Raspberry Pi 5 has two HDMI ports,
 # and an empty port still reports "connected" with a low-resolution
-# fallback mode and no EDID.  If both outputs are enabled, cage's XWayland
-# root window spans their bounding box (e.g. 1920 + 1024 = 2944px wide),
-# so pi3d renders a 2944x1200 canvas that the compositor scales back down
-# to the 1920x1200 monitor — distorting the slideshow aspect ratio.
+# fallback mode and no EDID.  If both outputs are enabled, the compositor's
+# surface spans their bounding box (e.g. 1920 + 1024 = 2944px wide), so the
+# frontend renders a 2944x1200 canvas that the compositor then scales back
+# down to the 1920x1200 monitor — distorting the slideshow aspect ratio.
 #
-# This launcher disables outputs with no real monitor (no EDID) BEFORE
-# the frontend connects to XWayland, so the XWayland root is created at
-# the real monitor's native resolution.  It then execs the frontend.
+# This launcher disables outputs with no real monitor (no EDID) BEFORE the
+# frontend starts, so the compositor's surface is created at the real
+# monitor's native resolution.  It then execs the frontend.
 #
-# The backend's Pi3dBackend also performs the same cleanup defensively
-# (covers mid-session hot-plug / desktop testing).
+# This is a COMPOSITOR-side concern, not an X11 one: it would be required
+# whatever the app used to draw.  Do not remove it when tidying up X11 or
+# Wayland references — the aspect-ratio distortion it prevents is real and
+# has been observed on a Pi 5 with an empty second HDMI port.
+#
+# The backend also performs the same cleanup defensively (covers mid-session
+# hot-plug / desktop testing).
 set -u
 
 

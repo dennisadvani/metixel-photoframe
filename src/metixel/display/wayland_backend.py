@@ -2,12 +2,12 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Phase 2 Display Backend: Mesa/DRM/Wayland via PyOpenGL.
 
-Targets Raspberry Pi 4/5 and other non-Pi SBCs (e.g., Radxa Zero 3W)
-running a modern Linux kernel with Mesa drivers and Wayland compositor.
+Targets non-Pi SBCs (e.g., Radxa Zero 3W) running a modern Linux kernel with
+Mesa drivers and a Wayland compositor.
 
-This is a STUB for future Phase 2 implementation. Phase 1 code runs against
-the Pi3dBackend; this backend will be implemented when Phase 2 hardware
-becomes the primary target.
+This is a STUB for future Phase 2 implementation. It will be built when Phase 2
+hardware becomes the primary target; until then the Raspberry Pi path and the
+TkBackend desktop path are the supported ones.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class WaylandBackend(DisplayBackend):
     def __init__(self) -> None:
         logger.warning(
             "WaylandBackend is a STUB — Phase 2 rendering is not yet implemented. "
-            "Use DispmanxBackend (Phase 1) or TkBackend (desktop) for now."
+            "Use TkBackend (desktop) or the Raspberry Pi backend for now."
         )
         self._running: bool = False
         self._w: int = 1920
@@ -64,7 +64,7 @@ class WaylandBackend(DisplayBackend):
     ):
         raise NotImplementedError(
             "WaylandBackend is not yet implemented. "
-            "Set METIXEL_DISPLAY_BACKEND=dev for desktop development."
+            "Run on a Raspberry Pi, or use METIXEL_DISPLAY_BACKEND=tk on desktop."
         )
 
     def destroy(self):

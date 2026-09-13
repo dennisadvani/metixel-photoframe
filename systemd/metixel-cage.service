@@ -16,8 +16,20 @@ SupplementaryGroups=video render input tty
 WorkingDirectory=/opt/metixel/live
 Environment=PYTHONPATH=/opt/metixel/live/src
 Environment=PYTHONUNBUFFERED=1
-Environment=METIXEL_DISPLAY_BACKEND=auto
 Environment=XDG_RUNTIME_DIR=/run/user/1000
+
+# Pin Qt to the Wayland platform plugin — DO NOT remove or replace with
+# auto-detection.  Qt picks a QPA plugin at runtime: `wayland` talks to cage
+# directly, whereas `xcb` needs an X server (XWayland).  Left to auto-detect,
+# a missing Wayland plugin silently degrades to `xcb`, which on a frame with
+# no X server is a BLACK SCREEN at boot with nothing in the log to explain it.
+# Pinning turns that into a loud, immediate startup failure that the OTA health
+# gate catches and rolls back.
+#
+# This makes `libqt6waylandclient6` a REQUIRED system package (see
+# requirements-system.txt).  If it is missing, Qt aborts on startup — which is
+# the intended, diagnosable behaviour.
+Environment=QT_QPA_PLATFORM=wayland
 
 # Ensure XDG_RUNTIME_DIR exists for cage's Wayland socket.
 # The '+' prefix runs these as root before dropping to User=pi.
@@ -27,14 +39,17 @@ ExecStartPre=+/bin/mkdir -p /run/user/1000
 ExecStartPre=+/bin/chown pi:pi /run/user/1000
 ExecStartPre=+/bin/chmod 0700 /run/user/1000
 
-# cage starts a Wayland session with XWayland, then runs metixel inside it.
-# This gives pi3d the X11 surface it needs on KMS-only systems (Trixie).
+# cage is the Wayland compositor; metixel runs as its single client.
 # -d: suppress the compositor's seat cursor entirely (no cursor on screen).
-# The cage_launch.sh wrapper disables phantom HDMI outputs (no EDID) BEFORE
-# the frontend connects to XWayland, so the frame renders at the real
-# monitor's native resolution (fixes aspect-ratio distortion on Pi 5 with
-# an empty second HDMI port).  cage_launch.sh also triggers the cursor-hider
-# before the compositor starts (single source of truth, launch-method agnostic).
+#
+# cage_launch.sh disables phantom HDMI outputs (a port reporting "connected"
+# with no EDID) BEFORE the frontend starts.  That is REQUIRED for correct
+# aspect ratio and is unrelated to X11: cage enables every output the DRM layer
+# reports, so an empty second HDMI port widens the compositor's surface (e.g.
+# 1920 + 1024 = 2944px) and the frontend renders a 2944x1200 canvas that cage
+# then scales back down — distorting the slideshow.  See scripts/cage_launch.sh.
+# cage_launch.sh also triggers the cursor-hider before the compositor starts
+# (single source of truth, launch-method agnostic).
 ExecStart=/usr/bin/cage -d -- /opt/metixel/live/scripts/cage_launch.sh
 
 # Restart on failure or exit

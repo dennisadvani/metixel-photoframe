@@ -14,7 +14,6 @@ Group=pi
 WorkingDirectory=/opt/metixel/live
 Environment=PYTHONPATH=/opt/metixel/live/src
 Environment=PYTHONUNBUFFERED=1
-Environment=METIXEL_DISPLAY_BACKEND=auto
 
 # ddcutil persists its cached capabilities + performance stats under
 # $XDG_CACHE_HOME (else $HOME/.cache).  Two reasons this MUST be set here:
