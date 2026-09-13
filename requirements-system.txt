@@ -2,7 +2,8 @@
 # The OTA updater installs any missing packages from this list before
 # the pip install step.  Already-installed packages are skipped.
 # New releases may add to this list — the updater handles it idempotently.
-# Mirrors the apt install line in scripts/setup_trixie_metixel.sh.
+# This list is the single source of truth for system packages; it is applied
+# by scripts/ota_install.sh on every install and upgrade.
 
 # Python runtime
 python3-pip

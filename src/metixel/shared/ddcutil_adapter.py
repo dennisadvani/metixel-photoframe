@@ -10,6 +10,7 @@ format differences across ddcutil versions.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -35,7 +36,12 @@ __all__ = [
     "parse_getvcp",
 ]
 
-_DEFAULT_TIMEOUT = 5.0
+# ddcutil probes the I²C bus with layered sleep/retry logic.  On marginal
+# buses (cheap DDC-over-HDMI, e.g. a Pi 3 driving an older monitor) a single
+# ``capabilities`` call routinely takes 5–9 s, so the old 5 s timeout made the
+# probe time out intermittently and the UI report "no DDC-capable monitor".
+# 15 s gives ample headroom while still failing eventually on a dead bus.
+_DEFAULT_TIMEOUT = 15.0
 
 _DISPLAY_RE = re.compile(r"^Display\s+(\d+)\b", re.IGNORECASE)
 _MODEL_RE = re.compile(r"^\s*Model:\s*(.+)$", re.IGNORECASE)
@@ -267,10 +273,19 @@ class DdcutilAdapter(DdcController):
         binary: str = "ddcutil",
         timeout: float = _DEFAULT_TIMEOUT,
         runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
     ) -> None:
         self._binary = binary
         self._timeout = timeout
         self._runner = runner or subprocess.run
+        # ddcutil persists performance stats + cached capabilities under
+        # ``$XDG_CACHE_HOME`` (else ``$HOME/.cache``).  The backend service runs
+        # with ``ProtectHome=yes``, so ``/home`` is read-only and ddcutil's
+        # default cache is unusable — every call then re-probes the slow bus,
+        # which is what pushed ``capabilities`` past the timeout.  Point it at
+        # a writable dir (under the persistent data dir) by default when one is
+        # provided.  ``None`` leaves ddcutil's own default untouched.
+        self._cache_dir = str(cache_dir) if cache_dir is not None else None
 
     def available(self) -> bool:
         return shutil.which(self._binary) is not None
@@ -349,7 +364,32 @@ class DdcutilAdapter(DdcController):
         *,
         check: bool = False,
     ) -> str | None:
-        cmd = [self._binary, *args]
+        # ``--syslog NEVER`` is LOAD-BEARING, not tidiness.  ddcutil writes its
+        # diagnostics via openlog()/syslog() — NOT to stderr — so they bypass
+        # our subprocess capture entirely and land in the systemd journal.
+        # ddcutil prints one ``is_sysfs_reliable_for_busno(<n>)`` line per
+        # candidate bus, on every invocation with a cold cache, so a single
+        # capabilities probe (detect + capabilities + one getvcp per
+        # user-facing code) emitted 18 journal lines.  Measured on a Pi 5
+        # (Raspberry Pi OS Trixie, ddcutil 2.2.0-dev): 18 lines → 0.
+        #
+        # Why this matters beyond log noise: /var/log/journal exists on the
+        # image, so journald persists to the SD card.  Metixel's own logs are
+        # kept empty at log_level=NONE precisely to spare flash, so routing
+        # ddcutil's chatter into a flash-backed journal defeats that.
+        # (Log level is also the wrong lever: ddcutil logs these at a level that
+        # ERROR — and even NONE — does not suppress; the flag is the fix.)
+        #
+        # The flag is placed AFTER the subcommand arguments deliberately: all
+        # four subcommands accept it there (verified on-device: rc=0), and it
+        # keeps cmd[1] as the subcommand so test fakes keyed on cmd[1:] still
+        # match.  stdout is byte-identical with and without it (verified via
+        # md5 for detect / capabilities / getvcp), so parsing is unaffected.
+        # The equivalent environment variable is NOT honoured by ddcutil —
+        # only the command-line option works, so it must be passed here rather
+        # than set once in the systemd unit.
+        cmd = [self._binary, *args, "--syslog", "NEVER"]
+        env = self._subprocess_env()
         try:
             result = self._runner(
                 cmd,
@@ -357,6 +397,7 @@ class DdcutilAdapter(DdcController):
                 text=True,
                 timeout=self._timeout,
                 check=False,
+                env=env,
             )
         except FileNotFoundError:
             logger.warning("%s not found on PATH", self._binary)
@@ -383,3 +424,26 @@ class DdcutilAdapter(DdcController):
             if not (result.stdout or "").strip():
                 return None
         return result.stdout or ""
+
+    def _subprocess_env(self) -> dict[str, str] | None:
+        """Build the subprocess environment, redirecting ddcutil's cache dir.
+
+        Returns ``None`` (inherit the parent environment unchanged) when no
+        ``cache_dir`` was configured.  Otherwise sets ``XDG_CACHE_HOME`` to the
+        configured dir (created if needed) so ddcutil persists its performance
+        stats + capabilities cache there instead of ``$HOME/.cache`` — which is
+        read-only under the backend service's ``ProtectHome=yes`` hardening.
+        """
+        if self._cache_dir is None:
+            return None
+        try:
+            os.makedirs(self._cache_dir, exist_ok=True)
+        except OSError:
+            # Read-only/permission failure — fall back to ddcutil's default
+            # rather than failing the call outright.
+            logger.debug("Could not create ddcutil cache dir %s", self._cache_dir, exc_info=True)
+            return None
+
+        env = dict(os.environ)
+        env["XDG_CACHE_HOME"] = self._cache_dir
+        return env

@@ -64,7 +64,51 @@ class TestInstallScript:
         assert "requirements-pip.txt" in content
         assert '-r "$REPO/requirements-pip.txt"' in content
         # The package reinstall step is still present.
-        assert 'pip install --break-system-packages -e "$REPO"' in content
+        assert 'pip install --break-system-packages --ignore-installed -e "$REPO"' in content
+
+    def test_pip_installs_ignore_apt_owned_packages(self) -> None:
+        """pip must NEVER try to uninstall an apt-provided package.
+
+        Regression guard: `numpy` is installed by apt (python3-numpy) AND listed
+        in requirements-pip.txt.  A constraint that excluded the apt version
+        made pip attempt a downgrade, which failed with
+          error: uninstall-no-record-file ("The package's contents are unknown")
+        and aborted the entire update.  `--ignore-installed` leaves the apt copy
+        alone instead of attempting a removal.
+        """
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        # Only actual INVOCATIONS: skip comments and continuations such as
+        # `|| _fail "pip install -e failed"`, which merely mention the phrase.
+        pip_lines = [
+            ln.strip()
+            for ln in content.splitlines()
+            if ln.strip().startswith("pip install")
+        ]
+        assert pip_lines, "no pip install invocation found"
+        for ln in pip_lines:
+            assert "--ignore-installed" in ln, (
+                f"pip install would attempt to uninstall an apt package: {ln}"
+            )
+
+    def test_pip_manifest_does_not_exclude_apt_numpy(self) -> None:
+        """requirements-pip.txt must not cap numpy below the apt version.
+
+        Debian Trixie ships numpy 2.x.  An upper bound like `<2.0` guarantees
+        the uninstall conflict above, so the pin must stay open.
+        """
+        req = (_REPO_ROOT / "requirements-pip.txt").read_text(encoding="utf-8")
+        code_lines = [
+            ln.strip()
+            for ln in req.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        numpy_lines = [ln for ln in code_lines if ln.lower().startswith("numpy")]
+        assert numpy_lines, "numpy should be declared in requirements-pip.txt"
+        for ln in numpy_lines:
+            assert "<" not in ln, (
+                f"numpy must not have an upper bound (conflicts with apt): {ln}"
+            )
 
     def test_installs_system_packages(self) -> None:
         """The install script must also handle requirements-system.txt so new
@@ -73,6 +117,47 @@ class TestInstallScript:
 
         assert "requirements-system.txt" in content
         assert "apt-get install" in content
+
+    def test_system_package_install_is_noninteractive(self) -> None:
+        """apt installs MUST be noninteractive.
+
+        Regression guard: `iptables-persistent` (and `samba`) raise debconf
+        questions — "Save current IPv4 rules?" — which BLOCK an unattended
+        install on a TUI prompt with no timeout, hanging a headless first
+        install forever.  Every apt invocation in the install path needs
+        DEBIAN_FRONTEND=noninteractive.
+        """
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+
+        assert "DEBIAN_FRONTEND=noninteractive" in content, (
+            "apt-get install would block on a debconf prompt"
+        )
+        # It must be attached to the apt invocation itself, not merely present
+        # somewhere in the file.
+        apt_lines = [
+            ln.strip()
+            for ln in content.splitlines()
+            if "apt-get install" in ln and not ln.strip().startswith("#")
+        ]
+        assert apt_lines, "no apt-get install invocation found"
+        # Walk back from each apt line to find its env prefix.
+        lines = content.splitlines()
+        for idx, ln in enumerate(lines):
+            if "apt-get install" in ln and not ln.strip().startswith("#"):
+                window = "\n".join(lines[max(0, idx - 4) : idx + 1])
+                assert "DEBIAN_FRONTEND=noninteractive" in window, (
+                    f"apt-get install at line {idx + 1} is not noninteractive:\n{window}"
+                )
+
+    def test_apt_install_keeps_existing_conffiles(self) -> None:
+        """Package upgrades must not prompt on (or replace) host-owned config.
+
+        `--force-confold` keeps an existing conffile, so a package upgrade
+        cannot silently overwrite a user's smb.conf/hostapd.conf — the same
+        principle as reconcile.sh only *appending* to shared files.
+        """
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+        assert "--force-confold" in content
 
     def test_install_script_strict_by_default(self) -> None:
         """The install script must FAIL (not warn-and-continue) by default so
@@ -92,160 +177,134 @@ class TestInstallScript:
         assert "--continue-on-error" in content
         assert "WARNING" in content
 
-    def test_install_script_self_migrates_old_layout(self) -> None:
-        """The install script must detect the absence of a valid live symlink
-        (clean monolithic layout OR a partial/aborted migration) and self-migrate
-        to Blue/Green before installing."""
+    def test_install_script_fails_closed_without_live_symlink(self) -> None:
+        """The Blue/Green layout is a PRECONDITION of the install steps.
+
+        `ota_install.sh` used to bridge a pre-Blue/Green device by running
+        scripts/migrate_to_atomic.sh.  That bridge is retired — the atomic
+        layout has been the only install path since 1.2.2, and update.sh
+        creates `live` before invoking this script.  A missing/dangling `live`
+        therefore means the CALLER is wrong, so the script must abort rather
+        than guess at the layout (in strict mode a half-applied install is
+        worse than a clean failure).
+        """
         content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
 
-        assert "migrate_to_atomic.sh" in content
-        assert "No valid live symlink" in content
-        # Detection is based on a VALID live symlink (not merely data/ existence),
-        # so a partial migration state is also bridged.
+        # It validates a *valid* symlink (target must exist, not just -L)...
         assert "readlink -f" in content
-        assert "ALREADY_LIVE" in content
-        # Runs with --no-restart (the OTA bootstrap handles the restart) and
-        # --no-backup (the checkout just reset to the new code).
-        assert "--no-restart" in content
-        assert "--no-backup" in content
-        # Re-points the working repo at the migrated release.
-        assert "MIGRATED_RELEASE_DIR" in content
+        assert "no valid" in content
+        # ...and aborts through the strict-mode failure path.
+        assert "_fail" in content
+        # The migration must be gone, along with its hand-off protocol.  Only
+        # EXECUTABLE lines count: a comment explaining the retirement legitimately
+        # names the deleted script (and a raw substring search would match it).
+        code = "\n".join(
+            ln
+            for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        )
+        assert "migrate_to_atomic.sh" not in code
+        assert "MIGRATED_RELEASE_DIR" not in code
+        assert "ALREADY_LIVE" not in code
 
-    def test_migrate_script_moves_logging_conf_to_data_etc(self) -> None:
-        """logging.conf must move into /data/etc (not stay at /opt/metixel/etc) —
-        __main__.py resolves it as data_dir()/etc/logging.conf, so all persistent
-        config lives under /data."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
+    def test_migrate_script_is_retired(self) -> None:
+        """The monolithic → atomic migration has been deleted outright.
 
-        # Both config.json and logging.conf move into /data.
-        assert "config.json" in content
-        assert "logging.conf" in content
-        assert 'mv "${INSTALL_ROOT}/etc/logging.conf" "${DATA_DIR}/etc/logging.conf"' in content
-        # No live/etc symlink is created (logging.conf is under /data now).
-        assert 'ln -sfn "${INSTALL_ROOT}/etc" "${LIVE_LINK}/etc"' not in content
+        It existed only to bridge a pre-1.2.2 device.  Such a device now has to
+        be re-imaged, because the last monolithic release (1.2.1) predates every
+        script in the current install flow.  Never reintroduce layout
+        auto-detection: `live` is an invariant, not a property to sniff.
+        """
+        repo = Path(__file__).resolve().parents[3]
+        assert not (repo / "scripts" / "migrate_to_atomic.sh").exists()
+        # ...and no hand-off protocol survives it either.
+        install = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+        assert "MIGRATED_RELEASE_DIR" not in install
 
-    def test_migrate_script_reads_manifests_from_release_dir(self) -> None:
-        """The installed_packages.json recorder must read the requirements
-        manifests from RELEASE_DIR (the code has already moved there), not from
-        the now-empty INSTALL_ROOT."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
+    def test_legacy_monolithic_setup_helper_is_retained(self) -> None:
+        """`scripts/legacy_setup_trixie_metixel.sh` is deliberately KEPT.
 
-        assert 'python3 - "${RELEASE_DIR}" "${DATA_DIR}"' in content
-        assert "release_dir, data_dir = sys.argv[1], sys.argv[2]" in content
-        assert 'os.path.join(release_dir, "requirements-system.txt")' in content
-        assert 'root = "/opt/metixel"' not in content
+        It builds a monolithic (pre-Blue/Green) install on a real device, which
+        is still how the atomic layout is exercised for image builds and manual
+        verification.  It is a TESTING helper, not an end-user installer, so
+        deleting it with the migration would have removed a capability we still
+        rely on.
+        """
+        repo = Path(__file__).resolve().parents[3]
+        assert (repo / "scripts" / "legacy_setup_trixie_metixel.sh").is_file()
 
-    def test_migrate_script_copies_canonical_systemd_units(self) -> None:
-        """Migration must COPY the shipped systemd units from the release rather
-        than sed-mutating the old ones — the sed approach left some devices with
-        a stale PYTHONPATH (crash-loop) when the installed value didn't match."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
+    def test_setup_script_is_retired(self) -> None:
+        """The end-user standalone installer has been deleted.
 
-        # Copies the canonical units from the release into /etc/systemd/system.
-        assert 'cp "${RELEASE_DIR}/systemd/${unit}" "/etc/systemd/system/${unit}"' in content
-        assert "metixel-backend.service metixel-cage.service" in content
-        # The obsolete pre-cage metixel-frontend unit is no longer shipped; the
-        # migration stops/removes a stale copy from aging devices.
-        assert "metixel-frontend.service" not in content.split("for unit in")[1].split(";")[0]
-        assert "rm -f /etc/systemd/system/metixel-frontend.service" in content
-        # The fragile per-value sed rewrite is gone (it left PYTHONPATH stale).
-        assert "PYTHONPATH=/opt/metixel$|PYTHONPATH" not in content
-        # The systemd units are copied, not sed-mutated (the only sed -i left is
-        # the Samba share path rewrite, which is unrelated to systemd).
-        assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
-        # The cursor-hider service (newer feature) is installed + enabled only
-        # when the release ships it — never against code that lacks the
-        # --mode cursor-hider entrypoint (that would crash-loop forever).
-        assert "metixel-cursor-hider.service" in content
-        assert 'grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"' in content
-        assert "CURSOR_HIDER_PRESENT" in content
+        Installing and updating now run ONE code path (bootstrap.sh →
+        update.sh), so a separate fresh-install script is both redundant and a
+        drift risk: it had to be re-tested and promoted to main on every change.
+        (The LEGACY monolithic helper is a different thing and stays — see
+        test_legacy_monolithic_setup_helper_is_retained.)
+        """
+        repo = Path(__file__).resolve().parents[3]
+        assert not (repo / "scripts" / "setup_trixie_metixel.sh").exists()
 
-    def test_migrate_script_repairs_partial_state(self) -> None:
-        """A partial/aborted migration (data/ present but no valid live symlink)
-        must be REPAIRED on re-run, not treated as already-migrated."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
+    def test_no_script_references_deleted_installers(self) -> None:
+        """Nothing may reference the two deleted scripts in EXECUTABLE code.
 
-        # Only a VALID live symlink counts as migrated.
-        assert 'if [ -L "${LIVE_LINK}" ] && [ -d "$(readlink -f "${LIVE_LINK}"' in content
-        # A stray data/ triggers a repair re-run, not a bail-out.
-        assert "Re-running migration to repair a partial/aborted previous run" in content
-        # The whole install root is chowned to pi so the service can write.
-        assert 'chown -R pi:pi "${INSTALL_ROOT}"' in content
+        Retired installers leave stale advice behind in comments, which is how
+        a reader ends up looking for a file that no longer exists.  Only
+        comments are allowed to mention them (e.g. explaining the retirement).
+        """
+        import re
 
-    def test_migrate_script_moves_whole_media_logs_cache_folders(self) -> None:
-        """The migration must move the ENTIRE media/logs/cache folders (not
-        file-by-file) so user-created custom watch folders are preserved, and
-        it must NOT pre-create data/media etc as placeholders that would block
-        the move."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
+        repo = Path(__file__).resolve().parents[3]
+        # The negative lookbehind matters: "setup_trixie_metixel.sh" is a
+        # SUBSTRING of the retained "legacy_setup_trixie_metixel.sh", so a plain
+        # `in` check would flag the test helper we deliberately keep.
+        deleted_re = re.compile(
+            r"(?<!legacy_)setup_trixie_metixel\.sh|migrate_to_atomic\.sh"
+        )
+        offenders: list[str] = []
+        for script in sorted((repo / "scripts").rglob("*.sh")):
+            for lineno, line in enumerate(
+                script.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if deleted_re.search(line):
+                    offenders.append(
+                        f"{script.relative_to(repo)}:{lineno}: {stripped}"
+                    )
+        assert not offenders, (
+            "executable code still references a deleted installer:\n"
+            + "\n".join(offenders)
+        )
 
-        # Step 3 must NOT pre-create media/cache/logs placeholders (they come
-        # from the move), so the top-level folder isn't orphaned.  Only backups
-        # is scaffolded (no monolithic source); config files live directly in
-        # /data, so there is no data/config subdir.
-        assert 'mkdir -p "${DATA_DIR}/backups"' in content
-        assert '"${DATA_DIR}/media" "${DATA_DIR}/cache" "${DATA_DIR}/logs"' not in content
-        assert '"${DATA_DIR}/config"' not in content
-        # Step 4 moves the whole folder (mv) or copy-merges on re-entry.
-        assert "for item in media logs cache; do" in content
-        assert 'mv "${INSTALL_ROOT}/${item}" "${DATA_DIR}/"' in content
-        assert 'cp -an "${INSTALL_ROOT}/${item}/." "${DATA_DIR}/${item}/"' in content
+    def test_logging_conf_is_fully_retired(self) -> None:
+        """logging.conf is gone — logging is configured in code, one file per
+        process.  Nothing may load it, and no string literal (including
+        docstrings, which is how stale guidance survives) may reference it."""
+        import ast
 
-    def test_migrate_script_updates_samba_share_path(self) -> None:
-        """The migration moves media/ to /data/media, so any Samba share pointing
-        at the old monolithic path must be rewritten to the new data location —
-        otherwise the share breaks after migration."""
-        mig = Path(__file__).resolve().parents[3] / "scripts" / "migrate_to_atomic.sh"
-        content = mig.read_text(encoding="utf-8")
+        main = (_REPO_ROOT / "src" / "metixel" / "__main__.py").read_text(encoding="utf-8")
+        # The declarative loader must be gone.
+        assert "fileConfig" not in main
 
-        # Rewrites the old install-root media path to the data path.
-        assert "path = ${INSTALL_ROOT}/media" in content
-        assert "path = ${DATA_DIR}/media" in content
-        assert 'sed -i "s|path = ${INSTALL_ROOT}/media|path = ${DATA_DIR}/media|g"' in content
-        # Restarts smbd so the new path takes effect.
-        assert "systemctl restart smbd" in content
-
-
-class TestSetupScript:
-    """The fresh-install setup script must build the atomic layout correctly."""
-
-    def test_setup_script_moves_code_into_release_not_self_copy(self) -> None:
-        """Step [4/9] must MOVE the repo contents into releases/<tag> rather
-        than `cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"` — RELEASE_DIR lives
-        INSIDE METIXEL_DIR (/opt/metixel/releases/<tag>), so a self-copy fails
-        with 'cannot copy a directory into itself'."""
-        setup = Path(__file__).resolve().parents[3] / "scripts" / "setup_trixie_metixel.sh"
-        content = setup.read_text(encoding="utf-8")
-
-        # The buggy self-copy must be gone.
-        assert 'cp -a "${METIXEL_DIR}/." "${RELEASE_DIR}/"' not in content
-        # The code is moved entry-by-entry, excluding the data/releases layer.
-        assert 'for entry in "${METIXEL_DIR}"/.* "${METIXEL_DIR}"/*; do' in content
-        assert 'mv "$entry" "${RELEASE_DIR}/" 2>/dev/null || true' in content
-        # The data/releases/live/cache/logs/media/etc dirs are excluded.
-        assert '"data"|"releases"|"live"|"cache"|"logs"|"media"|"etc"' in content
-        # The git checkout is preserved inside the release.
-        assert 'mv "${METIXEL_DIR}/.git" "${RELEASE_DIR}/"' in content
-
-    def test_setup_script_reads_moved_code_from_release_dir(self) -> None:
-        """After the code moves into RELEASE_DIR, later steps must read from
-        RELEASE_DIR (systemd units) — and etc/ stays at METIXEL_DIR (excluded
-        from the move), so config templates come from METIXEL_DIR/etc."""
-        setup = Path(__file__).resolve().parents[3] / "scripts" / "setup_trixie_metixel.sh"
-        content = setup.read_text(encoding="utf-8")
-
-        # systemd units are copied from the release (where the code moved).
-        assert 'cp "${RELEASE_DIR}/systemd/metixel-backend.service"' in content
-        assert 'cp "${RELEASE_DIR}/systemd/metixel-cage.service"' in content
-        # etc/ is excluded from the move, so config templates come from METIXEL_DIR.
-        assert 'cp "${METIXEL_DIR}/etc/config.example.json"' in content
-        assert 'cp -n "${METIXEL_DIR}/etc/logging.conf"' in content
-
+        tree = ast.parse(main)
+        # Raw-text search is unusable here: "logging.conf" is a substring of
+        # "logging.config" (an import) and appears in prose explaining the
+        # retirement.  Check the parsed string literals instead.
+        literals = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        assert not any("logging.conf" in s for s in literals), (
+            "no string literal (incl. docstrings) may reference logging.conf"
+        )
+        assert not any(
+            isinstance(node, ast.Import)
+            and any(alias.name == "logging.config" for alias in node.names)
+            for node in ast.walk(tree)
+        ), "logging.config import should have been removed"
 
 class TestFixups:
     """Versioned device-repair fixups run once per device during install."""
@@ -270,39 +329,116 @@ class TestFixups:
         # Fixups are warn-and-continue (do not abort the update).
         assert "WARNING: fixup" in content
 
-    def test_gpu_mem_fixup_handles_duplicate_lines(self) -> None:
-        """The gpu-mem fixup must handle duplicate gpu_mem= lines (the last one
-        wins in config.txt) by removing ALL of them and appending a single 128."""
+    def test_gpu_mem_is_not_convergent(self) -> None:
+        """gpu_mem must NOT be reconciled on every update.
+
+        /boot/firmware/config.txt is the device's own file and a change only
+        takes effect after a reboot — re-asserting 128 every update would
+        silently override a value the user deliberately chose, and would
+        schedule a reboot-dependent change on an unrelated upgrade.  It is
+        therefore applied at provisioning + by a one-time fixup instead.
+        """
         repo = Path(__file__).resolve().parents[3]
-        fixup = repo / "scripts" / "fixups" / "v1.3.0-gpu-mem.sh"
-        content = fixup.read_text(encoding="utf-8")
+        reconcile = (repo / "scripts" / "reconcile.sh").read_text(encoding="utf-8")
 
-        # Removes every gpu_mem= line, then appends a single gpu_mem=128.
-        assert "sed -i '/^gpu_mem=/d'" in content
-        assert 'echo "gpu_mem=128" >> "${BOOT}"' in content
-        # Only corrects when there isn't exactly one gpu_mem=128.
-        assert "COUNT" in content
-        assert "HAS_128" in content
+        # reconcile.sh must not edit gpu_mem at all.
+        assert "sed -i '/^gpu_mem=/d'" not in reconcile
+        # It documents the exclusion explicitly.
+        assert "DELIBERATELY NOT HANDLED HERE" in reconcile
 
-    def test_cursor_hider_fixup_provisions_service(self) -> None:
-        """Devices installed or migrated before 1.2.5 never received the
-        metixel-cursor-hider unit (migration only provisioned backend + cage).
-        The fixup must install + enable it from the release, and start it when
-        the live code already supports the mode (fixups run pre-swap)."""
+        # The one-time fixup is retained and shares the implementation.
+        fixup = repo / "scripts" / "fixups" / "v1.2.1-gpu-mem.sh"
+        assert fixup.is_file(), "gpu_mem is not convergent — its fixup must stay"
+        assert "configure_boot.sh" in fixup.read_text(encoding="utf-8")
+
+        # The shared implementation exists and does the actual edit.
+        boot = (repo / "scripts" / "configure_boot.sh").read_text(encoding="utf-8")
+        assert "sed -i '/^gpu_mem=/d'" in boot
+        assert "REBOOT_REQUIRED" in boot
+        assert "--dry-run" in boot
+
+    def test_reconcile_owns_ddc_cache_and_units(self) -> None:
+        """The retired fixups' behaviour now lives in reconcile.sh."""
         repo = Path(__file__).resolve().parents[3]
-        fixup = repo / "scripts" / "fixups" / "v1.2.5-cursor-hider.sh"
-        content = fixup.read_text(encoding="utf-8")
+        reconcile = (repo / "scripts" / "reconcile.sh").read_text(encoding="utf-8")
 
-        # Installs the unit from the release dir into /etc/systemd/system.
-        assert "systemd/metixel-cursor-hider.service" in content
-        assert 'cp "${UNIT_SRC}" "${UNIT_DST}"' in content
-        assert "systemctl daemon-reload" in content
-        assert "systemctl enable metixel-cursor-hider.service" in content
-        # Guarded: never installed against a release lacking the mode.
-        assert 'grep -q "cursor-hider" "${REPO}/src/metixel/__main__.py"' in content
-        # Start is attempted only when the live code already supports the mode.
-        assert "systemctl is-active --quiet metixel-cursor-hider.service" in content
-        assert "REBOOT_REQUIRED" in content
+        # ddcutil cache (was v1.2.6-ddc-cache.sh)
+        assert 'INSTALL_ROOT="${METIXEL_INSTALL_ROOT:-/opt/metixel}"' in reconcile
+        assert '"${DATA_DIR}/cache/ddcutil"' in reconcile
+        assert "rm -rf /home/pi/.cache/ddcutil" in reconcile
+        # i2c-dev (was v1.4.0-i2c-dev.sh)
+        assert "/etc/modules-load.d/metixel-i2c.conf" in reconcile
+        # cursor-hider unit (was v1.2.5-cursor-hider.sh)
+        assert "metixel-cursor-hider.service" in reconcile
+
+    def test_retired_fixups_are_gone(self) -> None:
+        """Convergent repairs must not remain as one-shot fixups — a mistake in
+        a fixup can never be corrected, because it runs exactly once ever.
+
+        gpu_mem is deliberately NOT in this list: it is excluded from
+        reconciliation (see test_gpu_mem_is_not_convergent).
+        """
+        repo = Path(__file__).resolve().parents[3]
+        for name in (
+            "v1.2.5-cursor-hider.sh",
+            "v1.2.6-ddc-cache.sh",
+            "v1.4.0-i2c-dev.sh",
+            "v1.5.0-systemd-units.sh",
+        ):
+            assert not (repo / "scripts" / "fixups" / name).exists(), (
+                f"{name} should have been folded into scripts/reconcile.sh"
+            )
+
+    def test_install_script_still_runs_fixups(self) -> None:
+        """The fixup mechanism is retained for genuine one-way migrations."""
+        content = _INSTALL_SCRIPT.read_text(encoding="utf-8")
+        assert "fixups/manifest.txt" in content
+        assert "installed_fixups.json" in content
+
+    def test_backend_unit_owns_ddc_cache_location(self) -> None:
+        """The ddcutil cache path must be declared by the unit (the shipped
+        artefact) rather than hardcoded in Python, so the unit that ships and
+        the service that runs cannot drift apart."""
+        repo = Path(__file__).resolve().parents[3]
+        unit = (repo / "systemd" / "metixel-backend.service").read_text(encoding="utf-8")
+
+        assert "Environment=XDG_CACHE_HOME=/opt/metixel/data/cache/ddcutil" in unit
+
+    def test_backend_unit_does_not_create_the_data_tree(self) -> None:
+        """reconcile.sh is the SINGLE owner of the persistent data tree.
+
+        The unit previously duplicated that list with its own root-run
+        ExecStartPre — which is how it came to create a `data/config` directory
+        that does not exist by design, and how the ownership rules drifted from
+        the installer.  Directory creation + ownership must live in exactly one
+        place.
+        """
+        repo = Path(__file__).resolve().parents[3]
+        unit = (repo / "systemd" / "metixel-backend.service").read_text(encoding="utf-8")
+
+        assert "ExecStartPre" not in unit, (
+            "the unit must not create the data tree — reconcile.sh owns it"
+        )
+        assert "chown" not in unit, (
+            "the unit must not fix ownership — reconcile.sh owns it"
+        )
+        # It still owns the SYSTEMD-specific runtime dir, which must exist
+        # before the service starts on every boot without an installer.
+        assert "RuntimeDirectory=metixel" in unit
+        # And the ddcutil cache location is still declared here.
+        assert "Environment=XDG_CACHE_HOME=" in unit
+
+    def test_daemon_reads_ddc_cache_from_environment(self) -> None:
+        """daemon.py must read XDG_CACHE_HOME instead of hardcoding the path."""
+        repo = Path(__file__).resolve().parents[3]
+        daemon = (repo / "src" / "metixel" / "backend" / "daemon.py").read_text(
+            encoding="utf-8"
+        )
+
+        assert 'os.environ.get("XDG_CACHE_HOME")' in daemon
+        assert "cache_dir=cache_env or None" in daemon
+        # The old hardcoded path must be gone from the daemon.
+        assert 'data_dir() / "cache" / "ddcutil"' not in daemon
 
 
 class TestUpdateScript:
@@ -323,6 +459,147 @@ class TestUpdateScript:
         assert "ln -sfn" in content
         assert "live" in content
 
+    def test_update_script_clones_full_not_shallow(self) -> None:
+        """The clone must NOT be shallow.
+
+        The application depends on a real git repository on the device:
+        ``update_manager._resolve_repo_root()`` locates the repo via ``.git``,
+        and ``git reset --hard`` / local debugging patches need real history.
+        A ``--depth 1`` clone silently breaks all of those.
+        """
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        code_lines = [
+            ln.strip()
+            for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        assert not any("--depth" in ln for ln in code_lines), (
+            "the clone must be full — a shallow clone breaks git-based updates"
+        )
+
+    def test_update_script_supports_dry_run(self) -> None:
+        """--dry-run must be safe: no staging, no install, no swap, no trap."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        assert "--dry-run" in content
+        assert 'DRY_RUN="yes"' in content
+        # The destructive cleanup trap must be disarmed in dry-run mode.
+        assert 'if [ "${DRY_RUN}" = "no" ]; then' in content
+        assert "trap _cleanup_staging ERR EXIT" in content
+
+    def test_update_script_accepts_staged_dir(self) -> None:
+        """bootstrap.sh clones before update.sh can exist, so it hands its
+        checkout over via --staged-dir rather than update.sh cloning again."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        assert "--staged-dir" in content
+        # The supplied checkout is validated before it is trusted.
+        assert "is not a Metixel checkout" in content
+        assert 'mv "${STAGED_DIR}" "${STAGING_DIR}"' in content
+
+    def test_sample_media_seeded_on_fresh_install_only(self) -> None:
+        """The demo gallery ships inside the release and is seeded ONCE.
+
+        Regression guard: the gallery was originally seeded only by the
+        standalone installer, so the bootstrap.sh install path shipped with an
+        EMPTY gallery — the issue that prompted this.  It must also be
+        fresh-install-only: re-adding samples on every update would resurrect a
+        gallery the user deliberately deleted.
+        """
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        assert "sample_media" in content, "sample media is never seeded"
+        # Gated on a fresh install.
+        seed_block = content.split("seed the sample media")[1].split("[8/8]")[0]
+        assert 'if [ "${FRESH_INSTALL}" = "yes" ]; then' in seed_block, (
+            "sample media must only be seeded on a fresh install"
+        )
+        # Sourced from the release (where the clone's data/ lands).
+        assert 'SAMPLE_SRC="${RELEASE_DIR}/data/media/sample_media"' in content
+        # Never overwrites what is already there.
+        assert 'if [ -e "${SAMPLE_DST}" ]' in content
+        assert 'cp -rn "${SAMPLE_SRC}/." "${SAMPLE_DST}/"' in content
+        # Must not be fatal to an otherwise healthy install.
+        assert '|| true' in seed_block
+
+    def test_bootstrap_is_thin_and_delegates(self) -> None:
+        """bootstrap.sh is the only downloadable file and must stay small and
+        stable: it obtains a checkout and delegates ALL install logic to
+        update.sh, so installing and updating share one code path."""
+        repo = Path(__file__).resolve().parents[3]
+        bootstrap = repo / "scripts" / "bootstrap.sh"
+        assert bootstrap.is_file(), "scripts/bootstrap.sh missing"
+
+        content = bootstrap.read_text(encoding="utf-8")
+        code_lines = [
+            ln.strip()
+            for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        code = "\n".join(code_lines)
+
+        # The structural invariant that matters: bootstrap must NOT reimplement
+        # install steps the release owns — it delegates to update.sh.
+        for owned in ("reconcile.sh", "ota_install.sh"):
+            assert owned not in code, (
+                f"bootstrap must not run {owned} itself — update.sh owns that"
+            )
+
+        # A loose sanity bound: the value is that it almost never changes, so a
+        # grossly bloated bootstrap is the thing worth catching.
+        assert len(code_lines) < 220, (
+            f"bootstrap.sh is {len(code_lines)} code lines — it should stay thin"
+        )
+
+        # It installs git (required to clone at all) and delegates the install.
+        assert "apt-get install" in content
+        assert "scripts/update.sh" in content
+
+    def test_bootstrap_writes_init_json_before_update(self) -> None:
+        """Installer answers go through init.json (not config.json) so the
+        config schema stays owned by Python and reconcile can read them."""
+        repo = Path(__file__).resolve().parents[3]
+        content = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+        assert "init.json" in content
+        assert "wifi_country" in content
+        # Never hand-write the real config — the app owns that schema.
+        assert "config.json" not in content
+
+        # Ordering must be checked on the actual DELEGATION call: the header
+        # comment and the --local validation both mention update.sh earlier.
+        code_lines = [
+            ln for ln in content.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        init_ln = next(i for i, ln in enumerate(code_lines) if "init.json" in ln)
+        delegate_ln = next(
+            i
+            for i, ln in enumerate(code_lines)
+            if ln.strip().startswith("bash ") and "scripts/update.sh" in ln
+        )
+        assert init_ln < delegate_ln, (
+            "init.json must be written BEFORE update.sh is invoked, so "
+            "reconcile.sh can read the answers"
+        )
+
+    def test_bootstrap_supports_local_checkout(self) -> None:
+        """Development path: install a working tree without pushing."""
+        repo = Path(__file__).resolve().parents[3]
+        content = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+        assert "--local" in content
+        # A local checkout must be COPIED, never moved (the user's tree lives on).
+        assert 'cp -a "${LOCAL_DIR}/."' in content
+
+    def test_bootstrap_refuses_when_already_installed(self) -> None:
+        """Re-running the installer over a live device must not clobber it."""
+        repo = Path(__file__).resolve().parents[3]
+        content = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+        assert "already installed" in content
+
     def test_update_script_has_rollback(self) -> None:
         content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
 
@@ -339,7 +616,7 @@ class TestUpdateScript:
         content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
 
         # The dev branch is detected and the commit id becomes the folder name.
-        assert 'if [ "${VERSION}" = "dev" ]; then' in content
+        assert 'if [ "${VERSION}" = "dev" ] && [ "${DRY_RUN}" = "no" ]; then' in content
         assert 'COMMIT="$(git -C "${STAGING_DIR}" rev-parse --short HEAD)"' in content
         assert 'STAGING_VERSION="${COMMIT}"' in content
         assert 'RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"' in content
@@ -347,21 +624,354 @@ class TestUpdateScript:
         # The rename into releases/ still happens after the commit resolution.
         assert 'mv "${STAGING_DIR}" "${RELEASE_DIR}"' in content
 
-    def test_update_script_provisions_new_systemd_service(self) -> None:
-        """An atomic upgrade must install + start a NEW systemd service shipped
-        by the release (e.g. metixel-cursor-hider in 1.2.5).  Devices installed
-        or migrated before the service existed would otherwise never run it."""
+    def test_cursor_hider_unit_guarded_by_entrypoint(self) -> None:
+        """A unit execing `--mode cursor-hider` against code lacking that
+        entrypoint would crash-loop forever, so both the unit install and the
+        stale-unit removal are guarded on the entrypoint existing."""
+        repo = Path(__file__).resolve().parents[3]
+        reconcile = (repo / "scripts" / "reconcile.sh").read_text(encoding="utf-8")
+
+        assert 'grep -q "cursor-hider" "${REPO}/src/metixel/__main__.py"' in reconcile
+        # Both directions are handled: install when shipped, remove when not.
+        assert "metixel-cursor-hider.service updated" in reconcile
+        assert "removed stale metixel-cursor-hider.service" in reconcile
+        # The retired pre-cage frontend unit is cleaned up too.
+        assert "metixel-frontend.service" in reconcile
+
+    def test_update_script_delegates_units_to_reconcile(self) -> None:
+        """Units are installed by reconcile.sh (the single owner of host
+        config), shared with fresh installs — NOT duplicated in update.sh.
+        Only backup/restore lives here, because rollback is update-specific."""
         content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
 
-        # The hider unit is provisioned from the staged release (guarded: only
-        # when the release actually ships the --mode cursor-hider entrypoint).
-        assert "metixel-cursor-hider.service" in content
-        assert 'grep -q "cursor-hider" "${RELEASE_DIR}/src/metixel/__main__.py"' in content
-        assert "systemctl enable metixel-cursor-hider.service" in content
-        assert "systemctl start metixel-cursor-hider.service" in content
-        # Runs AFTER the health check so provisioning can't affect rollback.
-        assert "New release is healthy" in content
-        assert content.index("metixel-cursor-hider.service") > content.index("healthy")
+        # It invokes the shared reconciler from the NEW release.
+        assert "scripts/reconcile.sh" in content
+        # It must fail closed: never swap on a reconcile failure.
+        assert 'if ! bash "${RELEASE_DIR}/scripts/reconcile.sh"' in content
+        # Backup/restore is still local to the updater (rollback-specific).
+        assert "_restore_units()" in content
+        assert "UNIT_BACKUP_DIR" in content
+
+    def test_update_script_reconciles_before_swap(self) -> None:
+        """Reconciliation must run BEFORE the symlink swap and restart, so a
+        failure aborts while the old release is still live and healthy."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        reconcile = content.index("Reconciling host configuration")
+        swap = content.index("Swapping live symlink")
+        restart = content.index("Restarting services")
+        assert reconcile < swap < restart
+
+    def test_update_script_restores_units_on_rollback(self) -> None:
+        """A rollback that left the new units in place would run the OLD
+        release against NEW unit files."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        rollback = content.index("ROLLING BACK")
+        assert content.index("_restore_units", rollback) > rollback
+        # Backups live outside the install root (survive a re-image).
+        assert "/etc/systemd/system/.metixel-backup" in content
+
+    def test_setup_has_no_self_bootstrap(self) -> None:
+        """bootstrap.sh must not clone the repository itself.
+
+        It is the only downloadable file; it obtains a checkout and delegates
+        to update.sh.  A self-bootstrapping installer would have to be promoted
+        to main before it could be tested, so the version a user runs could
+        differ from the one being worked on.
+        """
+        repo = Path(__file__).resolve().parents[3]
+        bootstrap = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+        code_lines = [
+            ln.strip()
+            for ln in bootstrap.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        code = "\n".join(code_lines)
+
+        # It may CLONE (that is how it obtains the repo), but it must never
+        # fetch and execute itself from raw.githubusercontent.
+        assert "raw.githubusercontent.com" not in code
+        assert "exec env METIXEL_CHANNEL" not in code
+
+    def test_bootstrap_accepts_unattended_env(self) -> None:
+        """Unattended installs must stay possible: answers come from flags."""
+        repo = Path(__file__).resolve().parents[3]
+        bootstrap = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+        assert "--channel" in bootstrap
+        assert "--wifi-country" in bootstrap
+
+    def test_bootstrap_channel_validation_matches_backend(self) -> None:
+        """bootstrap.sh must offer exactly the channels the backend populates.
+
+        Match the case-statement arm specifically — a bare "main)" search would
+        also match ordinary prose such as "(e.g. the repo on main) when no".
+        """
+        repo = Path(__file__).resolve().parents[3]
+        content = (repo / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "stable|beta|dev)" in content, (
+            "bootstrap.sh channel validation drifted from the backend"
+        )
+        assert "stable|beta|dev|main)" not in content, (
+            "bootstrap.sh still offers the phantom 'main' channel"
+        )
+
+
+class TestReconcileScript:
+    """reconcile.sh is the single owner of Metixel-managed host state."""
+
+    def _content(self) -> str:
+        repo = Path(__file__).resolve().parents[3]
+        return (repo / "scripts" / "reconcile.sh").read_text(encoding="utf-8")
+
+    def test_reconcile_script_exists_and_is_idempotent(self) -> None:
+        repo = Path(__file__).resolve().parents[3]
+        assert (repo / "scripts" / "reconcile.sh").is_file()
+        content = self._content()
+
+        # Idempotency relies on compare-before-write, not on being run once.
+        assert "cmp -s" in content
+        # A converged host reports no changes.
+        assert "already converged" in content
+
+    def test_dry_run_changes_nothing(self) -> None:
+        """--dry-run must not mutate the host, so it can be verified safely."""
+        content = self._content()
+
+        assert "--dry-run" in content
+        assert 'DRY_RUN="yes"' in content
+        # The write primitives are bypassed in dry-run mode.
+        assert 'if [ "${DRY_RUN}" = "yes" ]' in content
+
+    def test_shared_user_files_are_only_appended_to(self) -> None:
+        """smb.conf and /etc/default/hostapd are user-editable shared files.
+        Overwriting them wholesale would break a working device on update."""
+        content = self._content()
+
+        # smb.conf: append-only, guarded by an existence check.
+        assert "grep -q '\\[metixel-media\\]'" in content
+        assert 'tee -a "${SMB_CONF}"' in content
+        # hostapd.conf / dnsmasq.conf are only written when absent.
+        assert '[ ! -f /etc/hostapd/hostapd.conf ]' in content
+        assert '[ ! -f /etc/dnsmasq.conf ]' in content
+
+    def test_data_tree_owner_matches_app_expectations(self) -> None:
+        """reconcile.sh owns the data tree list; it must match what the
+        application expects.  Drift here previously produced a `data/config`
+        directory that does not exist by design."""
+        content = self._content()
+
+        for sub in ("logs", "media", "cache", "backups", "cache/ddcutil"):
+            assert sub in content, f"reconcile.sh must provision data/{sub}"
+        # data/config is not a real directory — config.json lives at data/.
+        assert '"${DATA_DIR}/config"' not in content
+        # data/etc is GONE: it existed only to hold logging.conf, which is
+        # retired (logging is configured in code).  Recreating it would be the
+        # same "directory that does not exist by design" bug as data/config.
+        assert '"${DATA_DIR}/etc"' not in content, (
+            "reconcile.sh must not recreate data/etc — logging.conf is retired"
+        )
+        # Ownership is repaired, and the chown is non-recursive except where a
+        # root-created file is the failure mode (recursive flag only for small
+        # dirs — never over the media tree).
+        assert 'chown "${owner}" "${path}"' in content
+        assert "recursive" in content
+
+
+class TestUpdateChannelConsistency:
+    """The UI channel selector must match the channels the backend populates.
+
+    Regression guard: the UI once offered a "main" channel while the backend
+    only ever populated "stable"/"beta"/"dev". Selecting it showed no version
+    and no install button — indistinguishable from being up to date.
+    """
+
+    def _code_lines(self, text: str) -> str:
+        return "\n".join(
+            ln
+            for ln in text.splitlines()
+            if ln.strip() and not ln.strip().startswith(("//", "#", "*", "/*"))
+        )
+
+    def test_backend_never_populates_main(self) -> None:
+        mgr = _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        content = mgr.read_text(encoding="utf-8")
+
+        # The channels the backend publishes.
+        assert 'available["stable"]' in content
+        assert 'available["beta"]' in content
+        assert 'available["dev"]' in content
+        assert 'available["main"]' not in content, (
+            "backend populates a 'main' channel that nothing else supports"
+        )
+
+    def test_valid_channels_match_published_channels(self) -> None:
+        mgr = _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        content = mgr.read_text(encoding="utf-8")
+
+        # set_channel must not accept a channel that is never populated.
+        assert 'valid = {"stable", "beta", "dev"}' in content
+        assert '"main"' not in content.split("def set_channel")[1].split("def ")[0]
+
+    def test_ui_dropdown_offers_only_real_channels(self) -> None:
+        html = (
+            _REPO_ROOT / "src" / "metixel" / "backend" / "web" / "templates" / "index.html"
+        ).read_text(encoding="utf-8")
+
+        # Isolate the channel <select>.
+        select = html.split('id="cfg-update-channel"')[1].split("</select>")[0]
+        for ch in ("stable", "beta", "dev"):
+            assert f'value="{ch}"' in select, f"UI is missing the {ch} channel"
+        assert 'value="main"' not in select, (
+            "UI offers a 'main' channel the backend never populates"
+        )
+
+    def test_ui_js_channel_list_matches_backend(self) -> None:
+        js = (
+            _REPO_ROOT
+            / "src"
+            / "metixel"
+            / "backend"
+            / "web"
+            / "static"
+            / "js"
+            / "updates-page.js"
+        ).read_text(encoding="utf-8")
+
+        assert 'var channels = ["stable", "beta", "dev"];' in js
+        # The description table must have an entry for every offered channel —
+        # a missing key renders an empty hint under the selector.
+        code = self._code_lines(js)
+        for ch in ("stable", "beta", "dev"):
+            assert f'"{ch}":' in code, f"missing channel description for {ch}"
+        assert '"main":' not in code, "stale 'main' channel description remains"
+
+    def test_installer_channels_match_backend(self) -> None:
+        """bootstrap.sh — the only remaining installer — must offer exactly the
+        channels the backend populates.
+
+        Match the case-statement arm specifically — a bare "main)" search would
+        also match ordinary prose such as "(e.g. the repo on main) when no".
+        """
+        content = (_REPO_ROOT / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+        assert "stable|beta|dev)" in content, (
+            "bootstrap.sh channel validation drifted from the backend"
+        )
+        assert "stable|beta|dev|main)" not in content, (
+            "bootstrap.sh still offers the phantom 'main' channel"
+        )
+
+
+class TestCheckInterval:
+    """The configured check interval is actually enforced (it used to be dead).
+
+    `MIN_CHECK_INTERVAL` was unreferenced and `check_interval_hours` was only
+    ever displayed, so the UI advertised "Checks every 6 hours" while the code
+    polled every 60 s.
+    """
+
+    def _mgr(self) -> UpdateManager:
+        return UpdateManager.__new__(UpdateManager)  # skip __init__
+
+    def test_due_when_no_previous_check(self, tmp_path, monkeypatch):
+        """Fresh boot / cleared tmpfs ⇒ check immediately."""
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        assert self._mgr()._check_due({"check_interval_hours": 6}) is True
+
+    def test_not_due_immediately_after_a_check(self, tmp_path, monkeypatch):
+        from datetime import UTC, datetime
+
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        runtime_state.write_runtime_state(
+            {"last_check": datetime.now(UTC).isoformat()}, force=True
+        )
+        assert self._mgr()._check_due({"check_interval_hours": 6}) is False
+
+    def test_due_once_interval_elapsed(self, tmp_path, monkeypatch):
+        from datetime import UTC, datetime, timedelta
+
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        old = (datetime.now(UTC) - timedelta(hours=7)).isoformat()
+        runtime_state.write_runtime_state({"last_check": old}, force=True)
+        assert self._mgr()._check_due({"check_interval_hours": 6}) is True
+
+    def test_user_cannot_undercut_the_floor(self, tmp_path, monkeypatch):
+        """A tiny configured interval must not turn the loop into a hammer."""
+        from datetime import UTC, datetime, timedelta
+
+        from metixel.shared import runtime_state
+        from metixel.backend.update_manager import MIN_CHECK_INTERVAL
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        # 1 minute ago: below MIN_CHECK_INTERVAL (600s), so still not due even
+        # though the requested interval is 0.01 hours (36 s).
+        recent = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+        runtime_state.write_runtime_state({"last_check": recent}, force=True)
+        assert MIN_CHECK_INTERVAL >= 600
+        assert self._mgr()._check_due({"check_interval_hours": 0.01}) is False
+
+    def test_garbage_timestamp_is_treated_as_due(self, tmp_path, monkeypatch):
+        from metixel.shared import runtime_state
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path))
+        runtime_state._last_write.clear()
+        runtime_state.write_runtime_state({"last_check": "not-a-date"}, force=True)
+        assert self._mgr()._check_due({}) is True
+
+    def test_last_check_is_not_persisted_to_config(self) -> None:
+        """Regression: last_check must never be written to config.json again.
+
+        It lived there and was rewritten every few minutes, wearing the SD card
+        and firing an inotify event that made the frontend reload its config.
+        """
+        mgr_src = (
+            _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        ).read_text(encoding="utf-8")
+        assert '"last_check"' in mgr_src  # still tracked...
+        assert 'update_config("update", {"last_check"' not in mgr_src  # ...not in config
+        assert 'write_runtime_state({"last_check"' in mgr_src
+
+    def test_dead_update_fields_removed(self) -> None:
+        """`last_update` was unused by the UI and `last_rollback` was never read
+        by anything — both writes were removed rather than left to rot."""
+        mgr_src = (
+            _REPO_ROOT / "src" / "metixel" / "backend" / "update_manager.py"
+        ).read_text(encoding="utf-8")
+        cfg_src = (_REPO_ROOT / "src" / "metixel" / "shared" / "config.py").read_text(
+            encoding="utf-8"
+        )
+
+        # Assert on EXECUTABLE lines: the comments intentionally name the fields
+        # they explain the removal of, so a raw substring search would match the
+        # explanation rather than the code.
+        def _code(text: str) -> str:
+            return "\n".join(
+                ln
+                for ln in text.splitlines()
+                if ln.strip() and not ln.strip().startswith("#")
+            )
+
+        mgr_code = _code(mgr_src)
+        assert "last_rollback" not in mgr_code
+        assert '"last_update": now_iso' not in mgr_code
+        assert '"last_update"' not in _code(cfg_src)
+        assert "last_rollback" not in _code(cfg_src)
+
+        # The persistent, READ fields must survive.
+        assert '"last_auto_update": None' in cfg_src
+        assert '"channel": "stable"' in cfg_src
 
 
 class TestAutoUpdateSchedule:

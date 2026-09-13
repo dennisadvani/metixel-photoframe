@@ -80,18 +80,6 @@ def resolve_install_path(path: Path | str) -> Path:
     return data_dir() / p
 
 
-def ensure_data_dirs() -> None:
-    """Create the persistent data subdirectories if they do not exist.
-
-    Called on startup so logs, media, and cache are always writable even on a
-    fresh install.  Note: config files (config.json, logging.conf) live
-    directly under ``data_dir()`` / ``data_dir()/etc`` — there is no
-    ``data/config`` subdirectory.
-    """
-    for sub in ("logs", "media", "cache", "backups"):
-        (data_dir() / sub).mkdir(parents=True, exist_ok=True)
-
-
 def run_dir() -> Path:
     """Return the runtime directory for status/state files.
 

@@ -171,6 +171,19 @@ Open the dashboard → **Network** page. You can **Scan** for networks, switch
 connections, or **Forget** the current one. If the frame has no network at all,
 the `Metixel-Setup` hotspot reappears so you can set up a new connection.
 
+#### Turning the Wi-Fi radio on or off
+
+The **Network Status** card has a **WiFi Radio** switch that turns the Pi's
+Wi-Fi radio on or off at the operating system level. It is the supported way to
+disable Wi-Fi on the frame (rather than `raspi-config` or `nmcli`), and the
+setting is remembered — Metixel never turns the radio back on by itself once the
+frame has finished its first boot.
+
+> **Turning Wi-Fi off** disconnects the frame from your network, so you may lose
+> access to the dashboard until you turn it back on at the device. It is blocked
+> while the `Metixel-Setup` hotspot is active, since that would cut off the
+> device you are setting the frame up from.
+
 > **Wi-Fi country code:** if your region's Wi-Fi channels don't work, set the
 > country code under **Settings → Network → Wi-Fi Country Code**.
 

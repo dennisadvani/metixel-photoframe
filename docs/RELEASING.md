@@ -103,8 +103,10 @@ When the user clicks **Install**, the backend:
 3. Restarts `metixel-backend.service` + `metixel-cage.service`
 
 > **Note:** Blue/Green OTA requires the device to run from a git clone in a
-> release folder (set up by `setup_trixie_metixel.sh`). Prebuilt images
-> (`build_phase1.sh`) are flat copies and are **not** OTA-updatable.
+> release folder.  A flat, non-git copy of the code is **not** OTA-updatable.
+> The layout is created by `scripts/update.sh` on install — there is no separate
+> installer script, and no migration path from the pre-1.2.2 monolithic layout
+> (such a device must be re-imaged).
 
 > **Important:** The `github_repo` field in `config.json` must match the
 > actual GitHub repository.  The default is `dennisadvani/metixel-photoframe`.
@@ -342,11 +344,16 @@ The tag name after stripping the leading `v` must match the
     "auto_check": true,
     "check_interval_hours": 6,
     "github_repo": "dennisadvani/metixel-photoframe",
-    "last_check": null,
-    "last_update": null
+    "last_auto_update": null
   }
 }
 ```
+
+> **Note:** `last_check` is *not* in `config.json` — it lives in tmpfs at
+> `/run/metixel/update_state.json`, because rewriting config every few minutes
+> wore the SD card. `last_update` and `last_rollback` were removed (nothing read
+> them). Only `channel` and `last_auto_update` are persisted, both because they
+> must survive a reboot.
 
 ### Files Involved in a Release
 

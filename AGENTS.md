@@ -61,27 +61,43 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 8. **Configuration is atomic.** Never write `config.json` directly. Always write to a temp file and use `os.replace()` to atomically swap. The frontend watches for `inotify IN_MODIFY` events.
 
-9. **Systemd is the process manager.** Three services: `metixel-backend.service`, `metixel-cage.service` (on Trixie, the frontend runs under cage), and `metixel-cursor-hider.service` (hides the cage cursor via a persistent virtual mouse). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
+9. **Minimise SD-card writes — flash wear is a real failure mode.** Every device runs from an SD card (or eMMC) with finite erase cycles, and `data/` is on that same flash. Anything that writes *continuously* or *on a timer* is a bug, not a convenience.
+    - **The rules:** a write must be (a) triggered by an explicit user action, or (b) genuinely rare (packages, a release, a one-off migration). **Never** write from a polling loop, a watchdog tick, a heartbeat, a per-request metric, or a per-frame render path.
+    - **Transient runtime values belong in tmpfs, not `config.json`.** Use `metixel.shared.runtime_state` (`/run/metixel/…`), which costs RAM and is discarded on reboot — correct, because a fresh boot re-derives them. `run_dir()` is tmpfs on the Pi.
+    - **Do not put fleeting telemetry in `config.json`.** It also fires the `inotify` change flag, so every such write makes the frontend reload its whole config. A "last seen / last checked / last polled" timestamp in config is the classic version of this bug.
+    - **Generalise before you persist.** Ask whether the value survives a reboot *legitimately*: `channel` must (a user preference), `last_auto_update` must (it gates the weekly schedule — losing it would re-fire the window), but "when did we last check?" must not.
+    - **Guard any unavoidable repetition** with a cache TTL or a write throttle, and prefer updating in memory with a periodic flush over write-through on every change.
+    - **Exceptions are narrow and must be justified:** user-initiated actions (saving settings, uploading media, starting a sync), and genuinely infrequent maintenance (OTA install, dependency self-heal). When a user explicitly asks for something chatty (e.g. verbose file logging), honour it — but that is a deliberate, user-controlled opt-in, never a default.
+    - **Rotating logs are held to the same standard:** keep the level user-controlled, bound the size, and never let a loop emit an unbounded stream at `DEBUG`.
 
-10. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
+10. **Systemd is the process manager.** Three services: `metixel-backend.service`, `metixel-cage.service` (on Trixie, the frontend runs under cage), and `metixel-cursor-hider.service` (hides the cage cursor via a persistent virtual mouse). The frontend depends on the backend. Do not propose init.d scripts or cron-based startup.
 
-11. **Test on desktop first.** The `tk_backend.py` (tkinter-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
+11. **The web UI is served from the backend process** on port 8080. It's a lightweight, **modular vanilla-JS SPA built from native ES6 modules** — no bundler, no build step, no React/Angular, no frameworks. **Never reintroduce a single-file JS monolith** — see Web UI Style Guide → **JavaScript architecture** below.
 
-12. **Phase 1 vs Phase 2 awareness.** When writing code:
+12. **Test on desktop first.** The `tk_backend.py` (tkinter-based) allows running the entire stack on a development machine without Pi hardware. Always test there before targeting ARM.
+
+13. **Phase 1 vs Phase 2 awareness.** When writing code:
     - Check `metixel.display.__init__.detect_backend()` to know which pipeline is active
     - Phase 1: pi3d runs under cage + XWayland on Trixie (Mesa EGL)
     - Phase 2: uses Mesa EGL, Wayland compositor, or DRM/KMS directly
     - `/opt/vc/` paths only exist on legacy Bullseye; never assume them on Trixie
 
-13. **Respect the Clean Architecture (`src/` layout + dependency inversion).**
+14. **Respect the Clean Architecture (`src/` layout + dependency inversion).**
     - **`src/` layout:** All application packages live under `src/metixel/`. Never add new top-level packages at the repository root.
     - **Ports & Adapters (dependency inversion):** Core business logic must NEVER import third-party libraries directly (`requests`, `paho-mqtt`, `libcec`, ...). Define a `typing.Protocol` *port* in `src/metixel/shared/ports.py`, a concrete *adapter* in `src/metixel/shared/adapters.py`, and inject the port via constructor with a **real default** (behaviour stays identical when nothing is injected). Bundle injectable dependencies with the `Ports` dataclass (`BackendDaemon(..., ports=Ports(http=...))`).
     - **Composition root:** `src/metixel/__main__.py` is thin — CLI parsing + logging only; it delegates to `build_backend()` (`backend/daemon.py`) and `build_renderer()` (`frontend/renderer.py`). Never put business logic in `__main__.py`.
     - **New external systems:** when adding a new external dependency, add a Protocol + adapter — do not import the library into core. See `ARCHITECTURE.md` §6.7.
 
-14. **Tests mirror the package and use Protocol fakes.** Unit tests live in `testing/unit_tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
+15. **Tests mirror the package and use Protocol fakes.** Unit tests live in `testing/unit_tests/backend|frontend|display|shared/`, mirroring `src/metixel/...`. Tests must NOT touch real hardware, the network, or systemd — inject fakes that implement the port Protocols (they are `@runtime_checkable`, so `isinstance(fake, HttpGateway)` works). Hardware-dependent tests use `pytest.importorskip(...)`. Web tests use the shared fixtures in `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked outbound deps).
 
-15. **OTA is a thin bootstrap + atomic Blue/Green hand-off + startup self-heal.** The runtime pip
+16. **Host configuration has exactly ONE owner: `scripts/reconcile.sh`.** Anything describing *what a Metixel host should look like* — the data tree, systemd units, I²C/ddcutil, networking, Samba values, boot config — lives there and nowhere else. It is idempotent, runs on **every** update (from the NEW release's copy) **and** on fresh install, and supports `--dry-run`.
+    - **Never duplicate host config in an install script or in a systemd unit.** Duplication is what let a device run NEW code under OLD units, and a unit create a `data/config` directory that does not exist by design.
+    - **Only append** to shared user-editable files (`smb.conf`, `/etc/default/hostapd`); never rewrite them wholesale. `hostapd.conf`/`dnsmasq.conf` are written only when absent, so a user's customisations survive.
+    - **Dir/ownership rules live here, not in Python.** The app runs as `pi` and cannot `chown` a root-owned dir left by an installer, so `reconcile.sh` (root) owns creation + ownership. `paths.ensure_data_dirs()` was removed for exactly this reason; `__main__.py` keeps only a best-effort `mkdir` for desktop runs.
+    - Convergent state belongs here, **not** in `scripts/fixups/`. Fixups run *once ever*, so a mistake in one can never be corrected — they are reserved for one-way data migrations and destructive/ambiguous edits that depend on device history. See `scripts/fixups/README.md`.
+    - **Deliberate exception — the Wi-Fi radio is NOT reconciled.** `reconcile.sh` must never run `rfkill unblock` or `nmcli radio wifi on|off`. Converging a value the user can own at runtime *is* the bug: the old block re-asserted the radio on every OTA, silently undoing a user's `nmcli radio wifi off`. The radio is now owned by the application, which enables it exactly once per device on first boot (`BackendDaemon._ensure_first_run_wifi_radio`, latched by `network.wifi_radio_first_run_done` in `config.json`) and otherwise only through the web-UI toggle (`POST /api/network/radio`). After that one boot nothing but the user changes the radio. Guarded by `testing/unit_tests/backend/test_first_run_wifi_radio.py` (which asserts the script contains no radio commands) — do not reintroduce the block, and do not "converge" any other user-owned runtime value here either.
+
+17. **OTA is a thin bootstrap + atomic Blue/Green hand-off + startup self-heal.** The runtime pip
     deps (`requirements-pip.txt`) and system deps (`requirements-system.txt`) must be applied on
     every upgrade:
     - **Thin bootstrap (`update_manager._build_update_script`):** the generated OTA script only
@@ -99,15 +115,22 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
     - **Package lifecycle:** Metixel-managed packages are tracked in
       `/opt/metixel/data/installed_packages.json`; an update removes obsolete managed packages
       (apt remove / pip uninstall) — never pre-existing ones.
-    - **Self-migrating first upgrade:** a device still on the old monolithic layout (no `/data`,
-      no `/live`) is bridged by `ota_install.sh`, which detects the flat layout and runs
-      `migrate_to_atomic.sh --no-restart --no-backup` BEFORE installing. Migration moves code
-      into `releases/<ver>`, creates the `live` symlink, and rewrites systemd units; then
-      `ota_install.sh` re-points the working repo at the migrated release (via the
-      `MIGRATED_RELEASE_DIR=` line it prints) so `pip install -e` targets the new location.
-      `logging.conf` lives at `/opt/metixel/data/etc/logging.conf` — `__main__.py` resolves it
-      as `data_dir()/etc/logging.conf` (never `config_path.parent.parent` arithmetic). All
-      persistent config (config.json + logging.conf) lives under `/data`.
+    - **Blue/Green layout is a precondition; the migration bridge is retired.** `update.sh`
+      creates `releases/<version>` and flips `live` BEFORE invoking `ota_install.sh`, so a fresh
+      install and an upgrade run one identical path. `ota_install.sh` now **fails closed** when
+      `/opt/metixel/live` is missing or dangling, instead of guessing at the layout.
+      `scripts/migrate_to_atomic.sh` (and its `MIGRATED_RELEASE_DIR=` hand-off) has been
+      **deleted**: the atomic layout has been the only install path since 1.2.2, and the last
+      monolithic release (1.2.1) predates every script in the current flow. A pre-1.2.2 device
+      must be re-imaged rather than upgraded. Never reintroduce layout auto-detection — `live`
+      is an invariant, so a missing symlink means the *caller* is wrong, not that the device
+      needs migrating.
+      `logging.conf` **no longer exists** — logging is configured in code with
+      one file per process (`metixel-backend.log` / `metixel-frontend.log`) under
+      `/opt/metixel/data/logs/`, and `system.log_level` is the only level
+      control. Never reintroduce a user-editable logging config: a hardcoded
+      shared log path made two processes rotate the same file and truncate each
+      other's output. All persistent config (config.json) lives under `/data`.
     - **Versioned device fixups:** `ota_install.sh` runs one-time repair scripts from
       `scripts/fixups/` (listed in `scripts/fixups/manifest.txt`) to fix device-level issues
       that aren't packages or config files (e.g. `gpu_mem` in `/boot/firmware/config.txt`).
@@ -259,12 +282,6 @@ cage -- python3 -m metixel --mode frontend --config etc/config.json
 # Run tests
 python -m pytest testing/unit_tests/ -v
 
-# Build Phase 1 OS image
-sudo bash scripts/build_phase1.sh
-
-# Build Phase 2 OS image
-sudo bash scripts/build_phase2.sh
-
 # Lint
 ruff check src/metixel/
 
@@ -287,9 +304,10 @@ mypy src/metixel/
 | `src/metixel/backend/daemon.py` | Main daemon — starts all background threads including OptimisationQueue + startup dependency self-heal |
 | `src/metixel/backend/dependencies.py` | Startup dependency self-heal — detects/installs missing `requirements-pip.txt` deps as root via `sudo systemd-run` |
 | `src/metixel/backend/update_manager.py` | OTA updates — thin bootstrap script delegating to `scripts/update.sh`, launched via `systemd-run` |
-| `scripts/update.sh` | Atomic Blue/Green updater — staging → strict install → remove obsolete → config backup → symlink swap → health-check → rollback |
-| `scripts/migrate_to_atomic.sh` | Migration of an old monolithic install to the `/data` + `/releases` + `/live` layout — invoked automatically by `ota_install.sh` on the first Blue/Green upgrade |
-| `scripts/ota_install.sh` | OTA/system install steps (system packages + `pip install -e .` + `requirements-pip.txt`, strict by default) — run from the NEW checkout |
+| `scripts/update.sh` | Atomic Blue/Green updater — staging → strict install → host reconcile → config backup → symlink swap → health-check → rollback. The ONLY entry point for install and upgrade. |
+| `scripts/bootstrap.sh` | The thin, downloadable installer — obtains a checkout and delegates to `update.sh` |
+| `scripts/reconcile.sh` | **Single owner of Metixel-managed host state** — data tree, systemd units, I²C/ddcutil, networking, Samba values, boot config. Idempotent; runs on every update AND on fresh install. Supports `--dry-run`. Never rewrite shared user files wholesale. |
+| `scripts/ota_install.sh` | OTA/system install steps (system packages + `pip install -e .` + `requirements-pip.txt`, strict by default) — run from the NEW release by `update.sh` |
 | `src/metixel/shared/paths.py` | Central path resolution: `install_root`/`data_dir`/`releases_dir`/`live_dir`/`resolve_install_path` |
 | `src/metixel/backend/processing/optimisation_queue.py` | 4-phase pipeline orchestrator: classifies, thresholds, optimises, queues |
 | `src/metixel/backend/processing/image.py` | Image resize + thumbnail generation + `needs_optimisation()` threshold check |
@@ -321,7 +339,7 @@ mypy src/metixel/
 - Check if the change affects both Phase 1 and Phase 2
 - Verify memory constraints for Pi Zero 2 W (512MB)
 - Ensure the display backend abstraction isn't leaked
-- **Video frame extraction is a backend responsibility.** The frontend must never import ffmpeg/ffprobe or extract frames. Frames are generated by `VideoProcessor` during Phase 2 (OPTIMISE) and referenced via `MediaItem.first_frame_path` / `MediaItem.last_frame_path`.- **Never import third-party libraries in core** — add a Protocol port + adapter and inject it (see rule 13)
+- **Video frame extraction is a backend responsibility.** The frontend must never import ffmpeg/ffprobe or extract frames. Frames are generated by `VideoProcessor` during Phase 2 (OPTIMISE) and referenced via `MediaItem.first_frame_path` / `MediaItem.last_frame_path`.- **Never import third-party libraries in core** — add a Protocol port + adapter and inject it (see rule 14)
 - Verify your change with the full test suite on the Pi (`python3 -m pytest testing/unit_tests/`) after desktop tests
 - Run `cat ARCHITECTURE.md` to re-establish project context
 - **Keep the web JS modular** — native ES6 modules, no bundler; see Web UI Style Guide → JavaScript architecture before touching `static/js/`

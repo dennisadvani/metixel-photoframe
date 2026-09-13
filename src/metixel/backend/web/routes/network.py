@@ -191,6 +191,89 @@ def ap_status():
     return jsonify({"active": ap_or_pin and not is_connected()})
 
 
+@network_bp.route("/network/radio", methods=["POST"])
+def network_radio():
+    """Enable or disable the WiFi radio at the OS level.
+
+    Accepts JSON: ``{"enabled": true|false}``.
+
+    This is the ONLY user-facing way to change the radio, and it is a
+    deliberate move of that control out of host provisioning: the radio is
+    user-owned state, so nothing converges it on boot or on an OTA.  See the
+    note in ``scripts/reconcile.sh`` §8 and
+    :meth:`BackendDaemon._ensure_first_run_wifi_radio`.
+
+    Disabling is BLOCKED while the AP is active.  Turning the radio off kills
+    hostapd, which would strand a user who is mid-setup in the captive portal —
+    the very situation the AP exists to resolve.  A ``409`` is returned with
+    ``reason: "ap_active"`` so the UI can explain rather than just fail.
+
+    Disabling is allowed while connected over Wi-Fi, but that can drop the
+    caller's own connection, so the response is flushed before the radio
+    actually goes down (same pattern as ``/network/connect``).
+    """
+    from metixel.backend.network_manager import (
+        is_wifi_hardware_present,
+        set_wifi_radio,
+    )
+
+    data = get_body()
+    if "enabled" not in data:
+        return jsonify_error("Missing 'enabled' (true or false)", 400)
+    # Require a real boolean.  `bool("false")` is True, so accepting a string
+    # here would silently do the OPPOSITE of what the caller asked for.
+    if not isinstance(data["enabled"], bool):
+        return jsonify_error("'enabled' must be true or false", 400)
+    enabled = data["enabled"]
+
+    if not is_wifi_hardware_present():
+        return jsonify_error("No WiFi hardware present on this device", 400)
+
+    controller = _get_controller()
+
+    if not enabled:
+        # Block during AP mode: stopping the radio tears down hostapd and would
+        # strand anyone using the captive portal.  Checked via both the live AP
+        # state and the controller's PIN, matching the /network/status logic.
+        ap_active = is_ap_mode_active() or bool(controller and controller.pin)
+        if ap_active and not is_connected():
+            return (
+                jsonify(
+                    {
+                        "status": "error",
+                        "error": "Access Point is active",
+                        "reason": "ap_active",
+                        "message": (
+                            "WiFi cannot be turned off while the setup hotspot is "
+                            "running. Connect the frame to a network first."
+                        ),
+                    }
+                ),
+                409,
+            )
+
+        # Flush this response BEFORE the radio drops, otherwise the caller's own
+        # socket dies first and they see a network error instead of a result.
+        response = jsonify({"status": "ok", "message": "WiFi radio is turning off"})
+
+        import threading
+
+        def _do_disable() -> None:
+            if set_wifi_radio(False):
+                logger.info("WiFi radio disabled via web UI")
+            else:
+                logger.warning("WiFi radio disable via web UI failed")
+
+        threading.Thread(target=_do_disable, name="wifi-radio-off", daemon=True).start()
+        return response
+
+    # Enabling is synchronous — it completes in well under a second and the
+    # caller needs a definite answer (there is no connection to lose).
+    if set_wifi_radio(True):
+        return jsonify({"status": "ok", "message": "WiFi radio enabled"})
+    return jsonify_error("Failed to enable the WiFi radio — check the backend log", 500)
+
+
 @network_bp.route("/network/ap-start", methods=["POST"])
 def ap_start():
     """Manually start the access point (captive portal).

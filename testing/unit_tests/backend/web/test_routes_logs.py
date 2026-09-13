@@ -58,16 +58,52 @@ class TestRecentLogs:
     def test_falls_back_to_log_file(self, client, tmp_path, monkeypatch):
         import metixel.backend.web.routes.logs as logs_mod
 
-        log_path = tmp_path / "metixel.log"
-        log_path.write_text("alpha\nbeta\n", encoding="utf-8")
+        backend_log = tmp_path / "metixel-backend.log"
+        backend_log.write_text("alpha\nbeta\n", encoding="utf-8")
         monkeypatch.setattr(logs_mod, "_read_from_ring_buffer", lambda count: [])
-        monkeypatch.setattr(logs_mod, "_find_log_file", lambda: str(log_path))
+        monkeypatch.setattr(logs_mod, "_log_files", lambda: [str(backend_log)])
 
         resp = client.get("/api/logs/recent")
         assert resp.status_code == 200
         data = json.loads(resp.data)
         assert data["logs"] == ["alpha", "beta"]
         assert data["total"] == 2
+
+    def test_merges_backend_and_frontend_logs(self, client, tmp_path, monkeypatch):
+        """Each process writes its own file; the Logs page shows BOTH, merged
+        chronologically.  A single-file tail would hide half the picture."""
+        import metixel.backend.web.routes.logs as logs_mod
+
+        backend = tmp_path / "metixel-backend.log"
+        frontend = tmp_path / "metixel-frontend.log"
+        backend.write_text(
+            "2026-09-11 08:00:01 [INFO] metixel.backend: b1\n"
+            "2026-09-11 08:00:03 [INFO] metixel.backend: b2\n",
+            encoding="utf-8",
+        )
+        frontend.write_text(
+            "2026-09-11 08:00:02 [INFO] metixel.frontend: f1\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(logs_mod, "_read_from_ring_buffer", lambda count: [])
+        monkeypatch.setattr(
+            logs_mod, "_log_files", lambda: [str(backend), str(frontend)]
+        )
+
+        resp = client.get("/api/logs/recent")
+        data = json.loads(resp.data)
+        # Interleaved by timestamp, not concatenated per file.
+        assert [ln[-2:] for ln in data["logs"]] == ["b1", "f1", "b2"]
+
+    def test_no_log_files_returns_empty(self, client, monkeypatch):
+        import metixel.backend.web.routes.logs as logs_mod
+
+        monkeypatch.setattr(logs_mod, "_read_from_ring_buffer", lambda count: [])
+        monkeypatch.setattr(logs_mod, "_log_files", lambda: [])
+
+        resp = client.get("/api/logs/recent")
+        assert resp.status_code == 200
+        assert json.loads(resp.data) == {"logs": [], "total": 0}
 
 
 class TestSetLogLevel:

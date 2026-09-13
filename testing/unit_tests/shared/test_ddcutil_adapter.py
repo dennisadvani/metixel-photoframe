@@ -129,11 +129,13 @@ class FakeRunner:
     def __init__(self, responses: dict[tuple[str, ...], tuple[int, str, str]]) -> None:
         self.responses = responses
         self.calls: list[list[str]] = []
+        self.kwargs: list[dict] = []
 
     def __call__(self, cmd, **kwargs):
         from subprocess import CompletedProcess
 
         self.calls.append(list(cmd))
+        self.kwargs.append(kwargs)
         key = tuple(cmd[1:])  # drop binary
         # Match by prefix for flexible lookups
         for resp_key, (code, out, err) in self.responses.items():
@@ -239,3 +241,84 @@ class TestDdcutilAdapter:
         adapter = DdcutilAdapter(runner=runner)
         adapter.reset_factory(1)
         assert any(c[1] == "setvcp" and c[2] == "0x04" for c in runner.calls)
+
+    def test_cache_dir_sets_xdg_cache_home(self, monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+        """A configured cache_dir is passed to ddcutil as XDG_CACHE_HOME.
+
+        The backend runs with ProtectHome=yes, so ddcutil's default
+        ``$HOME/.cache`` is read-only — the adapter must redirect the cache to
+        a writable directory, or every probe re-runs the slow bus timing.
+        """
+        from metixel.shared.ddcutil_adapter import DdcutilAdapter
+
+        monkeypatch.setattr(
+            "metixel.shared.ddcutil_adapter.shutil.which",
+            lambda _name: "/usr/bin/ddcutil",
+        )
+        cache = tmp_path / "ddcutil"
+        runner = FakeRunner({("detect",): (0, "Display 1\n   I2C bus:  /dev/i2c-2\n", "")})
+        adapter = DdcutilAdapter(runner=runner, cache_dir=cache)
+
+        adapter.detect()
+
+        assert cache.is_dir(), "adapter should create the cache dir"
+        assert runner.kwargs, "runner should have been called"
+        env = runner.kwargs[0].get("env")
+        assert env is not None
+        assert env["XDG_CACHE_HOME"] == str(cache)
+
+    def test_no_cache_dir_inherits_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """With no cache_dir, ddcutil inherits the parent environment."""
+        from metixel.shared.ddcutil_adapter import DdcutilAdapter
+
+        monkeypatch.setattr(
+            "metixel.shared.ddcutil_adapter.shutil.which",
+            lambda _name: "/usr/bin/ddcutil",
+        )
+        runner = FakeRunner({("detect",): (0, "Display 1\n   I2C bus:  /dev/i2c-2\n", "")})
+        adapter = DdcutilAdapter(runner=runner)
+
+        adapter.detect()
+
+        assert runner.kwargs[0].get("env") is None
+
+    def test_every_call_suppresses_ddcutil_syslog(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--syslog NEVER`` must be passed on every ddcutil invocation.
+
+        ddcutil emits its diagnostics through syslog(), NOT stderr, so they
+        bypass subprocess capture and land in the systemd journal — which is
+        persistent (flash-backed) on the Pi image.  A single capabilities probe
+        (detect + capabilities + one getvcp per user-facing code) produced 18
+        journal lines before this flag; ``--syslog NEVER`` reduces that to 0
+        (measured on-device with ddcutil 2.2.0-dev).
+
+        This is a REGRESSION GUARD: it is invisible in captured output, so
+        without an explicit test the flag can be dropped unnoticed.
+        """
+        from metixel.shared.ddcutil_adapter import DdcutilAdapter
+
+        monkeypatch.setattr(
+            "metixel.shared.ddcutil_adapter.shutil.which",
+            lambda _name: "/usr/bin/ddcutil",
+        )
+        runner = FakeRunner(
+            {
+                ("detect",): (0, "Display 1\n   I2C bus:  /dev/i2c-2\n", ""),
+                ("getvcp", "0x10", "--display", "1"): (0, "current value = 50\n", ""),
+            }
+        )
+        adapter = DdcutilAdapter(runner=runner)
+
+        adapter.detect()
+        adapter.get_vcp(1, 0x10)
+
+        assert runner.calls, "runner should have been called"
+        for cmd in runner.calls:
+            # Trailing position: all four subcommands accept the flag there,
+            # and it keeps cmd[1] as the subcommand so fakes keyed on cmd[1:]
+            # still match (see FakeRunner).
+            assert cmd[-2:] == ["--syslog", "NEVER"], (
+                f"{cmd!r} is missing the trailing --syslog NEVER"
+            )
+            # The subcommand must remain in position 1.
+            assert cmd[1] in {"detect", "capabilities", "getvcp", "setvcp"}

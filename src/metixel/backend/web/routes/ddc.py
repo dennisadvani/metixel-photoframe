@@ -9,7 +9,11 @@ import re
 
 from flask import Blueprint, current_app, jsonify, request
 
-from metixel.backend.display_control.ddc_service import DdcFeatureError, DdcUnavailableError
+from metixel.backend.display_control.ddc_service import (
+    DdcBusyError,
+    DdcFeatureError,
+    DdcUnavailableError,
+)
 from metixel.backend.web.helpers import get_body, jsonify_error
 
 logger = logging.getLogger(__name__)
@@ -17,6 +21,9 @@ logger = logging.getLogger(__name__)
 ddc_bp = Blueprint("ddc", __name__)
 
 _CODE_RE = re.compile(r"^(?:0x)?([0-9A-Fa-f]{1,2})$")
+
+#: Retry-After advertised when another DDC probe occupies the monitor.
+_DDC_BUSY_RETRY_AFTER = "3"
 
 
 def _service():
@@ -36,6 +43,18 @@ def _require_service():
     return svc, None
 
 
+def _busy_response(exc: Exception):
+    """Build a 503 for a transient 'another probe owns the monitor' condition.
+
+    Sets the real ``Retry-After`` header (``jsonify_error`` would only add a
+    body key) so clients can back off instead of treating the monitor as
+    unsupported.
+    """
+    resp, status = jsonify_error(str(exc), 503, retry_after=int(_DDC_BUSY_RETRY_AFTER))
+    resp.headers["Retry-After"] = _DDC_BUSY_RETRY_AFTER
+    return resp, status
+
+
 def _parse_code(raw: str) -> int | None:
     m = _CODE_RE.match(str(raw).strip())
     if not m:
@@ -49,7 +68,10 @@ def ddc_status():
     svc, err = _require_service()
     if err:
         return err
-    return jsonify(svc.status())
+    try:
+        return jsonify(svc.status())
+    except DdcBusyError as exc:
+        return _busy_response(exc)
 
 
 @ddc_bp.route("/capabilities", methods=["GET"])
@@ -61,6 +83,10 @@ def ddc_capabilities():
     display = request.args.get("display", type=int)
     try:
         return jsonify(svc.capabilities(display=display))
+    except DdcBusyError as exc:
+        # Another probe already owns the monitor.  Report it as transient so
+        # the UI retries instead of reporting "no DDC-capable monitor".
+        return _busy_response(exc)
     except Exception:
         logger.exception("DDC capabilities probe failed")
         return jsonify_error("Failed to probe monitor capabilities", 500)
@@ -129,6 +155,8 @@ def ddc_refresh():
         return err
     try:
         return jsonify(svc.refresh())
+    except DdcBusyError as exc:
+        return _busy_response(exc)
     except Exception:
         logger.exception("DDC refresh failed")
         return jsonify_error("Failed to refresh DDC state", 500)

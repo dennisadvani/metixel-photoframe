@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Features
 
+- **Wi-Fi radio toggle in the web UI (`POST /api/network/radio`).** The
+  **Network Status** card now has a **WiFi Radio** switch that turns Wi-Fi on or
+  off at the OS level, replacing the previous instruction to use `raspi-config`
+  or `nmcli` by hand. Turning it off is blocked while the setup hotspot is
+  active, and the response is flushed before the radio drops so the caller's own
+  connection isn't killed mid-request.
 - **Web dashboard password** — System → Security can now protect the
   dashboard and its API with a login screen. Passwords are stored as salted
   hashes, sessions use a signed `HttpOnly` cookie with a configurable idle
@@ -17,9 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   a forgotten password can be cleared from the console
   (`python -m metixel --clear-web-password`).
 - **Synced device password** — changing the Device Password (System →
-  Security) now updates the SSH console password and the Samba share
-  password together, so the two stores can never drift apart. A partially
-  failed change is reported instead of silently leaving them out of sync.
+  Security) now updates the SSH console password and the Samba share password
+  together, so the two stores can never drift apart. A partially failed change
+  is reported instead of silently leaving them out of sync.
 - **Monitor control (DDC/CI)** — a Playback-page Monitor Control card offers
   brightness, contrast, input source, and other VCP features. Metixel probes
   the attached display with `ddcutil` and only shows controls the monitor
@@ -30,15 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (frontend restart), and a resolution/rotation change re-optimises media
   for the new canvas size. Video playback is only available in landscape
   (0°/180°); at 90°/270° it is disabled with a warning in the UI.
-- **Scheduled automatic updates** — updates can now be installed
-  automatically on a chosen weekday and time. The schedule is randomised
-  once on first boot so a fleet of frames doesn't all update at the same
-  moment.
+- **Scheduled automatic updates** — updates can now be installed automatically
+  on a chosen weekday and time. The schedule is randomised once on first boot
+  so a fleet of frames doesn't all update at the same moment.
 - **Install, rollback and OS upgrades from the UI** — the Updates card lists
   available releases for manual install, can roll back to any previously
   installed release (switches the live symlink — no re-download), and adds
-  an "Upgrade OS & Reboot" action that runs a full `apt upgrade`. The old
-  `dev` update channel is now labelled **Main (latest commits)**.
+  an "Upgrade OS & Reboot" action that runs a full `apt upgrade`.
 - **Redesigned web UI** — the dashboard is rebuilt on Tailwind CSS and the
   former Settings/Image Sync/Advanced pages are reorganised into
   purpose-based pages: **Sources** (folders + Immich), **Playback**
@@ -47,6 +51,199 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Behind the scenes
 
+- **`scripts/reconcile.sh` — the single owner of convergent host state.**
+  Idempotent, supports `--dry-run`, runs on **every** update (from the new
+  release's copy) *and* on fresh install. It converges the persistent data
+  tree, systemd units, I²C/ddcutil, Wi-Fi power saving, the port 80→8080
+  redirect, Samba values, the captive-portal config and linger. It refuses to
+  run outside a release directory, because its unit-shipping checks would
+  otherwise misread a stray directory.
+- **`scripts/configure_boot.sh` — boot configuration, applied at provisioning
+  and by a one-time fixup.** `/boot/firmware/config.txt` is deliberately
+  excluded from reconciliation: it is the device's own file, and a change only
+  takes effect after a reboot. Re-asserting `gpu_mem` on every update would
+  silently override a value the user deliberately chose and schedule an
+  unrelated, reboot-dependent behaviour change.
+- **`scripts/bootstrap.sh` — a thin, one-line installer.** It installs `git`,
+  obtains a checkout (clone, or `--local DIR` for development), writes the
+  installer's answers to `data/init.json`, then **delegates to
+  `scripts/update.sh`**. Installing and updating therefore run the *same* code
+  path, so a fresh install also exercises staging, the health check and
+  rollback. Because `bootstrap.sh` is tiny and stable it rarely changes, so it
+  rarely needs promoting to `main` before an installer change can be tested.
+  Supports `--dry-run`, `--channel`, `--wifi-country`, `--repo` and
+  `--skip-boot-config`, and refuses to run over an existing installation.
+- **`data/init.json` — installer answers as a partial config overlay.** The
+  installer no longer hand-writes `config.json` (which duplicated the schema in
+  shell and bypassed validation). It writes a partial overlay using the same
+  schema, which the application merges then renames to `init.json.applied`.
+  The rename makes presence the "not yet applied" signal, so a crash before the
+  merge retries instead of silently losing the answers. `reconcile.sh` reads the
+  same file for host state, so neither component depends on the other running
+  first.
+- **`--dry-run` for `scripts/update.sh`.** Prints the plan and exits without
+  staging, installing, swapping or restarting anything — including disarming the
+  destructive cleanup trap.
+- **`--staged-dir` for `scripts/update.sh`.** Accepts an already-cloned checkout
+  instead of cloning. Used by `bootstrap.sh` (which must clone anyway, since it
+  needs `update.sh` to exist first) and by local development to install a
+  working tree without pushing.
+- **`reconcile.sh` left intermediate data directories root-owned.** It chowned
+  only the exact directory it was asked about, but `mkdir -p` creates the whole
+  missing chain. On a device where `data/media` already existed but
+  `data/media/sync` did not, the `media/sync/immich` entry created `sync` as
+  root and chowned only `immich`, leaving the pi-run Immich worker unable to
+  create `album_<id>/` or download an asset into it. Ownership is now repaired
+  for root-owned *ancestors* as well, both before and after the `mkdir`, so an
+  already-broken tree is healed on the next reconcile rather than needing a
+  fresh install. The walk stops at `data/` itself, so `/opt/metixel` stays
+  root-owned, and chowns remain non-recursive (no walk of a media library).
+- **`system.log_level` was ignored on a fresh install.** The file-handler level
+  was applied only *after* the handler was created, and only when `config.json`
+  already existed — but on a fresh device it does not (`Config.load` creates it
+  later, inside the daemon). So handlers were built at DEBUG and a device
+  configured `log_level: NONE` still wrote a full log on its first run. The
+  frontend — starting second, by which time the file existed — honoured NONE, so
+  the two processes disagreed: backend logged everything, frontend nothing. The
+  level is now resolved *before* handler construction, via a lightweight read of
+  `system.log_level` that does not require the config to exist.
+- **The Wi-Fi radio is now owned by the application, not by host
+  reconciliation.** `scripts/reconcile.sh` no longer runs `rfkill unblock` or
+  `nmcli radio wifi on`. That block was "convergent", which is precisely the
+  bug: it re-asserted the radio on *every* update, silently undoing a user's
+  deliberate `nmcli radio wifi off`. The radio is instead enabled **exactly
+  once** per device, on first boot
+  (`BackendDaemon._ensure_first_run_wifi_radio`), latched by the new
+  `network.wifi_radio_first_run_done` config key. This still fixes the original
+  failure — a Pi Imager/pi-gen image whose Wi-Fi was disabled at imaging time
+  leaves an rfkill soft block and an unmanaged `wlan0`, which the app clears
+  with the same three-step sequence — while making a user's "off" survive both
+  reboots and OTA updates. The first-run marker is only written once enabling
+  succeeds, so a transient `nmcli` failure retries on the next boot rather than
+  being swallowed. Guarded by
+  `testing/unit_tests/backend/test_first_run_wifi_radio.py`, which also asserts
+  `reconcile.sh` contains no radio commands.
+- **No more empty `data/etc/`.** That directory existed only to hold the retired
+  `logging.conf`. Nothing creates it, and no migration carries a left-over
+  `logging.conf` forward — it would re-seed a file nothing reads.
+- **A fresh install shipped with no sample media.** The demo gallery
+  (`data/media/sample_media`, 16 files) is tracked in git, but seeding it lived
+  only in the old standalone installer — which the new `bootstrap.sh` install
+  path never runs. `update.sh` now seeds it from the staged release. It is
+  gated on a **fresh install**: an upgrade must never re-add the gallery, or a
+  user who deliberately deleted the samples would find them back after every
+  release. It never overwrites existing files and is non-fatal.
+- **The install aborted on `error: uninstall-no-record-file` for numpy.**
+  `numpy` was declared with conflicting constraints: apt provides
+  `python3-numpy` (Debian Trixie ships 2.2.4) while `requirements-pip.txt`
+  demanded `numpy>=1.24,<2.0`. pip saw the apt version violated the cap, tried
+  to downgrade, could not uninstall the Debian package (no `RECORD` file), and
+  aborted the whole update. Two fixes:
+  - the stale `<2.0` upper bound was removed (the code uses no numpy-2.0-removed
+    APIs, and pi3d declares no numpy ceiling);
+  - `--ignore-installed` was restored on **all three** pip invocations so pip
+    never attempts to uninstall an apt-owned package. That flag was present in
+    the original setup script, documented as exactly this workaround, and was
+    lost when pip installs moved into `ota_install.sh`.
+- **CI's type check failed on the Python 3.13 job.** `requirements-ci.txt`
+  leaves `numpy` uncapped, and numpy **2.5.0 requires Python >= 3.12** and ships
+  stubs using PEP 695 `type X = ...` syntax. The 3.11 CI job never installs it
+  (the version is invalid there) so it passed, but the 3.13 job resolved it
+  legitimately and mypy — deliberately pinned to `python_version = "3.11"` so it
+  checks against our *minimum* supported interpreter — refused to parse the
+  stubs at that target:
+  `numpy/__init__.pyi:737: error: Type statement is only supported in Python 3.12 and greater [syntax]`.
+  The type checker was right to object; the dependency range was wrong. CI now
+  caps numpy at `<2.5` — the whole 2.4.x series still supports Python 3.11 and
+  parses at a 3.11 target — with a comment explaining why. The cap is
+  **CI-scoped only** — production still leaves numpy uncapped because it comes
+  from apt, so this does not reintroduce the `uninstall-no-record-file` conflict
+  above.
+- **apt installs could block on a debconf prompt.** `iptables-persistent` asks
+  "Save current IPv4 rules?", and debconf prompts have no timeout — so a headless
+  first install hung forever. `ota_install.sh` now runs every apt command with
+  `DEBIAN_FRONTEND=noninteractive`, and with `--force-confold` so a package
+  upgrade can never prompt about or replace a host-owned config.
+- **`apt-get update` was never run before installing packages**, so a device with
+  stale lists could fail to resolve a package and abort. It now refreshes first,
+  but only when a requirement is actually missing, and non-fatally (one
+  unreachable repo must not abort an update whose packages are already cached).
+- **A fresh install could not bootstrap itself at all.** `update.sh` assumed a
+  Blue/Green layout already existed, but on a bare device nothing had created it:
+  `mkdir` for the log tee failed (losing the update log entirely) and staging
+  died with `mv: ... No such file or directory`. The layout directories are now
+  created up front, and `live` is established *before* the install step, so
+  `ota_install.sh` does not mistake a fresh device for a legacy monolithic
+  install and self-migrate into an empty release. A failed first install now
+  removes its dangling `live` symlink instead of leaving the device subtly
+  broken, and the pre-swap cleanup handler is guarded against running twice.
+- **The web UI's log view and the on-disk log disagreed.** Two causes:
+  - The backend and frontend both loaded `logging.conf`, which hardcoded a
+    single log path, so each process attached its own `RotatingFileHandler` to
+    the **same file**. Two processes rotating one file truncate each other's
+    output — most lines never reached disk. Each process now writes its **own**
+    log (`metixel-backend.log` / `metixel-frontend.log`), and the Logs page
+    shows both, merged chronologically.
+  - `system.log_level` was not reliably applied: the level walk iterated
+    `Logger.manager.loggerDict`, which omits handlers attached to *named*
+    loggers (`metixel.backend.*`, `metixel.frontend.*`), so those kept DEBUG and
+    wrote to disk even when INFO was selected. The walk now covers the whole
+    hierarchy (and the runtime control reuses it, so startup and runtime cannot
+    diverge).
+- **`last_check` was rewritten to `config.json` every 5 minutes**, causing
+  needless SD-card wear. The background loop ran every 60 s and the timestamp
+  write sat outside the response cache, so it was rewritten on every cache miss.
+  Transient runtime values now live in **tmpfs** (`/run/metixel/update_state.json`
+  via `shared/runtime_state.py`) instead of flash, with a per-key write throttle
+  as a second guard. `config.json` is no longer touched by routine update checks,
+  which also stops the inotify event that made the frontend reload its config.
+- **The advertised update interval was not enforced.** `MIN_CHECK_INTERVAL` was
+  an unreferenced constant and `check_interval_hours` was only ever *displayed* —
+  the UI said "Checks every 6 hours" while the code polled every 60 s (bounded
+  only by the 5-minute response cache). The interval is now honoured, floored at
+  `MIN_CHECK_INTERVAL` so a user cannot configure a GitHub-polling hammer.
+- **Removed two dead fields.** `update.last_rollback` was written but never read
+  by anything (not even the API), and `update.last_update` was exposed on
+  `/api/updates/status` but consumed by no client. Both writes and both schema
+  entries were deleted rather than left to rot. `channel` (a user preference) and
+  `last_auto_update` (gates the weekly schedule — losing it on reboot would
+  re-fire the window) remain persistent.
+- **The "Dev (latest commits)" update channel was missing from the UI.** The
+  dropdown, the channel list and the description table had been renamed to a
+  `main` channel that the backend never populates — it publishes
+  `stable`/`beta`/`dev`. Selecting it therefore showed no version, no "Install
+  Update" button and no description, which is indistinguishable from being up to
+  date. The UI now offers `dev` again, and the phantom `main` channel was removed
+  from `set_channel`'s accepted set and from the version-ref resolver so it can
+  no longer be selected or silently accepted. Added a consistency test pinning
+  the UI selector, the JS channel list, the installer scripts and the backend's
+  published channels to one another so this drift cannot recur.
+- **Stale systemd units on upgrade.** `/etc/systemd/system` is not part of the Blue/Green symlink swap, so a device could run NEW code under OLD units  a `metixel-cage.service` still launching `python3 -m metixel` directly instead of `scripts/cage_launch.sh` (so phantom HDMI outputs were never disabled and the cursor-hider was never triggered), and a `metixel-backend.service` whose `ExecStartPre` did not match the release. Units are now installed atomically on every update, backed up first, and restored on rollback.
+- **`data/config` no longer created.** The backend unit's `ExecStartPre` and
+  the installer both created a `data/config` directory that does not exist by
+  design (`config.json` lives at `data/config.json`). Directory creation and
+  ownership now have exactly one owner.
+- **Data tree ownership is reconciled as root.** `paths.ensure_data_dirs()` was removed: the app runs as `pi` and cannot `chown` a directory left root-owned
+  by an installer, which was the actual cause of
+  `PermissionError: /opt/metixel/data/logs` crash-loops.
+- **The installer silently dropped the WiFi country on a fresh device.** The
+  old code guarded its config write with `if os.path.exists(config.json)`, but nothing created `config.json` at that point — so the block was a no-op and the choice was lost. Answers now go to `init.json`, which the app always consumes.
+- **DDC/CI monitor control reliability** — brightness/contrast and other
+  monitor controls could intermittently report "No DDC/CI-capable monitor
+  detected" or "no adjustable DDC features", especially on marginal DDC buses
+  (e.g. a Pi 3 with an older HDMI monitor). Two root causes are fixed:
+  - The per-command `ddcutil` timeout was too short (5 s). A single
+    `capabilities` probe can take 5–9 s on some monitors, so the probe timed
+    out before it could return features. The default is now 15 s, configurable
+    via `ddc.timeout_seconds`.
+  - `ddcutil`'s cache (`$HOME/.cache/ddcutil`) is unwritable under the backend
+    service's `ProtectHome=yes` hardening, so every probe re-ran the slow I²C
+    timing. The adapter now points `XDG_CACHE_HOME` at a writable
+    `/opt/metixel/data/cache/ddcutil`, and a one-time fixup provisions that
+    directory on existing devices.
+  - Feature probing/caching was refactored, and a one-time device fixup enables
+    the `i2c-dev` kernel module so monitor control works on devices installed
+    before DDC existed.
 - **Portrait-mode media optimisation fixed** — images and videos are now
   optimised to the effective post-rotation screen size (e.g. 1200×1920 for a
   1920×1200 panel rotated 90°), resolved once the frontend reports the real
@@ -56,12 +253,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the stored overrides.
 - **Backend log-directory ownership** — the backend service unit now ensures
   its log directories are created with correct ownership at startup.
-- **Update & rollback hardening** — reinstalling a release that already
-  exists locally now deletes the stale copy first; only atomic-era
-  (Blue/Green) releases are offered for install and rollback.
-- **DDC/CI reliability** — feature probing/caching was refactored, and a
-  one-time device fixup enables the `i2c-dev` kernel module so monitor
-  control works on devices installed before DDC existed.
+- **Update & rollback hardening** — reinstalling a release that already exists
+  locally now deletes the stale copy first; only atomic-era (Blue/Green)
+  releases are offered for install and rollback.
 - **Screen-PIN groundwork** — the backend and API for an optional on-screen
   PIN (4–6 digits, unlock timeout, attempt lockout) are in place, ready for
   the upcoming on-screen interface; it is a separate credential and is not
@@ -73,6 +267,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   extended with on-device functional suites (DDC/CI, MQTT, device password +
   Samba end-to-end, captive portal/Wi-Fi, media, smoke) plus new unit and
   web tests against the redesigned UI.
+- **`scripts/reconcile.sh` now derives host state from configuration.** It reads
+  `config.json` (falling back to `init.json`) for the WiFi regulatory domain and
+  applies it, along with the `smbd` service and the Samba account for `pi`.
+  These were previously setup-only, so they never reached an existing device on
+  upgrade. (The Wi-Fi radio itself is no longer reconciled — see the entry
+  above.)
+- **The clone is no longer shallow.** `git clone --depth 1` was removed: the
+  application relies on a real `.git` on the device
+  (`update_manager._resolve_repo_root()`, `git reset --hard`, and local
+  debugging patches). A shallow clone silently broke all three.
+- **`etc/config.example.json` deleted.** It was a redundant second copy of the
+  schema; `DEFAULT_CONFIG` in `shared/config.py` is authoritative and the
+  application creates `config.json` itself on first start.
+- **`scripts/fixups/` is now reserved for genuine one-time repairs.** Four
+  convergent fixups were retired into `reconcile.sh`: `v1.2.5-cursor-hider`,
+  `v1.2.6-ddc-cache`, `v1.4.0-i2c-dev` and `v1.5.0-systemd-units`. Fixups run
+  *once ever*, so a mistake in one can never be corrected — convergent state
+  belongs in `reconcile.sh`. Already-repaired devices stay repaired (the ledger
+  means a retired entry simply never re-runs).
+  `v1.2.1-gpu-mem` is **retained**, because boot config is not convergent; it
+  now delegates to `configure_boot.sh` so it shares one implementation with the
+  installer.
+
+### Removed
+
+- **`scripts/setup_trixie_metixel.sh` deleted.** Installing and updating now run
+  **one** code path (`bootstrap.sh` → `update.sh`), so a separate fresh-install
+  script was both redundant and a maintenance trap: every change had to be made
+  and tested twice, and the installer had to be promoted to `main` before it
+  could be tested at all. The installer also no longer duplicates host
+  configuration — it delegates package installation and host config to the
+  shared `ota_install.sh` and `reconcile.sh`, so a fresh install and an upgrade
+  converge to the same host.
+- **`scripts/migrate_to_atomic.sh` deleted, with the migration bridge in
+  `ota_install.sh`.** The atomic layout has been the only install path since
+  1.2.2, and `update.sh` creates `releases/<version>` and flips `live` *before*
+  invoking `ota_install.sh` — so the migration could only ever fire via the old
+  bootstrap on a pre-1.2.2 device. The last monolithic release (1.2.1) predates
+  every script in the current flow, so such a device must be re-imaged.
+  `ota_install.sh` now **fails closed** when `/opt/metixel/live` is missing or
+  dangling, instead of guessing at the layout: `live` is an invariant, so a
+  missing symlink means the *caller* is wrong, not that the device needs
+  migrating.
+  `scripts/legacy_setup_trixie_metixel.sh` is **retained** — it builds a
+  monolithic install so the atomic layout can still be exercised on real
+  hardware (image builds, manual verification). It is a testing helper rather
+  than an end-user installer, so it is unaffected by the removal above.
 
 ## [1.2.4]
 

@@ -6,7 +6,7 @@
 # Metixel Photoframe — LEGACY MONOLITHIC Trixie Setup Script (TESTING ONLY)
 #
 # Installs the OLD monolithic layout (pre-1.2.2 / pre-Blue-Green) so you can
-# test the monolithic → atomic migration path on a real device.
+# test the monolithic → atomic upgrade path on a real device.
 #
 # This is a TESTING helper, NOT for end users.  It deliberately:
 #   * Clones the repo to /opt/metixel and checks out a SPECIFIC version

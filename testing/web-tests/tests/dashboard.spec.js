@@ -7,9 +7,15 @@ test.describe("dashboard", () => {
     test("loads live system stats", async ({ page }) => {
         const errors = collectErrors(page);
         await goToPage(page, "dashboard");
-        await expect(page.locator("#stat-uptime-val")).not.toHaveText("--");
-        await expect(page.locator("#stat-mem-val")).not.toHaveText("--");
-        await expect(page.locator("#stat-temp-val")).not.toHaveText("--");
+        // Stats are polled by the SPA and can take a few seconds to arrive on
+        // a busy frame, so poll the assertion (expect's timeout) and retry the
+        // whole navigation — the first paint after a backend restart is the
+        // slowest case.
+        await expect(async () => {
+            await expect(page.locator("#stat-uptime-val")).not.toHaveText("--", { timeout: 5_000 });
+            await expect(page.locator("#stat-mem-val")).not.toHaveText("--", { timeout: 5_000 });
+            await expect(page.locator("#stat-temp-val")).not.toHaveText("--", { timeout: 5_000 });
+        }).toPass({ timeout: 30_000 });
         expectNoErrors(errors);
     });
 
@@ -17,7 +23,12 @@ test.describe("dashboard", () => {
         const errors = collectErrors(page);
         await goToPage(page, "dashboard");
         await expect(page.locator("#current-media")).toBeVisible();
-        await expect(page.locator("#stat-playlist-val")).not.toHaveText("--");
+        // Polled by the SPA — can take a few seconds to populate after a
+        // backend restart, so retry rather than assert once.
+        await expect(async () => {
+            await expect(page.locator("#current-media")).not.toHaveText("", { timeout: 5_000 });
+            await expect(page.locator("#stat-playlist-val")).not.toHaveText("--", { timeout: 5_000 });
+        }).toPass({ timeout: 30_000 });
         expectNoErrors(errors);
     });
 

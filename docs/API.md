@@ -31,8 +31,7 @@ LAN by default — the password is the access boundary.
 - `GET /api/health` — OTA update.sh health-check + monitoring
 - `POST /api/auth/login|logout|me` — the gate itself
 - `POST /api/slideshow-started` — frontend renderer loopback signal
-- `/api/network/*` — captive-portal Wi-Fi setup
-- `POST /api/control` — IPC control commands (trusted local process)
+- `/api/network/*` — captive-portal Wi-Fi setup- `POST /api/control` — IPC control commands (trusted local process)
 
 ### Configuration
 - `GET /api/config` — Full configuration
@@ -80,6 +79,25 @@ LAN by default — the password is the access boundary.
   plus `issues` (failed/skipped media from the processing journal, with
   `path`, `name`, `state`, `reason`, `updated_at`) and `journal_stats`
   (per-state counts).
+
+### Network
+- `GET /api/network/status` — Connection status + `wifi_radio_enabled` /
+  `has_saved_wifi` / `ap_mode_active`.
+- `GET /api/network/scan` — Visible Wi-Fi networks (cached while the AP is up).
+- `POST /api/network/connect` — Connect to a Wi-Fi network.  Body:
+  `{"ssid": "...", "password": "..."}` (empty password for open networks).
+- `POST /api/network/forget` — Forget a saved network.  Body: `{"ssid": "..."}`.
+- `POST /api/network/radio` — Enable or disable the Wi-Fi radio at the OS
+  level.  Body: `{"enabled": true|false}`.
+  - Toggling **off** returns `409` with `reason: "ap_active"` while the setup
+    hotspot is running (turning the radio off would strand a user mid-setup).
+    Otherwise the response is flushed before the radio drops, since disabling
+    can kill the caller's own connection.
+  - Toggling **on** is synchronous; `500` on failure.
+  - This is the only supported way to change the radio.  The radio is
+    user-owned state: the backend enables it once on a device's first boot
+    (latched by `network.wifi_radio_first_run_done`) and never re-asserts it on
+    boot or on an OTA.  `scripts/reconcile.sh` intentionally does not manage it.
 
 ### Processing
 - `POST /api/processing/retry` — Forget a failed/skipped journal entry so

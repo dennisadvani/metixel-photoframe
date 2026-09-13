@@ -11,6 +11,8 @@ from datetime import UTC, datetime
 
 from flask import Blueprint, current_app, jsonify
 
+from metixel.shared.paths import run_path
+
 logger = logging.getLogger(__name__)
 
 health_bp = Blueprint("health", __name__)
@@ -122,9 +124,9 @@ def get_processing_status():
     """Return the current background processing status.
 
     Reads from the same file the frontend uses for its splash screen
-    progress bar (``/run/metixel/processing_status.json``).
+    progress bar (``<run_dir>/processing_status.json``).
     """
-    data = _read_json("/run/metixel/processing_status.json")
+    data = _read_json(str(run_path("processing_status.json")))
     if data is None:
         return jsonify({"phase": "unknown", "total": 0, "processed": 0, "current_file": ""})
     return jsonify(data)
@@ -133,28 +135,62 @@ def get_processing_status():
 def _read_current_media() -> dict | None:
     """Read the current media state file written by the frontend.
 
-    Resolves any thumbnail path into a URL the dashboard can fetch.
+    Resolves any thumbnail path into a URL the dashboard can fetch.  The URL
+    is only published when the file it points at genuinely exists in one of
+    the locations ``/api/media/thumbnail`` serves from — otherwise the
+    dashboard renders an ``<img>`` that 404s (and the SPA's error collector
+    treats that as a failure).  The frontend clears ``cache/thumbnails/``
+    when the cache is reset while ``current_media.json`` still names the old
+    hash, so a stale path is a normal, expected state — not an error.
     """
-    data = _read_json("/run/metixel/current_media.json")
+    data = _read_json(str(run_path("current_media.json")))
     if data is None:
         return None
 
-    # Convert thumbnail_path → thumbnail_url
-    thumb_path = data.get("thumbnail_path")
-    if thumb_path:
-        # The path could be a thumbnail hash (cache/thumbnails/<hash>.jpg)
-        # or a video frame cache (<video>.<N>.frame).
-        fname = os.path.basename(thumb_path)
-        data["thumbnail_url"] = f"/api/media/thumbnail/{fname}"
-    else:
-        data["thumbnail_url"] = None
+    # Convert thumbnail_path → thumbnail_url (only if the file is servable)
+    data["thumbnail_url"] = _resolve_thumbnail_url(data.get("thumbnail_path"))
 
     return data
 
 
+def _resolve_thumbnail_url(thumb_path: str | None) -> str | None:
+    """Map a ``thumbnail_path`` to a servable URL, or ``None`` if absent.
+
+    ``thumbnail_path`` is either a hash-based thumbnail
+    (``<cache>/thumbnails/<hash>.jpg``) or a video frame cache
+    (``<video>.<N>.frame`` next to the media).  Mirror the lookup order used
+    by ``/api/media/thumbnail`` so the URL is only handed out when the
+    request would succeed.
+    """
+    if not thumb_path:
+        return None
+
+    name = os.path.basename(thumb_path)
+    if not name:
+        return None
+
+    # 1. Hash-based thumbnail in the cache directory (the common case).
+    state = current_app.config.get("METIXEL_STATE")
+    if state is not None:
+        try:
+            from metixel.backend.web.routes.media import _resolve_cache_dir
+
+            if (_resolve_cache_dir(state) / "thumbnails" / name).is_file():
+                return f"/api/media/thumbnail/{name}"
+        except Exception:  # pragma: no cover - defensive, never break /health
+            logger.debug("Could not resolve cache thumbnail dir", exc_info=True)
+
+    # 2. Video frame cache living next to the media file.
+    if os.path.isfile(thumb_path):
+        return f"/api/media/thumbnail/{name}"
+
+    logger.debug("Current-media thumbnail not found, omitting URL: %s", thumb_path)
+    return None
+
+
 def _read_display_info() -> dict | None:
     """Read the display info status file written by the frontend."""
-    return _read_json("/run/metixel/display_info.json")
+    return _read_json(str(run_path("display_info.json")))
 
 
 @health_bp.route("/processing-status", methods=["GET"])
@@ -166,7 +202,7 @@ def processing_status():
     ``issues`` lists failed/skipped media from the processing journal so the
     UI can show why items are missing from the slideshow.
     """
-    data = _read_json("/run/metixel/processing_status.json")
+    data = _read_json(str(run_path("processing_status.json")))
     if data is None:
         data = {}
 

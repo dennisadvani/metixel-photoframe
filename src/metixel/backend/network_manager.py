@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -55,6 +56,11 @@ def is_wifi_radio_enabled() -> bool:
     Returns False if Wi-Fi has been disabled via rfkill, raspi-config,
     or ``nmcli radio wifi off``.  The wlan0 interface may still exist
     but will show as "unavailable" in device status.
+
+    This is a READ-ONLY status check and deliberately fails open (returns
+    True when nmcli is unavailable) so a status request never blocks the
+    user.  Do NOT use it to gate a mutation — use :func:`set_wifi_radio`,
+    which reports the real command result.
     """
     try:
         result = subprocess.run(
@@ -68,6 +74,114 @@ def is_wifi_radio_enabled() -> bool:
         logger.debug("Wi-Fi radio check failed", exc_info=True)
         # If we can't determine, assume enabled (don't block the user)
         return True
+
+
+def _find_rfkill_binary() -> str | None:
+    """Resolve the absolute path to ``rfkill``, or None when not installed.
+
+    The binary is package-installed at ``/usr/sbin/rfkill``, which is NOT on the
+    PATH of a non-login shell (how systemd invokes the backend).  A bare
+    ``command -v rfkill`` therefore fails on a perfectly healthy install, so the
+    well-known locations are probed explicitly before falling back to PATH.
+
+    This was the root cause of a silent WiFi-enablement failure: the guard
+    failed, the step was skipped, and nothing was even logged.  Never replace
+    this with a bare ``command -v rfkill``.
+    """
+    for candidate in ("/usr/sbin/rfkill", "/sbin/rfkill", "/usr/bin/rfkill", "/bin/rfkill"):
+        if os.access(candidate, os.X_OK):
+            return candidate
+    found = shutil.which("rfkill")
+    return found or None
+
+
+def set_wifi_radio(enabled: bool) -> bool:
+    """Enable or disable the Wi-Fi radio at the OS level.
+
+    Returns True when the requested state was reached, False otherwise.  Unlike
+    :func:`is_wifi_radio_enabled` this reports real failures rather than failing
+    open — callers use the result to decide whether to persist a first-run
+    marker, so a transient nmcli failure must be detectable.
+
+    Enabling is deliberately THREE steps, in this order:
+
+      1. ``rfkill unblock wifi`` / ``unblock wlan`` — clears a software RF-kill
+         block.  A Raspberry Pi Imager image whose WiFi was disabled at imaging
+         time arrives in exactly this state (``nmcli radio`` shows
+         ``WIFI-HW=enabled WIFI=disabled``), and step 2 alone does NOT clear it.
+         Both type names are unblocked: ``wifi`` is an alias that some builds
+         resolve only to the wlan type, while ``wlan`` is the raw sysfs type.
+      2. ``nmcli radio wifi on`` — re-enables the NetworkManager radio.
+      3. ``nmcli device set wlan0 managed yes`` — re-adopts a device that was
+         marked unmanaged while blocked.  Without this the radio reads as on but
+         no connection is possible.
+
+    Disabling is a single ``nmcli radio wifi off``; NetworkManager persists that
+    choice itself, so nothing else is required (and nothing is written to
+    config).
+
+    All commands run via ``sudo -n`` — the backend service is unprivileged and
+    relies on a NOPASSWD sudoers entry, the same mechanism as AP mode control.
+    ``-n`` keeps this non-interactive: it fails fast instead of hanging on a
+    password prompt in a daemonised process.
+    """
+    from metixel.shared.subprocess import run_sudo
+
+    if not enabled:
+        try:
+            result = run_sudo(["nmcli", "radio", "wifi", "off"], timeout=10)
+        except Exception:
+            logger.warning("Wi-Fi radio disable failed", exc_info=True)
+            return False
+        if result.returncode != 0:
+            logger.warning(
+                "Wi-Fi radio disable returned rc=%d: %s",
+                result.returncode,
+                (result.stderr or "").strip()[-200:],
+            )
+            return False
+        logger.info("Wi-Fi radio disabled")
+        return True
+
+    # ── Enable: rfkill unblock → radio on → device managed ─────────────
+    rfkill_bin = _find_rfkill_binary()
+    if rfkill_bin is None:
+        # Not fatal: a device with no rfkill radio has nothing to unblock.
+        # Logged at debug because a machine with no WiFi at all is normal.
+        logger.debug("rfkill binary not found — skipping unblock")
+    else:
+        for radio_type in ("wifi", "wlan"):
+            try:
+                run_sudo([rfkill_bin, "unblock", radio_type], timeout=10)
+            except Exception:
+                # Best effort: a missing radio type is not an error, and the
+                # nmcli step below is the one that actually matters.
+                logger.debug("rfkill unblock %s failed", radio_type, exc_info=True)
+
+    try:
+        result = run_sudo(["nmcli", "radio", "wifi", "on"], timeout=10)
+    except Exception:
+        logger.warning("Wi-Fi radio enable failed", exc_info=True)
+        return False
+    if result.returncode != 0:
+        logger.warning(
+            "Wi-Fi radio enable returned rc=%d: %s",
+            result.returncode,
+            (result.stderr or "").strip()[-200:],
+        )
+        return False
+
+    # Best effort — this only matters on a device that was blocked while
+    # NetworkManager marked the interface unmanaged, which is rare enough that
+    # a failure here must not report the whole enable as failed.
+    if is_wifi_hardware_present():
+        try:
+            run_sudo(["nmcli", "device", "set", "wlan0", "managed", "yes"], timeout=10)
+        except Exception:
+            logger.debug("Could not set wlan0 managed", exc_info=True)
+
+    logger.info("Wi-Fi radio enabled")
+    return True
 
 
 def has_saved_wifi_networks() -> bool:

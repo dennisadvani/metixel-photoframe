@@ -36,7 +36,7 @@ class TestParseRequirementName:
         assert _parse_requirement_name(line) == "SomePkg"
 
     def test_name_with_multiple_versions(self) -> None:
-        assert _parse_requirement_name("numpy>=1.24,<2.0") == "numpy"
+        assert _parse_requirement_name("numpy>=1.24,!=1.26.0") == "numpy"
 
     def test_comment_and_blank(self) -> None:
         assert _parse_requirement_name("# comment") is None

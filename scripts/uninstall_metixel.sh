@@ -4,8 +4,8 @@
 # =============================================================================
 # Metixel Photoframe — Uninstall Script
 #
-# Reverts a Raspberry Pi back to its pre-setup state (before running
-# setup_trixie_metixel.sh). This:
+# Reverts a Raspberry Pi back to its pre-Metixel state (before running
+# scripts/bootstrap.sh). This:
 #   1. Stops & removes every Metixel systemd service/unit — including any
 #      enablement links, drop-ins, and lingering processes that keep running
 #      even after the unit files are gone (stopped FIRST so nothing reactivates

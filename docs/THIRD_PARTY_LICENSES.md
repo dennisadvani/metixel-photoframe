@@ -12,7 +12,7 @@ Apache License 2.0 under which Metixel Photoframe is distributed.
 |---|---|---|---|
 | **pi3d** | ≥2.47 | MIT | https://github.com/tipam/pi3d |
 | **Pillow** | ≥10.0 | HPND (Historical Permission Notice and Disclaimer) | https://github.com/python-pillow/Pillow |
-| **numpy** | ≥1.24, <2.0 | BSD 3-Clause | https://github.com/numpy/numpy |
+| **numpy** | ≥1.24 | BSD 3-Clause | https://github.com/numpy/numpy |
 | **Flask** | ≥3.0 | BSD 3-Clause | https://github.com/pallets/flask |
 | **watchdog** | ≥3.0 | Apache 2.0 | https://github.com/gorakhargosh/watchdog |
 | **paho-mqtt** | ≥1.6 | EPL-2.0 / EDL-1.0 (dual) | https://github.com/eclipse/paho.mqtt.python |

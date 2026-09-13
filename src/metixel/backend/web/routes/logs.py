@@ -19,8 +19,14 @@ logger = logging.getLogger(__name__)
 
 logs_bp = Blueprint("logs", __name__)
 
-# Default log file path used by RotatingFileHandler (see etc/logging.conf)
-_DEFAULT_LOG_PATH = str(data_dir() / "logs" / "metixel.log")
+# Log files written by the pi-run processes.  Each process owns its OWN file —
+# they must never share one, because two RotatingFileHandlers on the same path
+# race and truncate each other's output.  The Logs page merges these.
+_LOG_FILES = ("metixel-backend.log", "metixel-frontend.log")
+
+# Legacy single-file name, still surfaced so an upgraded device's existing
+# history remains readable until it rotates away.
+_LEGACY_LOG_NAME = "metixel.log"
 
 
 def _read_from_ring_buffer(count: int = 200) -> list[dict]:
@@ -85,32 +91,86 @@ def _tail_file(path: str, lines: int = 200) -> list[str]:
         return []
 
 
+def _log_files() -> list[str]:
+    """Return the log files that currently exist, in display order.
+
+    Includes the legacy single-file name so history written before the
+    per-process split stays readable.
+    """
+    log_dir = data_dir() / "logs"
+    found: list[str] = []
+    for name in (*_LOG_FILES, _LEGACY_LOG_NAME):
+        path = log_dir / name
+        if os.path.isfile(path):
+            found.append(str(path))
+    return found
+
+
 def _find_log_file() -> str | None:
-    """Find the active log file path from the root logger's file handler."""
-    root = logging.getLogger()
-    for handler in root.handlers:
-        if isinstance(handler, logging.FileHandler):
-            path = getattr(handler, "baseFilename", None)
-            if isinstance(path, str) and os.path.isfile(path):
-                return path
+    """Return the primary log file path (the backend's, when present).
 
-    # Check the metixel logger too
-    metixel = logging.getLogger("metixel")
-    for handler in metixel.handlers:
-        if isinstance(handler, logging.FileHandler):
-            path = getattr(handler, "baseFilename", None)
-            if isinstance(path, str) and os.path.isfile(path):
-                return path
-
-    # Fall back to default path
-    if os.path.isfile(_DEFAULT_LOG_PATH):
-        return _DEFAULT_LOG_PATH
-
+    Retained for callers that want a single file; prefer :func:`_log_files`.
+    """
+    files = _log_files()
+    if files:
+        return files[0]
     return None
+
+
+def _tail_files(count: int) -> list[str]:
+    """Return the most recent *count* lines merged across ALL process logs.
+
+    Each process writes its own file, so a single-file tail would hide half the
+    picture — the whole point of the Logs page is to show what the backend AND
+    the frontend are doing.  Lines carry a leading ``YYYY-MM-DD HH:MM:SS``
+    timestamp, so the merge sorts on that prefix; anything unparseable falls
+    back to its original position rather than being dropped.
+    """
+    per_file: list[list[str]] = []
+    for path in _log_files():
+        lines = _tail_file(path, count)
+        if lines:
+            per_file.append(lines)
+
+    if not per_file:
+        return []
+    if len(per_file) == 1:
+        return per_file[0][-count:]
+
+    # Interleave: tag each line with its file order as a stable tiebreaker so
+    # equal timestamps keep a deterministic, grouped output.
+    tagged: list[tuple[str, int, int, str]] = []
+    for file_idx, lines in enumerate(per_file):
+        for line_idx, line in enumerate(lines):
+            ts = line[:19]  # "YYYY-MM-DD HH:MM:SS"
+            tagged.append((ts, file_idx, line_idx, line))
+
+    tagged.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [item[3] for item in tagged][-count:]
 
 
 # Sentinel level — above CRITICAL (50); no log record passes this filter.
 _NONE_LEVEL = 100
+
+
+def _count_file_handlers() -> int:
+    """Count FileHandler instances across all loggers (for reporting only)."""
+    seen: set[int] = set()
+    total = 0
+
+    def _count(logger_obj: logging.Logger) -> None:
+        nonlocal total
+        for handler in logger_obj.handlers:
+            if isinstance(handler, logging.FileHandler) and id(handler) not in seen:
+                seen.add(id(handler))
+                total += 1
+
+    for obj in logging.Logger.manager.loggerDict.values():
+        if isinstance(obj, logging.Logger):
+            _count(obj)
+    _count(logging.getLogger())
+    _count(logging.getLogger("metixel"))
+    return total
 
 
 @logs_bp.route("/level", methods=["POST"])
@@ -151,21 +211,13 @@ def set_log_level():
     new_level = valid_levels[level_name]
 
     # ── 1. Update every FileHandler across all loggers ──────────────────
-    #     Ring buffers and console handlers are deliberately skipped.
-    updated = 0
-    for _logger_name, logger_obj in logging.Logger.manager.loggerDict.items():
-        if not isinstance(logger_obj, logging.Logger):
-            continue
-        for handler in logger_obj.handlers:
-            if isinstance(handler, logging.FileHandler):
-                handler.setLevel(new_level)
-                updated += 1
+    #     Reuses the same walk as startup so the runtime control and the
+    #     persisted setting cannot apply levels differently.  Ring buffers and
+    #     console handlers are deliberately skipped.
+    from metixel.__main__ import _apply_file_handler_levels
 
-    # Root logger
-    for handler in logging.getLogger().handlers:
-        if isinstance(handler, logging.FileHandler):
-            handler.setLevel(new_level)
-            updated += 1
+    _apply_file_handler_levels(new_level)
+    updated = _count_file_handlers()
 
     # ── 2. Persist to config so it survives a restart ──────────────────
     state = current_app.config["METIXEL_STATE"]
@@ -209,10 +261,6 @@ def recent_logs():
     if entries:
         return jsonify({"logs": entries, "total": len(entries)})
 
-    # Fall back to reading the log file
-    log_path = _find_log_file()
-    if log_path:
-        lines = _tail_file(log_path, count)
-        return jsonify({"logs": lines, "total": len(lines)})
-
-    return jsonify({"logs": [], "total": 0})
+    # Fall back to reading the log files (merged across processes)
+    lines = _tail_files(count)
+    return jsonify({"logs": lines, "total": len(lines)})
