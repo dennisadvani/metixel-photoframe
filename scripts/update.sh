@@ -63,6 +63,17 @@ PACKAGE_STATE="${DATA_DIR}/installed_packages.json"
 BACKUP_DIR="${DATA_DIR}/backups"
 CONFIG_FILE="${DATA_DIR}/config.json"
 LOG_FILE="${DATA_DIR}/cache/metixel-update.log"
+# The release currently pointed at by the `live` symlink, captured BEFORE the
+# swap.  Step 3 needs it: on a device with no package ledger (installed from an
+# image or the legacy monolithic script) the previous release's requirements
+# files are the only authoritative record of what that release installed, and
+# step 3 reconstructs the "previously installed" set from them.  Resolved with
+# readlink -f so it is a real path even if `live` is a relative or chained link.
+PREV_RELEASE_DIR="$(readlink -f "${LIVE_LINK}" 2>/dev/null || true)"
+if [ ! -d "${PREV_RELEASE_DIR}" ]; then
+    PREV_RELEASE_DIR=""
+fi
+export PREV_RELEASE_DIR
 # Backups of the systemd units replaced by this update.  Lives OUTSIDE the
 # install root on purpose: /opt/metixel is recreated on a re-image/reinstall,
 # whereas /etc/systemd/system survives — and it is exactly the directory whose
@@ -325,10 +336,11 @@ bash "${RELEASE_DIR}/scripts/ota_install.sh" "${RELEASE_DIR}"
 echo "[3/8] Removing obsolete managed packages…"
 APPS_SYS="${RELEASE_DIR}/requirements-system.txt"
 APPS_PIP="${RELEASE_DIR}/requirements-pip.txt"
-python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" "${RELEASE_DIR}" <<'PYEOF'
+python3 - "${PACKAGE_STATE}" "${APPS_SYS}" "${APPS_PIP}" "${RELEASE_DIR}" \
+         "${PREV_RELEASE_DIR:-}" <<'PYEOF'
 import json, os, sys, subprocess
 
-state_path, req_sys, req_pip, release_dir = sys.argv[1:5]
+state_path, req_sys, req_pip, release_dir, prev_dir = sys.argv[1:6]
 
 # The name parser is shared with step 8 via a helper file so the two cannot
 # drift apart.  It pins UTF-8 explicitly: this heredoc runs under systemd-run
@@ -337,14 +349,38 @@ state_path, req_sys, req_pip, release_dir = sys.argv[1:5]
 sys.path.insert(0, os.path.join(release_dir, "scripts"))
 from requirements_names import names
 
-if not os.path.isfile(state_path):
-    sys.exit(0)  # nothing recorded to remove
-
-with open(state_path, encoding="utf-8") as f:
-    prev = json.load(f)
-
 new_sys = set(names([req_sys]))
 new_pip = set(names([req_pip]))
+
+prev = None
+if os.path.isfile(state_path):
+    with open(state_path, encoding="utf-8") as f:
+        prev = json.load(f)
+    source = state_path
+elif prev_dir and os.path.isdir(prev_dir):
+    # No recorded manifest — the device predates the ledger (installed by an
+    # image or the legacy monolithic script, so step 8 has never run here).
+    #
+    # Seeding from "nothing" would silently skip this upgrade, and the NEXT one
+    # too would have a ledger that still lists the retired packages as current,
+    # so the removal would be deferred forever.  Instead we reconstruct the
+    # previous set from the OLD release's requirements files, which are the
+    # authoritative record of what that release installed.
+    #
+    # This is only safe because the previous release is a real checkout whose
+    # manifests we can read.  If it cannot be read we fall back to doing nothing
+    # rather than guessing: a wrong diff would uninstall packages the user needs.
+    prev = {
+        "apt": names([os.path.join(prev_dir, "requirements-system.txt")]),
+        "pip": names([os.path.join(prev_dir, "requirements-pip.txt")]),
+    }
+    source = f"{prev_dir} (reconstructed — no ledger yet)"
+else:
+    print("  no previous manifest available (no ledger and no previous release)")
+    print("  -> nothing to remove; the ledger will be seeded by step 8")
+    sys.exit(0)
+
+print(f"  previous manifest: {source}")
 
 # Only remove packages Metixel previously recorded as installing.
 prev_sys = set(prev.get("apt", []) or [])

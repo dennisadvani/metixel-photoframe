@@ -76,11 +76,14 @@ backend, the video player, and the dependencies are all different. Read
 ### Removed
 
 - **pi3d, python-vlc, pygame and pysdl2 are gone**, along with the VLC system
-  packages. On upgrade they are uninstalled automatically; a package that cannot
-  be removed is reported rather than silently left behind. The retired
-  configuration keys `slideshow.video_player_backend`, `video.player_backend`
-  and `timeouts.vlc_start` no longer exist — there is exactly one player now, so
-  a surviving key would be a setting the user could change with no effect.
+  packages. They are uninstalled during the upgrade, including on a device that
+  was never upgraded through the updater and so has no package ledger — in that
+  case the previous release's own dependency manifests are used to work out what
+  to remove. A package that cannot be removed is reported rather than silently
+  left behind. The retired configuration keys
+  `slideshow.video_player_backend`, `video.player_backend` and
+  `timeouts.vlc_start` no longer exist — there is exactly one player now, so a
+  surviving key would be a setting the user could change with no effect.
 - **`dispmanx_backend.py` and the GL shader sources are deleted**, and
   `DisplayBackend` is reduced to a `present(plan)` surface. A backend must now
   also implement `schedule(tick)`, so a new backend cannot inherit a render loop
@@ -90,6 +93,12 @@ backend, the video player, and the dependencies are all different. Read
 
 - **`vlc_start` never had a matching entry in the timeout defaults**, so the
   timeout it described was not actually applied. Removed rather than repaired.
+- **The obsolete-package removal step removed nothing on a device that had never
+  been upgraded through the updater.** Those devices (a fresh image, or an
+  install from the legacy monolithic script) have no package ledger, and the
+  step treated a missing ledger as "nothing to remove" — so VLC survived on
+  exactly the devices 2.0.0 is meant to clean up. It now reconstructs the
+  previous dependency set from the previous release's own manifests.
 - **The obsolete-package removal step reported success even when `apt` or `pip`
   failed.** Failures are now surfaced with the reason, so a retired player cannot
   linger unnoticed. This remains non-fatal by design — a purge failure must not

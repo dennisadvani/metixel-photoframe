@@ -423,6 +423,46 @@ class TestObsoletePackageRemoval:
         # Still non-fatal: the inline python must not use check=True.
         assert "check=True" not in script
 
+    def test_seeds_the_previous_manifest_when_the_ledger_is_missing(self) -> None:
+        """A device with no package ledger must still get its retired packages removed.
+
+        Found on hardware (GATE-2, Pi 5): a device installed from an image or the
+        legacy monolithic script has never run step 8, so
+        ``installed_packages.json`` does not exist.  The original code did
+        ``sys.exit(0)`` in that case and removed nothing — leaving VLC installed
+        on exactly the devices the retirement targets.  Worse, step 8 then wrote a
+        ledger listing only the NEW packages, so every subsequent upgrade also
+        found nothing to remove and the deferral was permanent.
+
+        The fix reconstructs the previous set from the OLD release's requirements
+        files, which is authoritative because the previous release is a real
+        checkout of this repo.
+        """
+        script = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        # The previous release must be captured before the symlink swap.
+        assert 'PREV_RELEASE_DIR="$(readlink -f' in script
+        assert "export PREV_RELEASE_DIR" in script
+        # Step 3 must accept it and use it.
+        assert "${PREV_RELEASE_DIR:-}" in script
+        assert "requirements-system.txt" in script
+        # Reconstructing is only safe from a real directory; a missing one must
+        # fall back to doing nothing rather than guessing.
+        assert "os.path.isdir(prev_dir)" in script
+        # The original silent no-op must be gone.
+        assert "sys.exit(0)  # nothing recorded to remove" not in script
+
+    def test_ledger_gap_never_silently_defers_removal(self) -> None:
+        """The no-ledger path must say so, not fail quietly.
+
+        Silence is what made the GATE-2 finding hard to see: step 3 printed only
+        its banner and moved on.  The path now explains itself, so an operator
+        reading the log can tell "nothing to remove" from "removal is broken".
+        """
+        script = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert "no previous manifest available" in script
+        assert "the ledger will be seeded by step 8" in script
+
     def test_parser_pins_utf8_encoding(self) -> None:
         """The manifest parser must open files with an explicit UTF-8 encoding.
 

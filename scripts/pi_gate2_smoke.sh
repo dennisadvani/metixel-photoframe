@@ -70,7 +70,10 @@ echo "  live:   $(readlink -f /opt/metixel/live 2>/dev/null || echo 'MISSING')"
 
 # Refuse to measure on a busy system: a second renderer would compete for the
 # display and the frame timings would be meaningless.
-if pgrep -x cage >/dev/null 2>&1 || pgrep -x metixel >/dev/null 2>&1; then
+#
+# Match on the command line: the application runs as `python3 -m metixel`, so its
+# process NAME is python3 and a name-based match would miss it entirely.
+if pgrep -x cage >/dev/null 2>&1 || pgrep -f -- '--mode frontend' >/dev/null 2>&1; then
     echo
     echo "  ! Metixel is already running.  Stopping it first so the run starts"
     echo "    from a known state."
@@ -200,14 +203,39 @@ else
 fi
 
 # ── 7) Frame rate holds the cap ────────────────────────────────────────────
-head_ "7) frame rate (advisory)"
+head_ "7) the renderer process is alive (advisory)"
 # The cap is 30 FPS by design (memory headroom on the weak boards). We only
-# assert it is not *absurd*; exact timing belongs to a dedicated benchmark.
-if pgrep -x metixel >/dev/null 2>&1; then
-    ok "metixel frontend process is running"
+# assert the renderer exists; exact timing belongs to a dedicated benchmark.
+#
+# NOTE: match on the command line, not the process name.  The frontend runs as
+# `python3 -m metixel --mode frontend`, so `pgrep -x metixel` can never match —
+# an earlier version of this script used exactly that and reported a false
+# failure on a perfectly healthy system.
+FRONTEND_PID=$(pgrep -f -- '--mode frontend' | head -1)
+if [ -n "${FRONTEND_PID}" ]; then
+    ok "frontend renderer running (pid ${FRONTEND_PID})"
+    # The frontend must be a direct child of cage in the intended topology.
+    PPID_NAME=$(ps -o comm= -p "$(ps -o ppid= -p "${FRONTEND_PID}" | tr -d ' ')" 2>/dev/null)
+    case "${PPID_NAME}" in
+        cage*) ok "parent is cage (${PPID_NAME}) — started under the compositor" ;;
+        *)     warn "parent is '${PPID_NAME}', not cage — check the launch path" ;;
+    esac
 else
-    bad "no metixel frontend process — nothing is rendering"
+    bad "no '--mode frontend' process — nothing is rendering"
 fi
+
+# The retired backend selector must be gone from the shipped units.
+head_ "7b) retired env plumbing removed from the units"
+for unit in metixel-cage metixel-backend; do
+    f="/opt/metixel/live/systemd/${unit}.service"
+    if [ -f "${f}" ]; then
+        if grep -q 'METIXEL_DISPLAY_BACKEND' "${f}"; then
+            bad "${unit}.service still sets METIXEL_DISPLAY_BACKEND"
+        else
+            ok "${unit}.service has no METIXEL_DISPLAY_BACKEND"
+        fi
+    fi
+done
 
 # ── 8) Video with hardware decode, in the real pipeline ────────────────────
 if [ "${RUN_VIDEO}" = "yes" ]; then
@@ -220,7 +248,7 @@ if [ "${RUN_VIDEO}" = "yes" ]; then
     esac
     echo "      expected hwdec for this board: ${EXPECT:-<unknown>}"
 
-    if [ "$(pgrep -c -f 'cage' 2>/dev/null || echo 0)" -gt 0 ]; then
+    if [ "$(pgrep -c -f -- '--mode frontend' 2>/dev/null || echo 0)" -gt 0 ]; then
         # Sample CPU across a window with the frontend up.  A hardware-decoding
         # pipeline should not be saturating the CPU.
         T1=$(awk '/^cpu /{print $2+$3+$4+$6+$7}' /proc/stat)
