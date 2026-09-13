@@ -5,6 +5,108 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased] — 2.0.0
+
+**This is a breaking release.** The rendering stack was replaced, so the display
+backend, the video player, and the dependencies are all different. Read
+[Upgrading](#upgrading-to-200) below before updating.
+
+### Upgrading to 2.0.0
+
+- **A Raspberry Pi 4 or newer is recommended.** 2.0.0 runs on a Pi 2, Pi 3, or
+  Pi Zero 2 W, but only manually — the weekly auto-update deliberately holds
+  2.0.0 back on those boards (see [1.2.5](#125)), so you will need to install it
+  from the Updates card or the release selector. If in doubt, stay on 1.2.5: it
+  is the last release with the old renderer and remains fully supported.
+- **The upgrade path is automatic.** `update.sh` installs the new packages,
+  removes the retired ones (pi3d, VLC, SDL), swaps the release, and health-checks
+  it. The first boot after upgrading will reconfigure the boot loader and restart
+  the frontend; the screen may be blank for a few seconds longer than usual.
+- **Nothing in `config.json` needs editing.** Retired keys are simply ignored.
+  If you had set `METIXEL_DISPLAY_BACKEND=dispmanx` or `=pi3d` by hand, remove
+  it — that override is no longer a valid value and the frontend will refuse to
+  start with a message naming the valid ones.
+- **Rolling back is safe.** The previous release stays on disk, so the Updates
+  card can switch back to it at any time.
+
+### Changed
+
+- **The renderer is now PySide6 + mpv, running Wayland-native under `cage`.**
+  The pi3d + VLC stack is gone. `QT_QPA_PLATFORM=wayland` is pinned in
+  `metixel-cage.service` rather than left to auto-detection, because Qt silently
+  falls back to `xcb` when no native plugin is found — and under `cage` there is
+  no X server, so the symptom was a black screen with no obvious cause. A
+  misconfiguration now aborts loudly at startup instead.
+- **Video plays *inside* the slideshow scene, not on top of it.** mpv is embedded
+  through the libmpv render API and draws into the same framebuffer as the
+  slideshow, so video is simply another layer. Overlays (clock, messages, boot
+  screen) now render above video correctly, which the old design could not do —
+  it covered the slideshow with a separate window and hoped nothing needed to
+  appear over it. The last-frame swap timer and the window-ordering rules it
+  existed to satisfy are gone.
+- **Hardware video decode is selected per board, from measurement.** `hwdec` is
+  no longer a single global guess. Benchmarked on idle hardware with genuine
+  HEVC and H.264 clips, counting CPU time from `/proc/stat`:
+
+  | Board | Codec | `drm-copy` | `v4l2m2m` | `auto` |
+  |---|---|---|---|---|
+  | Pi 5 | HEVC 1080p | **12.1 % (HW)** | 49.2 % (no device) | — |
+  | Pi 5 | H.264 1080p | 44–46 % (SW, all values) | — | — |
+  | Pi 3 | H.264 720p | (SW) | **55.4 % (HW)** | 170.1 % |
+
+  Three findings, each the opposite of what a single default would assume:
+  `v4l2m2m` works on a Pi 3 but not a Pi 5; `drm-copy` works on a Pi 5 but not a
+  Pi 3; and on a Pi 3, `auto` is **worse than no hardware decode at all**
+  (170 % CPU versus 138 %). The decoder is now chosen from the detected model.
+- **A Pi 5 has no working H.264 decoder**, so it continues to transcode to H.265
+  — the only codec with a hardware path there. This was nearly undone: the
+  original plan was to "fix" Pi 5 by switching it to H.264, which would have
+  removed its only hardware decode.
+- **Virtual mat and frame rendering** from a vendored framing engine
+  (`metixel.framing`). Geometry is computed in millimetres and returned as a
+  `RenderPlan`, so the mat, moulding and artwork rectangles are one data
+  structure that any backend can draw. Note that a mat's four bands are only
+  equal when the artwork aspect exactly matches the panel; the configured style
+  fraction is the *shortest* ring and the opposite axis carries the excess.
+- **Overlays compose declaratively.** Layers are described as a list of typed
+  `OverlayElement`s (rect / image / text) with a z-order instead of being drawn
+  imperatively, and are painted in ascending z so the previous depth-buffer
+  convention is preserved.
+
+### Removed
+
+- **pi3d, python-vlc, pygame and pysdl2 are gone**, along with the VLC system
+  packages. On upgrade they are uninstalled automatically; a package that cannot
+  be removed is reported rather than silently left behind. The retired
+  configuration keys `slideshow.video_player_backend`, `video.player_backend`
+  and `timeouts.vlc_start` no longer exist — there is exactly one player now, so
+  a surviving key would be a setting the user could change with no effect.
+- **`dispmanx_backend.py` and the GL shader sources are deleted**, and
+  `DisplayBackend` is reduced to a `present(plan)` surface. A backend must now
+  also implement `schedule(tick)`, so a new backend cannot inherit a render loop
+  by accident.
+
+### Fixed
+
+- **`vlc_start` never had a matching entry in the timeout defaults**, so the
+  timeout it described was not actually applied. Removed rather than repaired.
+- **The obsolete-package removal step reported success even when `apt` or `pip`
+  failed.** Failures are now surfaced with the reason, so a retired player cannot
+  linger unnoticed. This remains non-fatal by design — a purge failure must not
+  block a release — but it is no longer silent.
+- **The requirements parser depended on the ambient locale.** It now pins UTF-8
+  explicitly, which matters because the OTA runs it under `systemd-run` with no
+  locale set.
+
+### Internal
+
+- `scripts/requirements_names.py` is now the single requirements parser, shared by
+  the OTA's remove-obsolete and record-manifest steps, which previously duplicated
+  it. Those two steps have to agree: one writes the manifest the other diffs
+  against on the next upgrade.
+- `metixel.framing` is Qt-free and `DisplayBackend`-free, enforced by a test, so
+  the geometry can be exercised without a display.
+
 ## [1.2.5]
 
 ### Features

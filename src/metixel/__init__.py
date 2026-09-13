@@ -7,4 +7,4 @@ Raspberry Pi 2/3/4/5 (PySide6 + mpv under cage, Wayland-native)
 
 """
 
-__version__ = "1.2.5"
+__version__ = "2.0.0"
