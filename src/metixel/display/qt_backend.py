@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,7 @@ class PySide6Backend(DisplayBackend):
         self._wlr = WlrOutput()
         self._display_power = DisplayPower(self._wlr)
         self._video_path: Path | None = None
+        self._timer: Any = None
 
     # -- Properties ----------------------------------------------------------
 
@@ -424,18 +426,72 @@ class PySide6Backend(DisplayBackend):
             logger.debug("Could not list display modes", exc_info=True)
             return []
 
-    # -- Qt loop helpers -----------------------------------------------------
+    # -- Diagnostics ---------------------------------------------------------
 
-    def run_event_loop(self) -> None:
-        """Enter Qt's blocking event loop (used by the frontend's ``run()``)."""
-        if self._app is not None:
-            self._app.exec()
+    def effective_platform(self) -> str:
+        """Return the Qt platform plugin actually in use, for diagnosis.
+
+        ``QT_QPA_PLATFORM`` is pinned to ``wayland`` by the systemd unit, so this
+        normally reports ``wayland``.  Surfacing it in the log is the point: if a
+        future change lets Qt fall back to ``xcb`` on an X11-less frame, that is a
+        black screen, and a logged line is the difference between a five-minute
+        diagnosis and a long one.
+        """
+        try:
+            from PySide6.QtGui import QGuiApplication
+
+            return QGuiApplication.platformName() or "(unknown)"
+        except Exception:
+            return os.environ.get("QT_QPA_PLATFORM", "") or "(unknown)"
 
     def quit(self) -> None:
         """Ask Qt to leave the event loop."""
         self._running = False
         if self._app is not None:
             self._app.quit()
+
+    def schedule(self, tick: Callable[[], bool]) -> None:
+        """Drive *tick* from a QTimer while Qt owns the event loop.
+
+        Qt MUST run its own loop: without ``exec()`` it delivers no input, no
+        timers, no window events and no paints.  So instead of the renderer
+        owning a ``while`` loop, a ``QTimer`` calls the tick from inside the
+        event loop and the renderer's work becomes a callback.
+
+        The tick's ``False`` return stops the timer and quits the loop, which is
+        how a window close or a shutdown request ends the process cleanly.
+        """
+        from PySide6.QtCore import QTimer
+
+        if self._app is None:
+            logger.error("schedule() called before create() — no QApplication")
+            return
+
+        # 0ms interval: Qt runs the timer as soon as the event queue drains, and
+        # the presenter's own slide clock decides when a frame actually changes.
+        # A fixed interval here would fight that clock and add latency to input.
+        timer = QTimer()
+        timer.setInterval(0)
+        self._timer = timer
+
+        def _on_tick() -> None:
+            try:
+                if not tick():
+                    timer.stop()
+                    self._running = False
+                    self._app.quit()
+            except Exception:
+                # An exception escaping into Qt's event loop would be swallowed
+                # and leave a frozen window with no trace.  Log and stop
+                # instead, so the failure is visible and the OTA gate can see it.
+                logger.exception("Frame tick failed — stopping the render loop")
+                timer.stop()
+                self._running = False
+                self._app.quit()
+
+        timer.timeout.connect(_on_tick)
+        timer.start()
+        self._app.exec()
 
 
 def qt_available() -> bool:

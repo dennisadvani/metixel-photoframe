@@ -89,6 +89,12 @@ class FrontendRenderer:
         self._last_heartbeat: float = 0.0
         self._heartbeat_start: float = time.monotonic()
         self._boot_id: str = boot_identity()
+        # The heartbeat runs on its OWN thread — see _start_heartbeat for why.
+        self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_stop = threading.Event()
+        # Initial queue loading, populated by _render_loop and consumed by _tick.
+        self._queue_ready: threading.Event | None = None
+        self._loaded_items: list[MediaItem] = []
 
     # -- Main loop -----------------------------------------------------------
 
@@ -295,10 +301,13 @@ class FrontendRenderer:
             self._shutdown()
 
     def _render_loop(self) -> None:
-        """The main render loop — runs at the configured FPS.
+        """Run the slideshow, driven by whichever loop model the backend owns.
 
-        Frame timing is handled by the display backend's ``loop_running()``
-        (e.g., pygame's ``clock.tick()``), so we don't double-sleep here.
+        The backend decides how frames are pumped — Qt must run its own
+        ``exec()`` or nothing is delivered, whereas tkinter takes a plain loop —
+        so this method does NOT contain a loop.  It prepares what the tick needs
+        and hands ``_tick`` to ``backend.schedule()``, which returns only once the
+        loop has finished.
         """
         if self._backend is None or self._presentation is None:
             return
@@ -312,20 +321,23 @@ class FrontendRenderer:
         if self._overlay:
             self._overlay.update({"video_playing": False})
             self._overlay.draw(self._backend)
-        self._backend.loop_running()
+        self._backend.swap_buffers()
 
         # ── Start background queue loader ─────────────────────────────
         # The folder scan can take minutes on large libraries.  Run it
         # in a daemon thread so the render loop keeps spinning (boot
-        # screen stays animated).  The main thread checks a shared flag
-        # and swaps in the queue once loading is done.
-        _queue_ready = threading.Event()
-        _loaded_items: list[MediaItem] = []
+        # screen stays animated).  The tick checks a shared flag and
+        # swaps in the queue once loading is done.
+        #
+        # Held in a local as well as on self: the loader closure cannot rely on
+        # mypy narrowing an Optional attribute, and an Optional event would mean
+        # a silently never-ready queue.
+        ready = threading.Event()
+        self._queue_ready = ready
+        self._loaded_items = []
 
         def _load_initial_queue() -> None:
-            nonlocal _loaded_items
             items: list[MediaItem] = list(self._load_backend_playlist())
-
             if items:
                 logger.info("Loaded %d items from backend playlist", len(items))
             else:
@@ -334,8 +346,8 @@ class FrontendRenderer:
                     "the optimisation queue to process media.  The boot "
                     "screen stays visible until items are ready."
                 )
-            _loaded_items = items
-            _queue_ready.set()
+            self._loaded_items = items
+            ready.set()
 
         loader_thread = threading.Thread(
             target=_load_initial_queue,
@@ -344,56 +356,114 @@ class FrontendRenderer:
         )
         loader_thread.start()
 
-        while self._running and self._backend and self._backend.loop_running():
-            # ── Swap in initial queue when loading finishes ───────────
-            if _queue_ready.is_set() and self._presentation._queue_loaded is False:
-                self._presentation.set_queue(_loaded_items)
-                # Signal the backend that the slideshow has started so
-                # the network monitor can begin its AP-fallback countdown.
-                # Only fire when there are actually items to display —
-                # an empty initial load means the backend hasn't processed
-                # any media yet; the hot-reload path will populate later.
-                if _loaded_items:
-                    self._notify_slideshow_started()
-            # 1. Check for config changes (hot reload)
-            self._check_config_changed()
+        # ── Start the liveness heartbeat ──────────────────────────────
+        # On its OWN thread, deliberately.  The tick runs wherever the backend's
+        # loop lives — for Qt that is the GUI thread, which any stall (GL context
+        # setup, an mpv load, a large decode) blocks.  A heartbeat written from
+        # there would stop during exactly the stall it exists to report, and the
+        # OTA gate would read a healthy frame as dead and roll the release back.
+        # Writing a small file to tmpfs from a thread is safe and costs nothing.
+        self._start_heartbeat()
 
-            # 2. Process IPC control messages
-            self._process_ipc()
+        logger.info("Render loop starting (backend-driven scheduling)")
+        try:
+            self._backend.schedule(self._tick)
+        except KeyboardInterrupt:
+            logger.info("Render loop interrupted")
+        except Exception:
+            logger.exception("Fatal error in the render loop")
 
-            # 3. Render the current frame
-            self._render_frame()
+    def _tick(self) -> bool:
+        """One frame of frontend work.  Returns ``False`` to stop the loop.
 
-            # 4. Present to screen
-            if self._backend:
-                self._backend.swap_buffers()
+        Called by the backend from whichever thread owns its loop, so this must
+        stay cheap and must never block: a stall here is a stall of the whole
+        frontend, and — because Qt's loop also delivers input and paints — of the
+        window itself.
+        """
+        if not self._running or self._backend is None or self._presentation is None:
+            return False
 
-            self._frame_count += 1
+        # ── Swap in the initial queue once loading finishes ───────────
+        queue_ready = self._queue_ready
+        if queue_ready is not None and queue_ready.is_set() and not self._presentation.queue_loaded:
+            self._presentation.set_queue(self._loaded_items)
+            # Signal the backend that the slideshow has started so the network
+            # monitor can begin its AP-fallback countdown.  Only fire when there
+            # are actually items to display — an empty initial load means the
+            # backend has not processed any media yet, and the hot-reload path
+            # will populate the queue later.
+            if self._loaded_items:
+                self._notify_slideshow_started()
 
-            # Publish liveness for the OTA health-check.  Deliberately AFTER
-            # the frame has been rendered and presented: if rendering throws,
-            # the loop unwinds to the outer handler and the heartbeat stops,
-            # which is exactly the signal /api/health?require=render needs.
-            self._write_heartbeat()
+        # 1. Check for config changes (hot reload)
+        self._check_config_changed()
 
-            # Log FPS every 5 seconds
-            self._log_fps()
+        # 2. Process IPC control messages
+        self._process_ipc()
 
-            # Log system resources every 30 seconds (debug builds only)
-            self._log_resources()
+        # 3. Render the current frame
+        self._render_frame()
+
+        # 4. Present to screen
+        self._backend.swap_buffers()
+
+        self._frame_count += 1
+
+        # Log FPS every 5 seconds
+        self._log_fps()
+
+        # Log system resources every 30 seconds (debug builds only)
+        self._log_resources()
+
+        return self._running
+
+    def _start_heartbeat(self) -> None:
+        """Start the liveness heartbeat on its own thread.
+
+        Deliberately not driven from ``_tick``.  The tick runs wherever the
+        backend's loop lives — on Qt that is the GUI thread, which any stall
+        (GL context creation, an mpv load, a large decode) blocks.  A heartbeat
+        written from there stops during exactly the stall it exists to report,
+        and the OTA health gate would then read a *healthy* frame as dead and
+        roll the release back.
+
+        The write itself is tiny, throttled, and lands in ``run_dir()`` — tmpfs,
+        so this costs RAM rather than SD-card erase cycles.
+        """
+        if self._heartbeat_thread is not None:
+            return
+
+        def _beat() -> None:
+            while not self._heartbeat_stop.wait(HEARTBEAT_INTERVAL):
+                self._write_heartbeat()
+
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=_beat,
+            name="frontend-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+        # Publish one immediately so the gate does not have to wait an interval
+        # to see a live frontend after a restart.
+        self._write_heartbeat()
+
+    def _stop_heartbeat(self) -> None:
+        """Stop the heartbeat thread (called during shutdown)."""
+        self._heartbeat_stop.set()
 
     def _write_heartbeat(self) -> None:
         """Publish frontend liveness to ``run_dir()`` for the health check.
 
         The file's existence and mtime are the liveness proof, so there is no
-        cheaper mechanism; writes are throttled to HEARTBEAT_INTERVAL and land
-        on tmpfs rather than the SD card.  ``pid`` + ``boot_id`` let the
-        consumer detect a *restarting* frontend — a crash loop keeps the file
-        fresh, but the identity flips, so it must not be read as healthy.
+        cheaper mechanism.  ``pid`` + ``boot_id`` let the consumer detect a
+        *restarting* frontend — a crash loop keeps the file fresh, but the
+        identity flips, so it must not be read as healthy.
+
+        Called from the heartbeat thread, not the render loop.
         """
         now = time.monotonic()
-        if now - self._last_heartbeat < HEARTBEAT_INTERVAL:
-            return
         self._last_heartbeat = now
         try:
             atomic_write_json(
@@ -917,6 +987,7 @@ class FrontendRenderer:
         # Remove the heartbeat so a cleanly stopped frontend is reported as
         # "missing" immediately, rather than looking stale for 30 seconds.
         # Best-effort: the file is tmpfs telemetry, never worth failing over.
+        self._stop_heartbeat()
         with contextlib.suppress(OSError):
             self._heartbeat_path.unlink()
 
@@ -924,6 +995,11 @@ class FrontendRenderer:
             self._ipc_server.stop()
 
         if self._backend:
+            # Ask the loop to finish before tearing the surface down.  For Qt
+            # that means leaving exec(); calling destroy() underneath a running
+            # event loop would leave the loop pumping a deleted window.
+            with contextlib.suppress(Exception):
+                self._backend.quit()
             self._backend.destroy()
             self._backend = None
 

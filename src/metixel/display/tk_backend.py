@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -160,6 +162,32 @@ class TkBackend(DisplayBackend):
     def swap_buffers(self) -> None:
         """No-op — tkinter Canvas renders immediately."""
         pass
+
+    def schedule(self, tick: Callable[[], bool]) -> None:
+        """Drive *tick* from a plain loop, pumping tkinter events each frame.
+
+        tkinter is cooperative: the loop owns the thread and calls ``update()``
+        to drain events, so the tick runs on the same thread between pumps.
+        Timing is a monotonic deadline rather than ``after()``, because the
+        slideshow's own clock is what decides when a frame changes.
+        """
+        period = 1.0 / max(1, self._fps_limit)
+        next_frame = time.monotonic()
+        while self._running and self.loop_running():
+            if not tick():
+                break
+            next_frame += period
+            sleep_for = next_frame - time.monotonic()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            else:
+                # We are behind: resynchronise rather than accumulate debt, or a
+                # slow stretch would make the loop spin to catch up.
+                next_frame = time.monotonic()
+
+    def quit(self) -> None:
+        """Stop the loop; safe from another thread (just clears a flag)."""
+        self._running = False
 
     # -- Frame presentation --------------------------------------------------
 

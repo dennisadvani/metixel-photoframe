@@ -79,6 +79,12 @@ class WaylandBackend(DisplayBackend):
     def present(self, plan, image=None, alpha=1.0):
         raise NotImplementedError("WaylandBackend stub")
 
+    def schedule(self, tick):
+        raise NotImplementedError("WaylandBackend stub")
+
+    def quit(self):
+        self._running = False
+
     def load_image(self, path):
         raise NotImplementedError("WaylandBackend stub")
 

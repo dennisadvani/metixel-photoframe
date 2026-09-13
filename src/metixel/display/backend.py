@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +121,37 @@ class DisplayBackend(ABC):
     @abstractmethod
     def swap_buffers(self) -> None:
         """Present the composed frame to the screen."""
+
+    # -- Frame scheduling ----------------------------------------------------
+
+    @abstractmethod
+    def schedule(self, tick: Callable[[], bool]) -> None:
+        """Drive *tick* at the configured frame rate until it returns ``False``.
+
+        This is the backend's ONE piece of control flow, and it exists because the
+        two backends own their loops in fundamentally different ways:
+
+        * Qt owns the main thread.  A ``QApplication`` must run its own event loop
+          or nothing is delivered — input, timers, window events, painting — so
+          the backend drives the tick from a ``QTimer`` inside ``exec()``.
+        * tkinter is cooperative and allows a plain loop that calls ``update()``.
+
+        Abstract rather than defaulted, so a new backend has to state which model
+        it uses instead of silently inheriting the wrong one.  A backend that
+        pumps its own loop *and* is handed a scheduler would either never return
+        or run the slideshow twice.
+
+        ``tick`` returns ``False`` to stop (window closed, or a shutdown signal).
+        Implementations must return only once the loop has finished, so the caller
+        can shut down afterwards.
+        """
+
+    def quit(self) -> None:  # noqa: B027
+        """Ask the running loop to stop.
+
+        Idempotent, and safe to call from another thread or a signal handler — it
+        is how a shutdown request reaches a loop the backend owns.
+        """
 
     # -- Frame presentation --------------------------------------------------
 
