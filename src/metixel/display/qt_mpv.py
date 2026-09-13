@@ -26,6 +26,35 @@ They were established experimentally on a Pi 5 under cage:
 
 ``osd_level=0`` disables mpv's on-screen text, which would otherwise be baked
 into the frame and appear behind the matte.
+
+Hardware decoding: `drm-copy`, NOT `v4l2m2m`
+--------------------------------------------
+Measured on a Pi 5 (idle system, `vo=libmpv` via the render API, 1080p):
+
+    codec   --hwdec        result                        CPU
+    HEVC    no             software                      49%
+    HEVC    auto           hardware (drm-copy)           13%
+    HEVC    drm-copy       hardware (drm-copy)           12%
+    HEVC    drm            software (silent fallback)    48%
+    HEVC    v4l2m2m        software — "Could not find a valid device"
+    H.264   (any)          software                      44-46%
+
+Three conclusions, each of which was the opposite of what the design assumed:
+
+1. **`v4l2m2m` does not work at all on Pi 5** — for *either* codec. The plan's
+   premise that H.264/v4l2m2m was the verified-good path does not hold here.
+2. **HEVC is the codec with working hardware decode**, via `drm-copy`, which
+   drives the `rpi-hevc-dec` kernel device at ``/dev/video19`` with DMABuf in and
+   out ("Hwaccel V4L2 HEVC stateless V4"). The ``-copy`` suffix names the interop
+   layer, not a software path — do not "optimise" it away to plain ``drm``, which
+   **silently** falls back to software.
+3. Therefore ``PROFILES["pi5"]`` correctly transcodes to H.265, and switching it
+   to H.264 (the obvious reading of "H.264 is the verified path") would have
+   removed hardware decode entirely.
+
+The default is ``auto`` so mpv negotiates per codec, which is what it gets right
+on both. A Pi 3 does NOT share this answer — VC4 lacks the dmabuf interop that
+drm-copy needs — so its value must be measured, not inherited.
 """
 
 from __future__ import annotations
@@ -52,7 +81,7 @@ class MpvRenderWidget(QOpenGLWidget):
     #: happens on the GUI thread.
     frame_ready = Signal()
 
-    def __init__(self, parent: QWidget | None = None, *, hwdec: str = "v4l2m2m") -> None:
+    def __init__(self, parent: QWidget | None = None, *, hwdec: str = "auto") -> None:
         super().__init__(parent)
         self._mpv: Any = None
         self._ctx: Any = None

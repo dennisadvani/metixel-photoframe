@@ -52,6 +52,7 @@ from metixel.display.backend import DisplayBackend
 from metixel.display.hardware import DisplayPower, WlrOutput
 from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
+from metixel.shared.platform import detect_pi_model, hwdec_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -151,7 +152,13 @@ class PySide6Backend(DisplayBackend):
             )
 
         self._canvas = FrameCanvas()
-        self._mpv_widget = MpvRenderWidget()
+        # The hwdec value is derived from the BOARD, not left to mpv's `auto`.
+        # Measured on hardware: `auto` never reaches the working decoder on a
+        # Pi 3 (it exhausts CUDA/Vulkan/drm first and lands on software at 170%
+        # CPU, worse than requesting none). See shared/platform.hwdec_for_model.
+        hwdec = hwdec_for_model(detect_pi_model())
+        logger.info("mpv hardware decoding: %s", hwdec)
+        self._mpv_widget = MpvRenderWidget(hwdec=hwdec)
 
         from PySide6.QtWidgets import QStackedLayout, QWidget
 

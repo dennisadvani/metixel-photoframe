@@ -65,6 +65,62 @@ def detect_pi_model() -> str | None:
     return None
 
 
+#: mpv ``--hwdec`` value per Pi model, measured on hardware.
+#:
+#: **These must be set EXPLICITLY; ``auto`` is wrong on both platforms.**  ``auto``
+#: walks a fixed probe order (CUDA → Vulkan → VAAPI → drm → …) and on a Pi 3 it
+#: exhausts every candidate without ever reaching ``v4l2m2m``, landing on software
+#: at 170% CPU — *worse* than requesting no hardware decoding at all (138%).
+#:
+#: Measured (1080p HEVC on a Pi 5, 720p H.264 on a Pi 3, services stopped):
+#:
+#: ======= ======== ============ =====================
+#: Board   Codec    Working      Measured CPU
+#: ======= ======== ============ =====================
+#: Pi 5    HEVC     ``drm-copy`` 49% software → 12%
+#: Pi 5    H.264    *(none)*     always software
+#: Pi 3    H.264    ``v4l2m2m``  138% software → 55%
+#: Pi 3    HEVC     *(none)*     always software
+#: ======= ======== ============ =====================
+#:
+#: The asymmetry is real and not a misconfiguration: a Pi 5's V3D exposes V4L2
+#: HEVC stateless via ``rpi-hevc-dec`` (``/dev/video19``) with DMABuf interop,
+#: while the Pi 3's VC4 offers only ``bcm2835-codec-decode`` (``/dev/video10``,
+#: H.264) and lacks the dmabuf interop ``drm-copy`` requires.
+#:
+#: This mapping deliberately mirrors :data:`~metixel.backend.processing.video.
+#: VideoProcessor.PROFILES` — the board whose profile transcodes to H.265 is the
+#: board that can hardware-decode H.265.  Deriving both from the same model keeps
+#: the codec and the decoder from ever disagreeing, which is the failure that
+#: would otherwise ship silently: a board transcoding to a codec it cannot
+#: hardware-decode looks fine until the CPU saturates.
+HWDecByModel: dict[str, str] = {
+    # `drm-copy` names the interop layer, not a software path — underneath it
+    # libavcodec drives the V4L2 HEVC stateless device with DMABuf both ways.
+    # Plain `drm` (zero-copy) SILENTLY falls back to software for HEVC.
+    "pi5": "drm-copy",
+    "pi4": "drm-copy",
+    # VC4 decodes H.264 through the mem2mem device. `drm`/`drm-copy` do not work
+    # here, and `auto` never reaches this path at all.
+    "pi3": "v4l2m2m",
+    "pi2": "v4l2m2m",
+}
+
+
+def hwdec_for_model(model: str | None) -> str:
+    """Return the mpv ``--hwdec`` value for *model*, or ``"no"`` if unknown.
+
+    ``"no"`` is the honest answer when the board cannot be identified: it asks mpv
+    for software decoding explicitly, rather than leaving it to ``auto``, which on
+    a Pi 3 measurably costs *more* CPU than plain software.  A wrong guess here is
+    not a crash — it is a frame that runs hot and stutters, which is far harder to
+    diagnose than a failed start.
+    """
+    if model is None:
+        return "no"
+    return HWDecByModel.get(model, "no")
+
+
 def resolve_unique_id() -> str:
     """Return a stable, hardware-unique identifier for this device.
 
