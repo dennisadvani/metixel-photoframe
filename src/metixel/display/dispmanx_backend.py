@@ -88,7 +88,7 @@ class Pi3dBackend(DisplayBackend):
     def swap_buffers(self) -> None:
         pass
 
-    def present(self, plan: object, image: object = None) -> None:
+    def present(self, plan: object, image: object = None, alpha: float = 1.0) -> None:
         pass
 
     def load_image(self, path: object) -> object:

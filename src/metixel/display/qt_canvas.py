@@ -67,6 +67,8 @@ class FrameCanvas(QWidget):
         self._image: QImage | None = None
         self._background = QColor(0, 0, 0)
         self._overlay: list[OverlayElement] = []
+        # Artwork opacity, used by the crossfade.  Rings stay opaque.
+        self._image_alpha: float = 1.0
         # The canvas fully repaints every frame, so Qt does not need to erase
         # first — and skipping the erase avoids a visible flash on the video
         # path where the widget beneath is showing through.
@@ -75,15 +77,21 @@ class FrameCanvas(QWidget):
 
     # -- Public API ----------------------------------------------------------
 
-    def update_plan(self, plan: RenderPlan, image: Any = None) -> None:
-        """Store the plan (and optional artwork) for the next repaint."""
+    def update_plan(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
+        """Store the plan (and optional artwork) for the next repaint.
+
+        ``alpha`` applies to the artwork only — the frame rings always paint
+        opaque, so a fading photo never reveals the matte behind it.
+        """
         self._plan = plan
         self._image = image if isinstance(image, QImage) else None
+        self._image_alpha = max(0.0, min(1.0, alpha))
 
     def clear_plan(self) -> None:
         """Drop the current plan so the next paint is a bare background."""
         self._plan = None
         self._image = None
+        self._image_alpha = 1.0
 
     def set_background(self, color: tuple[float, float, float, float]) -> None:
         """Set the canvas clear colour."""
@@ -118,8 +126,12 @@ class FrameCanvas(QWidget):
 
                 # 2. Artwork.  Skipped for video (image is None), which is what
                 #    lets mpv's frames show through the Mat Window.
-                if self._image is not None:
-                    self._draw_artwork(painter, plan)
+                if self._image is not None and self._image_alpha > 0.01:
+                    painter.setOpacity(self._image_alpha)
+                    try:
+                        self._draw_artwork(painter, plan)
+                    finally:
+                        painter.setOpacity(1.0)
 
                 # 3–5. Ring layers, outermost last so the moulding reads as the
                 #      frame edge.  Annuli: disjoint from the artwork.

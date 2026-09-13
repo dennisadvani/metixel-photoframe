@@ -20,14 +20,14 @@ from pathlib import Path
 from metixel.display import detect_backend
 from metixel.display.backend import DisplayBackend
 from metixel.frontend.overlay import MessageLayer, OverlayManager
-from metixel.frontend.presentation.engine import PresentationEngine
+from metixel.frontend.presentation.presenter import Presenter
 from metixel.shared.config import Config
 from metixel.shared.io import atomic_write_json
 from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.paths import frontend_heartbeat_path, run_dir, run_path
 from metixel.shared.platform import boot_identity
-from metixel.shared.system_stats import format_gpu_stats, read_system_stats
+from metixel.shared.system_stats import read_system_stats
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class FrontendRenderer:
         self._config_path = config_path.resolve()
         self._config: Config = Config.load(config_path)
         self._backend = backend  # injected DisplayDriver port (None → detect_backend() in run())
-        self._presentation: PresentationEngine | None = None
+        self._presentation: Presenter | None = None
         self._overlay: OverlayManager | None = None
         self._ipc_server = IPCServer()
         self._running = False
@@ -239,7 +239,7 @@ class FrontendRenderer:
             logger.warning("Could not write display info file", exc_info=True)
 
         # Initialize subsystems
-        self._presentation = PresentationEngine(self._config, self._backend)
+        self._presentation = Presenter(self._config, self._backend)
 
         # Initialize overlay layer system.
         # BootLayer (z=0.0, closest) covers the screen until the first
@@ -493,10 +493,9 @@ class FrontendRenderer:
         )
 
         # ── GPU memory (Pi only) ─────────────────────────────────────
-        if self._backend:
-            gpu = self._backend.gpu_memory_info()
-            if gpu and "gpu_total_mb" in gpu:
-                logger.debug("GPU: %s", format_gpu_stats(gpu))
+        # The pi3d-era per-texture GPU memory probe is gone with the backend that
+        # exposed it.  The retained-mode canvas owns its own allocations, so there
+        # is no application-level texture budget left to report.
 
     def _render_frame(self) -> None:
         """Render a single frame."""
@@ -506,9 +505,9 @@ class FrontendRenderer:
         # Render presentation (slideshow + transition + matte)
         self._presentation.render()
 
-        # Render overlay layers on top of slideshow.
-        # Clear depth first so slideshow depth values don't occlude overlay.
-        self._backend.clear_depth()
+        # Overlay layers on top of the slideshow.  No depth clear: the retained
+        # mode canvas composites in paint order, so there is no depth buffer for
+        # the slideshow to write into and occlude the overlay with.
         if self._overlay:
             # Pass video state so message timers pause during VLC playback
             video_playing = (
@@ -522,20 +521,17 @@ class FrontendRenderer:
             # from fading to a black screen when queue loading is
             # deferred to a background thread.
             #
-            # Additionally, the active GPU texture slot must be
-            # non-None before we signal readiness.  If the first
-            # slide's texture hasn't been uploaded yet (e.g. a sync
-            # load is still in progress), the render loop stalls
-            # and the fade timer would expire before any frames
-            # are drawn — producing a jump cut instead of a smooth
-            # crossfade.  Waiting for the texture ensures the fade
-            # runs over actual rendered frames.
+            # Readiness also requires a frame to have been PAINTED.  The boot
+            # layer fades out on a timer, so signalling ready while the first item
+            # was still decoding would run the fade over empty frames and end on a
+            # black screen.  The presenter owns that judgement rather than the
+            # renderer reaching into its internals.
             slideshow_ready = (
-                self._presentation._queue_loaded
-                and len(self._presentation._queue) > 0
-                and self._presentation._tex[self._presentation._active] is not None
+                self._presentation.queue_loaded
+                and len(self._presentation.queue) > 0
+                and self._presentation.has_visible_frame
             )
-            queue_size = len(self._presentation._queue) if self._presentation else 0
+            queue_size = len(self._presentation.queue) if self._presentation else 0
             self._overlay.update(
                 {
                     "video_playing": video_playing,

@@ -163,7 +163,7 @@ class TkBackend(DisplayBackend):
 
     # -- Frame presentation --------------------------------------------------
 
-    def present(self, plan: RenderPlan, image: Any = None) -> None:
+    def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
         """Software-composite one frame from *plan*.
 
         Paints in the order the framing specification mandates — ambient fill,
@@ -172,6 +172,11 @@ class TkBackend(DisplayBackend):
         compositing and no z-buffer, which is exactly why the plan's ring layers
         are disjoint from the artwork: the order alone is sufficient, and no
         clipping or blending is required.
+
+        ``alpha`` fades the artwork only.  Tk cannot blend, so a transition here
+        degrades to a cut (see the alpha guard below) — the desktop dev backend
+        is not the place to reproduce a crossfade, and pretending otherwise would
+        mean a software blend of every frame.
         """
         if self._canvas is None:
             return
@@ -183,7 +188,9 @@ class TkBackend(DisplayBackend):
         if plan.ambient is not None:
             self._rect(plan.ambient, plan.ambient_colour)
 
-        if image is not None:
+        # A partially transparent artwork would need real alpha compositing; show
+        # it opaque above the midpoint and omit it below, which reads as a cut.
+        if image is not None and alpha >= 0.5:
             self._artwork(image, plan)
 
         for rect in plan.whitespace:
@@ -247,14 +254,23 @@ class TkBackend(DisplayBackend):
 
     # -- Artwork -------------------------------------------------------------
 
-    def load_image(self, path: Path | np.ndarray) -> Any:
+    def load_image(self, path: Path | np.ndarray | bytes) -> Any:
         """Load an image into a PIL handle.
 
         Returns an integer handle, or ``None`` if the file could not be read —
         a single unreadable photo must never stop the slideshow.
+
+        ``bytes`` is the encoded payload from the preload worker; ``ndarray`` is
+        used by tests and generated frames.
         """
         try:
-            if isinstance(path, np.ndarray):
+            if isinstance(path, (bytes, bytearray)):
+                import io
+
+                opened = Image.open(io.BytesIO(path))
+                opened.load()
+                pil_img = opened.convert("RGB")
+            elif isinstance(path, np.ndarray):
                 arr = path
                 if arr.ndim == 3 and arr.shape[2] == 4:
                     pil_img = Image.fromarray(arr, "RGBA")
@@ -263,9 +279,9 @@ class TkBackend(DisplayBackend):
                 else:
                     raise ValueError(f"Unsupported array shape: {arr.shape}")
             else:
-                pil_img = Image.open(path)
-                pil_img.load()
-                pil_img = pil_img.convert("RGB")
+                opened = Image.open(path)
+                opened.load()
+                pil_img = opened.convert("RGB")
         except Exception:
             logger.debug("Failed to load image: %s", path, exc_info=True)
             return None

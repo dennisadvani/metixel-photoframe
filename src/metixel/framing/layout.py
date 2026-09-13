@@ -244,6 +244,21 @@ class LayoutEngine:
     def screen_h(self) -> int:
         return self._screen_h
 
+    @property
+    def rotation(self) -> int:
+        """The rotation this layout was built for (0, 90, 180, 270)."""
+        return self._rotation
+
+    @property
+    def style(self) -> str:
+        """The framing style key in use."""
+        return self._style
+
+    @property
+    def overflow(self) -> str | None:
+        """The overflow mode override, or ``None`` to use the style's default."""
+        return self._overflow
+
     # -- Public -------------------------------------------------------------
 
     def compute(

@@ -237,12 +237,15 @@ class PySide6Backend(DisplayBackend):
 
     # -- Frame presentation --------------------------------------------------
 
-    def present(self, plan: RenderPlan, image: Any = None) -> None:
+    def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
         """Paint *plan* on the canvas, raising it above the mpv surface.
 
         When a video is playing the canvas is still on top, painting only the
         ring layers over mpv's output — which is how the virtual mat composites
         over live video without a second framebuffer.
+
+        ``alpha`` applies to the artwork, so two complementary calls produce the
+        crossfade.  The rings always paint opaque.
         """
         if self._canvas is None or self._window is None:
             return
@@ -250,7 +253,7 @@ class PySide6Backend(DisplayBackend):
         # on top (it paints the matte), but its artwork layer is skipped by
         # passing image=None, so mpv's frames show through the middle.
         self._canvas.raise_()
-        self._canvas.update_plan(plan, image)
+        self._canvas.update_plan(plan, image, alpha)
         self._canvas.update()
 
     # -- Overlay -------------------------------------------------------------
@@ -281,12 +284,19 @@ class PySide6Backend(DisplayBackend):
         Returns ``None`` on failure rather than raising: one unreadable photo
         must never stop the slideshow, and the presenter treats ``None`` as
         "advance".
+
+        Accepts a path, encoded ``bytes`` (from the preload worker) or a numpy
+        array.  The bytes form matters: ``QImage`` is constructed here, on the
+        GUI thread, because Qt objects must not be created off-thread.
         """
         try:
             from PySide6.QtGui import QImage
 
             if isinstance(path, QImage):
                 return path
+            if isinstance(path, (bytes, bytearray)):
+                image = QImage.fromData(bytes(path))
+                return None if image.isNull() else image
             if isinstance(path, (Path, str)):
                 image = QImage(str(path))
                 if image.isNull():

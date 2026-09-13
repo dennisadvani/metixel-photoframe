@@ -44,7 +44,7 @@ def test_renderer_passes_refresh_and_rotation(tmp_path, fake_backend, monkeypatc
 
     # Stub out the heavy subsystems so run() only exercises the display init.
     monkeypatch.setattr(
-        "metixel.frontend.renderer.PresentationEngine",
+        "metixel.frontend.renderer.Presenter",
         lambda *a, **k: mock.MagicMock(),
     )
     monkeypatch.setattr(
@@ -80,7 +80,7 @@ def test_renderer_defaults_when_omitted(tmp_path, fake_backend, monkeypatch):
     config_path = _write_config(tmp_path, {})  # no new keys
 
     monkeypatch.setattr(
-        "metixel.frontend.renderer.PresentationEngine",
+        "metixel.frontend.renderer.Presenter",
         lambda *a, **k: mock.MagicMock(),
     )
     monkeypatch.setattr(

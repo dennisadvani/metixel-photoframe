@@ -124,7 +124,7 @@ class DisplayBackend(ABC):
     # -- Frame presentation --------------------------------------------------
 
     @abstractmethod
-    def present(self, plan: RenderPlan, image: Any = None) -> None:
+    def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
         """Paint one complete frame for *plan*.
 
         The single rendering entry point.  Implementations paint the plan's
@@ -142,6 +142,12 @@ class DisplayBackend(ABC):
             image: An opaque handle from :meth:`load_image` for the artwork, or
                 ``None`` to paint the frame without artwork (a pure mat preview,
                 or a video whose frames arrive out of band).
+            alpha: Opacity of the *artwork*, used by the crossfade.  The frame
+                rings always paint opaque, so a fading photo does not reveal the
+                matte behind it.  Painting twice at complementary alpha is what
+                implements the transition — there is no separate blend entry
+                point, which keeps transitions independent of backend blend
+                capability.
         """
         ...
 
@@ -166,7 +172,7 @@ class DisplayBackend(ABC):
     # -- Artwork -------------------------------------------------------------
 
     @abstractmethod
-    def load_image(self, path: Path | np.ndarray) -> Any:
+    def load_image(self, path: Path | np.ndarray | bytes) -> Any:
         """Load an image into a backend-native handle.
 
         For a video item, pass the pre-generated first-frame JPEG: the backend
@@ -175,7 +181,10 @@ class DisplayBackend(ABC):
         presentation layer never runs ffmpeg or ffprobe.
 
         Args:
-            path: A filesystem path, or an ``(H, W, 3/4)`` numpy array.
+            path: A filesystem path, an ``(H, W, 3/4)`` numpy array, or encoded
+                image ``bytes``.  The bytes form exists because the preload
+                worker decodes off-thread and hands over a payload rather than
+                letting Qt objects be constructed on a worker thread.
 
         Returns:
             An opaque handle, or ``None`` if the image could not be loaded.

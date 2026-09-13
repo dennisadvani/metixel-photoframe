@@ -76,7 +76,7 @@ class WaylandBackend(DisplayBackend):
     def swap_buffers(self):
         pass
 
-    def present(self, plan, image=None):
+    def present(self, plan, image=None, alpha=1.0):
         raise NotImplementedError("WaylandBackend stub")
 
     def load_image(self, path):
