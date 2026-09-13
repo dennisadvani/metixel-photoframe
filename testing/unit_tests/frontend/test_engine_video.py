@@ -297,6 +297,99 @@ class TestEngineVideoIntegration:
         assert len(engine._queue) == 2
 
 
+class TestCurrentMediaStateFile:
+    """``current_media.json`` drives the dashboard's "Now Playing" card.
+
+    The dashboard polls ``/api/health``, which reports ``current_media`` from
+    this file.  A queue change that does not republish it leaves the UI showing
+    a stale item (or "No media playing") indefinitely, because nothing else
+    rewrites the file until the next slide advance.
+    """
+
+    @pytest.fixture
+    def engine(self, tmp_path, monkeypatch):
+        from metixel.frontend.presentation.engine import PresentationEngine
+        from metixel.shared.config import Config
+
+        # run_path() honours METIXEL_RUN_DIR — point it at the temp dir.
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path / "run"))
+        cfg = Config()
+        cfg.update("slideshow", {"shuffle": False})
+        backend = mock.MagicMock()
+        backend.width = 1920
+        backend.height = 1080
+        return PresentationEngine(cfg, backend)
+
+    def _read_state(self, tmp_path) -> dict | None:
+        import json
+
+        path = tmp_path / "run" / "current_media.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _image(item_id: str, path: Path) -> MediaItem:
+        return MediaItem(
+            id=item_id,
+            original_path=path,
+            cached_path=path,
+            media_type=MediaType.IMAGE,
+            width=1920,
+            height=1080,
+        )
+
+    def test_set_queue_publishes_current_item(self, engine, tmp_path):
+        a = tmp_path / "a.jpg"
+        b = tmp_path / "b.jpg"
+        engine.set_queue([self._image("a", a), self._image("b", b)])
+
+        state = self._read_state(tmp_path)
+        assert state is not None
+        assert state["file"] == "a.jpg"
+        assert state["index"] == 0
+        assert state["total"] == 2
+
+    def test_remove_items_republishes_state(self, engine, tmp_path):
+        """Removing items must rewrite the file, not leave the stale index."""
+        a = tmp_path / "a.jpg"
+        b = tmp_path / "b.jpg"
+        c = tmp_path / "c.jpg"
+        engine.set_queue([self._image("a", a), self._image("b", b), self._image("c", c)])
+        engine.next_item()  # now on b (index 1)
+        assert self._read_state(tmp_path)["file"] == "b.jpg"
+
+        # Remove a non-current item — the file must still reflect the queue.
+        removed = engine.remove_items({"c"})
+
+        assert removed == 1
+        state = self._read_state(tmp_path)
+        assert state is not None
+        assert state["file"] == "b.jpg"
+        assert state["total"] == 2
+
+    def test_remove_all_items_unpublishes_state(self, engine, tmp_path):
+        """An emptied queue must not publish an index of -1.
+
+        A published record with index=-1 is invisible to the dashboard (which
+        keeps its last rendered value), so the UI stuck on the previous item
+        while the pipeline rebuilt the playlist.
+        """
+        a = tmp_path / "a.jpg"
+        engine.set_queue([self._image("a", a)])
+        assert self._read_state(tmp_path) is not None
+
+        engine.remove_items({"a"})
+
+        assert engine._current_idx == -1
+        assert self._read_state(tmp_path) is None
+
+    def test_empty_queue_at_startup_publishes_nothing(self, engine, tmp_path):
+        engine.set_queue([])
+
+        assert self._read_state(tmp_path) is None
+
+
 class TestEngineVlcIntegration:
     """Tests for VLC-based video playback in PresentationEngine."""
 

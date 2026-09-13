@@ -329,6 +329,12 @@ class PlaylistControllerMixin(BaseEngineState):
         # Restart preload for the correct next item
         self._preload_into_inactive()
 
+        # Republish the current-media state file.  Without this the file kept
+        # the pre-removal contents (including a stale index), so the dashboard
+        # showed the wrong item — or "No media playing" — indefinitely, since
+        # nothing else rewrites it until the next advance.
+        self._write_current_media()
+
         logger.info(
             "Removed %d items from queue (total: %d, current idx: %d)",
             removed,

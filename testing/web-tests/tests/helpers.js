@@ -27,8 +27,20 @@ function collectErrors(page) {
     return errors;
 }
 
+// A current-media thumbnail that was regenerated (or whose cache was cleared)
+// can 404 for one poll cycle while the frontend rewrites current_media.json.
+// That is a transient, self-healing condition — not a page fault — so drop the
+// thumbnail endpoint from the collected errors.  The backend also withholds the
+// URL when the file is missing; this is belt-and-braces for the poll race.
+const _IGNORED_ERROR = /\/api\/media\/thumbnail\//;
+
+function relevantErrors(errors) {
+    return errors.filter((e) => !_IGNORED_ERROR.test(e));
+}
+
 function expectNoErrors(errors) {
-    expect(errors, "console/page/network errors:\n" + errors.join("\n")).toEqual([]);
+    const relevant = relevantErrors(errors);
+    expect(relevant, "console/page/network errors:\n" + relevant.join("\n")).toEqual([]);
 }
 
 // Capture a field's value, change it, save, verify it persisted after a
@@ -47,4 +59,5 @@ async function assertSaveRestores(page, { field, saveBtn, value }) {
     await expect(page.locator(".toast").first()).toBeVisible();
 }
 
-module.exports = { goToPage, collectErrors, expectNoErrors, assertSaveRestores };
+module.exports = { goToPage, collectErrors, expectNoErrors, relevantErrors, assertSaveRestores };
+

@@ -1,10 +1,84 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
-"""Tests for the health display endpoints (info + supported modes)."""
+"""Tests for the health display endpoints (info + supported modes) and the
+current-media thumbnail URL resolution used by ``GET /api/health``."""
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
+
+
+class TestCurrentMediaThumbnail:
+    """``/api/health`` must never publish a thumbnail URL that 404s.
+
+    The frontend writes ``current_media.json`` naming a thumbnail path; the
+    dashboard then renders ``<img src=thumbnail_url>``.  A stale path (e.g. the
+    cache was cleared but the state file still names the old hash) would 404 and
+    surface as a console/network error on the dashboard.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _run_dir(self, monkeypatch, tmp_path):
+        """Point the run-dir resolution at the test's temp directory.
+
+        ``conftest`` builds a real ``StateManager`` with ``run_dir=tmp_path/"run"``,
+        but the route reads the frontend's state file through
+        ``metixel.shared.paths.run_path``, which honours ``METIXEL_RUN_DIR``.
+        """
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path / "run"))
+
+    def _write_current_media(self, tmp_path, payload: dict) -> None:
+        run_dir = tmp_path / "run"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "current_media.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def _thumbs_dir(self, tmp_path) -> Path:
+        """The cache/thumbnails dir, resolved exactly as the route sees it."""
+        from metixel.backend.web.routes.media import _resolve_cache_dir
+
+        cache_dir = _resolve_cache_dir(
+            type("S", (), {"config": type("C", (), {"system": {"cache_dir": str(tmp_path / "cache")}})})()
+        )
+        return cache_dir / "thumbnails"
+
+    def _current_media(self, client) -> dict:
+        resp = client.get("/api/health")
+        assert resp.status_code == 200
+        return json.loads(resp.data)["current_media"]
+
+    def test_publishes_url_when_thumbnail_exists(self, client, tmp_path):
+        thumb_dir = self._thumbs_dir(tmp_path)
+        thumb_dir.mkdir(parents=True)
+        (thumb_dir / "abc123.jpg").write_bytes(b"\xff\xd8\xff")
+
+        self._write_current_media(tmp_path, {"file": "a.jpg", "thumbnail_path": str(thumb_dir / "abc123.jpg")})
+
+        assert self._current_media(client)["thumbnail_url"] == "/api/media/thumbnail/abc123.jpg"
+
+    def test_omits_url_when_thumbnail_missing(self, client, tmp_path):
+        # State file names a hash that no longer exists in the cache.
+        self._write_current_media(
+            tmp_path,
+            {"file": "a.jpg", "thumbnail_path": str(self._thumbs_dir(tmp_path) / "gone.jpg")},
+        )
+
+        assert self._current_media(client)["thumbnail_url"] is None
+
+    def test_omits_url_when_no_thumbnail_path(self, client, tmp_path):
+        self._write_current_media(tmp_path, {"file": "a.jpg", "thumbnail_path": None})
+
+        assert self._current_media(client)["thumbnail_url"] is None
+
+    def test_publishes_url_for_video_frame_cache(self, client, tmp_path):
+        frame = tmp_path / "clip.mp4.1.frame"
+        frame.write_bytes(b"\xff\xd8\xff")
+
+        self._write_current_media(tmp_path, {"file": "clip.mp4", "thumbnail_path": str(frame)})
+
+        assert self._current_media(client)["thumbnail_url"] == "/api/media/thumbnail/clip.mp4.1.frame"
 
 
 class TestDisplayModes:

@@ -9,6 +9,7 @@ public API plus the shared state (declared in ``base.BaseEngineState``).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import subprocess
@@ -125,54 +126,59 @@ class PresentationEngine(
     def _write_current_media(self) -> None:
         try:
             if self._current_idx < 0 or not self._queue:
-                data: dict[str, Any] = {
-                    "file": None,
-                    "index": -1,
-                    "total": 0,
-                    "paused": self._paused,
-                    "media_type": None,
-                    "thumbnail_path": None,
-                }
+                # No item is displayed.  Publish an empty file rather than a
+                # record with index=-1: the queue is transiently empty at
+                # startup and whenever the backend playlist is cleared while
+                # the optimisation pipeline rebuilds.  A published -1 is
+                # invisible to the dashboard (which keeps its last rendered
+                # value), so the UI stayed stuck on "No media playing" long
+                # after playback resumed.  Removing the file lets /api/health
+                # report current_media as null and the frontend rewrite it as
+                # soon as the first slide is shown.
+                current = run_path("current_media.json")
+                with contextlib.suppress(FileNotFoundError):
+                    current.unlink()
+                return
+
+            item = self._queue[self._current_idx]
+            # Resolve the thumbnail path:
+            # 1. Use the item's thumbnail_path (set by ImageProcessor
+            #    or merged from backend playlist).
+            # 2. Fall back to the hash-based thumbnail in cache/thumbnails/.
+            # 3. For videos: last resort is the raw first-frame cache (.1.frame).
+            thumb = None
+            if item.thumbnail_path is not None:
+                thumb = str(item.thumbnail_path)
             else:
-                item = self._queue[self._current_idx]
-                # Resolve the thumbnail path:
-                # 1. Use the item's thumbnail_path (set by ImageProcessor
-                #    or merged from backend playlist).
-                # 2. Fall back to the hash-based thumbnail in cache/thumbnails/.
-                # 3. For videos: last resort is the raw first-frame cache (.1.frame).
-                thumb = None
-                if item.thumbnail_path is not None:
-                    thumb = str(item.thumbnail_path)
-                else:
-                    # Fall back to hash-based thumbnail lookup.
-                    # CRITICAL: use original_path (NOT cached_path) because
-                    # thumbnails are always named after the ORIGINAL file's
-                    # content hash.  cached_path may point to the optimised
-                    # cache file whose content differs from the original,
-                    # producing a different hash that won't match any thumbnail.
-                    try:
-                        file_hash = content_hash(item.original_path)
-                        hash_thumb = resolve_install_path("cache/thumbnails") / f"{file_hash}.jpg"
-                        if hash_thumb.exists():
-                            thumb = str(hash_thumb)
-                    except OSError:
-                        pass
-                # Video-only: fall back to first-frame cache (backend-generated)
-                if (
-                    thumb is None
-                    and item.media_type == MediaType.VIDEO
-                    and item.first_frame_path is not None
-                    and item.first_frame_path.exists()
-                ):
-                    thumb = str(item.first_frame_path)
-                data = {
-                    "file": str(item.original_path.name) if item.original_path else "unknown",
-                    "index": self._current_idx,
-                    "total": len(self._queue),
-                    "paused": self._paused,
-                    "media_type": item.media_type.value,
-                    "thumbnail_path": thumb,
-                }
+                # Fall back to hash-based thumbnail lookup.
+                # CRITICAL: use original_path (NOT cached_path) because
+                # thumbnails are always named after the ORIGINAL file's
+                # content hash.  cached_path may point to the optimised
+                # cache file whose content differs from the original,
+                # producing a different hash that won't match any thumbnail.
+                try:
+                    file_hash = content_hash(item.original_path)
+                    hash_thumb = resolve_install_path("cache/thumbnails") / f"{file_hash}.jpg"
+                    if hash_thumb.exists():
+                        thumb = str(hash_thumb)
+                except OSError:
+                    pass
+            # Video-only: fall back to first-frame cache (backend-generated)
+            if (
+                thumb is None
+                and item.media_type == MediaType.VIDEO
+                and item.first_frame_path is not None
+                and item.first_frame_path.exists()
+            ):
+                thumb = str(item.first_frame_path)
+            data = {
+                "file": str(item.original_path.name) if item.original_path else "unknown",
+                "index": self._current_idx,
+                "total": len(self._queue),
+                "paused": self._paused,
+                "media_type": item.media_type.value,
+                "thumbnail_path": thumb,
+            }
             atomic_write_json(run_path("current_media.json"), data)
         except OSError:
             pass
