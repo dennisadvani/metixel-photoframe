@@ -97,6 +97,34 @@ def test_unknown_backend_override_is_rejected():
         del os.environ["METIXEL_DISPLAY_BACKEND"]
 
 
+def test_retired_backend_modules_stay_deleted():
+    """The pi3d-era backend module must not come back.
+
+    ``dispmanx_backend.py`` spent a release as a raising retirement stub, and
+    that stub was then deleted.  It has twice been restored to disk as a side
+    effect of editor/sync tooling, and the second time it was committed.  A
+    resurrected stub is worse than useless: its docstring promises it will
+    "fail loudly", but the factory no longer references it, so it is simply dead
+    code that misleads whoever reads ``display/`` next.
+
+    Asserting absence of the FILE (not just the symbol) is the point — importing
+    it would succeed, since nothing stops a module existing.
+    """
+    from pathlib import Path
+
+    display_dir = Path(__file__).resolve().parents[3] / "src" / "metixel" / "display"
+
+    for retired in ("dispmanx_backend.py", "shaders"):
+        assert not (display_dir / retired).exists(), (
+            f"{retired} was retired in 2.0.0 and must not be reinstated"
+        )
+
+    # The factory must not reference the retired backend by any spelling.
+    factory = (display_dir / "__init__.py").read_text(encoding="utf-8")
+    assert "dispmanx_backend" not in factory
+    assert "Pi3dBackend" not in factory
+
+
 def _on_raspberry_pi() -> bool:
     """Whether we are running on a Pi (which selects the Qt backend)."""
     from metixel.shared.platform import is_raspberry_pi

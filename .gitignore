@@ -34,6 +34,12 @@ build/
 *.img
 *.img.xz
 
+# Scratch files from ad-hoc debugging / one-shot migration scripts.
+# These are written and deleted during a session; if one is ever left behind or
+# restored by an editor/sync task it must not end up in a commit.
+.tmp_*
+*.tmp_*
+
 # Media files — user content, not source code
 media/
 scripts/pyside6_mpv_prototype/test_videos
