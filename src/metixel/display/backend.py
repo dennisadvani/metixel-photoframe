@@ -130,6 +130,24 @@ class DisplayBackend(ABC):
         """
         ...
 
+    # -- Overlay -------------------------------------------------------------
+
+    def present_overlay(self, elements: list[dict[str, Any]]) -> None:  # noqa: B027
+        """Composite overlay elements on top of the current frame.
+
+        Elements are the declarative dicts produced by
+        :meth:`~metixel.frontend.overlay.layer.OverlayLayer.render`, already
+        flattened and sorted by the overlay manager (largest ``z`` first).
+
+        Kept separate from :meth:`present` on purpose: the slideshow frame is
+        composed once per item, whereas overlay layers animate every frame
+        (boot spinner, message slide-in).  Folding them together would force a
+        full re-composite of the matte on every animation tick.
+
+        Default is a no-op, so a backend may present frames without overlay
+        support rather than being forced to implement it.
+        """
+
     # -- Artwork -------------------------------------------------------------
 
     @abstractmethod

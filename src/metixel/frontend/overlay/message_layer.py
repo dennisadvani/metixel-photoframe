@@ -48,6 +48,12 @@ SEVERITY_COLORS = {
 SEVERITY_ICONS = {"info": "i", "warning": "!", "error": "x", "success": "v"}
 
 
+def _hex(rgb: tuple[float, float, float]) -> str:
+    """Convert a 0..1 RGB triple to the ``#rrggbb`` the element contract uses."""
+    r, g, b = (int(max(0.0, min(1.0, c)) * 255) for c in rgb[:3])
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def _wrap_text(text: str, chars_per_line: int) -> list[str]:
     """Split text into lines at word boundaries, max *chars_per_line* per line."""
     words = text.split()
@@ -123,6 +129,10 @@ class MessageLayer(OverlayLayer):
         self._next_id = 0
         self._last_cleanup = 0.0
         self._video_playing = False
+        # Surface width, captured by ensure_ready().  render() runs every frame
+        # with no backend argument, so anything it needs from the backend has to
+        # be remembered from the one call that receives one.
+        self._screen_w: int = 0
 
     # -- Public API (thread-safe) -------------------------------------------
 
@@ -228,34 +238,150 @@ class MessageLayer(OverlayLayer):
                 m._alpha = 0.0
 
     def draw(self, backend: DisplayBackend) -> None:
-        self.reset_z()
-        # Lazy-init textures (created once, reused every frame)
-        if not hasattr(self, "_tex_bg"):
-            import numpy as np
+        """Deprecated — the overlay manager composites via :meth:`render`.
 
-            bg_arr = np.ones((1, 1, 3), dtype=np.uint8)
-            bg_arr[0, 0] = tuple(int(c * 255) for c in MSG_BG)
-            self._tex_bg = backend.load_texture(bg_arr)
-            accent_arr = np.ones((1, 1, 3), dtype=np.uint8)
-            accent_arr[0, 0] = tuple(int(c * 255) for c in ACCENT_COLOR)
-            self._tex_accent = backend.load_texture(accent_arr)
-        bw = backend.width
-        mw = MSG_WIDTH
-        margin = MSG_MARGIN
-        target_x = bw - mw - margin
+        Kept to satisfy the layer interface; message geometry and animation
+        live on in :meth:`render`, which returns a description rather than
+        issuing draw calls.
+        """
+
+    def ensure_ready(self, backend: DisplayBackend) -> None:
+        """Capture the display width needed to lay messages out.
+
+        ``render()`` takes no arguments and runs every frame, so the one piece
+        of backend state it needs — the surface width — is recorded here.
+        """
+        self._screen_w = backend.width
+
+    def render(self) -> list[dict[str, Any]]:
+        """Return this frame's message elements.
+
+        Ported from the old ``draw(backend)``: the slide animations, the
+        height-accumulated Y offsets and the text wrapping are unchanged.  Only
+        the mechanism differs — rect and text elements are returned instead of
+        issued as draw calls, because the backend no longer exposes primitives.
+
+        Background and accent bar are now ``rect`` elements rather than 1x1
+        textures: those existed solely to work around a pi3d colour-space bug in
+        ``draw_rect``, which the retained-mode canvas does not have.
+        """
+        if self._screen_w <= 0:
+            return []
+
+        self.reset_z()
+        elements: list[dict[str, Any]] = []
+
+        bw = self._screen_w
+        target_x = bw - MSG_WIDTH - MSG_MARGIN
 
         with self._lock:
             # Accumulate Y by summing actual heights of preceding visible
-            # messages — avoids gaps/overlaps when messages have different
-            # body lengths and therefore different computed heights.
-            y_offset = margin
+            # messages — avoids gaps/overlaps when messages have different body
+            # lengths and therefore different computed heights.
+            y_offset = MSG_MARGIN
             for m in self._msgs:
                 if not m.active:
                     continue
                 mh = self._msg_height(m)
                 m._y = y_offset
                 y_offset += mh + MSG_GAP
-                self._draw_one(backend, m, bw, target_x)
+                elements.extend(self._render_one(m, bw, target_x))
+
+        return elements
+
+    def _render_one(self, m: _Message, bw: int, target_x: int) -> list[dict[str, Any]]:
+        """Build the elements for one message, advancing its slide animation."""
+        # Compute the x position (animated).
+        if m.state == "sliding_in":
+            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_IN_MS
+            et = 1.0 - (1.0 - min(t, 1.0)) ** 3
+            m._x = bw + MSG_MARGIN - (bw + MSG_MARGIN - target_x) * et
+        elif m.state == "sliding_out":
+            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_OUT_MS
+            et = min(t, 1.0) ** 3
+            m._x = m._from_x + (bw + MSG_MARGIN - m._from_x) * et
+        else:
+            m._x = target_x
+
+        mh = self._msg_height(m)
+        x, y, alpha = m._x, m._y, m._alpha
+        if alpha <= 0.01:
+            return []
+
+        elements: list[dict[str, Any]] = []
+
+        # 1. Background panel.
+        elements.append(
+            {
+                "kind": "rect",
+                "rect": (x, y, MSG_WIDTH, mh),
+                "colour": _hex(MSG_BG),
+                "alpha": MSG_BG_ALPHA * alpha,
+                "z": self.next_z(),
+            }
+        )
+
+        # 2. Accent bar down the left edge.
+        elements.append(
+            {
+                "kind": "rect",
+                "rect": (x, y, MSG_ACCENT, mh),
+                "colour": _hex(ACCENT_COLOR),
+                "alpha": 1.0 * alpha,
+                "z": self.next_z(),
+            }
+        )
+
+        # 3. Icon.
+        icon_x = int(x + MSG_ACCENT + MSG_PADDING)
+        elements.append(
+            {
+                "kind": "text",
+                "text": m.icon,
+                "rect": (icon_x, int(y + 8), 0, 0),
+                "size": MSG_ICON_SIZE,
+                "colour": "#ffffff",
+                "alpha": MSG_TEXT_ALPHA * alpha,
+                "z": self.next_z(),
+            }
+        )
+
+        text_x = int(icon_x + MSG_ICON_SIZE + MSG_PADDING)
+
+        # 4. Title.
+        if m.title:
+            elements.append(
+                {
+                    "kind": "text",
+                    "text": m.title,
+                    "rect": (text_x, int(y + 6), 0, 0),
+                    "size": MSG_TITLE_SIZE,
+                    "colour": "#ffffff",
+                    "alpha": MSG_TEXT_ALPHA * alpha,
+                    "z": self.next_z(),
+                }
+            )
+
+        # 5. Body, wrapped to the available width.
+        if m.body:
+            body_start_y = int(y + MSG_TITLE_SIZE + 10) if m.title else int(y + 6)
+            char_w = MSG_BODY_SIZE * 0.55
+            avail_w = MSG_WIDTH - MSG_ACCENT - MSG_PADDING - MSG_ICON_SIZE - MSG_PADDING - 10
+            chars_per = max(20, int(avail_w / char_w))
+            for li, line in enumerate(_wrap_text(m.body, chars_per)[:5]):
+                elements.append(
+                    {
+                        "kind": "text",
+                        "text": line,
+                        "rect": (text_x, body_start_y + li * (MSG_BODY_SIZE + 4), 0, 0),
+                        "size": MSG_BODY_SIZE,
+                        "colour": "#c7c7d1",
+                        "alpha": MSG_TEXT_ALPHA * 0.9 * alpha,
+                        "z": self.next_z(),
+                    }
+                )
+
+        return elements
 
     @staticmethod
     def _msg_height(m: _Message) -> int:
@@ -275,75 +401,3 @@ class MessageLayer(OverlayLayer):
             h += body_lines * (MSG_BODY_SIZE + 4)
         # Ensure minimum height
         return max(h, 60)
-
-    def _draw_one(self, backend, m, bw, target_x):
-        # Compute message x position (animated)
-        if m.state == "sliding_in":
-            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_IN_MS
-            et = 1.0 - (1.0 - min(t, 1.0)) ** 3
-            m._x = bw + MSG_MARGIN - (bw + MSG_MARGIN - target_x) * et
-        elif m.state == "sliding_out":
-            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_OUT_MS
-            et = min(t, 1.0) ** 3
-            m._x = m._from_x + (bw + MSG_MARGIN - m._from_x) * et
-        else:
-            m._x = target_x
-
-        # Y position was computed by draw() via accumulated heights above
-        mh = self._msg_height(m)
-
-        x, y, alpha = m._x, m._y, m._alpha
-        if alpha <= 0.01:
-            return
-
-        # 1. Background — use draw_image (same as slideshow, correct colours)
-        backend.draw_image(
-            self._tex_bg, x, y, MSG_WIDTH, mh, alpha=MSG_BG_ALPHA * alpha, z=self.next_z()
-        )
-
-        # 2. Accent bar — use draw_image (bypasses draw_rect colour bug)
-        backend.draw_image(
-            self._tex_accent, x, y, MSG_ACCENT, mh, alpha=1.0 * alpha, z=self.next_z()
-        )
-
-        # 3. Icon — vertically centered in the box
-        icon_x = int(x + MSG_ACCENT + MSG_PADDING)
-        icon_y = int(y + 8)
-        backend.draw_text(
-            m.icon,
-            icon_x,
-            icon_y,
-            font_size=MSG_ICON_SIZE,
-            color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
-            z=self.next_z(),
-        )
-
-        # 4. Title — positioned higher, next to icon
-        text_x = int(icon_x + MSG_ICON_SIZE + MSG_PADDING)
-        if m.title:
-            backend.draw_text(
-                m.title,
-                text_x,
-                int(y + 6),
-                font_size=MSG_TITLE_SIZE,
-                color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
-                z=self.next_z(),
-            )
-
-        # 5. Body — wrapping support
-        if m.body:
-            # Estimate chars per line based on available pixel width
-            body_start_y = int(y + MSG_TITLE_SIZE + 10) if m.title else int(y + 6)
-            char_w = MSG_BODY_SIZE * 0.55
-            avail_w = MSG_WIDTH - MSG_ACCENT - MSG_PADDING - MSG_ICON_SIZE - MSG_PADDING - 10
-            chars_per = max(20, int(avail_w / char_w))
-            lines = _wrap_text(m.body, chars_per)
-            for li, line in enumerate(lines[:5]):  # max 5 lines
-                backend.draw_text(
-                    line,
-                    text_x,
-                    body_start_y + li * (MSG_BODY_SIZE + 4),
-                    font_size=MSG_BODY_SIZE,
-                    color=(0.78, 0.78, 0.82, MSG_TEXT_ALPHA * 0.9 * alpha),
-                    z=self.next_z(),
-                )

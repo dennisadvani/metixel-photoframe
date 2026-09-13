@@ -67,10 +67,14 @@ class BootLayer(OverlayLayer):
 
     def __init__(self) -> None:
         super().__init__("boot", OverlayLayer.Z_BOOT)
-        self._bg_tex: Any = None
         self._logo_tex: Any = None
         self._spinner_tex: Any = None
         self._tex_loaded: bool = False
+        # Display dimensions, captured in _compute_layout.  render() has no
+        # backend argument, so the size must be remembered from the one call
+        # that does.
+        self._screen_w: int = 0
+        self._screen_h: int = 0
 
         # State machine: "active" → "fading" → "done"
         self._state: str = "active"
@@ -95,9 +99,6 @@ class BootLayer(OverlayLayer):
         self._progress_h: int = 0
         self._progress_x: int = 0
         self._progress_y: int = 0
-        # 1×1 pixel textures for the progress bar (avoids draw_rect colour bugs)
-        self._progress_bg_tex: Any = None  # dark gray track
-        self._progress_fill_tex: Any = None  # red fill
         # Suppress the progress bar once the slideshow queue has enough
         # items to begin — avoids the bar cycling to 100% multiple times
         # on cached restarts where items process instantly.
@@ -209,122 +210,140 @@ class BootLayer(OverlayLayer):
                 logger.info("Boot screen fading out — slideshow is ready")
                 self._start_fade()
 
-    def draw(self, backend: DisplayBackend) -> None:
-        """Render logo + spinner.  Lazy-loads textures on first call."""
+    # -- Internal ------------------------------------------------------------
+
+    def ensure_ready(self, backend: DisplayBackend) -> None:
+        """Lazy-load textures and compute layout from the real display size.
+
+        Called by the overlay manager before :meth:`render`, because the layer
+        cannot know the display dimensions until a backend exists — and it must
+        not load textures from inside ``render()``, which is called every frame
+        and has no backend argument.
+        """
         if self._state == "done":
             return
-
-        # ── Lazy-init textures (first draw call only) ──────────────────
         if not self._tex_loaded:
             self._load_textures(backend)
-            # Start the minimum-display clock NOW — the boot screen is
-            # actually visible on screen for the first time.
+            # Start the minimum-display clock NOW: the boot screen is visible
+            # on screen for the first time.
             self._start_time = time.monotonic()
-
-        # ── Lazy-init layout (needs display dimensions) ────────────────
         if not self._layout_done:
             self._compute_layout(backend)
 
+    def render(self) -> list[dict[str, Any]]:
+        """Return the boot screen's elements for this frame.
+
+        Ported from the old ``draw(backend)``: the element geometry, alpha and
+        ordering are unchanged, and the z-values still come from :meth:`next_z`
+        in the same sequence so layering is identical.  Only the *mechanism*
+        changed — this returns a description instead of issuing draw calls,
+        because the backend no longer exposes drawing primitives.
+        """
+        if self._state == "done" or not self._layout_done:
+            return []
+
         self.reset_z()
+        elements: list[dict[str, Any]] = []
 
-        # ── Full-screen black background ───────────────────────────────
-        if self._bg_tex is not None:
-            backend.draw_image(
-                self._bg_tex,
-                0,
-                0,
-                backend.width,
-                backend.height,
-                alpha=self._alpha,
-                z=self.next_z(),
-            )
+        # Full-screen black background so the slideshow does not show through
+        # while the boot screen is up.
+        elements.append(
+            {
+                "kind": "rect",
+                "rect": (0, 0, self._screen_w, self._screen_h),
+                "colour": "#000000",
+                "alpha": self._alpha,
+                "z": self.next_z(),
+            }
+        )
 
-        # ── Logo ───────────────────────────────────────────────────────
         if self._logo_tex is not None:
-            backend.draw_image(
-                self._logo_tex,
-                self._logo_x,
-                self._logo_y,
-                self._logo_w,
-                self._logo_h,
-                alpha=self._alpha,
-                z=self.next_z(),
+            elements.append(
+                {
+                    "kind": "image",
+                    "image": self._logo_tex,
+                    "rect": (self._logo_x, self._logo_y, self._logo_w, self._logo_h),
+                    "alpha": self._alpha,
+                    "z": self.next_z(),
+                }
             )
 
-        # ── Spinner ────────────────────────────────────────────────────
         if self._spinner_tex is not None:
-            backend.draw_image(
-                self._spinner_tex,
-                self._spinner_x,
-                self._spinner_y,
-                self._spinner_size,
-                self._spinner_size,
-                alpha=self._alpha,
-                rotation=self._spinner_angle,
-                z=self.next_z(),
+            elements.append(
+                {
+                    "kind": "image",
+                    "image": self._spinner_tex,
+                    "rect": (
+                        self._spinner_x,
+                        self._spinner_y,
+                        self._spinner_size,
+                        self._spinner_size,
+                    ),
+                    "alpha": self._alpha,
+                    "rotation": self._spinner_angle,
+                    "z": self.next_z(),
+                }
             )
 
-        # ── Progress bar ───────────────────────────────────────────────
-        # Uses draw_image with 1×1 pixel textures instead of draw_rect
-        # to avoid colour-space issues (draw_rect may render wrong
-        # colours on some pi3d/OpenGL configurations).
-        # The bar only draws when we have a meaningful percentage
-        # and haven't been suppressed (queue already has enough items).
+        # Progress bar.  Rect elements rather than 1x1 textures: the old code
+        # used textures only to dodge a pi3d colour-space bug in draw_rect, and
+        # that bug does not exist on the retained-mode canvas.
         if self._progress_pct > 0.0 and self._progress_pct <= 100.0 and not self._progress_hidden:
-            # Lazy-init progress bar textures
-            if self._progress_bg_tex is None:
-                self._progress_bg_tex = self._make_pixel_tex(backend, (0.2, 0.2, 0.2))
-            if self._progress_fill_tex is None:
-                self._progress_fill_tex = self._make_pixel_tex(backend, (0.85, 0.15, 0.15))
-
             pct = self._progress_pct / 100.0
-            # Track (dark gray, full width)
-            if self._progress_bg_tex is not None:
-                backend.draw_image(
-                    self._progress_bg_tex,
-                    self._progress_x,
-                    self._progress_y,
-                    self._progress_w,
-                    self._progress_h,
-                    alpha=self._alpha,
-                    z=self.next_z(),
-                )
-            # Fill (red, clipped to percentage)
-            if self._progress_fill_tex is not None and pct > 0.0:
+            elements.append(
+                {
+                    "kind": "rect",
+                    "rect": (
+                        self._progress_x,
+                        self._progress_y,
+                        self._progress_w,
+                        self._progress_h,
+                    ),
+                    "colour": "#333333",
+                    "alpha": self._alpha,
+                    "z": self.next_z(),
+                }
+            )
+            if pct > 0.0:
                 fill_w = max(1, int(self._progress_w * pct))
-                backend.draw_image(
-                    self._progress_fill_tex,
-                    self._progress_x,
-                    self._progress_y,
-                    fill_w,
-                    self._progress_h,
-                    alpha=self._alpha,
-                    z=self.next_z(),
+                elements.append(
+                    {
+                        "kind": "rect",
+                        "rect": (self._progress_x, self._progress_y, fill_w, self._progress_h),
+                        "colour": "#d92626",
+                        "alpha": self._alpha,
+                        "z": self.next_z(),
+                    }
                 )
+
+        return elements
+
+    def draw(self, backend: DisplayBackend) -> None:
+        """Deprecated — the overlay manager composites via :meth:`render`.
+
+        Boot geometry is unchanged; this exists only to satisfy the layer
+        interface.  It deliberately does not draw, because issuing primitives is
+        no longer possible against the reduced backend.
+        """
 
     # -- Internal ------------------------------------------------------------
 
     def _load_textures(self, backend: DisplayBackend) -> None:
-        """Load logo, spinner, and background textures into GPU memory.
+        """Load logo, spinner, and progress-bar textures into display memory.
 
-        Logo and spinner are loaded via Pillow → numpy array so the
-        alpha channel is preserved.  Passing file paths directly to
-        ``load_texture()`` forces GL_RGB (no alpha) in the pi3d backend.
+        Logo and spinner are loaded via Pillow → numpy so the alpha channel
+        survives; passing the file path directly would drop alpha.
         """
         self._backend_ref = backend  # Keep reference for unload
 
         import numpy as np
         from PIL import Image
 
-        # 1×1 black pixel for full-screen background (avoids draw_rect colour issues)
-        black_arr = np.zeros((1, 1, 3), dtype=np.uint8)
-        self._bg_tex = backend.load_texture(black_arr)
-
         if _LOGO_PATH.is_file():
             try:
                 logo_img = Image.open(_LOGO_PATH).convert("RGBA")
                 logo_arr = np.array(logo_img, dtype=np.uint8)
-                self._logo_tex = backend.load_texture(logo_arr)
+                self._logo_tex = backend.load_image(logo_arr)
                 logger.debug("Boot logo loaded: %s", _LOGO_PATH.name)
             except Exception:
                 logger.exception("Failed to load boot logo texture")
@@ -335,7 +354,7 @@ class BootLayer(OverlayLayer):
             try:
                 spinner_img = Image.open(_SPINNER_PATH).convert("RGBA")
                 spinner_arr = np.array(spinner_img, dtype=np.uint8)
-                self._spinner_tex = backend.load_texture(spinner_arr)
+                self._spinner_tex = backend.load_image(spinner_arr)
                 logger.debug("Boot spinner loaded: %s", _SPINNER_PATH.name)
             except Exception:
                 logger.exception("Failed to load spinner texture")
@@ -348,6 +367,8 @@ class BootLayer(OverlayLayer):
         """Compute logo and spinner positions relative to display size."""
         dw = backend.width
         dh = backend.height
+        self._screen_w = dw
+        self._screen_h = dh
 
         # Logo: 60% screen width, centred, preserving aspect ratio
         self._logo_w = int(dw * _LOGO_WIDTH_RATIO)
@@ -447,32 +468,13 @@ class BootLayer(OverlayLayer):
         logger.info("Boot screen dismissed immediately (video starting)")
 
     def _unload_textures(self) -> None:
-        """Release GPU textures.  Safe to call multiple times."""
-        for attr in (
-            "_bg_tex",
-            "_logo_tex",
-            "_spinner_tex",
-            "_progress_bg_tex",
-            "_progress_fill_tex",
-        ):
-            tex = getattr(self, attr, None)
-            if tex is not None:
+        """Release image handles.  Safe to call multiple times."""
+        for attr in ("_logo_tex", "_spinner_tex"):
+            handle = getattr(self, attr, None)
+            if handle is not None:
                 try:
                     if hasattr(self, "_backend_ref"):
-                        self._backend_ref.unload_texture(tex)
+                        self._backend_ref.unload_image(handle)
                 except Exception:
-                    logger.debug("Failed to unload %s texture", attr, exc_info=True)
+                    logger.debug("Failed to unload %s", attr, exc_info=True)
                 setattr(self, attr, None)
-
-    @staticmethod
-    def _make_pixel_tex(backend: DisplayBackend, color: tuple[float, float, float]) -> Any:
-        """Create a 1×1 pixel texture of the given RGB color.
-
-        Used for the progress bar since ``draw_rect`` can produce
-        incorrect colours on some pi3d / OpenGL configurations.
-        """
-        import numpy as np
-
-        arr = np.zeros((1, 1, 3), dtype=np.uint8)
-        arr[0, 0] = [int(c * 255) for c in color]
-        return backend.load_texture(arr)

@@ -117,7 +117,39 @@ class OverlayLayer(ABC):
     def draw(self, backend: DisplayBackend) -> None:
         """Called every frame after :meth:`update`.  Render layer content.
 
-        Subclasses must call :meth:`reset_z` at the start of each
-        frame's draw and use :meth:`next_z` for each draw call.
+        Superseded by :meth:`render`.  It is retained on the interface because
+        the abstract method is what forces every layer to state its intent, but
+        a layer can no longer issue draw calls: the backend exposes
+        ``present(plan)`` rather than ``draw_image``/``draw_rect``, so a
+        ``draw()`` that called those would fail.
         """
         ...
+
+    def render(self) -> list[dict[str, Any]]:
+        """Return this layer's elements for the current frame.
+
+        Each element is a plain dict, so an overlay layer carries no rendering
+        dependency and stays testable without a backend or Qt:
+
+            {
+                "kind": "rect",           # "rect" | "image" | "text"
+                "rect": (x, y, w, h),     # pixels, screen coordinates
+                "colour": "#rrggbb",      # rect only
+                "image": <handle>,        # image only
+                "alpha": 0.0..1.0,        # optional, default 1.0
+                "rotation": degrees,      # optional, images only
+                "text": "...",            # text only
+                "size": 24,               # text only, points
+                "z": 0.0,                 # paint order
+            }
+
+        Elements are composited in ascending ``z`` — the largest z paints first,
+        the smallest last (closest to the viewer).  That matches the convention
+        the pi3d backend used with GL_LESS depth testing, so existing z-offsets
+        keep their meaning unchanged.
+
+        The default returns nothing, so a layer that has not been ported yet
+        simply draws nothing instead of crashing the frame.  Deliberate: a
+        missing overlay must never take down the slideshow.
+        """
+        return []
