@@ -2,12 +2,13 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Display backend abstraction layer.
 
-Provides a hardware-agnostic interface for 2D rendering. The factory function
-:func:`detect_backend` auto-selects the correct implementation based on the
-runtime environment (Raspberry Pi model, available drivers, etc.).
+Provides a hardware-agnostic interface for frame rendering.  The factory
+function :func:`detect_backend` auto-selects the correct implementation based on
+the runtime environment.
 
-On Trixie (Pi 2/3/Zero 2 W), pi3d uses Mesa EGL via cage/XWayland.
-On desktop, the TkBackend (tkinter) is used for testing.
+On a Raspberry Pi the backend is PySide6 + mpv (under cage); on a desktop the
+TkBackend (tkinter) is used for development, so the whole slideshow can be
+exercised without hardware.
 """
 
 from __future__ import annotations
@@ -29,61 +30,87 @@ def detect_backend() -> DisplayBackend:
     """Auto-detect the correct display backend for the current hardware.
 
     Detection order:
-    1. Check for ``METIXEL_DISPLAY_BACKEND`` environment variable override
-    2. On Raspberry Pi with pi3d installed: use Pi3dBackend (Mesa EGL)
-    3. On other Linux with a Wayland session: use WaylandBackend (Phase 2)
-    4. On desktop / unknown: use TkBackend (tkinter)
+    1. ``METIXEL_DISPLAY_BACKEND`` environment variable override (dev / debug)
+    2. On a Raspberry Pi: ``PySide6Backend`` (cage + Qt + mpv)
+    3. On Linux with a Wayland session but no Qt: ``WaylandBackend`` (Phase 2 stub)
+    4. Otherwise: ``TkBackend`` (tkinter) for desktop development
+
+    Preferring the Qt backend whenever it is *importable* rather than
+    additionally probing for a compositor is deliberate: on the Pi, cage always
+    provides Wayland, and a missing compositor should surface as a Qt startup
+    failure that the OTA health gate can catch — not as a silent fall back to a
+    dev renderer that shows a window nobody is looking at.
     """
     logger.info(
         "Detecting display backend: platform=%s, python=%s", sys.platform, sys.version.split()[0]
     )
 
-    # -- Environment variable override ---------------------------------------
-    env_backend = os.environ.get("METIXEL_DISPLAY_BACKEND", "").lower()
-    if env_backend:
-        logger.info("Display backend forced via env: %s", env_backend)
-        if env_backend in ("dispmanx", "pi3d"):
-            from metixel.display.dispmanx_backend import Pi3dBackend
+    forced = os.environ.get("METIXEL_DISPLAY_BACKEND", "").strip().lower()
+    if forced:
+        return _backend_for_override(forced)
 
-            return Pi3dBackend()
-        elif env_backend == "wayland":
-            from metixel.display.wayland_backend import WaylandBackend
+    # -- Raspberry Pi → PySide6 + mpv ----------------------------------------
+    if _is_raspberry_pi():
+        if _module_available("PySide6"):
+            logger.info("Detected Raspberry Pi → PySide6Backend (cage + Qt + mpv)")
+            from metixel.display.qt_backend import PySide6Backend
 
-            return WaylandBackend()
-        elif env_backend == "dev" or env_backend == "tk":
-            from metixel.display.tk_backend import TkBackend
-
-            return TkBackend()
-
-    # -- Check if running on a Raspberry Pi ----------------------------------
-    is_pi = _is_raspberry_pi()
-    has_pi3d = _pi3d_available()
-    logger.info("Hardware check: is_raspberry_pi=%s, pi3d_available=%s", is_pi, has_pi3d)
-
-    if is_pi and has_pi3d:
-        logger.info("Detected Raspberry Pi → Pi3dBackend (Mesa EGL via cage/XWayland)")
-        from metixel.display.dispmanx_backend import Pi3dBackend
-
-        return Pi3dBackend()
+            return PySide6Backend()
+        logger.error(
+            "Raspberry Pi detected but PySide6 is not installed — falling back to "
+            "the Tk dev backend, which cannot render on a KMS-only console. "
+            "Install the Qt packages (see requirements-system.txt)."
+        )
 
     # -- Linux with a Wayland session (non-Pi SBCs, Phase 2) -----------------
-    # Only auto-select WaylandBackend when a Wayland compositor is actually
-    # present — on plain desktop Linux (no Wayland) we fall through to the
-    # TkBackend dev renderer.
     if sys.platform == "linux" and (
         os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland"
     ):
-        logger.info("Detected Linux + Wayland → WaylandBackend")
+        logger.info("Detected Linux + Wayland → WaylandBackend (Phase 2 stub)")
         from metixel.display.wayland_backend import WaylandBackend
 
         return WaylandBackend()
 
     # -- Fallback: dev backend -----------------------------------------------
-    # Use tkinter (bundled with Python, zero extra dependencies).
     logger.info("Using TkBackend (tkinter) for desktop development")
     from metixel.display.tk_backend import TkBackend
 
     return TkBackend()
+
+
+def _backend_for_override(forced: str) -> DisplayBackend:
+    """Return the backend named by ``METIXEL_DISPLAY_BACKEND``.
+
+    This exists for development and diagnosis.  The Pi's systemd units no longer
+    set it — an ``auto`` value that selected a renderer is exactly the kind of
+    indirection that hides which backend is really running.
+    """
+    logger.info("Display backend forced via env: %s", forced)
+
+    if forced in ("qt", "pyside6", "auto"):
+        from metixel.display.qt_backend import PySide6Backend
+
+        return PySide6Backend()
+    if forced in ("tk", "dev"):
+        from metixel.display.tk_backend import TkBackend
+
+        return TkBackend()
+    if forced == "wayland":
+        from metixel.display.wayland_backend import WaylandBackend
+
+        return WaylandBackend()
+    if forced in ("dispmanx", "pi3d"):
+        # Retired in 2.0.0. Constructing it raises with an explanation rather
+        # than silently selecting something else, so a stale override on a
+        # device is diagnosed instead of ignored.
+        from metixel.display.dispmanx_backend import Pi3dBackend
+
+        return Pi3dBackend()
+
+    raise ValueError(
+        f"Unknown METIXEL_DISPLAY_BACKEND value: {forced!r}. "
+        "Valid values: qt, tk, wayland, dispmanx (retired)."
+    )
 
 
 def _is_raspberry_pi() -> bool:
@@ -95,44 +122,11 @@ def _is_raspberry_pi() -> bool:
     return is_pi
 
 
-def _pi3d_available() -> bool:
-    """Check if the pi3d library can be imported.
+def _module_available(name: str) -> bool:
+    """Return whether *name* can be imported, without importing it permanently."""
+    import importlib.util
 
-    pi3d auto-detects the correct EGL platform at runtime (Mesa EGL on
-    Trixie, or dispmanx on legacy Bullseye). We just need to know if
-    the library itself is installed.
-    """
     try:
-        import pi3d  # noqa: F401
-
-        return True
-    except ImportError:
-        logger.debug("pi3d not installed — Pi3dBackend unavailable")
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
         return False
-
-
-def _has_legacy_broadcom() -> bool:
-    """Check if the legacy Broadcom dispmanx driver is available.
-
-    This is only relevant on Bullseye (Debian 11) systems with the legacy
-    Broadcom graphics stack. On Trixie, the vc4 KMS driver is always used.
-    """
-    # The legacy driver provides EGL/GLES libs at /opt/vc/lib
-    if os.path.exists("/opt/vc/lib/libEGL.so") and os.path.exists("/opt/vc/lib/libGLESv2.so"):
-        # On RPi 4+, these may exist but KMS is active — check the driver in use
-        # A simple heuristic: if /dev/dri/card0 exists with vc4, it's KMS
-        if os.path.exists("/dev/dri/card0"):
-            # KMS is available — but on Bullseye with legacy, vc4 may coexist
-            # Check if dispmanx is actually available via vc_dispmanx helper
-            try:
-                with open("/proc/device-tree/soc/firmwarekms@7e000000/status") as f:
-                    status = f.read().strip()
-                    if status == "okay":
-                        logger.debug("firmwarekms is active — KMS in use")
-                        return False
-            except (OSError, FileNotFoundError):
-                pass
-            # On Bullseye with legacy, dispmanx should still be accessible
-            return True
-        return True
-    return False

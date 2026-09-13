@@ -23,28 +23,22 @@ def test_tk_backend_imports():
 def test_detect_backend_returns_tk():
     """On a non-Pi machine, detect_backend should return TkBackend.
 
-    When pi3d is importable (running on a Pi), it returns Pi3dBackend instead.
+    On a Raspberry Pi it returns the PySide6 backend instead, so the assertion
+    is conditional on the hardware rather than hard-coded.
     """
     pytest.importorskip("tkinter", reason="tkinter not installed (headless Pi)")
     from metixel.display import detect_backend
-    from metixel.display.tk_backend import TkBackend
-
-    # Check if we're on a Pi with pi3d available
-    try:
-        import pi3d  # noqa: F401
-
-        on_pi = True
-    except ImportError:
-        on_pi = False
 
     backend = detect_backend()
-    if on_pi:
-        from metixel.display.dispmanx_backend import Pi3dBackend
+    if _on_raspberry_pi():
+        from metixel.display.qt_backend import PySide6Backend
 
-        assert isinstance(backend, Pi3dBackend), (
-            f"On Pi with pi3d, expected Pi3dBackend, got {type(backend).__name__}"
+        assert isinstance(backend, PySide6Backend), (
+            f"On a Pi, expected PySide6Backend, got {type(backend).__name__}"
         )
     else:
+        from metixel.display.tk_backend import TkBackend
+
         assert isinstance(backend, TkBackend), (
             f"On non-Pi, expected TkBackend, got {type(backend).__name__}"
         )
@@ -56,9 +50,50 @@ def test_detect_backend_env_override():
     import os
 
     os.environ["METIXEL_DISPLAY_BACKEND"] = "tk"
-    from metixel.display import detect_backend
-    from metixel.display.tk_backend import TkBackend
+    try:
+        from metixel.display import detect_backend
+        from metixel.display.tk_backend import TkBackend
 
-    backend = detect_backend()
-    assert isinstance(backend, TkBackend)
-    del os.environ["METIXEL_DISPLAY_BACKEND"]
+        assert isinstance(detect_backend(), TkBackend)
+    finally:
+        del os.environ["METIXEL_DISPLAY_BACKEND"]
+
+
+def test_retired_pi3d_override_fails_loudly():
+    """A stale ``dispmanx`` override must be diagnosed, not silently ignored.
+
+    pi3d was removed in 2.0.0. A device carrying the old override should say so
+    plainly, because the alternative — quietly selecting a different renderer —
+    leaves an operator believing they are running the pi3d path.
+    """
+    import os
+
+    os.environ["METIXEL_DISPLAY_BACKEND"] = "dispmanx"
+    try:
+        from metixel.display import detect_backend
+
+        with pytest.raises(RuntimeError, match="removed in Metixel 2.0.0"):
+            detect_backend()
+    finally:
+        del os.environ["METIXEL_DISPLAY_BACKEND"]
+
+
+def test_unknown_backend_override_is_rejected():
+    """A typo in the override must not silently fall through to a default."""
+    import os
+
+    os.environ["METIXEL_DISPLAY_BACKEND"] = "qt6-wayland-please"
+    try:
+        from metixel.display import detect_backend
+
+        with pytest.raises(ValueError, match="Unknown METIXEL_DISPLAY_BACKEND"):
+            detect_backend()
+    finally:
+        del os.environ["METIXEL_DISPLAY_BACKEND"]
+
+
+def _on_raspberry_pi() -> bool:
+    """Whether we are running on a Pi (which selects the Qt backend)."""
+    from metixel.shared.platform import is_raspberry_pi
+
+    return bool(is_raspberry_pi())

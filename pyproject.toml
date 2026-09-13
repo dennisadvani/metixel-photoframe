@@ -95,9 +95,15 @@ module = [
     "pi3d",
     "pi3d.*",
     "evdev",
-    # matplotlib is an OPTIONAL extra (the `viz` viewing tool only) and is
-    # deliberately absent from CI.  `visualize_framing` imports it lazily, so
-    # the code is correct without it; mypy just cannot resolve the stubs.
+    # PySide6 is installed from apt on the Pi, never from pip, and is
+    # deliberately absent from CI.  The Qt backend imports it lazily inside
+    # `create()` so the module stays importable without it; mypy cannot resolve
+    # the stubs on a machine where it is not installed.
+    "PySide6",
+    "PySide6.*",
+    # python-mpv provides the libmpv render API.  Pi-only system package.
+    "mpv",
+    # matplotlib is an OPTIONAL extra (the `viz` viewing tool only).
     "matplotlib",
     "matplotlib.*",
 ]

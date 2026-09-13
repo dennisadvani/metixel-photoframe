@@ -76,31 +76,13 @@ class WaylandBackend(DisplayBackend):
     def swap_buffers(self):
         pass
 
-    def draw_rect(self, x, y, w, h, color=(0, 0, 0, 1), z=0.0):
+    def present(self, plan, image=None):
         raise NotImplementedError("WaylandBackend stub")
 
-    def draw_image(
-        self,
-        texture,
-        x,
-        y,
-        w,
-        h,
-        alpha=1.0,
-        rotation=0.0,
-        z=0.0,
-        uv_offset=(0.0, 0.0),
-        uv_scale=(1.0, 1.0),
-    ):
+    def load_image(self, path):
         raise NotImplementedError("WaylandBackend stub")
 
-    def load_texture(self, path, **kwargs):
-        raise NotImplementedError("WaylandBackend stub")
-
-    def unload_texture(self, texture):
-        raise NotImplementedError("WaylandBackend stub")
-
-    def draw_text(self, text, x, y, font_size=24, color=(1, 1, 1, 1), z=10.0):
+    def unload_image(self, handle):
         raise NotImplementedError("WaylandBackend stub")
 
     def set_background(self, color):
