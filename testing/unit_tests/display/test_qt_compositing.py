@@ -35,78 +35,83 @@ def _source(path: Path) -> str:
 
 
 class TestVideoMatteComposition:
-    """The canvas must stay visible over a playing video so it can paint the mat.
+    """The video must appear inside the same virtual mat as a photo.
 
-    Regression: ``QStackedLayout`` was set to ``StackOne`` while the comments and
-    ``present()`` both assumed raise-based layering.  Under ``StackOne`` only the
-    current widget is visible, so showing the mpv widget hid the canvas — and the
-    canvas is what paints the ring.  Video therefore filled the surface with no
-    mat, while photos were unaffected (they never switch pages).
+    This has now been wrong in three different ways, each with a symptom that did
+    not point at its cause, so the guards below pin the STRUCTURE that makes the
+    matte work rather than any particular idiom:
+
+    1. ``QStackedLayout(StackOne)`` — only the current widget is visible, so
+       bringing the mpv widget forward hid the canvas that painted the ring.
+       Video filled the surface with no matte; photos were unaffected because
+       they never switch pages.
+    2. ``QStackedLayout(StackAll)`` — both visible, but the swap path wedged: the
+       main thread sat in ``QWaylandWindow::waitForFrameSync`` burning a core, so
+       the event loop never returned to the presenter and the slideshow froze on
+       the first video.
+    3. Canvas painting the ring over mpv through a transparent hole — a
+       ``WA_OpaquePaintEvent`` widget that leaves part of itself unpainted gives
+       undefined framebuffer content, which Qt rendered as a solid black
+       rectangle where the video should be.
+
+    The working structure is the prototype's: a plain layout, and the widget that
+    renders the video also paints its own matte.
     """
 
-    def test_stacking_mode_is_stack_all(self) -> None:
-        """StackOne hides the non-current widget, which defeats the matte."""
+    def test_uses_a_plain_layout_not_a_stacked_one(self) -> None:
+        """No QStackedLayout: it has a 'current page' that fights raise_()."""
         source = _source(_BACKEND)
-        assert "StackingMode.StackAll" in source, (
-            "the canvas and the mpv widget must BOTH be visible; StackOne makes "
-            "them mutually exclusive pages and hides the matte during video"
+        assert "QStackedLayout" not in source.replace(
+            "# QStackedLayout was tried twice", ""
+        ).replace("# The prototype never uses QStackedLayout", ""), (
+            "QStackedLayout must not be used; it failed twice, once by hiding the "
+            "canvas (no matte) and once by wedging the Wayland swap path"
         )
-        assert "StackingMode.StackOne" not in source, (
-            "StackOne is the bug: it hides the canvas (and with it the matte) "
-            "whenever the mpv widget is current"
-        )
+        assert "QVBoxLayout" in source
 
-    def test_mpv_is_beneath_the_canvas(self) -> None:
-        """Z-order: mpv underneath, canvas painting the ring over it."""
+    def test_mpv_widget_is_added_before_the_canvas(self) -> None:
+        """Z-order: canvas added last so it starts on top for photos."""
         source = _source(_BACKEND)
-        # Instead of positional parsing, assert both are added and the mpv one
-        # is added first (QStackedLayout raises the most recently added).
         mpv_add = source.index("layout.addWidget(self._mpv_widget)")
         canvas_add = source.index("layout.addWidget(self._canvas)")
-        assert mpv_add < canvas_add, (
-            "the mpv widget must be added BEFORE the canvas so the canvas is on "
-            "top and can paint the matte over the video"
-        )
+        assert mpv_add < canvas_add
 
-    def test_play_video_does_not_switch_pages(self) -> None:
-        """Starting a video must not hide the canvas."""
+    def test_the_mpv_widget_paints_its_own_matte(self) -> None:
+        """One widget owning video AND matte is the whole point.
+
+        Compositing the ring from a separate widget above the video requires a
+        transparent hole, which Qt renders as black.  If this ever moves back out
+        of MpvRenderWidget, the black rectangle returns.
+        """
+        source = _source(_MPV)
+        assert "def _paint_matte_over_video" in source
+        assert "def set_matte" in source
+        # And it is actually called from the video paint path.
+        assert "self._paint_matte_over_video(w, h)" in source
+
+    def test_matte_bands_exclude_the_artwork_rect(self) -> None:
+        """Only the ring layers are painted; the artwork rect is the video hole."""
         source = _source(_BACKEND)
-        assert "setCurrentWidget(self._mpv_widget)" not in source, (
-            "play_video must not switch the stacked layout to the mpv widget — "
-            "that hides the canvas and the matte with it"
-        )
-        assert "set_video_underlay(True)" in source
+        # The band builder must cover exactly the three ring layers.
+        for layer in ("plan.whitespace", "plan.matte", "plan.moulding"):
+            assert layer in source, f"{layer} must paint over the video"
+        # artwork_dst must NOT be painted, or the video would be hidden.
+        assert "_add(plan.artwork_dst" not in source
 
-    def test_stop_video_restores_the_artwork_layer(self) -> None:
-        """The transparent Mat Window must be closed again after playback."""
+    def test_stop_video_clears_the_matte_bands(self) -> None:
+        """A stale ring must not survive into the next photo."""
         source = _source(_BACKEND)
-        assert "set_video_underlay(False)" in source, (
-            "leaving the underlay enabled makes every later photo render with a "
-            "transparent middle, revealing the black container"
+        assert "set_matte(None)" in source, (
+            "stop_video must clear the bands, or the video's frame is left "
+            "painted over the following photo"
         )
 
-    def test_canvas_skips_the_fill_under_the_video(self) -> None:
-        """An opaque full-rect fill would hide mpv's frames entirely."""
-        source = _source(_CANVAS)
-        assert "_video_underlay" in source
-        # The background fill must be conditional on the underlay being off.
-        assert "if not self._video_underlay:" in source
-        # And the artwork must not be drawn over the hole.
-        assert "and not self._video_underlay" in source
-
-    def test_ring_layers_still_paint_over_video(self) -> None:
-        """The matte itself must NOT be conditional — it paints in both modes."""
-        tree = ast.parse(_source(_CANVAS))
-        fill_calls = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.For)
-            and isinstance(node.iter, ast.Attribute)
-            and node.iter.attr in {"matte", "moulding", "whitespace"}
-        ]
-        assert len(fill_calls) == 3, (
-            "expected the matte, moulding and whitespace loops to be unconditional "
-            "so the frame paints over video as well as photos"
+    def test_present_does_not_raise_the_canvas_over_video(self) -> None:
+        """Raising the canvas during video would cover the frame."""
+        source = _source(_BACKEND)
+        # The video branch of present() must raise the mpv widget, not the canvas.
+        assert "self._mpv_widget.raise_()" in source, (
+            "present() must keep mpv on top while a video plays"
         )
 
 

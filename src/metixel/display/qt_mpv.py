@@ -92,6 +92,9 @@ class MpvRenderWidget(QOpenGLWidget):
         self._paused = False
         self._eof = False
         self._playing = False
+        # (QRect, QColor) pairs painted over the video each frame, covering the
+        # ring layers.  Set by the backend from the current RenderPlan.
+        self._matte_rects: list[tuple[Any, Any]] | None = None
 
         self.frame_ready.connect(self.update)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -315,10 +318,42 @@ class MpvRenderWidget(QOpenGLWidget):
         # wreck frame pacing on GPUs without swap control.
         QTimer.singleShot(0, self._report_swap)
 
-        # mpv letterboxes within the full widget, so nothing is painted here.
-        # The matte ring is drawn by FrameCanvas, which sits above this widget.
+        self._paint_matte_over_video(w, h)
+
+    def _paint_matte_over_video(self, w: int, h: int) -> None:
+        """Paint the matte ring over the video, in THIS widget.
+
+        mpv renders full-size into the widget's framebuffer and letterboxes the
+        video itself (object-fit: contain).  The matte is then painted on top,
+        leaving only the artwork rectangle showing video — the same recipe the
+        working prototype uses.
+
+        Doing it here rather than in the canvas above matters: a transparent hole
+        in an overlying widget depends on Qt compositing two surfaces correctly,
+        which is exactly what produced a black rectangle instead of video.  One
+        widget owning both the video and its matte has no such dependency.
+        """
+        if self._matte_rects is None:
+            return
         painter = QPainter(self)
-        painter.end()
+        try:
+            for rect, colour in self._matte_rects:
+                painter.fillRect(rect, colour)
+        except Exception:
+            logger.debug("matte paint failed", exc_info=True)
+        finally:
+            painter.end()
+
+    def set_matte(self, bands: list[tuple[Any, Any]] | None) -> None:
+        """Set the matte bands to paint over the video.
+
+        ``bands`` is a list of ``(QRect, QColor)`` pairs covering the ring layers
+        (whitespace, mat, moulding) — everything except the artwork rectangle.
+        ``None`` clears them, which is what a backend should do when playback
+        stops so a stale ring is never left behind.
+        """
+        self._matte_rects = bands
+        self.update()
 
     def _report_swap(self) -> None:
         """Tell mpv the frame reached the display."""

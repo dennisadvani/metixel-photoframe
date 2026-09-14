@@ -73,6 +73,7 @@ class PySide6Backend(DisplayBackend):
         self._app: Any = None
         self._window: Any = None
         self._container: Any = None
+        self._layout: Any = None
         self._canvas: Any = None
         self._mpv_widget: Any = None
         self._running: bool = False
@@ -161,29 +162,40 @@ class PySide6Backend(DisplayBackend):
         logger.info("mpv hardware decoding: %s", hwdec)
         self._mpv_widget = MpvRenderWidget(hwdec=hwdec)
 
-        from PySide6.QtWidgets import QStackedLayout, QWidget
+        from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-        # A plain container with a stacked layout, NOT a QStackedWidget: switching
-        # pages in a QStackedWidget hides the mpv widget, which tears down its GL
-        # context and forces a re-init on the next video (dropping the video
-        # track).  Keeping both children alive and only changing which one is
-        # raised avoids that entirely.
+        # A plain QVBoxLayout with both children present, using raise_() for
+        # z-order.  This mirrors the prototype
+        # (prototypes/graphics_engines/pyside6_mpv_prototype/slideshow.py), which
+        # is known to work on a Pi 5 under cage.
         #
-        # StackAll (NOT StackOne) is load-bearing, and getting it wrong is not
-        # obvious from the symptom.  Under StackOne only the *current* widget is
-        # visible, so `setCurrentWidget(mpv_widget)` hides the canvas — and the
-        # canvas is what paints the matte ring.  The result is video filling the
-        # whole surface with no virtual mat, while every photo still gets one
-        # (photos never switch pages).  StackAll makes both children visible at
-        # once, with `raise_()` deciding the z-order, which is what the design
-        # above actually requires: mpv underneath, canvas painting the ring over
-        # it in the same frame.
+        # QStackedLayout was tried twice and failed twice, in ways whose symptoms
+        # did not point at the layout:
+        #
+        #   StackOne — only the *current* widget is visible, so bringing the mpv
+        #     widget forward hid the canvas.  Video then filled the surface with
+        #     no matte, while photos were fine (they never switch pages).
+        #   StackAll — both visible, but the swap path wedged: the main thread sat
+        #     in QWaylandWindow::waitForFrameSync burning a core, so the event
+        #     loop never returned to the presenter and the slideshow froze on the
+        #     first video.
+        #
+        # The prototype never uses QStackedLayout at all.  A plain layout has no
+        # notion of a "current" page to fight raise_() over, which is precisely
+        # the ambiguity that caused both failures.
+        #
+        # Order matters once, at construction: add mpv first and canvas second so
+        # the canvas ends up on top and can paint the matte ring over the video.
+        # The video sits underneath, showing through the hole the canvas leaves
+        # in the Mat Window (see FrameCanvas.set_video_underlay).
         container = QWidget()
-        layout = QStackedLayout(container)
-        layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self._mpv_widget)
         layout.addWidget(self._canvas)
+        self._canvas.raise_()
+        self._layout = layout
 
         self._window = container
         container.setWindowTitle("Metixel Photoframe")
@@ -358,20 +370,35 @@ class PySide6Backend(DisplayBackend):
     # -- Frame presentation --------------------------------------------------
 
     def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
-        """Paint *plan* on the canvas, raising it above the mpv surface.
+        """Paint *plan* on the canvas.
 
-        When a video is playing the canvas is still on top, painting only the
-        ring layers over mpv's output — which is how the virtual mat composites
-        over live video without a second framebuffer.
+        Two distinct cases, and conflating them is what produced a black
+        rectangle instead of video:
+
+        * **Photo** (``image`` given) — the canvas is raised and paints the
+          artwork *and* the rings.  It is the only visible surface.
+        * **Video** (``image`` is ``None``) — the mpv widget is raised and paints
+          the video plus its own matte (see ``MpvRenderWidget``).  The canvas must
+          NOT be raised here or it would cover the video; the only thing the
+          canvas still owns over video is the overlay, and ``present_overlay``
+          handles that.
 
         ``alpha`` applies to the artwork, so two complementary calls produce the
         crossfade.  The rings always paint opaque.
         """
         if self._canvas is None or self._window is None:
             return
-        # Raise the canvas for the image path; for video the canvas must ALSO be
-        # on top (it paints the matte), but its artwork layer is skipped by
-        # passing image=None, so mpv's frames show through the middle.
+
+        if self._video_path is not None and image is None:
+            # Video case: mpv owns the frame and the matte.  Keep the canvas
+            # beneath it and refresh the mpv widget's matte from the new plan, so
+            # a config change (style, ambient) is reflected without a restart.
+            if self._mpv_widget is not None:
+                self._mpv_widget.set_matte(self._matte_bands(plan))
+                self._mpv_widget.raise_()
+            self._canvas.update_plan(plan, None, alpha)
+            return
+
         self._canvas.raise_()
         self._canvas.update_plan(plan, image, alpha)
         self._canvas.update()
@@ -448,35 +475,61 @@ class PySide6Backend(DisplayBackend):
     # -- Video ---------------------------------------------------------------
 
     def play_video(self, path: Path, plan: RenderPlan) -> bool:
-        """Start mpv playback with the canvas painting the matte over it.
+        """Start mpv playback with the video matted by its own widget.
 
         Returns ``False`` when the mpv pipeline is unavailable so the presenter
         advances instead of waiting for frames that will never arrive.
 
-        The mpv widget is *not* brought to the front.  It is already underneath
-        (see ``create``), and the canvas above it keeps painting the ring layers
-        while leaving the Mat Window transparent — that is what puts a video in
-        the same virtual mat as a photo.
+        The mpv widget paints the matte itself (see ``MpvRenderWidget``), so the
+        video and its frame are one surface — the same structure the working
+        prototype uses.  Compositing the matte from a *separate* widget above the
+        video required a transparent hole in that widget, which Qt rendered as a
+        black rectangle.
         """
         if self._mpv_widget is None:
             return False
         try:
             self._video_path = Path(path)
-            # The canvas keeps its z-order; only its middle becomes a hole.
-            self._canvas.set_video_underlay(True)
+            self._mpv_widget.set_matte(self._matte_bands(plan))
+            # mpv must be on top while it plays; the canvas keeps painting the
+            # overlay (clock, messages) which lives above everything.
+            self._mpv_widget.raise_()
             self._canvas.raise_()
             self._mpv_widget.ensure_gl_init()
             self._mpv_widget.play(str(path))
-            # Paint the frame's ring layers over the live video by presenting the
-            # plan with no artwork.
-            self.present(plan, image=None)
             return True
         except Exception:
             logger.warning("mpv failed to play %s", path, exc_info=True)
             return False
 
+    def _matte_bands(self, plan: RenderPlan) -> list[tuple[Any, Any]]:
+        """Convert a plan's ring layers into ``(QRect, QColor)`` paints.
+
+        Only the ring layers are returned — the artwork rectangle is the hole the
+        video shows through.  The plan guarantees those layers are disjoint from
+        the artwork, which is what makes painting them unconditionally correct.
+        """
+        from PySide6.QtCore import QRect
+        from PySide6.QtGui import QColor
+
+        bands: list[tuple[Any, Any]] = []
+
+        def _add(rects: Any, colour_spec: str) -> None:
+            colour = QColor(colour_spec)
+            if not colour.isValid():
+                colour = QColor(128, 128, 128)
+            for x, y, w, h in rects or ():
+                if w > 0 and h > 0:
+                    bands.append((QRect(int(x), int(y), int(w), int(h)), colour))
+
+        _add(plan.whitespace, plan.whitespace_colour)
+        _add(plan.matte, plan.matte_colour)
+        # The moulding reads as the outer frame edge.  Black, matching the canvas.
+        _add(plan.moulding, "#000000")
+        return bands
+
     def stop_video(self) -> None:
-        """Stop playback and repaint the Mat Window.  Idempotent."""
+        """Stop playback and drop the matte bands.  Idempotent."""
         if self._mpv_widget is None:
             return
         try:
@@ -485,10 +538,11 @@ class PySide6Backend(DisplayBackend):
             logger.debug("Error stopping mpv", exc_info=True)
         finally:
             self._video_path = None
-            # Close the hole again, or the frame behind the video would stay
-            # transparent and show the black container.
+            # Clear the bands so a stale ring is never left over a photo.
+            if self._mpv_widget is not None:
+                self._mpv_widget.set_matte(None)
             if self._canvas is not None:
-                self._canvas.set_video_underlay(False)
+                self._canvas.raise_()
                 self._canvas.update()
 
     def pause_video(self, paused: bool = True) -> None:
