@@ -61,6 +61,34 @@ logger = logging.getLogger(__name__)
 _QT_READY = False
 
 
+def _make_resize_filter(callback: Any) -> Any:
+    """Build a QObject that invokes ``callback`` on its parent's resize.
+
+    ``installEventFilter`` requires a ``QObject``, and ``PySide6Backend`` is a
+    plain class (it derives from ``DisplayBackend``, an ABC).  Passing the backend
+    directly raised::
+
+        TypeError: installEventFilter called with wrong argument types
+          QObject.installEventFilter(PySide6Backend)
+
+    which escaped from ``create()`` as a startup failure and crash-looped the
+    service 39 times.  This factory is defined lazily because ``QObject`` only
+    exists once Qt is importable — CI has no Qt and must still import this module.
+    """
+    from PySide6.QtCore import QEvent, QObject
+
+    class _ResizeFilter(QObject):
+        def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802
+            if event.type() == QEvent.Type.Resize:
+                try:
+                    callback()
+                except Exception:
+                    logger.debug("relayout on resize failed", exc_info=True)
+            return False
+
+    return _ResizeFilter()
+
+
 class PySide6Backend(DisplayBackend):
     """Qt + mpv display backend for the Raspberry Pi.
 
@@ -73,7 +101,7 @@ class PySide6Backend(DisplayBackend):
         self._app: Any = None
         self._window: Any = None
         self._container: Any = None
-        self._layout: Any = None
+        self._resize_filter: Any = None
         self._canvas: Any = None
         self._mpv_widget: Any = None
         self._running: bool = False
@@ -162,40 +190,36 @@ class PySide6Backend(DisplayBackend):
         logger.info("mpv hardware decoding: %s", hwdec)
         self._mpv_widget = MpvRenderWidget(hwdec=hwdec)
 
-        from PySide6.QtWidgets import QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QWidget
 
-        # A plain QVBoxLayout with both children present, using raise_() for
-        # z-order.  This mirrors the prototype
-        # (prototypes/graphics_engines/pyside6_mpv_prototype/slideshow.py), which
-        # is known to work on a Pi 5 under cage.
+        # Two surfaces must OVERLAY, not tile.  This is the subtlety that took
+        # three attempts to get right:
         #
-        # QStackedLayout was tried twice and failed twice, in ways whose symptoms
-        # did not point at the layout:
+        # A QVBoxLayout *allocates* space to each visible child, so two visible
+        # widgets end up stacked vertically at half height each — which is
+        # exactly what "the slideshow is drawn halfway down the screen" was.  The
+        # canvas then occupied only the bottom half, so its artwork "hole" was
+        # nowhere near the video and the matte read as solid black.
         #
-        #   StackOne — only the *current* widget is visible, so bringing the mpv
-        #     widget forward hid the canvas.  Video then filled the surface with
-        #     no matte, while photos were fine (they never switch pages).
-        #   StackAll — both visible, but the swap path wedged: the main thread sat
-        #     in QWaylandWindow::waitForFrameSync burning a core, so the event
-        #     loop never returned to the presenter and the slideshow froze on the
-        #     first video.
+        # The prototype never overlays them either: it shows exactly ONE widget at
+        # a time (hide() the other, which frees its layout space) and raise_()s the
+        # visible one.  But metixel needs BOTH visible at once, because the canvas
+        # paints the overlay (clock, messages) above a playing video.
         #
-        # The prototype never uses QStackedLayout at all.  A plain layout has no
-        # notion of a "current" page to fight raise_() over, which is precisely
-        # the ambiguity that caused both failures.
-        #
-        # Order matters once, at construction: add mpv first and canvas second so
-        # the canvas ends up on top and can paint the matte ring over the video.
-        # The video sits underneath, showing through the hole the canvas leaves
-        # in the Mat Window (see FrameCanvas.set_video_underlay).
+        # So: no layout manager at all.  Both widgets are children of the
+        # container and are given the full geometry explicitly by _relayout(),
+        # with raise_() deciding z-order.  Manual geometry is the correct tool for
+        # a deliberate overlay; a layout manager is the wrong tool for it.
         container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-        layout.addWidget(self._mpv_widget)
-        layout.addWidget(self._canvas)
+        self._mpv_widget.setParent(container)
+        self._canvas.setParent(container)
         self._canvas.raise_()
-        self._layout = layout
+        self._container = container
+
+        # Keep both children exactly container-sized, on every resize.  The filter
+        # must be a QObject, so it comes from a factory rather than being `self`.
+        self._resize_filter = _make_resize_filter(self._on_container_resized)
+        container.installEventFilter(self._resize_filter)
 
         self._window = container
         container.setWindowTitle("Metixel Photoframe")
@@ -233,14 +257,9 @@ class PySide6Backend(DisplayBackend):
             )
 
         self._width, self._height = self._read_surface_size(container)
-        # Keep the size current for the rest of the session.  The callback is
-        # invoked from FrameCanvas.resizeEvent, NOT from an event filter here:
-        # installEventFilter requires a QObject, and this backend is a plain
-        # Python class.  Passing it was a TypeError that crash-looped the service
-        # 39 times on hardware, because create() is called before the render loop
-        # so the exception escaped as a startup failure.
-        self._canvas.set_resize_callback(self._on_surface_resized)
-        self._container = container
+        # Both children must fill the container exactly; there is no layout
+        # manager to do it, so do it explicitly now and on every resize.
+        self._relayout(container)
         self._running = True
 
         global _QT_READY
@@ -257,9 +276,40 @@ class PySide6Backend(DisplayBackend):
 
     # -- Surface size --------------------------------------------------------
 
-    @staticmethod
-    def _read_surface_size(container: Any) -> tuple[int, int]:
-        """Return the container's size, falling back to sensible defaults."""
+    def _relayout(self, container: Any = None) -> None:
+        """Give both children the full container geometry.
+
+        There is deliberately no layout manager.  A QVBoxLayout would tile the two
+        widgets vertically (half height each), which is what made the slideshow
+        render halfway down the screen and left the canvas's artwork hole
+        somewhere other than over the video.  A QStackedLayout would make them
+        mutually exclusive pages.  We need them to OVERLAY, so the geometry is set
+        by hand and raise_() decides which is on top.
+
+        The mpv widget is set first and the canvas second so the canvas stays the
+        upper sibling for photos; the z-order is then adjusted per frame by
+        raise_() in present()/play_video().
+        """
+        target = container if container is not None else self._container
+        if target is None:
+            return
+        rect = target.rect()
+        for widget in (self._mpv_widget, self._canvas):
+            if widget is not None:
+                widget.setGeometry(rect)
+
+    def _read_surface_size(self, container: Any) -> tuple[int, int]:
+        """Return the surface size, preferring the launcher's authoritative value.
+
+        The compositor configures a Wayland surface asynchronously, so a read
+        taken here can still be a placeholder.  ``cage_launch.sh`` has already
+        queried the compositor's output geometry via ``wlr-randr``, so its value
+        wins when present; otherwise fall back to the container, then to sensible
+        defaults.
+        """
+        launch = self._launch_surface_size()
+        if launch is not None:
+            return launch
         w = int(container.width())
         h = int(container.height())
         # A zero or absurdly small size means the compositor has not configured
@@ -269,20 +319,75 @@ class PySide6Backend(DisplayBackend):
         return (w, h)
 
     def _wait_for_stable_size(self, container: Any, *, attempts: int = 20) -> bool:
-        """Pump the event loop until the surface size stops changing.
+        """Pump the event loop until the surface size settles.
 
-        Returns True if the size settled (two consecutive reads agreeing), False
-        if the attempt budget ran out.  A Wayland surface is configured
-        asynchronously, so the first read after ``show()`` can be a placeholder.
+        Returns True if the size settled, False if the attempt budget ran out.
+        A Wayland surface is configured asynchronously, so the first read after
+        ``show()`` can be a placeholder (observed as "200x100" and "640x480").
+
+        When the launcher has told us the real output size (see
+        :meth:`_launch_surface_size`), settling simply means the compositor has
+        agreed with it.  Otherwise fall back to two consecutive identical reads,
+        which is weak but only used on a system with no launcher to ask.
         """
+        target = self._launch_surface_size()
         last: tuple[int, int] | None = None
         for _ in range(attempts):
             self._app.processEvents()
             current = (int(container.width()), int(container.height()))
-            if current == last and current[0] >= 100 and current[1] >= 100:
+            if target is not None:
+                if current == target:
+                    return True
+            elif current == last and current[0] >= 100 and current[1] >= 100:
                 return True
             last = current
         return False
+
+    @staticmethod
+    def _launch_surface_size() -> tuple[int, int] | None:
+        """The output size the launcher resolved, or ``None`` if not provided.
+
+        ``scripts/cage_launch.sh`` reads the compositor's real output geometry
+        with ``wlr-randr`` — after disabling phantom outputs but *before* the
+        frontend starts — and exports it as ``METIXEL_LAUNCH_WIDTH`` /
+        ``METIXEL_LAUNCH_HEIGHT``.
+
+        That is the authoritative answer, and it is why this class does not try
+        to *infer* the size: the compositor configures a Wayland surface
+        asynchronously, so Qt can legitimately observe a placeholder, whereas the
+        launcher has already asked the compositor directly.  Preferring the
+        launcher's value removes the guesswork (and the intermittent low-res
+        top-left rendering it caused).
+        """
+        try:
+            width = int(os.environ.get("METIXEL_LAUNCH_WIDTH", "") or 0)
+            height = int(os.environ.get("METIXEL_LAUNCH_HEIGHT", "") or 0)
+        except ValueError:
+            logger.warning("Ignoring malformed METIXEL_LAUNCH_* size")
+            return None
+        if width < 100 or height < 100:
+            return None
+        return (width, height)
+
+    def _on_container_resized(self) -> None:
+        """Container resized: give both children the new full geometry."""
+        if self._container is None:
+            return
+        self._relayout(self._container)
+        width = int(self._container.width())
+        height = int(self._container.height())
+        if width < 100 or height < 100:
+            return
+        if (width, height) != (self._width, self._height):
+            logger.info(
+                "Display surface resized: %dx%d → %dx%d",
+                self._width,
+                self._height,
+                width,
+                height,
+            )
+            self._width, self._height = width, height
+            self._publish_display_info()
 
     def _on_surface_resized(self, width: int, height: int) -> None:
         """Handle the canvas reporting a new surface size.
@@ -290,6 +395,13 @@ class PySide6Backend(DisplayBackend):
         Called from the GUI thread during ``resizeEvent``.  A too-small value is
         ignored: it means the compositor has not finished configuring the
         surface, not that the display shrank.
+
+        The geometry is re-applied here as well as in ``_on_container_resized``.
+        Without that, a surface that reaches its final size *after* ``create()``
+        returns updates the reported resolution but leaves both children sized to
+        the stale (placeholder) rectangle — the slideshow then paints at low
+        resolution in the top-left corner even though the panel size is detected
+        correctly.  Re-running ``_relayout`` is idempotent and cheap.
         """
         if width < 100 or height < 100:
             return
@@ -303,6 +415,9 @@ class PySide6Backend(DisplayBackend):
             height,
         )
         self._width, self._height = width, height
+        # Give both children the new full geometry before the next paint, so the
+        # correct size is what gets rendered rather than merely reported.
+        self._relayout()
         self._publish_display_info()
 
     def _publish_display_info(self) -> None:
@@ -390,36 +505,90 @@ class PySide6Backend(DisplayBackend):
             return
 
         if self._video_path is not None and image is None:
-            # Video case: mpv owns the frame and the matte.  Keep the canvas
-            # beneath it and refresh the mpv widget's matte from the new plan, so
-            # a config change (style, ambient) is reflected without a restart.
+            # Video case: mpv owns the frame and the matte.  Refresh the bands
+            # from the new plan so a config change (style, ambient) shows up
+            # without a restart.
+            #
+            # Z-order note: do NOT raise the mpv widget here.  The canvas sits
+            # above it in overlay-only mode (transparent, overlay elements only),
+            # and raising mpv every frame would flip the order back and forth —
+            # making the video appear to flicker behind the overlay.  mpv is
+            # raised once in play_video(); after that the canvas stays on top.
             if self._mpv_widget is not None:
                 self._mpv_widget.set_matte(self._matte_bands(plan))
-                self._mpv_widget.raise_()
             self._canvas.update_plan(plan, None, alpha)
+            self._canvas.update()
             return
 
+        self._canvas.set_overlay_only(False)
         self._canvas.raise_()
         self._canvas.update_plan(plan, image, alpha)
+        self._canvas.update()
+
+    def present_transition(
+        self,
+        plan: RenderPlan,
+        image: Any,
+        alpha: float,
+        prev_plan: RenderPlan | None,
+        prev_image: Any,
+        prev_alpha: float,
+    ) -> None:
+        """Composite both crossfade layers in a SINGLE repaint.
+
+        :meth:`present` stores one layer and requests a repaint.  Calling it twice
+        for a transition does not blend: Qt coalesces the two ``update()``
+        requests into one ``paintEvent``, so only the second layer survives and
+        the incoming photo fades up from the background — which reads as "fade to
+        black, then the next slide appears".
+
+        Storing both layers and repainting once is what makes the outgoing and
+        incoming images genuinely mix.  Both plans are passed because the two
+        items usually have different aspect ratios, so each must be drawn with the
+        geometry its own layout produced.
+        """
+        if self._canvas is None or self._window is None:
+            return
+
+        self._canvas.set_overlay_only(False)
+        self._canvas.raise_()
+        self._canvas.update_transition(
+            plan,
+            image,
+            alpha,
+            prev_plan,
+            prev_image,
+            prev_alpha,
+        )
         self._canvas.update()
 
     # -- Overlay -------------------------------------------------------------
 
     def present_overlay(self, elements: list[OverlayElement]) -> None:
-        """Composite the overlay elements on the canvas.
+        """Composite the overlay elements above whatever is showing.
 
-        The canvas owns overlay compositing because the matte must paint over a
-        playing video, and both live in the same widget.  Elements arrive
-        already flattened and z-sorted by the overlay manager.
+        Layout, and why this is not simply "raise the canvas":
+
+        * **Photo** — the canvas is the only surface: it paints the artwork, the
+          rings and the overlay.
+        * **Video** — the mpv widget holds the frame AND its own matte.  Raising
+          the canvas here would draw its opaque black background over the video,
+          which is what produced a solid black centre.  Instead the canvas goes
+          into overlay-only mode: no background fill, no artwork, no rings —
+          just the overlay elements on a transparent surface.
+
+        ``FrameCanvas.set_overlay_only`` owns that mode, including the
+        ``WA_OpaquePaintEvent`` flag.  That flag is a contract ("I paint every
+        pixel"), and breaking it while still claiming it is what made the earlier
+        transparent-hole attempt render black rather than see-through.
         """
         if self._canvas is None:
             return
         if not elements:
             return
-        # Only force a raise when a video is up; otherwise the canvas is already
-        # on top and raising every frame would be wasted work.
-        if self._video_path is not None:
-            self._canvas.raise_()
+        overlay_only = self._video_path is not None
+        self._canvas.set_overlay_only(overlay_only)
+        self._canvas.raise_()
         self._canvas.update_overlay(elements)
         self._canvas.update()
 
@@ -491,9 +660,13 @@ class PySide6Backend(DisplayBackend):
         try:
             self._video_path = Path(path)
             self._mpv_widget.set_matte(self._matte_bands(plan))
-            # mpv must be on top while it plays; the canvas keeps painting the
-            # overlay (clock, messages) which lives above everything.
+            # mpv owns the surface while it plays: the frame AND the matte.
             self._mpv_widget.raise_()
+            # The canvas goes to overlay-only mode so it contributes the clock and
+            # messages WITHOUT covering the video.  Raising it in its normal mode
+            # here would paint its opaque background straight over the frame —
+            # that was the solid black centre.
+            self._canvas.set_overlay_only(True)
             self._canvas.raise_()
             self._mpv_widget.ensure_gl_init()
             self._mpv_widget.play(str(path))
@@ -529,7 +702,7 @@ class PySide6Backend(DisplayBackend):
         return bands
 
     def stop_video(self) -> None:
-        """Stop playback and drop the matte bands.  Idempotent."""
+        """Stop playback, drop the matte bands, and restore the canvas.  Idempotent."""
         if self._mpv_widget is None:
             return
         try:
@@ -539,9 +712,11 @@ class PySide6Backend(DisplayBackend):
         finally:
             self._video_path = None
             # Clear the bands so a stale ring is never left over a photo.
-            if self._mpv_widget is not None:
-                self._mpv_widget.set_matte(None)
+            self._mpv_widget.set_matte(None)
             if self._canvas is not None:
+                # Leave overlay-only mode: the canvas is the only surface again,
+                # so it must paint the artwork, the rings and a real background.
+                self._canvas.set_overlay_only(False)
                 self._canvas.raise_()
                 self._canvas.update()
 

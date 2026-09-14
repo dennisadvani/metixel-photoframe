@@ -579,12 +579,11 @@ class FrontendRenderer:
         # mode canvas composites in paint order, so there is no depth buffer for
         # the slideshow to write into and occlude the overlay with.
         if self._overlay:
-            # Pass video state so message timers pause during video playback
-            video_playing = (
-                self._presentation._video_state != 0  # _VIDEO_IDLE
-                if hasattr(self._presentation, "_video_state")
-                else False
-            )
+            # Video state so overlay message timers can pause during playback.
+            # The frontend no longer plays video (playback is being re-inserted
+            # later), so this is always False; the overlay contract is kept so
+            # nothing has to change when playback returns.
+            video_playing = False
             # Tell the boot layer whether the frontend has actually
             # loaded its queue — not just whether the backend wrote
             # playlist.json to disk.  This prevents the boot screen

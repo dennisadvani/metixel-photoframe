@@ -69,6 +69,15 @@ class FrameCanvas(QWidget):
         self._overlay: list[OverlayElement] = []
         # Artwork opacity, used by the crossfade.  Rings stay opaque.
         self._image_alpha: float = 1.0
+        # Outgoing crossfade layer.  Held separately from the primary layer so a
+        # single paintEvent can composite BOTH images at their complementary
+        # alphas.  Two `update_plan()` + `update()` calls in one frame would
+        # collapse into one paint (Qt coalesces update requests), leaving only
+        # the last call stored — which is what made a crossfade fade to black
+        # before the next slide appeared instead of blending into it.
+        self._prev_plan: RenderPlan | None = None
+        self._prev_image: QImage | None = None
+        self._prev_alpha: float = 0.0
         # When True, the layer inside the Mat Window is left UNPAINTED so a
         # sibling widget underneath (the mpv surface) shows through.  That is the
         # whole "virtual mat over live video" mechanism: this canvas paints the
@@ -77,6 +86,9 @@ class FrameCanvas(QWidget):
         # Notified with (width, height) whenever the surface resizes, so the
         # backend can track the real display size.  See set_resize_callback.
         self._resize_callback: Any = None
+        # True while a video plays: paint ONLY the overlay, on transparency.
+        # See set_overlay_only for why the paint attributes matter.
+        self._overlay_only: bool = False
         # The canvas paints every pixel of itself, so Qt can skip the erase pass.
         #
         # Do NOT reintroduce a mode where part of the canvas is left unpainted to
@@ -90,6 +102,30 @@ class FrameCanvas(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
     # -- Public API ----------------------------------------------------------
+
+    def set_overlay_only(self, enabled: bool) -> None:
+        """Switch to painting ONLY the overlay, on a transparent background.
+
+        Used while a video plays: the mpv widget underneath owns the frame and
+        the matte, so this canvas must contribute nothing but the overlay (clock,
+        messages) — otherwise its opaque background covers the video, which is
+        what produced a solid black centre.
+
+        The load-bearing part is ``WA_OpaquePaintEvent``.  It is a CONTRACT with
+        Qt meaning "this widget paints every pixel of itself".  When it is set and
+        the widget paints nothing in a region, Qt does not fall back to showing
+        what is underneath — the region shows uninitialised framebuffer, i.e.
+        black.  So the attribute must be cleared for the duration of overlay-only
+        mode, and the widget must also be told not to erase to black.
+        """
+        if self._overlay_only == enabled:
+            return
+        self._overlay_only = enabled
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, not enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, enabled)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, enabled)
+        self.update()
+        logger.debug("Canvas overlay-only mode: %s", "on" if enabled else "off")
 
     def set_resize_callback(self, callback: Any) -> None:
         """Register a callable invoked with ``(width, height)`` on resize.
@@ -117,16 +153,53 @@ class FrameCanvas(QWidget):
 
         ``alpha`` applies to the artwork only — the frame rings always paint
         opaque, so a fading photo never reveals the matte behind it.
+
+        Any pending outgoing crossfade layer is dropped: this is the single-layer
+        entry point, and leaving a stale outgoing image behind would make the
+        next ordinary slide paint a ghost of the previous one.
         """
         self._plan = plan
         self._image = image if isinstance(image, QImage) else None
         self._image_alpha = max(0.0, min(1.0, alpha))
+        self._prev_plan = None
+        self._prev_image = None
+        self._prev_alpha = 0.0
+
+    def update_transition(
+        self,
+        plan: RenderPlan,
+        image: Any,
+        alpha: float,
+        prev_plan: RenderPlan | None,
+        prev_image: Any,
+        prev_alpha: float,
+    ) -> None:
+        """Store BOTH crossfade layers so one repaint composites them together.
+
+        This is what actually implements a crossfade.  The two images are painted
+        into the same frame at their complementary alphas — outgoing first, then
+        incoming on top — so the result is the two photos mixing, not the incoming
+        one fading up over the background (which reads as "fade to black, then
+        the next slide appears").
+
+        Both alphas come from :class:`~metixel.frontend.presentation.transitions.
+        TransitionEngine`, so the easing curves stay in one place.
+        """
+        self._plan = plan
+        self._image = image if isinstance(image, QImage) else None
+        self._image_alpha = max(0.0, min(1.0, alpha))
+        self._prev_plan = prev_plan
+        self._prev_image = prev_image if isinstance(prev_image, QImage) else None
+        self._prev_alpha = max(0.0, min(1.0, prev_alpha))
 
     def clear_plan(self) -> None:
         """Drop the current plan so the next paint is a bare background."""
         self._plan = None
         self._image = None
         self._image_alpha = 1.0
+        self._prev_plan = None
+        self._prev_image = None
+        self._prev_alpha = 0.0
 
     def set_background(self, color: tuple[float, float, float, float]) -> None:
         """Set the canvas clear colour."""
@@ -150,10 +223,17 @@ class FrameCanvas(QWidget):
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)
         try:
-            # The canvas always paints every pixel (WA_OpaquePaintEvent holds).
-            # Video does not come through here at all: while a video plays, the
-            # mpv widget is raised and paints the frame plus its own matte, and
-            # this canvas only supplies the overlay.
+            if self._overlay_only:
+                # Video plays underneath and owns the frame and the matte.
+                # Paint nothing but the overlay: no fill, no artwork, no rings.
+                # The widget is non-opaque in this mode, so the unpainted area
+                # is genuinely transparent rather than black.
+                for element in self._overlay:
+                    self._draw_element(painter, element)
+                return
+
+            # The canvas always paints every pixel here (WA_OpaquePaintEvent
+            # holds), so Qt can skip the erase pass.
             painter.fillRect(self.rect(), self._background)
             plan = self._plan
             if plan is not None:
@@ -163,7 +243,24 @@ class FrameCanvas(QWidget):
                 if plan.ambient is not None:
                     self._fill(painter, plan.ambient, _qcolor(plan.ambient_colour))
 
-                # 2. Artwork.
+                # 2. Outgoing crossfade layer, then the incoming artwork.
+                #
+                #    Order is load-bearing: the outgoing image paints first, at
+                #    its fading alpha, and the incoming one composites on top at
+                #    its rising alpha.  Painting only the incoming layer (the old
+                #    behaviour, because two present() calls collapsed into one
+                #    repaint) faded the new photo up from the background, which is
+                #    what looked like "fade to black before the next slide".
+                #
+                #    The outgoing layer uses ITS OWN plan so a different aspect
+                #    ratio is not drawn with the incoming item's geometry.
+                if self._prev_plan is not None and self._prev_alpha > 0.01:
+                    painter.setOpacity(self._prev_alpha)
+                    try:
+                        self._draw_artwork(painter, self._prev_plan, self._prev_image)
+                    finally:
+                        painter.setOpacity(1.0)
+
                 if self._image is not None and self._image_alpha > 0.01:
                     painter.setOpacity(self._image_alpha)
                     try:
@@ -251,15 +348,23 @@ class FrameCanvas(QWidget):
             return
         painter.fillRect(QRectF(x, y, w, h), colour)
 
-    def _draw_artwork(self, painter: QPainter, plan: RenderPlan) -> None:
+    def _draw_artwork(
+        self, painter: QPainter, plan: RenderPlan, image: QImage | None = None
+    ) -> None:
         """Blit the artwork through the plan's source→destination mapping.
 
         Honouring ``artwork_src`` is what implements ``overflow="crop"``: the
         covering region of the source is drawn into the Mat Window, discarding
         the parts outside it.  Qt does the scaling, which keeps this identical
         in behaviour to the Tk backend without sharing pixel code.
+
+        ``image`` defaults to the primary layer's artwork; the crossfade's
+        outgoing layer passes its own, so both frames are drawn with the geometry
+        each was actually laid out for.
         """
-        assert self._image is not None
+        source_image = self._image if image is None else image
+        if source_image is None:
+            return
         sx, sy, sw, sh = plan.artwork_src
         dx, dy, dw, dh = plan.artwork_dst
         if sw <= 0 or sh <= 0 or dw <= 0 or dh <= 0:
@@ -268,4 +373,4 @@ class FrameCanvas(QWidget):
         source = QRectF(sx, sy, sw, sh)
         target = QRectF(dx, dy, dw, dh)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-        painter.drawImage(target, self._image, source)
+        painter.drawImage(target, source_image, source)

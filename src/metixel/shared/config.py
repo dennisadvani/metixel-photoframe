@@ -65,6 +65,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "smart_cover": True,  # use contain for square/opposite-orientation images in cover mode
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
+        # Framing is pinned to the full-bleed slideshow presentation: no Mat
+        # Ring, artwork cropped to cover the panel.  These keys are written so
+        # the value is visible in config.json, but the presenter treats them as
+        # authoritative constants (see presentation/presenter.py) — changing
+        # them here does not reintroduce a mat.
+        "framing_style": "borderless",
+        "framing_overflow": "crop",
     },
     "image": {
         "optimisation_enabled": True,

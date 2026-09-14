@@ -31,15 +31,18 @@ freeze the frame forever.  Two consequences of that decision are load-bearing:
 
 Video
 -----
-A video's *poster* is the pre-generated first-frame JPEG, which the backend loads
-as an ordinary image.  ``play_video`` then takes over the surface; the presenter
-keeps presenting the same plan with ``image=None`` so the matte ring paints over
-the live video.  The backend media pipeline (Phase 2: OPTIMISE) generates those
-frames — the frontend never runs ffmpeg or ffprobe.
+**Video playback has been removed from the frontend** while the basics are
+rebuilt; it will be re-inserted later.  A video item is still accepted and is
+presented as a still: its *poster* is the pre-generated first-frame JPEG, which
+the backend loads as an ordinary image.  The backend media pipeline (Phase 2:
+OPTIMISE) continues to probe and optimise videos — only the frontend's
+``play_video`` / ``stop_video`` usage is gone, so nothing is lost when playback
+returns.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import Any, Literal
@@ -51,7 +54,10 @@ from metixel.framing.resolve import MediaSize
 from metixel.frontend.presentation.image_cache import ImageCache
 from metixel.frontend.presentation.transitions import TransitionEngine
 from metixel.shared.config import Config
+from metixel.shared.io import atomic_write_json
+from metixel.shared.media import content_hash
 from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.paths import resolve_install_path, run_path
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +70,23 @@ STALL_TIMEOUT_S = 30.0
 
 #: How hard to look ahead when the next item is a video and needs its poster.
 VIDEO_POSTER_LOOKAHEAD = 1
+
+#: Slideshow presentation is deliberately reduced to the one behaviour that has
+#: to work before anything else: a looping photo slideshow that fills the panel.
+#:
+#: ``borderless`` drops the Mat Ring (no matte, no moulding band read as a mat),
+#: and ``crop`` samples the centred cover window so the artwork covers the
+#: frame instead of being letterboxed inside it.  ``EDGE_MARGIN_MM`` is pinned
+#: to zero as well: the template default insets the artwork to hide the bezel,
+#: which would leave a 7 px border at 1920x1200 — i.e. a "mat" by another name.
+#:
+#: The ring layers are still *computed* (the framing engine keeps its fit check
+#: and the physical branch stays supported); they simply resolve to the full
+#: panel and the moulding annulus falls outside the canvas, so nothing is
+#: drawn.  That keeps this a presentation choice, not a fork of the geometry.
+SLIDESHOW_FRAMING_STYLE = "borderless"
+SLIDESHOW_FRAMING_OVERFLOW = "crop"
+SLIDESHOW_EDGE_MARGIN_MM = 0.0
 
 
 class Presenter:
@@ -97,8 +120,9 @@ class Presenter:
             screen_w=sw,
             screen_h=sh,
             rotation=int(config.display.get("rotation", 0) or 0),
-            style=str(config.slideshow.get("framing_style", "gallery")),
-            overflow=config.slideshow.get("framing_overflow") or None,
+            style=SLIDESHOW_FRAMING_STYLE,
+            overflow=SLIDESHOW_FRAMING_OVERFLOW,
+            edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
         )
 
         # -- Playlist --
@@ -120,10 +144,6 @@ class Presenter:
         #    duration.  A dict-free pair rather than the old texture slots.
         self._prev_plan: RenderPlan | None = None
         self._prev_image: Any = None
-
-        # -- Video --
-        self._video_item: MediaItem | None = None
-        self._video_playing: bool = False
 
         logger.info(
             "Presenter: %dx%d, style=%s, transition=%s, image_duration=%ss",
@@ -169,15 +189,6 @@ class Presenter:
         frame is the thing that actually guarantees pixels are on the panel.
         """
         return self._shown_plan is not None and self._shown_item is not None
-
-    @property
-    def video_active(self) -> bool:
-        """Whether a video currently owns the surface.
-
-        Used by the overlay to pause message timers, so a notification does not
-        expire unseen while the viewer is watching a video.
-        """
-        return self._video_playing
 
     # -- Queue ---------------------------------------------------------------
 
@@ -225,28 +236,22 @@ class Presenter:
 
     def _clear_current_media(self) -> None:
         """Remove ``current_media.json`` so the dashboard shows nothing playing."""
-        try:
-            from metixel.shared.paths import run_path
-
-            run_path("current_media.json").unlink(missing_ok=True)
-        except Exception:
-            logger.debug("Could not clear current_media.json", exc_info=True)
+        with contextlib.suppress(FileNotFoundError):
+            run_path("current_media.json").unlink()
 
     # -- Playback control ----------------------------------------------------
 
     def next_item(self) -> None:
-        """Skip forward, stopping any video first."""
+        """Skip forward."""
         if not self._queue:
             return
-        self._stop_video()
         self._paused = False
         self._advance(initial=False)
 
     def prev_item(self) -> None:
-        """Skip back, stopping any video first."""
+        """Skip back."""
         if not self._queue:
             return
-        self._stop_video()
         self._paused = False
         self._current_idx = (self._current_idx - 1) % len(self._queue)
         self._item_start_time = time.monotonic()
@@ -259,17 +264,27 @@ class Presenter:
         self._write_current_media()
 
     def pause(self) -> None:
-        """Pause the slideshow, pausing video in place rather than stopping it."""
+        """Pause the slideshow.
+
+        Republishing ``current_media.json`` is load-bearing, not cosmetic: the
+        dashboard's pause/resume button is driven by ``current_media.paused``,
+        so without a write the UI keeps showing the pre-pause state and the next
+        click issues the *same* command again — which reads as "resume pauses
+        instead of resuming".
+        """
         self._paused = True
-        if self._video_playing:
-            self._backend.pause_video(True)
+        self._write_current_media()
 
     def resume(self) -> None:
-        """Resume the slideshow, restarting the current slide's timer."""
+        """Resume the slideshow, restarting the current slide's timer.
+
+        Resetting the slide clock gives the resumed slide its full duration
+        rather than whatever fraction of it had already elapsed.  Republishing
+        the state file is required for the same reason as in :meth:`pause`.
+        """
         self._paused = False
         self._item_start_time = time.monotonic()
-        if self._video_item is not None:
-            self._backend.pause_video(False)
+        self._write_current_media()
 
     def switch_album(self, album_id: str) -> None:
         """Album switching is a backend concern; recorded here for completeness."""
@@ -285,11 +300,18 @@ class Presenter:
             self._item_start_time = time.monotonic()
 
     def reload_config(self, config: Config) -> None:
-        """Apply a hot-reloaded config without restarting the slideshow."""
+        """Apply a hot-reloaded config without restarting the slideshow.
+
+        The framing style and overflow are **not** taken from the config: they
+        are pinned to the slideshow's full-bleed presentation (see
+        :data:`SLIDESHOW_FRAMING_STYLE`), so a stale ``framing_style`` in
+        ``config.json`` cannot reintroduce a mat on the next reload.  Only the
+        rotation — which genuinely changes the panel geometry — is honoured.
+        """
         self._config = config
         rotation = int(config.display.get("rotation", 0) or 0)
-        style = str(config.slideshow.get("framing_style", "gallery"))
-        overflow = config.slideshow.get("framing_overflow") or None
+        style = SLIDESHOW_FRAMING_STYLE
+        overflow = SLIDESHOW_FRAMING_OVERFLOW
         if (rotation, style, overflow) != (
             self._layout.rotation,
             self._layout.style,
@@ -303,6 +325,7 @@ class Presenter:
                 rotation=rotation,
                 style=style,
                 overflow=overflow,
+                edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
             )
             # The geometry changed, so the cached plans are stale.
             self._shown_plan = None
@@ -322,15 +345,6 @@ class Presenter:
 
         if self._paused:
             self._present_current()
-            return
-
-        # A video owns the surface once playing: keep the matte painted over it
-        # and let the backend report when the stream ends.
-        if self._video_playing:
-            if self._backend.video_finished():
-                self._video_finished()
-            else:
-                self._present_current(with_artwork=False)
             return
 
         elapsed = time.monotonic() - self._item_start_time
@@ -407,11 +421,14 @@ class Presenter:
     def _present_transition(self, progress: float) -> None:
         """Blend from the shown frame to the next item.
 
-        Implemented as two paints at complementary alpha rather than a dedicated
-        blend entry point: the canvas composites in one pass, so a transition
-        works on any backend without a blend capability.
+        Both layers are handed to the backend in ONE call rather than two
+        ``present()`` calls, because a backend that defers painting (Qt coalesces
+        ``update()`` requests into a single ``paintEvent``) would keep only the
+        last one stored — the incoming photo would then fade up from the
+        background instead of blending into the outgoing one, which is exactly
+        the "fade to black, then the next slide appears" defect.
 
-        The eased alpha comes from :class:`TransitionEngine`, which also owns
+        The eased alphas come from :class:`TransitionEngine`, which also owns
         ``fade_through_black`` (outgoing fades to black, then incoming fades up)
         and the hard cut for ``none``.  Reusing it keeps the easing curves and the
         three styles in one place rather than reimplementing them here.
@@ -423,16 +440,28 @@ class Presenter:
         next_image = self._image_for(next_item)
 
         outgoing = self._shown_plan or self._current_plan()
+        outgoing_image = self._image_for(self._shown_item) if self._shown_item else None
         cur_alpha = self._transitions.get_alpha(progress, "current")
         next_alpha = self._transitions.get_alpha(progress, "next")
 
-        # Outgoing first, then incoming on top at its eased opacity.
-        if outgoing is not None and cur_alpha > 0.01:
-            self._backend.present(
+        # Prefer the single-call composite: it is the only form that actually
+        # blends on a backend which defers painting.  A backend without it (an
+        # older implementation, or a test double) falls back to two paints, which
+        # still works on an immediate-mode renderer.
+        composite = getattr(self._backend, "present_transition", None)
+        if composite is not None:
+            composite(
+                next_plan,
+                next_image,
+                next_alpha,
                 outgoing,
-                self._image_for(self._shown_item) if self._shown_item else None,
-                alpha=cur_alpha,
+                outgoing_image,
+                cur_alpha,
             )
+            return
+
+        if outgoing is not None and cur_alpha > 0.01:
+            self._backend.present(outgoing, outgoing_image, alpha=cur_alpha)
         if next_image is not None and next_alpha > 0.01:
             self._backend.present(next_plan, next_image, alpha=next_alpha)
 
@@ -447,34 +476,78 @@ class Presenter:
         indefinitely, because nothing else rewrites the file until the next
         advance.
 
+        The payload is a contract with the SPA and must keep these keys:
+        ``file`` (the display name — the card shows "No media playing" when it
+        is absent), ``index``/``total`` (rendered as "Image 2 of 17"),
+        ``paused`` (the paused badge and pause button), ``media_type`` and
+        ``thumbnail_path`` (which the route resolves into ``thumbnail_url``).
+
         Writes to ``run_dir()``, which is tmpfs — a per-slide write there costs
         RAM, not SD-card erase cycles.  Best-effort: a read-only run dir must not
         stop the slideshow.
         """
-        item = self.current_item
-        if item is None:
-            return
         try:
-            from metixel.shared.io import atomic_write_json
-            from metixel.shared.paths import run_dir
+            if self._current_idx < 0 or not self._queue:
+                # No item is displayed.  Publish an empty file rather than a
+                # record with index=-1: the queue is transiently empty at
+                # startup and whenever the backend playlist is cleared while
+                # the optimisation pipeline rebuilds.  A published -1 is
+                # invisible to the dashboard (which keeps its last rendered
+                # value), so the UI stayed stuck on "No media playing" long
+                # after playback resumed.  Removing the file lets /api/health
+                # report current_media as null and the frontend rewrite it as
+                # soon as the first slide is shown.
+                current = run_path("current_media.json")
+                with contextlib.suppress(FileNotFoundError):
+                    current.unlink()
+                return
 
-            payload = {
-                "id": item.id,
-                "original_path": str(item.original_path),
-                "cached_path": str(item.cached_path),
-                "media_type": item.media_type.value,
-                "width": item.width,
-                "height": item.height,
-                "duration_seconds": item.duration_seconds,
-                "source": item.source,
+            item = self._queue[self._current_idx]
+
+            # Resolve the thumbnail path:
+            # 1. Use the item's thumbnail_path (set by ImageProcessor
+            #    or merged from backend playlist).
+            # 2. Fall back to the hash-based thumbnail in cache/thumbnails/.
+            # 3. For videos: last resort is the raw first-frame cache
+            #    (<video>.1.frame).
+            thumb = None
+            if item.thumbnail_path is not None:
+                thumb = str(item.thumbnail_path)
+            else:
+                # Fall back to hash-based thumbnail lookup.
+                # CRITICAL: use original_path (NOT cached_path) because
+                # thumbnails are always named after the ORIGINAL file's
+                # content hash.  cached_path may point to the optimised
+                # cache file whose content differs from the original,
+                # producing a different hash that won't match any thumbnail.
+                try:
+                    file_hash = content_hash(item.original_path)
+                    hash_thumb = resolve_install_path("cache/thumbnails") / f"{file_hash}.jpg"
+                    if hash_thumb.exists():
+                        thumb = str(hash_thumb)
+                except OSError:
+                    pass
+
+            # Video-only: fall back to first-frame cache (backend-generated)
+            if (
+                thumb is None
+                and item.media_type == MediaType.VIDEO
+                and item.first_frame_path is not None
+                and item.first_frame_path.exists()
+            ):
+                thumb = str(item.first_frame_path)
+
+            data = {
+                "file": str(item.original_path.name) if item.original_path else "unknown",
                 "index": self._current_idx,
-                "queue_size": len(self._queue),
+                "total": len(self._queue),
+                "paused": self._paused,
+                "media_type": item.media_type.value,
+                "thumbnail_path": thumb,
             }
-            target = run_dir() / "current_media.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(target, payload)
-        except Exception:
-            logger.debug("Could not publish current_media.json", exc_info=True)
+            atomic_write_json(run_path("current_media.json"), data)
+        except OSError:
+            pass
 
     def _advance(self, *, initial: bool) -> None:
         """Move to the next item and begin showing it."""
@@ -498,10 +571,11 @@ class Presenter:
         # chance of being ready on time.
         self._preload_next()
 
-        if item.media_type == MediaType.VIDEO:
-            self._start_video(item)
-        else:
-            self._present_current()
+        # Video playback has been removed from the frontend (it will be
+        # re-inserted later), so every item is presented as a still.  A video's
+        # first-frame JPEG is loaded as an ordinary image, which is all the
+        # presentation layer needs.
+        self._present_current()
 
         self._write_current_media()
 
@@ -511,8 +585,8 @@ class Presenter:
             return
         nxt = self._queue[(self._current_idx + 1) % len(self._queue)]
         if nxt.media_type == MediaType.VIDEO:
-            # A video shows its poster until playback starts, and the backend
-            # generates that during OPTIMISE — nothing to decode here.
+            # A video is shown as its pre-generated first-frame JPEG, which the
+            # backend produced during OPTIMISE — there is nothing to decode here.
             return
         if self._cache.get(nxt.id) is not None:
             return
@@ -533,49 +607,6 @@ class Presenter:
             return
         if handle is not None:
             self._cache.put(ready.key, handle)
-
-    # -- Video ---------------------------------------------------------------
-
-    def _start_video(self, item: MediaItem) -> None:
-        """Show a video's poster, then hand the surface to the backend's player."""
-        plan = self._current_plan()
-        if plan is None:
-            return
-
-        # The poster must be on screen BEFORE playback starts, so the transition
-        # into video is seamless rather than showing the previous slide.
-        poster = self._image_for(item)
-        self._backend.present(plan, poster)
-        self._shown_plan = plan
-        self._shown_item = item
-
-        if not self._backend.supports_video:
-            logger.debug("Backend cannot play video — treating %s as a still", item.id)
-            # Not a failure: the poster stays up for the item's duration.
-            return
-
-        source = item.cached_path or item.original_path
-        started = self._backend.play_video(source, plan)
-        if not started:
-            logger.warning("Video playback unavailable for %s — showing its poster", item.id)
-            return
-        self._video_item = item
-        self._video_playing = True
-
-    def _stop_video(self) -> None:
-        if self._video_item is None and not self._video_playing:
-            return
-        self._backend.stop_video()
-        self._video_item = None
-        self._video_playing = False
-
-    def _video_finished(self) -> None:
-        """Called when the backend reports the stream ended."""
-        self._stop_video()
-        self._item_start_time = time.monotonic()
-        # Show the poster/last frame in place until the slide timer expires, so
-        # the frame never goes blank between items.
-        self._present_current()
 
     # -- Helpers -------------------------------------------------------------
 
@@ -618,6 +649,7 @@ class Presenter:
         if cached is not None:
             return cached
 
+        # A video is presented as its pre-generated first-frame JPEG.
         path = item.first_frame_path if item.media_type == MediaType.VIDEO else None
         path = path or item.cached_path
         try:
@@ -631,7 +663,12 @@ class Presenter:
 
     @staticmethod
     def _media_type(item: MediaItem) -> FramingMediaType:
-        """The framing engine expects its own literal, not the MediaType enum."""
+        """The framing engine's media-type literal.
+
+        Still reported accurately even though video is not *played*: the framing
+        engine keys some geometry off the media type, and a video's poster has a
+        known aspect that the layout should use.
+        """
         return "video" if item.media_type == MediaType.VIDEO else "image"
 
     def _transition_seconds(self) -> float:
@@ -643,19 +680,9 @@ class Presenter:
     def _item_duration(self, item: MediaItem) -> float:
         """Seconds to show *item*.
 
-        A video's configured playback cap wins when the backend has not reported
-        a duration; otherwise the metadata from the backend is authoritative.
+        With video playback removed there is nothing to play, so every item —
+        including a video's poster — is shown for the configured image duration.
         """
-        if item.media_type == MediaType.VIDEO:
-            cap = float(self._config.video.get("max_duration_seconds", 0) or 0)
-            duration = float(item.duration_seconds or 0)
-            if cap > 0:
-                return min(duration, cap) if duration > 0 else cap
-            return (
-                duration
-                if duration > 0
-                else float(self._config.slideshow.get("image_duration_seconds", 30))
-            )
         return float(self._config.slideshow.get("image_duration_seconds", 30))
 
     # -- Overlay integration -------------------------------------------------

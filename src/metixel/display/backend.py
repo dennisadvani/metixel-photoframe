@@ -201,6 +201,40 @@ class DisplayBackend(ABC):
         support rather than being forced to implement it.
         """
 
+    def present_transition(
+        self,
+        plan: RenderPlan,
+        image: Any,
+        alpha: float,
+        prev_plan: RenderPlan | None,
+        prev_image: Any,
+        prev_alpha: float,
+    ) -> None:  # noqa: B027
+        """Composite an outgoing and an incoming frame in ONE repaint.
+
+        A crossfade cannot be expressed as two :meth:`present` calls: a backend
+        that defers painting (Qt coalesces ``update()`` requests into one
+        ``paintEvent``) keeps only the last layer stored, so the incoming image
+        fades up from the background — which reads as "fade to black, then the
+        next slide appears" rather than a blend.
+
+        The default implementation degrades to a hard cut at the midpoint, which
+        is honest for a backend with no compositing (the Tk dev backend cannot
+        blend at all).  Backends that *can* blend override this.
+
+        Args:
+            plan: Layout of the incoming item.
+            image: Incoming artwork handle.
+            alpha: Incoming artwork opacity (0→1 across the transition).
+            prev_plan: Layout of the outgoing item, or ``None`` to skip it.
+            prev_image: Outgoing artwork handle.
+            prev_alpha: Outgoing artwork opacity (1→0 across the transition).
+        """
+        if alpha >= 0.5 or prev_plan is None:
+            self.present(plan, image, alpha)
+        else:
+            self.present(prev_plan, prev_image, 1.0)
+
     # -- Artwork -------------------------------------------------------------
 
     @abstractmethod

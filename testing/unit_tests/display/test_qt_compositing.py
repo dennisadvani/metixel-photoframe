@@ -58,23 +58,40 @@ class TestVideoMatteComposition:
     renders the video also paints its own matte.
     """
 
-    def test_uses_a_plain_layout_not_a_stacked_one(self) -> None:
-        """No QStackedLayout: it has a 'current page' that fights raise_()."""
-        source = _source(_BACKEND)
-        assert "QStackedLayout" not in source.replace(
-            "# QStackedLayout was tried twice", ""
-        ).replace("# The prototype never uses QStackedLayout", ""), (
-            "QStackedLayout must not be used; it failed twice, once by hiding the "
-            "canvas (no matte) and once by wedging the Wayland swap path"
-        )
-        assert "QVBoxLayout" in source
+    def test_uses_no_layout_manager(self) -> None:
+        """Both surfaces must OVERLAY, which a layout manager cannot do here.
 
-    def test_mpv_widget_is_added_before_the_canvas(self) -> None:
-        """Z-order: canvas added last so it starts on top for photos."""
+        A QVBoxLayout *allocates* space, so two visible children tile vertically
+        at half height each — that was "the slideshow is drawn halfway down the
+        screen", and it put the canvas's artwork hole nowhere near the video so
+        the matte read as solid black.
+
+        A QStackedLayout has the opposite problem: it makes children mutually
+        exclusive pages, which hid the canvas entirely (no matte) and then wedged
+        the Wayland swap path when both were forced visible.
+
+        So neither is used: geometry is set explicitly in _relayout() and z-order
+        is decided by raise_().
+        """
         source = _source(_BACKEND)
-        mpv_add = source.index("layout.addWidget(self._mpv_widget)")
-        canvas_add = source.index("layout.addWidget(self._canvas)")
-        assert mpv_add < canvas_add
+        assert "QVBoxLayout" not in source or "# A QVBoxLayout" in source, (
+            "QVBoxLayout tiles children instead of overlaying them"
+        )
+        assert "QStackedLayout(" not in source, "QStackedLayout makes pages, not an overlay"
+        assert "def _relayout" in source, "geometry must be set explicitly"
+        assert "setGeometry(rect)" in source
+
+    def test_both_surfaces_get_the_full_container_geometry(self) -> None:
+        """_relayout must size BOTH children, not just the canvas."""
+        source = _source(_BACKEND)
+        # Locate the relayout body.  The window must be generous: the docstring
+        # alone is longer than a naive slice, which made an earlier version of
+        # this test fail against correct code.
+        start = source.index("def _relayout")
+        body = source[start : start + 2500]
+        assert "self._mpv_widget" in body, "the mpv widget must be sized too"
+        assert "self._canvas" in body, "the canvas must be sized"
+        assert "target.rect()" in body
 
     def test_the_mpv_widget_paints_its_own_matte(self) -> None:
         """One widget owning video AND matte is the whole point.
@@ -142,48 +159,42 @@ class TestSurfaceSizeDetection:
     def test_size_is_re_read_on_resize(self) -> None:
         """A late-configured surface must still be picked up.
 
-        Regression: the first attempt at this installed an event filter on the
-        container via ``container.installEventFilter(self)``.  The backend is NOT
-        a ``QObject``, so PySide6 raised
+        Regression: the first attempt installed an event filter with
+        ``container.installEventFilter(self)``. The backend is NOT a ``QObject``,
+        so PySide6 raised
 
             TypeError: installEventFilter called with wrong argument types
               PySide6.QtCore.QObject.installEventFilter(PySide6Backend)
               Supported signatures: installEventFilter(QObject, /)
 
-        and because ``create()`` runs before the render loop, that exception
-        escaped as a startup failure and the service crash-looped 39 times.  The
-        resize signal is now routed through FrameCanvas, which IS a QWidget.
-        """
-        backend = _source(_BACKEND)
-        # Check for a CALL, not the string: the comment above the callback
-        # explains why installEventFilter is wrong, so a raw substring search
-        # matches the prose and fails. (Same trap as
-        # test_logging_conf_is_fully_retired in test_update_manager.py.)
-        tree = ast.parse(backend)
-        called = {
-            node.func.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-        }
-        assert "installEventFilter" not in called, (
-            "the backend is not a QObject and cannot be an event filter; this "
-            "raised TypeError at startup and crash-looped the service"
-        )
-        assert "set_resize_callback" in called
+        and because ``create()`` runs before the render loop, that escaped as a
+        startup failure and the service crash-looped 39 times.
 
-        canvas = _source(_CANVAS)
-        assert "def resizeEvent" in canvas, (
-            "the canvas must override resizeEvent to report the new surface size"
+        The fix is a QObject factory, so the invariant is about the ARGUMENT, not
+        about whether ``installEventFilter`` is called at all.
+        """
+        source = _source(_BACKEND)
+
+        assert "_make_resize_filter" in source, (
+            "the resize filter must be built by the QObject factory"
         )
-        assert "def set_resize_callback" in canvas
+        assert "class _ResizeFilter(QObject)" in source, "the filter must be a QObject"
+        assert "installEventFilter(self)" not in source, (
+            "passing the backend (a plain class) as an event filter raises "
+            "TypeError at startup and crash-loops the service"
+        )
+
+        # With no layout manager, the resize handler must keep both children
+        # container-sized explicitly.
+        assert "def _relayout" in source
+        assert "setGeometry(rect)" in source
 
     def test_no_qt_object_is_used_as_an_event_filter(self) -> None:
-        """Guard the general shape: only QObjects may be event filters.
+        """PySide6Backend must not become a QObject just to satisfy a filter.
 
-        `PySide6Backend` is a plain class (it derives from `DisplayBackend`, an
-        ABC, not from QObject), so any use of it as a Qt receiver is a TypeError.
-        This is asserted explicitly because the failure mode is a startup crash
-        that is only visible on hardware.
+        It derives from ``DisplayBackend``, an ABC.  Making it a QObject would
+        drag the Qt object model into a class that must stay importable without
+        Qt — CI has none, and ``qt_backend`` is imported from the display factory.
         """
         tree = ast.parse(_source(_BACKEND))
         backend_cls = next(
@@ -195,8 +206,8 @@ class TestSurfaceSizeDetection:
             b.attr for b in backend_cls.bases if isinstance(b, ast.Attribute)
         }
         assert "QObject" not in base_names, (
-            "PySide6Backend must not become a QObject just to satisfy an event "
-            "filter; route the signal through FrameCanvas instead"
+            "PySide6Backend must not derive from QObject; route resize through "
+            "the QObject filter factory instead"
         )
 
     def test_absurd_size_is_treated_as_unknown(self) -> None:

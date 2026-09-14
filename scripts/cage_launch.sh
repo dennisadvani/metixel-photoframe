@@ -40,8 +40,21 @@ for _ in $(seq 1 100); do
 done
 
 
-# Disable phantom outputs (no EDID) before the frontend starts.
-/usr/bin/env python3 - "$XDG_RUNTIME_DIR" <<'PY'
+# Resolve the compositor's real output geometry and export it for the frontend.
+#
+# Qt cannot reliably read this itself: a Wayland surface is configured
+# asynchronously, so the size Qt sees immediately after show() can still be a
+# placeholder (observed: 200x100 and 640x480).  Latching that produced an
+# intermittent low-resolution slideshow drawn into the top-left corner.
+#
+# The compositor already knows the answer, and this script is the one place that
+# has just finished talking to it (disabling phantom outputs above), so ask it
+# here and hand the result to the frontend as METIXEL_LAUNCH_{WIDTH,HEIGHT}.
+# The Qt backend treats those as authoritative.
+#
+# Best-effort: on failure the variables stay unset and the backend falls back to
+# reading the container size, so this can never break the launch.
+eval "$(/usr/bin/env python3 - "$XDG_RUNTIME_DIR" <<'PY'
 import json
 import os
 import subprocess
@@ -64,19 +77,54 @@ def run(*cmd):
     subprocess.run(cmd, env=env, capture_output=True, timeout=5)
 
 
-out = subprocess.run([wlr, "--json"], env=env, capture_output=True, timeout=5)
-try:
-    outputs = json.loads(out.stdout.decode(errors="replace") or "[]")
-except Exception:
-    outputs = []
+def query():
+    out = subprocess.run([wlr, "--json"], env=env, capture_output=True, timeout=5)
+    try:
+        return json.loads(out.stdout.decode(errors="replace") or "[]")
+    except Exception:
+        return []
 
-for o in outputs:
+
+# 1. Disable outputs that report "connected" with no EDID (an empty HDMI port).
+#    cage enables every connected output, so leaving a phantom enabled widens the
+#    compositor surface and the frontend renders a stretched canvas.
+for o in query():
     if o.get("enabled") and not (o.get("make") or o.get("model")):
         name = o.get("name")
         if isinstance(name, str):
-            print("metixel cage-launch: disabling phantom output (no monitor):", name)
+            print("metixel cage-launch: disabling phantom output (no monitor):", name,
+                  file=sys.stderr)
             run(wlr, "--output", name, "--off")
+
+# 2. Re-query after the change and report the size of the output that remains.
+#    This is the geometry the frontend should render at.
+for o in query():
+    if not o.get("enabled"):
+        continue
+    # A real monitor carries make/model (set from EDID); prefer those.
+    if not (o.get("make") or o.get("model")):
+        continue
+    # The mode in use is flagged `current` inside `modes`.  Older/newer
+    # wlr-randr builds also expose a top-level `current_mode` dict; accept
+    # either, because relying on `current_mode` alone silently yields nothing
+    # on the version shipping with Trixie (observed: current_mode is None).
+    modes = o.get("modes") or []
+    current = o.get("current_mode")
+    if not isinstance(current, dict):
+        current = next(
+            (m for m in modes if isinstance(m, dict) and m.get("current")),
+            modes[0] if modes and isinstance(modes[0], dict) else None,
+        )
+    if isinstance(current, dict):
+        width, height = current.get("width"), current.get("height")
+        if isinstance(width, int) and isinstance(height, int) and width >= 100 and height >= 100:
+            print(f"metixel cage-launch: output {o.get('name')} is {width}x{height}",
+                  file=sys.stderr)
+            print(f"export METIXEL_LAUNCH_WIDTH={width}")
+            print(f"export METIXEL_LAUNCH_HEIGHT={height}")
+            break
 PY
+)"
 
 # Launch the frontend as cage's client.
 exec python3 -m metixel --mode frontend --config /opt/metixel/data/config.json
