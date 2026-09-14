@@ -163,6 +163,10 @@ def resolve(
     stay supported: the Web UI and the on-screen menu represent a *real* frame
     with it, which needs ``required_rebate`` and a Frame Outer that can extend
     beyond the panel.  Do not prune it as dead code.
+
+    Note that ``required_rebate`` on the physical branch is a **fit check** — the
+    overlap a real frame must provide to hide the panel edge — and is never
+    drawn.  It is not part of the composition and has no render step.
     """
     descriptor = MediaDescriptor(
         width=float(media.width),

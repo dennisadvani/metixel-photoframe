@@ -414,17 +414,31 @@ class Screen:
     def minimum_rebate(self) -> Insets:
         """The smallest rebate that hides the panel edge, per side.
 
-        Equal to the non-screen border when the Frame Opening matches the active
-        area.  Reported so a customer can be told the minimum rebate required.
+        A **fit check, not a drawn element**.  The rebate is the overlap a real
+        frame must provide to cover the non-screen border of the panel; this
+        property reports the figure so a customer can be told the minimum a
+        frame needs.  Nothing renders it — see :attr:`required_rebate`.
         """
         return self.bezel
 
     def required_rebate(self, opening: Rect) -> Insets:
         """Rebate needed for ``opening`` to cover the panel edge, per side.
 
-        The panel sits behind the frame, so the frame must overlap it by
-        ``(panel - opening) / 2`` per side.  Nothing is required once the
-        opening is at least as large as the panel, hence the clamp at zero.
+        A **fit check, not a drawn element.**  Nothing in the render path draws
+        or applies this value; it exists to answer "will the panel fit inside a
+        real frame, and how much must that frame overlap the panel?" for the
+        Remote UI / documentation.
+
+        The physical reasoning: the panel sits *behind* the frame, so the frame
+        must overlap it by ``(panel - opening) / 2`` per side.  Nothing is
+        required once the opening is at least as large as the panel, hence the
+        clamp at zero.
+
+        On the PHYSICAL branch this is a genuine constraint and the engine
+        enforces that the rebate cannot exceed the moulding width (a rebate wider
+        than the frame is not buildable).  On the VIRTUAL branch — where the mat
+        and artwork are drawn in software — there is no physical frame doing any
+        hiding at all, so the value is guidance only and must never be painted.
         """
         dx = max(0.0, (self.panel_size[0] - opening.width) / 2.0)
         dy = max(0.0, (self.panel_size[1] - opening.height) / 2.0)
@@ -629,6 +643,13 @@ class FrameResult:
     moulding: Insets
     orientation: Orientation
     required_rebate: Insets = field(default_factory=lambda: Insets(0.0, 0.0, 0.0, 0.0))
+    """Frame overlap needed to hide the panel edge — a FIT CHECK, not geometry.
+
+    Reported for the Remote UI and documentation so a customer can pick a real
+    frame that will hold the panel.  It is deliberately NOT drawn: there is no
+    render step for it, and it must not be added to the visualisation as though
+    it were part of the composition.  See ``Screen.required_rebate``.
+    """
     """How far the frame must overlap the panel to hide the non-screen area.
 
     Must not exceed the moulding width on any side, which would be physically

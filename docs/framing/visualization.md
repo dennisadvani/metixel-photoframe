@@ -85,8 +85,16 @@ Markers overlay the artwork: a gold `+` at the focal point and red boxes for
 detected faces.
 
 Panel titles carry the numbers that matter — Frame Opening, Mat Window, ring
-widths, screen utilisation, and flags for rebate, ambient and whitespace — all
-wrapped to fit the panel.
+widths, screen utilisation, and caption flags for ambient and whitespace — all
+wrapped to fit the panel. On the virtual branch a fit-check line is also shown,
+stating the rebate a real frame must provide.
+
+The rebate is **reported as text, never drawn**: it is an advisory fit check for
+choosing a physical frame, not a component of the composition. Nothing in the
+figure is a rebate, and it must not become one — there is no layer or geometry to
+paint. (On the physical branch the engine already enforces
+`required_rebate ≤ moulding_width`, so the caption would only restate a
+constraint.)
 
 ## Customising scenarios
 
@@ -111,7 +119,7 @@ variations need no new code. For anything more involved, use
 
 A scenario the engine legitimately rejects (for example a frame too narrow to
 house the required rebate) is annotated on its panel rather than failing the
-whole figure.
+whole figure. Again, the annotation is text: the rebate is never drawn.
 
 ## Keeping it in sync
 

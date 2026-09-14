@@ -44,6 +44,14 @@ shown: a frame rebate smaller than the panel would expose it, so
 :func:`~metixel.framing_engine.calculate_framing` rejects that configuration
 instead.
 
+The **rebate is never drawn.**  ``required_rebate`` is a fit check — "what
+overlap must a real frame provide to hide the panel edge?" — reported as text for
+the customer, not as a component of the composition.  It appears in a panel's
+caption only on the virtual branch, where it is pure guidance because the mat and
+artwork are software-drawn and no physical frame is doing any hiding.  On the
+physical branch the engine already enforces rebate-vs-moulding, so repeating it
+would read as though it were geometry.
+
 Run::
 
     .venv\\Scripts\\python visualize_framing.py --no-show
@@ -355,10 +363,20 @@ def draw_scenario(ax, scenario: Scenario) -> list[str]:
     lines.append(f"open {opening.width:.0f}x{opening.height:.0f}")
     lines.append(f"win {window.width:.0f}x{window.height:.0f}")
     lines.append(f"ring {ring_text}mm  used {result.metrics.screen_utilisation:.0%}")
-    rebate = result.frame.required_rebate
     flags: list[str] = []
+    # The rebate is a FIT CHECK, never a drawn element.  It answers "will this
+    # panel fit inside a real frame, and how much overlap does the frame need to
+    # hide the non-screen border?" — so it is reported as advice, not rendered.
+    #
+    # Only shown on the VIRTUAL branch.  There the mat and artwork are drawn in
+    # software, so there is no physical rebate doing any hiding; the number is
+    # guidance for someone choosing a real frame to mount the panel in.  On the
+    # PHYSICAL branch the rebate is a genuine constraint that the engine already
+    # enforces (see the rebate-vs-moulding check in framing_engine), so repeating
+    # it here as a flag would read as though it were part of the geometry.
+    rebate = result.frame.required_rebate
     if result.branch == "virtual" and rebate.minimum > 0:
-        flags.append(f"rebate {rebate.minimum:.0f}mm")
+        flags.append(f"fits frame rebate >= {rebate.minimum:.0f}mm")
     if result.ambient_fill.present:
         flags.append(f"ambient {result.ambient_fill.strategy}")
     if result.whitespace.enabled and result.whitespace.authored_gap > 0:
@@ -791,7 +809,11 @@ def print_spec_table() -> None:
         print(f"  {name}")
         for key, value in row.items():
             print(f"    {key:<16} {value}")
-    print("\n  A frame rebate of at least the panel size is required to hide the non-screen area.")
+    print(
+        "\n  Fit check: a real frame needs a rebate of at least the panel size to "
+        "hide the non-screen area."
+    )
+    print("  The rebate is never drawn — it is guidance for choosing a frame.")
 
     print("\nStyle table (Metixel, edge_margin 2 mm, reference dimension 320 mm)")
     print(f"{'style':<12} {'ring %':>8} {'ring mm':>9}  mental model")

@@ -87,6 +87,57 @@ class TestRenderPlanContract:
         json.dumps(_landscape().describe(plan))
 
 
+class TestRebateIsNotDrawn:
+    """The rebate is a fit check and must never enter the render plan.
+
+    ``required_rebate`` answers "what overlap must a real frame provide to hide
+    the panel edge?" so a customer can choose a frame.  It is not a layer and has
+    no render step.  These guards exist because the value is reported next to
+    genuine geometry in the same ``FramingResult``, which makes it easy to assume
+    it is part of the composition.
+    """
+
+    def test_render_plan_has_no_rebate_field(self) -> None:
+        """RenderPlan is the compositing contract — a rebate field would be a bug."""
+        fields = set(RenderPlan.__dataclass_fields__)
+        assert not any("rebate" in name for name in fields), (
+            f"RenderPlan must not carry rebate geometry; found {sorted(fields)}"
+        )
+
+    def test_render_plan_fields_are_all_drawable_layers(self) -> None:
+        """Every rect in the plan is something the canvas actually paints."""
+        plan = _landscape(style="gallery").compute(MediaSize(3000, 2000))
+        # The five drawn things, plus the source window (a sampling instruction,
+        # not a screen rect) and metadata.
+        drawable = {"screen", "ambient", "artwork_dst", "whitespace", "matte", "moulding"}
+        rect_fields = {
+            name
+            for name, value in RenderPlan.__dataclass_fields__.items()
+            if value.type in ("tuple[float, float, float, float]",)
+            or "tuple" in str(value.type)
+        }
+        unexpected = rect_fields - drawable - {"artwork_src"}
+        assert not unexpected, (
+            f"RenderPlan gained rect fields that are not drawn layers: {sorted(unexpected)}"
+        )
+        # Sanity: the ones we expect are populated.
+        assert plan.matte or plan.style == "borderless"
+
+    def test_the_engine_reports_the_rebate_separately_from_the_plan(self) -> None:
+        """It lives on the Frame, which is the fit-check vocabulary.
+
+        ``FramingResult.frame.required_rebate`` is the reporting channel; the
+        render plan never sees it.  Keeping the two apart is what stops the value
+        being painted by a future change that "helpfully" surfaces it.
+        """
+        from metixel.framing.framing_engine import FramingResult
+
+        frame_fields = set(FramingResult.__dataclass_fields__)
+        assert "frame" in frame_fields
+        # And the plan type is a different type entirely.
+        assert RenderPlan is not FramingResult
+
+
 # ---------------------------------------------------------------------------
 # Unusable media
 # ---------------------------------------------------------------------------

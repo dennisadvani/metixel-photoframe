@@ -54,6 +54,9 @@ from .framing_engine import (
 # 5 mm side / 6.5 mm vertical border is the non-screen area a frame must cover.
 # ``minimum_rebate`` (528 x 337 mm) is the smallest frame rebate that will hold
 # the panel, and is reported for customer guidance when mounting without a mat.
+#
+# The rebate is a FIT CHECK, never a drawn element: it answers "will this panel
+# fit in a real frame?", and nothing in the render path paints or applies it.
 METIXEL_16_10_1920x1200 = Screen(
     width_mm=518.0,
     height_mm=324.0,
@@ -65,7 +68,8 @@ METIXEL_16_10_1920x1200 = Screen(
 )
 
 #: The minimum frame rebate (mm) for the Metixel panel, i.e. the size a frame
-#: must be at least in order to contain the panel.
+#: must be at least in order to contain the panel.  Fit check only — reported to
+#: the user, never drawn.
 METIXEL_MINIMUM_REBATE = METIXEL_16_10_1920x1200.minimum_rebate
 
 #: The same panel mounted **portrait** — the assembly rotated 90°.  The active
@@ -539,8 +543,12 @@ def screen_table() -> dict[str, dict[str, Any]]:
     """Screen presets: active area, panel, and the rebate a frame must provide.
 
     ``minimum_rebate`` is the overlap needed to hide the non-screen area when
-    the Frame Opening matches the active area; the renderer reports the actual
-    requirement per configuration via ``FramingResult.frame.required_rebate``.
+    the Frame Opening matches the active area; the actual requirement per
+    configuration is ``FramingResult.frame.required_rebate``.
+
+    Both are **fit checks, not drawn geometry.**  They exist so the UI and the
+    documentation can tell a customer which real frames will hold the panel.
+    Nothing renders them; do not add either to the visualisation as a component.
     """
     table: dict[str, dict[str, Any]] = {}
     for name, screen in SCREENS.items():

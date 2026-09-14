@@ -140,14 +140,20 @@ the screen is, which is what you want: the mat is the same mat.
 Available as the presets `METIXEL_16_10_1920x1200` (landscape),
 `METIXEL_16_10_PORTRAIT`, and `METIXEL_SCREENS` keyed by orientation.
 
-### Panel coverage
+### Panel coverage (a fit check, not a drawn element)
 
-The non-screen area must **never** be visible. The frame overlaps the panel by
+The non-screen area must **never** be visible. A real frame overlaps the panel by
 the **rebate**:
 
 ```
 required_rebate = max(0, (panel − Frame Opening) / 2)     per side
 ```
+
+**The rebate is never drawn.** It is not a layer, not part of any `RenderPlan`, and
+has no render step. It exists purely to answer *"will this panel fit inside a real
+frame, and how much must that frame overlap the panel?"* — so the website and the
+app can advise a customer on which ready-made frames will hold the panel. Adding
+it to a rendering as a component is a category error: there is nothing to paint.
 
 The clamp at zero matters: once the Frame Opening is at least as large as the
 panel, no rebate is required — the ring has grown the opening past the edge.
@@ -171,7 +177,19 @@ wide enough to house the resulting rebate. When neither is possible, the remedy
 is one of: widen the moulding, enlarge the Mat Window, or increase the Mat Ring.
 
 `FramingResult.frame.required_rebate` reports the value per side so the website
-can tell a customer the minimum rebate their frame must provide.
+can tell a customer the minimum rebate their frame must provide — **as text**.
+Nothing consumes it as geometry.
+
+Note the asymmetry between the two branches, which is why the figure is advisory
+on one and enforced on the other:
+
+- **Physical branch** — there is a real mat board and frame in front of the panel,
+  so the rebate is a genuine buildability constraint. The engine enforces
+  `required_rebate ≤ moulding_width` and rejects configurations that cannot be
+  built.
+- **Virtual branch** — the mat and artwork are drawn in software, so no physical
+  part is hiding anything. The value is pure guidance for someone choosing a real
+  frame to mount the panel in.
 
 ## Inputs, in user-flow order
 
