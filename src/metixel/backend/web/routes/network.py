@@ -10,8 +10,9 @@ mode control.  All Wi-Fi operations are delegated to
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, current_app, jsonify, session
 
 from metixel.backend.network_manager import (
     connect_to_network,
@@ -23,14 +24,31 @@ from metixel.backend.network_manager import (
 )
 from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
 
+if TYPE_CHECKING:
+    from metixel.backend.network_controller import NetworkController
+
 logger = logging.getLogger(__name__)
 
 network_bp = Blueprint("network", __name__)
 
+#: Session flag set by a successful ``POST /network/validate-pin``.  While
+#: the controller has an active PIN, ``POST /network/connect`` refuses any
+#: session without it — the PIN check must be enforced server-side, not
+#: just by the captive portal hiding the form.
+_SESSION_PORTAL_PIN_OK = "portal_pin_ok"
 
-def _get_controller() -> object | None:
+
+def _get_controller() -> NetworkController | None:
     """Return the NetworkController from the daemon, or None if unavailable."""
-    return get_daemon_component("_network_controller")  # type: ignore[no-any-return]
+    return cast("NetworkController | None", get_daemon_component("_network_controller"))
+
+
+def _get_str(data: dict, key: str) -> str | None:
+    """Return ``data[key]`` stripped, ``""`` if absent, ``None`` if not a str."""
+    value = data.get(key, "")
+    if not isinstance(value, str):
+        return None
+    return value.strip()
 
 
 @network_bp.route("/network/status", methods=["GET"])
@@ -73,17 +91,27 @@ def network_connect():
     but by then it has already received the HTTP response.
     """
     data = get_body()
-    ssid = data.get("ssid", "").strip()
+    ssid = _get_str(data, "ssid")
     password = data.get("password", "")
 
+    if ssid is None or not isinstance(password, str):
+        return jsonify_error("'ssid' and 'password' must be strings", 400)
     if not ssid:
         return jsonify_error("SSID is required", 400)
 
+    controller = _get_controller()
+
+    # Server-side PIN gate: while the captive portal PIN is active, only a
+    # session that has passed /network/validate-pin may connect.
+    if controller is not None and controller.pin and not session.get(_SESSION_PORTAL_PIN_OK):
+        return jsonify_error("PIN validation required", 403)
+
     # Tell the controller a connection is in progress so the monitor
     # thread doesn't panic when it sees the AP go down.
-    controller = _get_controller()
     if controller is not None:
         controller.begin_connection()
+    # The PIN grant is single-use: clear it once a connect has been kicked off.
+    session.pop(_SESSION_PORTAL_PIN_OK, None)
 
     # Capture references BEFORE the request context ends.  The
     # background thread runs after the response is sent — Flask
@@ -171,8 +199,10 @@ def network_forget():
     Accepts JSON: ``{"ssid": "MyWiFi"}``.
     """
     data = get_body()
-    ssid = data.get("ssid", "").strip()
+    ssid = _get_str(data, "ssid")
 
+    if ssid is None:
+        return jsonify_error("'ssid' must be a string", 400)
     if not ssid:
         return jsonify_error("SSID is required", 400)
 
@@ -316,7 +346,7 @@ def validate_pin():
     is locked for 10 minutes.
     """
     data = get_body()
-    candidate = data.get("pin", "").strip()
+    candidate = _get_str(data, "pin")
 
     if not candidate or len(candidate) != 4 or not candidate.isdigit():
         return jsonify({"valid": False, "message": "Enter a 4-digit PIN"}), 400
@@ -328,6 +358,9 @@ def validate_pin():
     valid, message = controller.validate_pin(candidate)
 
     if valid:
+        # Grant this session the right to call /network/connect.
+        session[_SESSION_PORTAL_PIN_OK] = True
         return jsonify({"valid": True, "message": "PIN accepted"})
     else:
+        session.pop(_SESSION_PORTAL_PIN_OK, None)
         return jsonify({"valid": False, "message": message}), 403

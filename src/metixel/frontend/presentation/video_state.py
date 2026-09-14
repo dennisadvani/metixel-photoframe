@@ -51,17 +51,11 @@ class VideoStateMachineMixin(BaseEngineState):
         recommended for Pi, zero Python heap memory during playback.
         """
         # ── Resolve video-playback-enabled config ─────────────────────
-        video_cfg = self._config.video if hasattr(self._config, "video") else {}
-
-        if not self._config.slideshow.get("video_playback_enabled", True):
-            # Also check new video section
-            if video_cfg:
-                if not video_cfg.get("playback_enabled", True):
-                    logger.debug("Video playback disabled — skipping %s", item.original_path)
-                    return
-            else:
-                logger.debug("Video playback disabled — skipping %s", item.original_path)
-                return
+        # Same helper as the queue filter, so the launch gate can never
+        # disagree with what set_queue()/add_items() let through.
+        if not self._video_playback_enabled(self._config):
+            logger.debug("Video playback disabled — skipping %s", item.original_path)
+            return
 
         video_path = str(item.cached_path or item.original_path)
 
@@ -499,8 +493,11 @@ class VideoStateMachineMixin(BaseEngineState):
                 except subprocess.TimeoutExpired:
                     self._video_proc.kill()
                     self._video_proc.wait(timeout=1.0)
-            except OSError:
-                pass
+            except (OSError, subprocess.SubprocessError):
+                # The post-kill wait() can itself raise TimeoutExpired (a
+                # SubprocessError) when VLC is stuck in the kernel; the
+                # render loop must survive that, not unwind.
+                logger.warning("VLC did not exit cleanly (pid=%d)", pid, exc_info=True)
             logger.info("VLC stopped (pid=%d)", pid)
 
         self._video_state = _VIDEO_IDLE

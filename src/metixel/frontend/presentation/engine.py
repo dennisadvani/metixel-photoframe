@@ -78,6 +78,7 @@ class PresentationEngine(
 
         # --- Queue state ---
         self._queue: list[MediaItem] = []
+        self._all_items: list[MediaItem] = []  # unfiltered backend playlist
         self._current_idx: int = -1
         self._paused: bool = False
         self._item_start_time: float = 0.0
@@ -85,12 +86,14 @@ class PresentationEngine(
 
         # --- Preload (CPU worker → GPU upload on main thread) ---
         self._preload_thread: threading.Thread | None = None
+        self._preload_target: MediaItem | None = None
+        self._preload_cancel: threading.Event | None = None
         self._preload_lock = threading.Lock()
         self._preload_array: np.ndarray | None = None
         self._preload_cache_key: str = ""
 
         # --- Layout cache ---
-        self._layout_cache: dict[tuple[int, str], dict] = {}
+        self._layout_cache: dict[tuple[str, int, int, str], dict] = {}
         self._fit_mode_cache: str = fit_mode
         self._screen_ratio: float = sw / max(sh, 1)
 
@@ -241,32 +244,24 @@ class PresentationEngine(
         return items
 
     def reload_config(self, config: Config) -> None:
-        # Determine old/new video playback status from new video section
-        # with fallback to legacy slideshow keys
-        def _get_playback(cfg):
-            if hasattr(cfg, "video") and cfg.video:
-                return cfg.video.get("playback_enabled", True)
-            return cfg.slideshow.get("video_playback_enabled", True)
-
-        old_video = _get_playback(self._config)
-        new_video = _get_playback(config)
+        old_video = self._video_playback_enabled(self._config)
+        new_video = self._video_playback_enabled(config)
         self._config = config
         self._transitions.reload_config(config)
         self._fit_mode_cache = config.slideshow.get("fit_mode", "contain")
         self._layout_cache.clear()
 
         if old_video != new_video:
+            # Re-apply the video guardrails to the unfiltered backend
+            # playlist.  Rescanning the watch folder here would replace the
+            # backend-processed items with raw stubs (no dimensions, no
+            # cache paths, no Immich items, only the first watch path).
             logger.info(
-                "Video playback toggled (%s → %s) — regenerating queue",
+                "Video playback toggled (%s → %s) — re-filtering queue (%d items)",
                 old_video,
                 new_video,
+                len(self._all_items),
             )
-            from metixel.shared.config import resolve_watch_paths
-
-            watch_paths = resolve_watch_paths(config)
-            if watch_paths:
-                folder_path = watch_paths[0]
-                items = self.scan_folder(folder_path)
-                self.set_queue(items)
+            self.set_queue(self._all_items)
 
         logger.debug("Presentation engine config reloaded")

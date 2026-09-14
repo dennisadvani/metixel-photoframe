@@ -4,7 +4,10 @@
 
 from __future__ import annotations
 
+import io
 import json
+
+import pytest
 
 
 class TestServeThumbnail:
@@ -31,6 +34,48 @@ class TestServeThumbnail:
         monkeypatch.setattr(media_mod, "_resolve_cache_dir", lambda state: tmp_path)
         resp = client.get("/api/media/thumbnail/nope.jpg")
         assert resp.status_code == 404
+
+    def test_video_frame_served_from_cache_videos(self, client, tmp_path, monkeypatch):
+        """``<cache>/videos/<hash>.<N>.frame.jpg`` frames are served (resized)."""
+        import metixel.backend.web.routes.media as media_mod
+
+        pytest.importorskip("PIL")
+        from PIL import Image
+
+        videos_dir = tmp_path / "videos"
+        videos_dir.mkdir(parents=True)
+        Image.new("RGB", (1280, 720), "red").save(videos_dir / "abc123.2.frame.jpg", "JPEG")
+        monkeypatch.setattr(media_mod, "_resolve_cache_dir", lambda state: tmp_path)
+
+        resp = client.get("/api/media/thumbnail/abc123.2.frame.jpg")
+        assert resp.status_code == 200
+        assert resp.mimetype == "image/jpeg"
+        with Image.open(io.BytesIO(resp.data)) as img:
+            assert max(img.size) <= 320
+
+    def test_non_frame_name_not_looked_up_in_videos(self, client, tmp_path, monkeypatch):
+        """Only the strict ``<hash>.<N>.frame.jpg`` shape is served from
+        cache/videos — an arbitrary jpg dropped there is not exposed."""
+        import metixel.backend.web.routes.media as media_mod
+
+        videos_dir = tmp_path / "videos"
+        videos_dir.mkdir(parents=True)
+        (videos_dir / "random.jpg").write_bytes(b"\xff\xd8fake")
+        monkeypatch.setattr(media_mod, "_resolve_cache_dir", lambda state: tmp_path)
+        assert client.get("/api/media/thumbnail/random.jpg").status_code == 404
+
+    def test_media_tree_not_searched(self, client, tmp_path, monkeypatch):
+        """The old rglob-the-media-tree fallback is gone: a jpg in the watch
+        folder is not served via the thumbnail route."""
+        import metixel.backend.web.routes.media as media_mod
+        import metixel.shared.config as config_mod
+
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        (media_dir / "photo.jpg").write_bytes(b"\xff\xd8fake")
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [media_dir])
+        monkeypatch.setattr(media_mod, "_resolve_cache_dir", lambda state: tmp_path / "cache")
+        assert client.get("/api/media/thumbnail/photo.jpg").status_code == 404
 
 
 class TestListMedia:

@@ -102,6 +102,10 @@ echo "==> Running DDC/CI monitor control test (brightness/contrast round-trip + 
 ssh "${PI_USER}@${PI_HOST}" \
     "cd ${REMOTE_FUNC} && python3 -m pytest test_ddc.py -m functional -v --no-cov -p no:cacheprovider"
 
+echo "==> Running device-password test (console + Samba password sync, throwaway password restored afterwards)"
+ssh "${PI_USER}@${PI_HOST}" \
+    "cd ${REMOTE_FUNC} && python3 -m pytest test_device_password.py -m functional -v --no-cov -p no:cacheprovider"
+
 echo "==> Running Wi-Fi + sudo + network-message functional tests (test mode)"
 ssh "${PI_USER}@${PI_HOST}" \
     "cd ${REMOTE_FUNC} && METIXEL_NETWORK_TEST_MODE=1 PYTHONPATH=${METIXEL_SRC} python3 -m pytest test_sudo.py test_wifi.py -m functional -v --no-cov -p no:cacheprovider"

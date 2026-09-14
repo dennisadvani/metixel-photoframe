@@ -579,6 +579,58 @@ function _handleAuthFailure(path, status) {
     }
 }
 
+/**
+ * Decide whether a non-2xx response means the backend itself is gone.
+ *
+ * Only a gateway-style status (502/503/504) counts — and even then only
+ * when the body is NOT the backend's own JSON error envelope, because a
+ * live backend legitimately answers 502/503 for an *upstream* failure
+ * (Immich unreachable, frontend not rendering).  Every 4xx is a normal
+ * error the caller must handle; it must never blank the dashboard.
+ *
+ * @param {Response} res
+ * @param {any} body  parsed JSON body (or null when not JSON)
+ */
+function _isBackendDown(res, body) {
+    if (res.status !== 502 && res.status !== 503 && res.status !== 504) return false;
+    return !(body && typeof body === "object" && body.status === "error");
+}
+
+async function _parseJsonOrNull(res) {
+    try {
+        return await res.json();
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * Shared non-2xx handling for apiGet/apiPut/apiPost.  Returns null (the
+ * value callers already treat as "failed") after routing the response to
+ * the right side effect: auth overlay, disconnect overlay, or just a log.
+ */
+async function _handleApiFailure(method, path, res) {
+    if (res.status === 401 || res.status === 403) {
+        _handleAuthFailure(path, res.status);
+        return null;
+    }
+    var body = await _parseJsonOrNull(res);
+    if (_isBackendDown(res, body)) {
+        console.error("API %s %s failed: %s %s", method, path, res.status, res.statusText);
+        _apiUpdateConnectionStatus(false);
+        return null;
+    }
+    // Ordinary error (400/404/409/429/500, or a backend-reported upstream
+    // failure).  The backend answered, so we are connected.
+    console.warn(
+        "API %s %s returned %s: %s",
+        method, path, res.status,
+        (body && (body.message || body.error)) || res.statusText
+    );
+    _apiUpdateConnectionStatus(true);
+    return null;
+}
+
 function _apiUpdateConnectionStatus(ok) {
     var overlay = document.getElementById("connection-overlay");
     if (!overlay) return;
@@ -603,13 +655,7 @@ export async function apiGet(path) {
     try {
         const res = await fetch(`/api${path}`, { credentials: "same-origin" });
         if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-                _handleAuthFailure(path, res.status);
-            } else {
-                console.error("API GET %s failed: %s %s", path, res.status, res.statusText);
-                _apiUpdateConnectionStatus(false);
-            }
-            return null;
+            return await _handleApiFailure("GET", path, res);
         }
         _apiUpdateConnectionStatus(true);
         return await res.json();
@@ -634,13 +680,7 @@ export async function apiPut(path, data) {
             body: JSON.stringify(data),
         });
         if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-                _handleAuthFailure(path, res.status);
-            } else {
-                console.error("API PUT %s failed: %s %s", path, res.status, res.statusText);
-                _apiUpdateConnectionStatus(false);
-            }
-            return null;
+            return await _handleApiFailure("PUT", path, res);
         }
         _apiUpdateConnectionStatus(true);
         return await res.json();
@@ -664,13 +704,7 @@ export async function apiPost(path, data) {
             body: data ? JSON.stringify(data) : undefined,
         });
         if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-                _handleAuthFailure(path, res.status);
-            } else {
-                console.error("API POST %s failed: %s %s", path, res.status, res.statusText);
-                _apiUpdateConnectionStatus(false);
-            }
-            return null;
+            return await _handleApiFailure("POST", path, res);
         }
         _apiUpdateConnectionStatus(true);
         return await res.json();

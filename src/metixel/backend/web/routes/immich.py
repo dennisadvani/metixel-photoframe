@@ -9,13 +9,14 @@ and sync status retrieval.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from typing import TYPE_CHECKING
 
 from flask import Blueprint, current_app, jsonify
 
 from metixel.backend.web.helpers import get_body, jsonify_error
-from metixel.shared.paths import resolve_install_path
+from metixel.shared.paths import resolve_install_path, run_path
 
 if TYPE_CHECKING:
     from metixel.backend.sync.immich import ImmichSyncer
@@ -23,6 +24,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 immich_bp = Blueprint("immich", __name__)
+
+#: Immich album ids are UUIDs.  The id is used to build the on-disk
+#: ``album_<id>`` folder that gets ``rmtree``'d on removal, so anything
+#: outside this strict character set is rejected outright.
+_ALBUM_ID_RE = re.compile(r"^[A-Za-z0-9-]+$")
 
 
 @immich_bp.route("/albums", methods=["GET"])
@@ -66,10 +72,16 @@ def add_album():
     """Add an album to the configured sync group (deduplicated by id)."""
 
     data = get_body()
-    album_id = (data.get("id") or "").strip()
-    name = (data.get("name") or "").strip()
+    album_id = data.get("id") or ""
+    name = data.get("name") or ""
+    if not isinstance(album_id, str) or not isinstance(name, str):
+        return jsonify_error("'id' and 'name' must be strings", 400)
+    album_id = album_id.strip()
+    name = name.strip()
     if not album_id or not name:
         return jsonify_error("Missing album id or name", 400)
+    if not _ALBUM_ID_RE.match(album_id):
+        return jsonify_error("Invalid album id", 400)
 
     state = current_app.config["METIXEL_STATE"]
     config = state.config
@@ -91,21 +103,32 @@ def remove_album():
     """
 
     data = get_body()
-    album_id = (data.get("id") or "").strip()
+    album_id = data.get("id") or ""
+    if not isinstance(album_id, str):
+        return jsonify_error("'id' must be a string", 400)
+    album_id = album_id.strip()
     if not album_id:
         return jsonify_error("Missing album id", 400)
+    if not _ALBUM_ID_RE.match(album_id):
+        return jsonify_error("Invalid album id", 400)
 
     state = current_app.config["METIXEL_STATE"]
     config = state.config
+
+    # Resolve the album folder FIRST and refuse anything that does not land
+    # strictly inside the sync dir — this path is rmtree'd below.
+    sync_dir = config.sync["immich"].get("sync_dir", "media/sync/immich/")
+    sync_dir_path = resolve_install_path(sync_dir).resolve()
+    album_dir = (sync_dir_path / f"album_{album_id}").resolve()
+    if album_dir == sync_dir_path or sync_dir_path not in album_dir.parents:
+        return jsonify_error("Invalid album id", 400)
+
     albums = [a for a in (config.sync["immich"].get("albums") or []) if a.get("id") != album_id]
     state.update_config("sync", {"immich": {"albums": albums}})
 
     # Delete the local album folder (best-effort).
     import shutil
 
-    sync_dir = config.sync["immich"].get("sync_dir", "media/sync/immich/")
-    sync_dir_path = resolve_install_path(sync_dir)
-    album_dir = sync_dir_path / f"album_{album_id}"
     deleted = False
     if album_dir.is_dir():
         shutil.rmtree(album_dir, ignore_errors=True)
@@ -197,13 +220,20 @@ def test_connection():
     Body (JSON):
         ``{"server_url": "...", "api_key": "..."}``
 
-    Returns 200 if the connection works, or an error message.
+    The HTTP status is always 200 once the request body is valid — this is a
+    diagnostic probe of an *upstream* server, so its failures are reported in
+    the body (``ok: false`` plus ``status`` = the upstream HTTP code, or
+    ``"connection_error"`` / ``"timeout"``) rather than as our own 401/502/504.
+    A 401 here would make the dashboard think *its* session had expired.
     """
     import requests as req_lib
 
     data = get_body()
-    server_url = data.get("server_url", "").rstrip("/")
+    server_url = data.get("server_url", "")
     api_key = data.get("api_key", "")
+    if not isinstance(server_url, str) or not isinstance(api_key, str):
+        return jsonify_error("'server_url' and 'api_key' must be strings", 400)
+    server_url = server_url.rstrip("/")
 
     if not server_url or not api_key:
         return jsonify_error("Missing server_url or api_key", 400)
@@ -221,11 +251,12 @@ def test_connection():
             return jsonify(
                 {
                     "ok": False,
+                    "status": resp.status_code,
                     "error": (
                         f"Authentication failed (HTTP {resp.status_code}). Check your API key."
                     ),
                 }
-            ), 401
+            )
         resp.raise_for_status()
         album_count = len(resp.json())
         return jsonify(
@@ -239,23 +270,23 @@ def test_connection():
         return jsonify(
             {
                 "ok": False,
+                "status": "connection_error",
                 "error": "Could not connect to the server. Check the URL and network.",
             }
-        ), 502
+        )
     except req_lib.exceptions.Timeout:
         return jsonify(
             {
                 "ok": False,
+                "status": "timeout",
                 "error": "Connection timed out. Check the server URL and network.",
             }
-        ), 504
+        )
+    except req_lib.exceptions.HTTPError as e:
+        code = getattr(e.response, "status_code", None)
+        return jsonify({"ok": False, "status": code, "error": f"Server returned HTTP {code}"})
     except Exception as e:
-        return jsonify(
-            {
-                "ok": False,
-                "error": str(e),
-            }
-        ), 502
+        return jsonify({"ok": False, "status": "error", "error": str(e)})
 
 
 # ── Module-level syncer cache ───────────────────────────────────────────────
@@ -283,11 +314,10 @@ def _get_or_create_syncer(state) -> ImmichSyncer:
 def _read_progress() -> dict | None:
     """Read the live sync progress file, if it exists."""
     import json as _json
-    import os as _os
 
     try:
-        path = "/run/metixel/immich_sync_progress.json"
-        if _os.path.isfile(path):
+        path = run_path("immich_sync_progress.json")
+        if path.is_file():
             with open(path) as f:
                 return _json.load(f)  # type: ignore[no-any-return]
     except (OSError, ValueError):

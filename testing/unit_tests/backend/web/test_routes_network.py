@@ -196,3 +196,110 @@ class TestNetworkRadio:
         assert resp.status_code == 200
         _wait_for_len(called, 1)
         assert called == [False]
+
+
+class _FakeController:
+    """Minimal NetworkController stand-in exposing what the routes use."""
+
+    def __init__(self, pin: str = "1234"):
+        self.pin = pin
+        self.begun = 0
+        self.ended = 0
+
+    def validate_pin(self, candidate: str):
+        if candidate == self.pin:
+            return True, "ok"
+        return False, "Incorrect PIN. 2 attempt(s) remaining."
+
+    def begin_connection(self) -> None:
+        self.begun += 1
+
+    def end_connection(self) -> None:
+        self.ended += 1
+
+    def on_wifi_connected(self) -> None:
+        pass
+
+
+class _FakeDaemon:
+    def __init__(self, controller):
+        self._network_controller = controller
+
+
+class TestPinSessionGate:
+    """POST /network/connect is refused until the session has passed
+    /network/validate-pin — while the controller has an active PIN."""
+
+    def _wire(self, app, monkeypatch, pin: str = "1234") -> _FakeController:
+        import metixel.backend.web.routes.network as net_mod
+
+        ctl = _FakeController(pin)
+        app.config["METIXEL_DAEMON"] = _FakeDaemon(ctl)
+        monkeypatch.setattr(net_mod, "connect_to_network", lambda s, p: (False, "nope"))
+        return ctl
+
+    def test_connect_refused_without_pin_validation(self, app, monkeypatch):
+        ctl = self._wire(app, monkeypatch)
+        client = app.test_client()
+        resp = client.post("/api/network/connect", json={"ssid": "MyWiFi", "password": "x"})
+        assert resp.status_code == 403
+        assert ctl.begun == 0
+
+    def test_wrong_pin_does_not_unlock(self, app, monkeypatch):
+        self._wire(app, monkeypatch)
+        client = app.test_client()
+        resp = client.post("/api/network/validate-pin", json={"pin": "9999"})
+        assert resp.status_code == 403
+        assert json.loads(resp.data)["valid"] is False
+        resp = client.post("/api/network/connect", json={"ssid": "MyWiFi", "password": "x"})
+        assert resp.status_code == 403
+
+    def test_validated_session_can_connect_once(self, app, monkeypatch):
+        ctl = self._wire(app, monkeypatch)
+        client = app.test_client()
+        resp = client.post("/api/network/validate-pin", json={"pin": "1234"})
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["valid"] is True
+        with client.session_transaction() as sess:
+            assert sess.get("portal_pin_ok") is True
+
+        resp = client.post("/api/network/connect", json={"ssid": "MyWiFi", "password": "x"})
+        assert resp.status_code == 200
+        assert ctl.begun == 1
+        # The grant is single-use: cleared after the connect kickoff.
+        with client.session_transaction() as sess:
+            assert "portal_pin_ok" not in sess
+        resp = client.post("/api/network/connect", json={"ssid": "MyWiFi", "password": "x"})
+        assert resp.status_code == 403
+
+    def test_no_pin_active_means_no_gate(self, app, monkeypatch):
+        ctl = self._wire(app, monkeypatch, pin="")
+        client = app.test_client()
+        resp = client.post("/api/network/connect", json={"ssid": "MyWiFi", "password": "x"})
+        assert resp.status_code == 200
+        assert ctl.begun == 1
+
+    def test_other_session_cannot_reuse_grant(self, app, monkeypatch):
+        self._wire(app, monkeypatch)
+        a = app.test_client()
+        b = app.test_client()
+        assert a.post("/api/network/validate-pin", json={"pin": "1234"}).status_code == 200
+        assert b.post("/api/network/connect", json={"ssid": "W", "password": ""}).status_code == 403
+
+
+class TestBodyTypes:
+    def test_connect_rejects_non_string_ssid(self, client):
+        resp = client.post("/api/network/connect", json={"ssid": 123})
+        assert resp.status_code == 400
+
+    def test_connect_rejects_non_string_password(self, client):
+        resp = client.post("/api/network/connect", json={"ssid": "x", "password": {"a": 1}})
+        assert resp.status_code == 400
+
+    def test_forget_rejects_non_string_ssid(self, client):
+        resp = client.post("/api/network/forget", json={"ssid": ["x"]})
+        assert resp.status_code == 400
+
+    def test_validate_pin_rejects_non_string_pin(self, client):
+        resp = client.post("/api/network/validate-pin", json={"pin": 1234})
+        assert resp.status_code == 400

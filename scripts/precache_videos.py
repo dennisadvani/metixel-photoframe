@@ -12,7 +12,7 @@ Usage:
 
     # Pull from Pi via SSH, process, push results back
     python scripts/precache_videos.py --profile pi2 --host 192.168.222.143 \
-        --remote-media /opt/metixel/media/sample_media --out ./cache --push
+        --remote-media /opt/metixel/data/media/sample_media --out ./cache --push
 
 This produces:
     cache/videos/<hash>.mp4       — transcoded video
@@ -441,8 +441,8 @@ def main() -> None:
     parser.add_argument("--host", help="Pi hostname/IP to pull media from via SSH")
     parser.add_argument(
         "--remote-media",
-        default="/opt/metixel/media/sample_media",
-        help="Remote media path on Pi (default: /opt/metixel/media/sample_media)",
+        default="/opt/metixel/data/media/sample_media",
+        help="Remote media path on Pi (default: /opt/metixel/data/media/sample_media)",
     )
     parser.add_argument(
         "--out", default="./cache", help="Output cache directory (default: ./cache)"
@@ -574,8 +574,9 @@ def main() -> None:
         print(f"\nPushing results to pi@{args.host} …")
         # Stop backend before pushing to avoid partial reads
         ssh_run(args.host, "sudo systemctl stop metixel-cage metixel-backend 2>/dev/null || true")
-        scp_push(video_dir, args.host, "/opt/metixel/cache/videos")
-        scp_push(thumb_dir, args.host, "/opt/metixel/cache/thumbnails")
+        # Runtime cache lives under the persistent data dir (metixel.shared.paths).
+        scp_push(video_dir, args.host, "/opt/metixel/data/cache/videos")
+        scp_push(thumb_dir, args.host, "/opt/metixel/data/cache/thumbnails")
         ssh_run(args.host, "sudo systemctl start metixel-backend metixel-cage")
         print("  → pushed and backend restarted")
 
@@ -583,8 +584,11 @@ def main() -> None:
     if not args.push:
         print()
         print("To deploy to the Pi:")
-        print(f"  scp {video_dir}/*.mp4 {video_dir}/*.frame.jpg pi@<ip>:/opt/metixel/cache/videos/")
-        print(f"  scp {thumb_dir}/*.jpg pi@<ip>:/opt/metixel/cache/thumbnails/")
+        print(
+            f"  scp {video_dir}/*.mp4 {video_dir}/*.frame.jpg "
+            "pi@<ip>:/opt/metixel/data/cache/videos/"
+        )
+        print(f"  scp {thumb_dir}/*.jpg pi@<ip>:/opt/metixel/data/cache/thumbnails/")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, cast
@@ -505,15 +506,26 @@ class Config:
     # -- Mutators ------------------------------------------------------------
 
     def update(self, section: str, values: dict[str, Any]) -> None:
-        """Deep-merge values into a config section."""
+        """Deep-merge values into a config section.
+
+        ``display.schedule_on_time`` / ``schedule_off_time`` are normalised
+        to ``HH:MM``; an invalid value (e.g. ``""`` from an empty form field)
+        is dropped with a warning so a bad schedule can never be persisted
+        and crash the daemon on the next boot.
+        """
         if section not in self._data:
             raise KeyError(f"Unknown config section: {section}")
+        if section == "display":
+            values = _sanitise_display_schedule(dict(values), self._data[section])
         _deep_merge(self._data[section], values)
         logger.debug("Config section '%s' updated: %s", section, values)
 
     def replace(self, data: dict[str, Any]) -> None:
         """Replace the entire configuration atomically."""
         self._data = deepcopy(data)
+        display = self._data.get("display")
+        if isinstance(display, dict):
+            _sanitise_display_schedule(display, DEFAULT_CONFIG["display"])
         logger.debug("Config fully replaced")
 
     # -- Persistence ---------------------------------------------------------
@@ -652,6 +664,68 @@ def resolve_watch_paths(
                 p = base_dir / p
             paths.append(p)
     return paths
+
+
+# ---------------------------------------------------------------------------
+# Display schedule times
+# ---------------------------------------------------------------------------
+
+#: ``HH:MM`` (1-2 digit hour, 2 digit minute) — the only accepted shape for
+#: ``display.schedule_on_time`` / ``display.schedule_off_time``.
+SCHEDULE_TIME_RE = re.compile(r"^(\d{1,2}):(\d{2})$")
+
+#: Display keys holding an ``HH:MM`` schedule time.
+SCHEDULE_TIME_KEYS = ("schedule_on_time", "schedule_off_time")
+
+
+def parse_schedule_time(value: Any) -> int | None:
+    """Parse an ``HH:MM`` schedule time into minutes since midnight.
+
+    Returns ``None`` for anything that is not a well-formed, in-range time
+    (non-string, empty, ``"7"``, ``"25:00"``, ``"07:60"`` ...).  Never raises.
+    """
+    if not isinstance(value, str):
+        return None
+    match = SCHEDULE_TIME_RE.match(value.strip())
+    if match is None:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return hour * 60 + minute
+
+
+def normalise_schedule_time(value: Any) -> str | None:
+    """Return *value* as a canonical ``HH:MM`` string, or ``None`` if invalid."""
+    minutes = parse_schedule_time(value)
+    if minutes is None:
+        return None
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _sanitise_display_schedule(values: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    """Normalise schedule times in *values* in place, dropping invalid ones.
+
+    An invalid entry is replaced by the value already in *current* when that
+    is valid, otherwise by the built-in default — so the stored config always
+    holds a parseable time.  Returns *values* for convenience.
+    """
+    for key in SCHEDULE_TIME_KEYS:
+        if key not in values:
+            continue
+        normalised = normalise_schedule_time(values[key])
+        if normalised is not None:
+            values[key] = normalised
+            continue
+        fallback = normalise_schedule_time(current.get(key)) or str(DEFAULT_CONFIG["display"][key])
+        logger.warning(
+            "Ignoring invalid display.%s=%r — keeping %s",
+            key,
+            values[key],
+            fallback,
+        )
+        values[key] = fallback
+    return values
 
 
 # ---------------------------------------------------------------------------

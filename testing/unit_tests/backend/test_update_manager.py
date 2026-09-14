@@ -15,9 +15,16 @@ release runs the NEW version's install logic.
 
 from __future__ import annotations
 
+import subprocess
+import threading
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
+import pytest
+
+import metixel.backend.update_manager as um
+import metixel.shared.paths as paths
 from metixel.backend.update_manager import UpdateManager
 
 # testing/unit_tests/backend/ -> repo root
@@ -1046,13 +1053,44 @@ class TestReleaseManagement:
     """Local release listing and ref→folder mapping."""
 
     def test_release_dir_for_ref_maps_tags(self) -> None:
+        """Folder names follow scripts/update.sh: the TAG as-is, v prefix kept.
+
+        The old mapping stripped the ``v`` (``1.2.3``) while update.sh created
+        ``releases/v1.2.3``, so no local-release lookup ever matched.
+        """
         mgr = UpdateManager.__new__(UpdateManager)
-        # refs/tags/v1.2.3 → 1.2.3
-        assert mgr._ref_to_release_name("refs/tags/v1.2.3") == "1.2.3"
+        # refs/tags/v1.2.3 → v1.2.3 (exactly what update.sh names the folder)
+        assert mgr._ref_to_release_name("refs/tags/v1.2.3") == "v1.2.3"
         # origin/main → main
         assert mgr._ref_to_release_name("origin/main") == "main"
-        # bare version
-        assert mgr._ref_to_release_name("v2.0.0") == "2.0.0"
+        # bare tag passes through unchanged
+        assert mgr._ref_to_release_name("v2.0.0") == "v2.0.0"
+        # raw SHAs pass through (update.sh names dev releases after them)
+        assert mgr._ref_to_release_name("0abc123") == "0abc123"
+
+    def test_update_sh_names_folder_after_tag(self) -> None:
+        """The shell side of the convention: ``releases/<tag>`` with no
+        ``v`` stripping, and dev → short SHA."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert 'refs/tags/*) VERSION="${_REF#refs/tags/}"' in content
+        assert 'RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"' in content
+        assert "lstrip" not in content and "#v}" not in content
+        assert "rev-parse --short HEAD" in content
+
+    def test_build_release_list_marks_installed_by_tag(self, tmp_path: Path, monkeypatch) -> None:
+        """``installed`` must look for the TAG-named folder update.sh creates."""
+        _install_root(tmp_path, monkeypatch)
+        (tmp_path / "releases" / "v1.2.6").mkdir(parents=True)
+        mgr = UpdateManager.__new__(UpdateManager)
+        out = mgr._build_release_list(
+            [
+                {"tag_name": "v1.2.6", "prerelease": False},
+                {"tag_name": "v1.2.5", "prerelease": True},
+            ]
+        )
+        by_tag = {r["tag"]: r for r in out}
+        assert by_tag["v1.2.6"]["installed"] is True
+        assert by_tag["v1.2.5"]["installed"] is False
 
     def test_set_auto_update_validates_day(self) -> None:
         mgr = UpdateManager.__new__(UpdateManager)
@@ -1101,3 +1139,219 @@ class TestReleaseManagement:
         assert fake.calls == [
             ("update", {"auto_update": False, "auto_update_day": 3, "auto_update_time": "04:30"})
         ]
+
+
+# ---------------------------------------------------------------------------
+# Helpers for the Blue/Green layout tests
+# ---------------------------------------------------------------------------
+
+
+def _install_root(root: Path, monkeypatch) -> None:
+    """Point every install-root lookup (paths + update_manager) at *root*."""
+    monkeypatch.setattr(paths, "install_root", lambda: root)
+    monkeypatch.setattr(um, "install_root", lambda: root)
+    (root / "releases").mkdir(exist_ok=True)
+
+
+def _layout(root: Path, live: str, *others: str) -> Path:
+    """Create ``releases/<name>`` folders and point ``live`` at *live*."""
+    for name in (live, *others):
+        (root / "releases" / name).mkdir(parents=True, exist_ok=True)
+    (root / "live").symlink_to(root / "releases" / live)
+    return root / "releases" / live
+
+
+class _RecordingState:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def update_config(self, section: str, values: dict) -> None:
+        self.calls.append((section, values))
+
+
+def _bare_manager() -> UpdateManager:
+    mgr = UpdateManager.__new__(UpdateManager)
+    mgr._lock = threading.Lock()
+    mgr._cache = {}
+    mgr._update_in_progress = False
+    mgr._last_error = None
+    mgr._state = cast(Any, _RecordingState())
+    return mgr
+
+
+class TestLiveReleaseGuard:
+    """The release the backend runs from must never be deleted or re-staged."""
+
+    def test_is_live_release(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        live = _layout(tmp_path, "v1.2.6", "v1.2.5")
+        mgr = UpdateManager.__new__(UpdateManager)
+        assert mgr._is_live_release(live) is True
+        assert mgr._is_live_release(tmp_path / "releases" / "v1.2.5") is False
+
+    def test_is_live_release_without_symlink(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        (tmp_path / "releases" / "v1.2.6").mkdir()
+        mgr = UpdateManager.__new__(UpdateManager)
+        assert mgr._is_live_release(tmp_path / "releases" / "v1.2.6") is False
+
+    def test_apply_update_refuses_the_active_release(self, tmp_path: Path, monkeypatch) -> None:
+        """Reinstalling the live release would rm -rf the running code."""
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.6")
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path / "releases" / "v1.2.6"
+        monkeypatch.setattr(mgr, "_resolve_target_ref", lambda ch, v: "refs/tags/v1.2.6")
+        deleted = mock.MagicMock()
+        launched = mock.MagicMock()
+        monkeypatch.setattr(mgr, "_delete_local_release", deleted)
+        monkeypatch.setattr(UpdateManager, "_write_and_launch_update_script", launched)
+
+        result = mgr.apply_update(channel="stable", version="1.2.6")
+
+        assert result["status"] == "error"
+        assert "active release" in result["message"]
+        deleted.assert_not_called()
+        launched.assert_not_called()
+        assert mgr._update_in_progress is False
+
+    def test_apply_update_deletes_a_stale_non_live_release(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A previously installed (then rolled-back) release IS found now that
+        the folder naming matches, and is removed before the reinstall."""
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.5", "v1.2.6")
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path / "releases" / "v1.2.5"
+        monkeypatch.setattr(mgr, "_resolve_target_ref", lambda ch, v: "refs/tags/v1.2.6")
+        deleted = mock.MagicMock()
+        launched = mock.MagicMock()
+        monkeypatch.setattr(mgr, "_delete_local_release", deleted)
+        monkeypatch.setattr(UpdateManager, "_write_and_launch_update_script", launched)
+
+        result = mgr.apply_update(channel="stable", version="1.2.6")
+
+        assert result["status"] == "ok", result
+        deleted.assert_called_once_with(tmp_path / "releases" / "v1.2.6")
+        launched.assert_called_once_with("refs/tags/v1.2.6", "stable")
+
+    def test_update_sh_trap_never_removes_live(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        trap = content[content.index("_cleanup_staging() {") :]
+        trap = trap[: trap.index("\n}\n")]
+        assert "PREV_LIVE" in trap and "REFUSING to remove" in trap
+        # The dev re-check happens after the SHA is known, before the mv.
+        dev = content.index("dev staging → release folder")
+        assert content.index("already the live release", dev) > dev
+        assert content.index('mv "${STAGING_DIR}" "${RELEASE_DIR}"', dev) > content.index(
+            "already the live release", dev
+        )
+
+
+class TestResolveTargetRef:
+    """An explicit tag is accepted from the cached GitHub release list, so a
+    tag newer than the running clone (which nothing ever fetches) is
+    selectable without a network round-trip in the request path."""
+
+    def test_known_release_tag(self) -> None:
+        mgr = _bare_manager()
+        mgr._cache = {
+            "releases": [{"tag": "v9.9.9", "version": "9.9.9"}],
+            "available": {"beta": {"tag": "v9.9.10-beta.1"}},
+        }
+        assert mgr._is_known_release_tag("v9.9.9") is True
+        assert mgr._is_known_release_tag("v9.9.10-beta.1") is True
+        assert mgr._is_known_release_tag("v0.0.1") is False
+
+    def test_resolve_accepts_cached_tag_without_git(self, monkeypatch, tmp_path: Path) -> None:
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path
+        mgr._cache = {"releases": [{"tag": "v9.9.9", "version": "9.9.9"}]}
+        git = mock.MagicMock(side_effect=AssertionError("git must not be consulted"))
+        monkeypatch.setattr(um.subprocess, "run", git)
+
+        assert mgr._resolve_target_ref("stable", "9.9.9") == "refs/tags/v9.9.9"
+        assert mgr._resolve_target_ref("stable", "v9.9.9") == "refs/tags/v9.9.9"
+
+    def test_resolve_falls_back_to_local_git(self, monkeypatch, tmp_path: Path) -> None:
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path
+        mgr._cache = {"releases": [{"tag": "v9.9.9"}]}
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kw):
+            calls.append(list(cmd))
+            rc = 0 if cmd[:2] == ["git", "rev-parse"] and "refs/tags/v1.0.0" in cmd else 1
+            return subprocess.CompletedProcess(cmd, rc, "", "")
+
+        monkeypatch.setattr(um.subprocess, "run", fake_run)
+        assert mgr._resolve_target_ref("stable", "1.0.0") == "refs/tags/v1.0.0"
+        assert calls, "unknown tag must fall through to the local git lookups"
+
+
+class TestRollbackDefersRestart:
+    """``rollback()`` must not restart metixel-backend inside the request."""
+
+    def test_rollback_schedules_restart(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.6", "v1.2.5")
+        mgr = _bare_manager()
+        flipped = mock.MagicMock()
+        scheduled = mock.MagicMock()
+        sync_sudo = mock.MagicMock(side_effect=AssertionError("must not run sudo synchronously"))
+        monkeypatch.setattr(mgr, "_flip_live_symlink", flipped)
+        monkeypatch.setattr(um, "schedule_sudo", scheduled)
+        monkeypatch.setattr(um, "run_sudo", sync_sudo)
+
+        result = mgr.rollback("v1.2.5")
+
+        assert result["status"] == "ok", result
+        flipped.assert_called_once_with(tmp_path / "releases" / "v1.2.5")
+        scheduled.assert_called_once()
+        args, kwargs = scheduled.call_args
+        assert list(args[0]) == ["systemctl", "restart", "metixel-backend", "metixel-cage"]
+        assert kwargs["delay"] >= 1.0, "the delay is what lets the JSON response flush"
+        assert mgr._update_in_progress is False
+
+    def test_rollback_rejects_active_release(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.6")
+        mgr = _bare_manager()
+        scheduled = mock.MagicMock()
+        monkeypatch.setattr(um, "schedule_sudo", scheduled)
+        result = mgr.rollback("v1.2.6")
+        assert result["status"] == "error"
+        scheduled.assert_not_called()
+
+
+class TestUpdateScriptLogging:
+    def test_wrapper_marks_log_attached_and_update_sh_honours_it(self) -> None:
+        """Both sides tee to the same log; update.sh must skip its tee when the
+        OTA wrapper already attached it, or every line is written twice."""
+        wrapper = UpdateManager._build_update_script("v1.0.0", "stable")
+        assert "export METIXEL_UPDATE_LOG_ATTACHED=1" in wrapper
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert '[ "${METIXEL_UPDATE_LOG_ATTACHED:-}" != "1" ]' in content
+        tee = content.index('exec > >(tee -a "${LOG_FILE}")')
+        assert content.rindex("METIXEL_UPDATE_LOG_ATTACHED", 0, tee) > 0
+
+
+class TestHeadlessHealthGate:
+    def test_backend_only_probe_when_cage_not_enabled(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert "systemctl is-enabled metixel-cage.service" in content
+        assert '[ "${CAGE_ENABLED}" != "enabled" ]' in content
+        assert 'HEALTH_PROBE_URL="${HEALTH_URL}"\n' in content
+        # The relaxed assignment must come AFTER the strict default.
+        assert content.index('HEALTH_PROBE_URL="${HEALTH_URL}"\n') > content.index(
+            'HEALTH_PROBE_URL="${HEALTH_URL}?require=render"'
+        )
+
+
+class TestPiUserPreflight:
+    @pytest.mark.parametrize("script", ["update.sh", "bootstrap.sh"])
+    def test_scripts_check_for_pi_user(self, script: str) -> None:
+        content = (_REPO_ROOT / "scripts" / script).read_text(encoding="utf-8")
+        assert "id -u pi" in content
+        assert "Raspberry Pi Imager" in content

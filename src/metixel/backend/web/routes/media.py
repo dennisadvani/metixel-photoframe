@@ -10,6 +10,7 @@ existing tests that monkeypatch ``media_mod._resolve_cache_dir`` /
 
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -39,11 +40,15 @@ from metixel.shared.media import (
     VIDEO_EXTENSIONS,
     content_hash,
 )
-from metixel.shared.paths import resolve_install_path
 
 logger = logging.getLogger(__name__)
 
 media_bp = Blueprint("media", __name__)
+
+#: Video first/last frame caches live in ``<cache_dir>/videos/`` and are named
+#: ``<content_hash>.<N>.frame.jpg`` (see ``processing/frames.py``).  Only
+#: names of exactly that shape are looked up there.
+_VIDEO_FRAME_RE = re.compile(r"^[A-Za-z0-9]+\.[0-9]+\.frame\.jpg$")
 
 # Backwards-compatible aliases (logic lives in media_service.py).
 UPLOAD_SUBDIR = "my_media"
@@ -69,58 +74,56 @@ _stream_size = stream_size
 _convert_heic = convert_heic
 
 
+def find_thumbnail(state: Any, name: str) -> tuple[Path, bool] | None:
+    """Locate the file ``/api/media/thumbnail/<name>`` would serve.
+
+    Returns ``(path, is_full_res_frame)`` or ``None``.  Shared with the
+    health route so the ``thumbnail_url`` it publishes is only ever one this
+    endpoint can actually serve.  Lookup order:
+
+    1. ``<cache_dir>/thumbnails/<name>`` — image/video thumbnails (320 px).
+    2. ``<cache_dir>/videos/<hash>.<N>.frame.jpg`` — video first/last frame
+       caches (full resolution; downscaled on the way out).
+    """
+    safe_name = Path(name).name
+    if not safe_name or safe_name in (".", ".."):
+        return None
+    if not (safe_name.endswith(".jpg") or safe_name.endswith(".jpeg")):
+        return None
+    cache_dir = _resolve_cache_dir(state)
+    thumb_path = cache_dir / "thumbnails" / safe_name
+    if thumb_path.is_file():
+        return thumb_path, False
+    if _VIDEO_FRAME_RE.match(safe_name):
+        frame_path = cache_dir / "videos" / safe_name
+        if frame_path.is_file():
+            return frame_path, True
+    return None
+
+
 @media_bp.route("/thumbnail/<path:filename>")
 def serve_thumbnail(filename: str):
     """Serve a cached thumbnail or video frame image.
 
-    Looks in two locations (in order):
-
-    1. ``<cache_dir>/thumbnails/<filename>`` — image thumbnails (already 320px).
-    2. ``<media_folder>/**/<filename>`` — video frame caches
-       (``.1.frame`` / ``.2.frame`` files stored next to videos).
-
-    Video frame files are full-resolution — they are downscaled to
-    320 px max before serving, matching image thumbnail sizing.
+    Only files under the processed-media cache are served (see
+    :func:`find_thumbnail`).  Video frame files are full-resolution — they
+    are downscaled to 320 px max before serving, matching image thumbnail
+    sizing.
     """
     state = current_app.config["METIXEL_STATE"]
     safe_name = Path(filename).name
 
     # Security: only allow known safe extensions
-    if not (
-        safe_name.endswith(".jpg")
-        or safe_name.endswith(".jpeg")
-        or safe_name.endswith(".frame.jpg")
-    ):
+    if not (safe_name.endswith(".jpg") or safe_name.endswith(".jpeg")):
         return jsonify({"error": "Invalid file type"}), 403
 
-    # 1. Try the thumbnail cache directory (already 320 px)
-    cache_dir = _resolve_cache_dir(state)
-    thumb_dir = cache_dir / "thumbnails"
-    thumb_path = thumb_dir / safe_name
-    if thumb_path.exists() and thumb_path.is_file():
-        return send_from_directory(str(thumb_dir), safe_name, mimetype="image/jpeg")
-
-    # 2. Try the media folder for video frame caches
-    from metixel.shared.config import resolve_watch_paths
-
-    config = state.config
-    watch_paths = resolve_watch_paths(config)
-    media_folder = watch_paths[0] if watch_paths else resolve_install_path("media/")
-
-    if media_folder.exists():
-        for candidate in media_folder.rglob(safe_name):
-            if candidate.is_file():
-                # Video frames are full-resolution — downscale to
-                # thumbnail size before serving.
-                if safe_name.endswith(".frame"):
-                    return _serve_resized_frame(candidate)
-                return send_from_directory(
-                    str(candidate.parent),
-                    safe_name,
-                    mimetype="image/jpeg",
-                )
-
-    return jsonify({"error": "Thumbnail not found"}), 404
+    found = find_thumbnail(state, safe_name)
+    if found is None:
+        return jsonify({"error": "Thumbnail not found"}), 404
+    path, is_frame = found
+    if is_frame:
+        return _serve_resized_frame(path)
+    return send_from_directory(str(path.parent), path.name, mimetype="image/jpeg")
 
 
 def _serve_resized_frame(path: Path) -> Response:
@@ -180,13 +183,14 @@ def list_media():
     cache_key = str(tuple(sorted(str(p) for p in watch_paths)))
     now = time.monotonic()
 
+    all_paths: list[Path]
     with _file_list_lock:
         cached = _file_list_cache.get(cache_key)
 
         if cached is not None and (now - cached[0]) < _CACHE_TTL:
             all_paths, img_count, vid_count = cached[1], cached[2], cached[3]
         else:
-            all_paths: list[Path] = []
+            all_paths = []
             img_count = 0
             vid_count = 0
             for media_folder in watch_paths:
@@ -320,14 +324,30 @@ def upload_media():
     Returns:
         JSON ``{saved: [...], errors: [...]}`` with per-file results.
     """
-    state = current_app.config["METIXEL_STATE"]
-    upload_dir = _resolve_upload_dir(state)
-
     files = request.files.getlist("files")
     if not files:
         return (
             jsonify({"saved": [], "errors": [{"name": None, "error": "No files supplied"}]}),
             400,
+        )
+
+    # Only touch the filesystem once we know there is something to save.
+    state = current_app.config["METIXEL_STATE"]
+    try:
+        upload_dir = _resolve_upload_dir(state)
+    except OSError as exc:
+        logger.error("Cannot create upload directory: %s", exc)
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "error": "Upload directory is not writable",
+                    "message": f"Upload directory is not writable: {exc}",
+                    "saved": [],
+                    "errors": [{"name": None, "error": "Upload directory is not writable"}],
+                }
+            ),
+            500,
         )
 
     saved: list[dict[str, Any]] = []

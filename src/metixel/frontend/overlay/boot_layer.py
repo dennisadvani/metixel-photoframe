@@ -137,13 +137,12 @@ class BootLayer(OverlayLayer):
         self._fade_start = 0.0
         self._progress_pct = 0.0
         self._progress_hidden = False
-        # Textures were freed by _finish() — force a reload on next draw
+        # Force a texture reload on the next draw.  If we were still
+        # fading, the textures are live GPU objects — release them the
+        # same way _finish() does rather than dropping the references
+        # (which leaked them).  Safe when _finish() already ran.
+        self._unload_textures()
         self._tex_loaded = False
-        self._bg_tex = None
-        self._logo_tex = None
-        self._spinner_tex = None
-        self._progress_bg_tex = None
-        self._progress_fill_tex = None
         self._reset_mode = True
         logger.info("Boot layer reactivated — pipeline is rebuilding")
 

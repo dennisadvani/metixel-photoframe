@@ -125,11 +125,30 @@ def test_upload_heic_converts_to_jpeg(app, client, mock_state, tmp_path, monkeyp
     assert (upload_dir / "IMG_0001.jpg").read_bytes() == b"\xff\xd8\xff\xe0converted-jpeg"
 
 
-def test_upload_no_files_returns_400(app, client):
-    """A request with no files is rejected."""
+def test_upload_no_files_returns_400(app, client, mock_state, tmp_path):
+    """A request with no files is rejected — before the upload dir is created."""
+    mock_state.update_config("system", {"media_dir": str(tmp_path / "media")})
     resp = client.post("/api/media/upload", data={}, content_type="multipart/form-data")
     assert resp.status_code == 400
     assert resp.get_json()["errors"][0]["error"] == "No files supplied"
+    # The empty-request path must not touch the filesystem.
+    assert not (tmp_path / "media" / "my_media").exists()
+
+
+def test_upload_dir_not_creatable_returns_500(app, client, mock_state, tmp_path, monkeypatch):
+    """A failure to create the upload directory is a clear 500, not a crash."""
+    import metixel.backend.web.routes.media as media_mod
+
+    def boom(state):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(media_mod, "_resolve_upload_dir", boom)
+    resp = _upload(client, [("photo.jpg", b"\xff\xd8\xff\xe0fakejpeg")])
+    assert resp.status_code == 500
+    body = resp.get_json()
+    assert body["status"] == "error"
+    assert "not writable" in body["error"]
+    assert body["saved"] == []
 
 
 def test_upload_saves_into_configured_upload_dir(app, client, mock_state, tmp_path):

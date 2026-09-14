@@ -25,7 +25,7 @@
 # only reverts the Metixel-specific configuration and removes the app.
 #
 # Usage:
-#   sudo bash /opt/metixel/scripts/uninstall_metixel.sh
+#   sudo bash /opt/metixel/live/scripts/uninstall_metixel.sh
 # =============================================================================
 
 set -euo pipefail
@@ -111,8 +111,19 @@ systemctl daemon-reload
 # 2. Revert quiet boot settings
 # ============================================================================
 echo "[2/9] Reverting quiet boot settings..."
-if [ -f "${METIXEL_DIR}/scripts/quiet_boot.sh" ]; then
-    bash "${METIXEL_DIR}/scripts/quiet_boot.sh" --revert / || \
+# Blue/Green layout: scripts ship inside the live release
+# (${METIXEL_DIR}/live/scripts).  The legacy monolithic path is tried second so
+# an old install can still be reverted; the manual fallback below is only for
+# when neither exists.
+QUIET_BOOT=""
+for candidate in "${METIXEL_DIR}/live/scripts/quiet_boot.sh" "${METIXEL_DIR}/scripts/quiet_boot.sh"; do
+    if [ -f "${candidate}" ]; then
+        QUIET_BOOT="${candidate}"
+        break
+    fi
+done
+if [ -n "${QUIET_BOOT}" ]; then
+    bash "${QUIET_BOOT}" --revert / || \
         echo "  WARNING: quiet_boot revert reported an error (continuing)"
 else
     echo "  ! quiet_boot.sh not found — reverting manually"

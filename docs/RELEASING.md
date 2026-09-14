@@ -188,7 +188,7 @@ PR:
 
 ```bash
 # Bump, commit on dev, push a release branch, open a PR to main, wait for CI
-scripts/release.sh minor-beta      # bump minor + beta (or: scripts/release.ps1)
+scripts/release.sh minor-beta      # bump patch + beta number (or: scripts/release.ps1)
 scripts/release.sh beta            # bump beta only
 scripts/release.ps1 -Version 0.2.0-beta.2   # set an exact version (Windows)
 
@@ -202,7 +202,7 @@ Two beta options are available:
 
 | Script arg | Meaning | Example |
 |---|---|---|
-| `minor-beta` | Bump the numeric version **and** the beta number | `1.1.9-beta.9` → `1.1.10-beta.10` |
+| `minor-beta` | Bump the **patch** segment **and** the beta number (`bump_version.py --beta`) | `1.1.9-beta.9` → `1.1.10-beta.10` |
 | `beta` | Bump **only** the beta number | `1.1.9-beta.9` → `1.1.9-beta.10` |
 
 > **Note:** the `main` branch is protected by a ruleset that **requires a
@@ -264,7 +264,8 @@ A stable release appears on the **stable** channel.  Do this after
 betas/RCs have been tested.
 
 ```bash
-# One-shot: bump, PR to main, wait for CI, merge, tag, push
+# Bump, PR to main, wait for CI — then STOPS. You merge the PR in GitHub and
+# run `scripts/release.sh --finalize <version>` to tag main and push the tag.
 scripts/release.sh stable   # or: scripts/release.ps1 stable   (Windows)
 ```
 
@@ -366,6 +367,5 @@ The tag name after stripping the leading `v` must match the
 | `scripts/bump_version.py` | Bump the version programmatically |
 | `docs/CHANGELOG.md` | Human-readable release notes |
 | `pyproject.toml` | Package metadata (version is dynamic, reads `__version__`) |
-| `ARCHITECTURE.md` | Top-of-file version badge (update manually) |
 | GitHub Release | OTA discovery source + downloadable tarball |
 | Git tag (`vX.Y.Z`) | The ref the update manager checks out |

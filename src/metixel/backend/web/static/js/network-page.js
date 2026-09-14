@@ -61,12 +61,39 @@ import {
                 await apiPut("/config/messages", { enabled: !this.checked });
                 showToast(this.checked ? "Network popups suppressed" : "Network popups enabled", "info");
             });
+
+            // WiFi country — bound ONCE here (not in _loadNetworkConfig, which
+            // runs on every page visit and used to stack duplicate handlers).
+            var countryEl = document.getElementById("cfg-wifi-country");
+            if (countryEl) {
+                document.getElementById("btn-save-wifi-country")?.addEventListener("click", _saveWifiCountry);
+                countryEl.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") { e.preventDefault(); _saveWifiCountry(); }
+                });
+            }
         }
 
         _refreshNetworkStatus();
         _refreshNetworkAPStatus();
         _refreshNetworkScan();
         _loadNetworkConfig();
+    }
+
+    async function _saveWifiCountry() {
+        var countryEl = document.getElementById("cfg-wifi-country");
+        if (!countryEl) return;
+        var code = countryEl.value.trim().toUpperCase().slice(0, 2);
+        countryEl.value = code;
+        if (!code || code.length !== 2) return;
+        var saved = await apiPut("/config/network", { wifi_country: code });
+        // Applying to the radio (iw reg set) is a side effect, so it is a
+        // POST — never a GET query parameter.
+        var applied = await apiPost("/config/network/apply-wifi-country", { country: code });
+        if (saved && applied) {
+            showToast("WiFi country set to " + code, "success");
+        } else {
+            showToast("Failed to set WiFi country", "error");
+        }
     }
 
     async function _loadNetworkConfig() {
@@ -76,23 +103,6 @@ import {
             var countryEl = document.getElementById("cfg-wifi-country");
             if (countryEl) {
                 countryEl.value = cfg.wifi_country || "";
-
-                async function _saveWifiCountry() {
-                    var code = countryEl.value.trim().toUpperCase().slice(0, 2);
-                    countryEl.value = code;
-                    if (code && code.length === 2) {
-                        await apiPut("/config/network", { wifi_country: code });
-                        await apiGet("/config/network?apply_wifi_country=" + encodeURIComponent(code));
-                        showToast("WiFi country set to " + code, "success");
-                    }
-                }
-
-                // Save button
-                document.getElementById("btn-save-wifi-country")?.addEventListener("click", _saveWifiCountry);
-                // Also save on Enter
-                countryEl.addEventListener("keydown", function (e) {
-                    if (e.key === "Enter") { e.preventDefault(); _saveWifiCountry(); }
-                });
             }
         }
         var msgCfg = await apiGet("/config/messages");

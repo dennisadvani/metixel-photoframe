@@ -206,6 +206,10 @@ import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings
                     server_url: document.getElementById("cfg-immich-url").value,
                     api_key: document.getElementById("cfg-immich-key").value,
                 });
+                // The route always answers 200 once the body is valid: an
+                // upstream failure (bad key, unreachable host, timeout) comes
+                // back as {ok:false, status, error} rather than a 401/502
+                // that the API layer would mistake for OUR auth/backend state.
                 if (!data) {
                     if (resultEl) { resultEl.textContent = "Request failed"; resultEl.style.color = "var(--danger)"; }
                     return;

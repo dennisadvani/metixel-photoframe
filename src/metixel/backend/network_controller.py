@@ -236,6 +236,7 @@ class NetworkController:
         if old == new_state:
             return
 
+        old_entered = self._state_entered
         self._state = new_state
         self._state_entered = time.monotonic()
         self._pending_actions.append(new_state)
@@ -260,6 +261,10 @@ class NetworkController:
                 logger.error("AP start failed — will retry next tick")
                 self._pin = ""
                 self._state = old
+                # Restore the entry clock too: otherwise the grace-period
+                # timer restarts and the next retry waits a whole extra
+                # ap_grace_period_seconds before trying the AP again.
+                self._state_entered = old_entered
                 self._pending_actions.pop()
                 return
 

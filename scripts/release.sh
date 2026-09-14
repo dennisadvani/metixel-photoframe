@@ -159,12 +159,30 @@ fi
 # -- Bump version -----------------------------------------------------------
 
 echo -e "${GREEN}Bumping version: ${BUMP_TYPE}${NC}"
-NEW_VERSION=$(python3 "$REPO_ROOT/scripts/bump_version.py" $BUMP_FLAG 2>&1)
+# bump_version.py prints TWO lines on success ("Bumped version: X" and
+# "  File: ..."), so the raw output must not be used as the version.  Capture
+# it with `set -e` suspended: under errexit a failing `$(...)` assignment
+# aborts the script before `$?` can ever be inspected.
+set +e
+BUMP_OUTPUT=$(python3 "$REPO_ROOT/scripts/bump_version.py" $BUMP_FLAG 2>&1)
 BUMP_EXIT=$?
+set -e
 
 if [ $BUMP_EXIT -ne 0 ]; then
     echo -e "${RED}Version bump failed:${NC}"
-    echo "$NEW_VERSION"
+    echo "$BUMP_OUTPUT"
+    exit 1
+fi
+
+# Extract the bare semver (1.2.6 or 1.2.6-beta.1) the same way release.ps1
+# does: the value after "version:" on the first matching line.
+NEW_VERSION=$(printf '%s\n' "$BUMP_OUTPUT" \
+    | sed -nE 's/^.*[Vv]ersion:[[:space:]]*([0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z]+\.?[0-9]+)?).*$/\1/p' \
+    | head -n 1)
+if [ -z "$NEW_VERSION" ]; then
+    echo -e "${RED}Could not parse the new version from bump_version.py output:${NC}"
+    echo "$BUMP_OUTPUT"
+    git checkout -- src/metixel/__init__.py 2>/dev/null || true
     exit 1
 fi
 

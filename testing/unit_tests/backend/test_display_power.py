@@ -365,7 +365,7 @@ class TestInputHandlerScreenRouting:
         state = StateManager(config_path, tmp_path / "run")
         ipc = FakeIPC()
         handler = CECHandler(state, ipc, cec=None, display_power=display_power)
-        handler._cec_key_callback(0x42, 0)  # Screen Off
+        handler._cec_key_callback(0x6C, 0)  # Power Off (CEC UI command table)
         assert calls == [False]
         assert ipc.sent == []
 

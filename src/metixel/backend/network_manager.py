@@ -50,6 +50,36 @@ _cached_scan_time: float = 0.0
 # ---------------------------------------------------------------------------
 
 
+def _split_terse(line: str, maxsplit: int = -1) -> list[str]:
+    """Split one line of ``nmcli -t`` output on UNESCAPED colons.
+
+    Terse mode escapes ``:`` inside a value as ``\\:`` (and a backslash as
+    ``\\\\``), so an SSID such as ``Home:Net`` arrives as ``Home\\:Net``.  A
+    plain ``str.split(":")`` breaks such lines into the wrong number of
+    fields; this splits on real separators only and unescapes the values.
+    ``maxsplit`` behaves like :meth:`str.split` (``-1`` = unlimited).
+    """
+    fields: list[str] = []
+    current: list[str] = []
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "\\" and i + 1 < n:
+            current.append(line[i + 1])
+            i += 2
+            continue
+        if ch == ":" and (maxsplit < 0 or len(fields) < maxsplit):
+            fields.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    fields.append("".join(current))
+    return fields
+
+
 def is_wifi_radio_enabled() -> bool:
     """Check whether the Wi-Fi radio is enabled at the OS level.
 
@@ -198,7 +228,7 @@ def has_saved_wifi_networks() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 2 and parts[1] == "wifi":
                 return True
         return False
@@ -247,7 +277,7 @@ def is_connected() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 2:
                 dev, state = parts[0], parts[1]
                 # Exclude the AP's own IP — 192.168.42.x is the
@@ -275,7 +305,7 @@ def is_ethernet_connected() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3 and parts[1] == "ethernet" and parts[2] == "connected":
                 return True
         return False
@@ -299,7 +329,7 @@ def is_wifi_connected() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3 and parts[1] == "wifi" and parts[2] == "connected":
                 return True
         return False
@@ -318,7 +348,7 @@ def _interface_has_real_ip(device: str) -> bool:
         )
         for line in ip_result.stdout.strip().splitlines():
             if line.startswith("IP4.ADDRESS["):
-                val = line.split(":", 1)[-1].split("/")[0].strip()
+                val = _split_terse(line, 1)[-1].split("/")[0].strip()
                 if val and not val.startswith("192.168.42."):
                     return True
         return False
@@ -403,7 +433,7 @@ def _parse_scan_results() -> list[dict[str, Any]]:
     for line in result.stdout.strip().splitlines():
         if not line:
             continue
-        parts = line.split(":")
+        parts = _split_terse(line)
         if len(parts) < 2:
             continue
         ssid = parts[0].strip()
@@ -618,7 +648,7 @@ def forget_network(ssid: str) -> bool:
         )
         uuid = None
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 2 and parts[0] == ssid:
                 uuid = parts[1]
                 break
@@ -677,7 +707,7 @@ def get_connection_status() -> dict[str, Any]:
         )
         connected_ifaces: list[dict[str, str]] = []
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3:
                 dev, dev_type, state = parts[0], parts[1], parts[2]
                 if dev != "lo" and state == "connected":
@@ -723,7 +753,7 @@ def _fill_wifi_details(status: dict[str, Any], device: str) -> None:
             timeout=5,
         )
         for line in conn_result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3 and parts[0] == "yes":
                 status["ssid"] = parts[1].strip()
                 with contextlib.suppress(ValueError, IndexError):
@@ -749,7 +779,7 @@ def _fill_ethernet_details(status: dict[str, Any], device: str) -> None:
         )
         for line in conn_result.stdout.strip().splitlines():
             if line.startswith("GENERAL.CONNECTION:"):
-                name = line.split(":", 1)[-1].strip()
+                name = _split_terse(line, 1)[-1].strip()
                 if name:
                     status["ssid"] = name  # Reuse ssid field for connection name
                 break
@@ -770,7 +800,7 @@ def _fill_ip_address(status: dict[str, Any], device: str) -> None:
         )
         for line in ip_result.stdout.strip().splitlines():
             if line.startswith("IP4.ADDRESS["):
-                val = line.split(":", 1)[-1].split("/")[0].strip()
+                val = _split_terse(line, 1)[-1].split("/")[0].strip()
                 if val:
                     status["ip"] = val
                     break

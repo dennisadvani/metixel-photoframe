@@ -139,8 +139,11 @@ if you want to inspect or modify the install process.
    [Raspberry Pi website](https://www.raspberrypi.com/software/operating-systems/).
 2. Flash it with Raspberry Pi Imager (select "Raspberry Pi OS Lite" and
    choose the Trixie version) or use `dd`.
-3. (Optional) In Pi Imager's ⚙ settings, pre-configure Wi-Fi and enable SSH
-   so you can access the Pi after boot without a keyboard.
+3. In Pi Imager's ⚙ settings (**OS customisation** → **Set username and
+   password**), set the username to **`pi`** — the installer refuses to run
+   on any other username, because the systemd units, `update.sh` and
+   `reconcile.sh` all hard-code `pi`. Optionally pre-configure Wi-Fi and
+   enable SSH here too so you can access the Pi after boot without a keyboard.
 
 ### 2. Boot the Pi
 

@@ -62,7 +62,7 @@ src/metixel/
 
 ```bash
 # All Trixie-based platforms (Pi Zero 2 W / Pi 2 / Pi 3 / Pi 4 / Pi 5):
-cage -- python3 -m metixel --mode frontend --config etc/config.json
+cage -- python3 -m metixel --mode frontend   # --config defaults to /opt/metixel/data/config.json
 # cage starts a Wayland session + XWayland — pi3d gets its X11 surface
 ```
 
@@ -71,7 +71,7 @@ The application code and `Pi3dBackend` are identical across all platforms. Only 
 | **Kernel** | 6.6 LTS (Trixie default) | 6.6 LTS (Trixie default) |
 | **Init System** | systemd (stripped) | systemd or Busybox init (Buildroot) |
 
-### 1.4 Core Dependencies (Python 3.9+)
+### 1.4 Core Dependencies (Python 3.11+)
 
 | Package | Purpose | Phase 1 | Phase 2 |
 |---|---|---|---|
@@ -100,7 +100,7 @@ graph TB
         subgraph "Backend Daemon (Python)"
             SYNC[Sync Engine<br/>Immich + Folder Watcher]
             OPTQ[Optimisation Queue<br/>Image resize + Video transcode]
-            STATE[State Manager<br/>JSON Config + inotify]
+            STATE[State Manager<br/>JSON Config + mtime polling]
             HTTP[Web Server<br/>Flask on :8080]
             MQTT[MQTT Client<br/>paho-mqtt]
             CEC[CEC Handler<br/>python-cec]
@@ -120,7 +120,7 @@ graph TB
         end
 
         subgraph "Shared State"
-            CONFIG[config.json<br/>in /opt/metixel/etc/]
+            CONFIG[config.json<br/>in /opt/metixel/data/]
             CACHE[Media Cache<br/>/opt/metixel/cache/]
             SOCKET[Unix Domain Socket<br/>/run/metixel/control.sock]
         end
@@ -139,7 +139,7 @@ graph TB
     OPTQ -->|Ready-to-play| STATE
     STATE <--> CONFIG
     HTTP --> WEBUI
-    STATE -->|inotify event| ENGINE
+    STATE -->|mtime change| ENGINE
     STATE <-->|Control Socket| ENGINE
     ENGINE --> DISPLAY
     DISPLAY --> DBMX
@@ -168,7 +168,7 @@ The system runs as **three systemd services**:
    - Starts AFTER `metixel-backend.service`
    - Runs `cage` → `cage_launch.sh` → `python3 -m metixel --mode frontend`
    - Opens the display backend
-   - Reads `config.json` at startup, watches for `inotify IN_MODIFY` events
+   - Reads `config.json` at startup, polls the file's mtime for changes (hot reload)
    - Runs the main render loop
    - Connects to `/run/metixel/control.sock` for immediate commands
    - Note: the obsolete pre-cage `metixel-frontend.service` (legacy Bullseye direct launch) was removed — cage is the only frontend launcher.
@@ -198,7 +198,7 @@ metixel-photoframe/                           # Repository root
 │       │   ├── sync/
 │       │   │   ├── __init__.py
 │       │   │   ├── immich.py           # Immich API client
-│       │   │   ├── folder_watcher.py   # inotify-based folder sync
+│       │   │   ├── folder_watcher.py   # mtime-polling folder sync
 │       │   │   └── scheduler.py        # Cron-like sync scheduling
 │       │   ├── processing/
 │       │   │   ├── __init__.py
@@ -301,20 +301,29 @@ metixel-photoframe/                           # Repository root
 │           ├── media.py                # Media extension sets + content hash + fingerprint
 │           └── retry.py                # Retry with exponential backoff
 │
-├── etc/                               # Configuration files
-│   ├── config.json                    # Main runtime configuration
-│   └── logging.conf                   # Python logging configuration
-│
 ├── scripts/                           # Build & deployment scripts
+│   ├── bootstrap.sh                  # Fresh-install entry point (curl | bash)
+│   ├── update.sh                     # Blue/Green OTA: stage, install, health-check, swap
+│   ├── ota_install.sh                # Install steps run against the staged release
 │   ├── reconcile.sh                  # Idempotent host-config convergence
+│   ├── configure_boot.sh             # Boot config (config.txt / cmdline)
 │   ├── quiet_boot.sh                 # Splash screen + silent boot config
-│   ├── setup_ap.sh                   # Wi-Fi captive portal setup
-│   ├── setup_trixie.sh              # Install deps for Trixie Lite (cage + pi3d)
-│   └── run_trixie.sh                # Launch via cage (Wayland + XWayland) on Trixie
+│   ├── cage_launch.sh                # Launched by metixel-cage.service
+│   ├── trigger_cursor_hider.py       # Cursor-hider helper
+│   ├── precache_videos.py            # Pre-generate video frame caches
+│   ├── uninstall_metixel.sh          # Remove the install
+│   ├── legacy_setup_trixie_metixel.sh # Retired monolithic installer
+│   ├── release.sh / release.ps1      # Release PR workflow (see docs/RELEASING.md)
+│   ├── bump_version.py               # Version bump helper
+│   ├── run_functional_tests.sh       # Copy + run testing/functional/ on a Pi
+│   ├── pre-commit                    # Git pre-commit hook
+│   ├── fixups/                       # One-way migrations run by update.sh
+│   └── dev/                          # Developer helpers
 │
 ├── systemd/                           # systemd unit files
 │   ├── metixel-backend.service       # Backend daemon (all platforms)
-│   └── metixel-cage.service          # Frontend under cage (Trixie/KMS)
+│   ├── metixel-cage.service          # Frontend under cage (Trixie/KMS)
+│   └── metixel-cursor-hider.service  # Hides the Wayland cursor
 │
 ├── testing/                           # All test suites
 │   ├── unit_tests/                    # Automated unit tests (mirrors src/metixel domains)
@@ -336,11 +345,13 @@ metixel-photoframe/                           # Repository root
 │   └── WIDGET_DEV.md
 │
 ├── ARCHITECTURE.md                    # This file
-├── CLAUDE.md                          # AI assistant instructions
+├── AGENTS.md                          # AI assistant instructions
+├── CONTRIBUTING.md                    # Contributor guide
 ├── README.md                          # Project overview
-├── LICENSE                            # AGPL v3
+├── LICENSE                            # Apache 2.0
 ├── requirements-pip.txt               # Python deps
-├── requirements-apt-system.txt        # System packages for apt insssssssstall
+├── requirements-ci.txt                # CI-only Python deps
+├── requirements-system.txt            # System packages for apt install
 └── pyproject.toml                     # Modern Python project metadata
 ```
 
@@ -359,7 +370,7 @@ Backend Daemon (Flask)
     │  2. Write atomically to config.json (write temp → os.replace)
     │  3. Touch /run/metixel/config.updated flag file
     ▼
-config.json on disk  ──inotify IN_MODIFY──▶  Frontend Renderer
+config.json on disk  ──mtime poll────────▶  Frontend Renderer
                                               │
                                               │  Reload config struct
                                               │  Apply changes without restart
@@ -442,7 +453,7 @@ Next frame reflects change
 - System metrics (CPU/memory/swap/disk/cache sizing) live in
   `backend/system_metrics.py` (`SystemMetrics`), injected into StateManager
 - Immich API client (auth, albums, assets, download)
-- Folder watcher (inotify + polling fallback)
+- Folder watcher (mtime polling, `sync.local.poll_interval_seconds`)
 - MediaProcessor (resize, EXIF, transcode, cache)
 
 #### Step 1.5: Web Dashboard
@@ -548,7 +559,7 @@ Next frame reflects change
 │  • Optimised videos (post-transcode)                        │
 │                                                             │
 │  Playlist persisted to /run/metixel/playlist.json.          │
-│  Frontend reads via polling + inotify.                      │
+│  Frontend reads via mtime polling.                          │
 └──────────────────────┬──────────────────────────────────────┘
                        │
                        ▼
@@ -698,8 +709,9 @@ GPU memory on Pi 2/3
 5. MediaProcessor.ingest()
 ```
 
-- Poll interval: configurable (default 5 min Immich, 30 sec local)
-- Sync state persisted in cache/sync_state.json
+- Poll interval: configurable (default 60 min Immich, 30 sec local)
+- Sync status/progress written to `/run/metixel/immich_sync_status.json` and
+  `/run/metixel/immich_sync_progress.json`
 
 ### 6.3 Virtual Matte Board Algorithm
 
@@ -800,13 +812,12 @@ reads the same value for host state before the app has run, so neither depends o
 the other's ordering. Logging is likewise configured in code, with one log file
 per process under `data/logs/`.
 
-`etc/` stays in git at the repo root because it holds **templates**, not user
-data. The setup/build scripts copy `etc/` into each release folder, then seed
-the *real* `config.json` and `logging.conf` into `/opt/metixel/data/` (and
-`/opt/metixel/data/etc/`). The release keeps `etc/` only as the template source;
-all persistent config lives under `/data`. Moving `etc/` under `data/` in git
-would be wrong — it would commit templates as "data" and strip the release of
-the templates it needs to seed from.
+There is no `etc/` directory in git: the defaults live in code
+(`shared/config.py`) and the real `config.json` is created under
+`/opt/metixel/data/` on first run. The former user-editable `logging.conf` has
+been retired (`scripts/fixups/v1.3.0-retire-logging-conf.sh` removes it from
+existing devices); logging is configured in code with the level coming from
+`system.log_level`. All persistent config lives under `/data`.
 
 #### Discovery
 
@@ -819,9 +830,9 @@ the templates it needs to seed from.
 | **beta** | Latest pre-release tag | `refs/tags/vX.Y.Z-beta.N` |
 | **dev** | HEAD of `origin/dev` | commit SHA |
 
-The repository is read from the `updates.github_repo` config field; the channel
-from `updates.channel`. Auto-checking is governed by `updates.auto_check` and
-`updates.check_interval_hours`.
+The repository is read from the `update.github_repo` config field; the channel
+from `update.channel`. Auto-checking is governed by `update.auto_check` and
+`update.check_interval_hours`.
 
 #### Apply flow
 
@@ -834,8 +845,12 @@ runs in its own cgroup and survives the backend being stopped:
 1. Stop `metixel-cage.service` (frontend renderer), then `metixel-backend.service`
 2. **Hand off** to `scripts/update.sh <target ref>` (under the `live` symlink),
    which performs the atomic Blue/Green workflow in `scripts/update.sh`:
-   - **Staging** — `git clone --branch <ref> --depth 1` into a temp dir, then
-     rename to `/opt/metixel/releases/<version>/`
+   - **Staging** — `git clone --branch <ref>` (a deliberately **full** clone —
+     a shallow one breaks `git describe`, local debugging patches and
+     dev-channel SHA naming) into a temp dir, then rename to
+     `/opt/metixel/releases/<release>/`.  The release folder is the tag name
+     **as-is** (`v1.2.6`), a branch name for branches (`main`), or — for the
+     `dev` channel — the short commit SHA
    - **Install (strict)** — install missing system packages from
      `requirements-system.txt`, `pip install --break-system-packages -e`,
      and `requirements-pip.txt`. Any failure (e.g. no internet) **aborts**

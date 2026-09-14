@@ -98,7 +98,7 @@ run.
 
 | Task | What it does |
 |---|---|
-| **[Pi] Sync Code (scp)** | Mirrors `src/metixel/` to `/opt/metixel/src/metixel/` on the Pi |
+| **[Pi] Sync Code (scp)** | Mirrors `src/metixel/` to `/opt/metixel/live/src/metixel/` on the Pi |
 | **[Pi] Sync + Restart All (scp)** / **Backend (scp)** | Syncs, then restarts the systemd services |
 | **[Pi] Run Tests** | Runs `pytest` on the Pi |
 | **[Pi] Lint** / **[Pi] Type Check** | Quality checks on the Pi |
@@ -113,7 +113,7 @@ run.
 > `testing/` are **not** synced — copy them manually when you change tests:
 >
 > ```powershell
-> scp -r testing/unit_tests/ pi@<pi-ip>:/opt/metixel/testing/unit_tests/
+> scp -r testing/unit_tests/ pi@<pi-ip>:/opt/metixel/live/testing/unit_tests/
 > ```
 
 ## Functional (hardware) tests — `testing/functional/`
@@ -139,10 +139,11 @@ passwordless sudo. They are deliberately excluded from the default
 scripts/run_functional_tests.sh <pi-host> [<pi-user>] [--wifi-only]
 ```
 
-The functional tests are **not synced** — they run from the Pi's own git
-clone at the live symlink, so the code under test matches the installed
-release. The script only pushes a local `testing/functional/.env` if one
-exists (the credentials aren't part of the git clone). The Wi-Fi tests run
+The script copies the **latest local** `testing/functional/*.py` (plus
+`conftest.py`) to a fresh temp dir on the Pi (`/tmp/metixel-functional-<ts>`),
+runs them there against the installed release, and removes the temp dir
+afterwards. It also pushes a local `testing/functional/.env` if one exists
+(the credentials aren't part of the git clone). The Wi-Fi tests run
 with `METIXEL_NETWORK_TEST_MODE=1`, which makes the controller **ignore
 Ethernet for connectivity decisions** — so the Pi stays reachable over SSH
 while the Wi-Fi radio is exercised. The AP test runs in a **separate
@@ -184,7 +185,7 @@ Pillow, Flask):
 .\venv\Scripts\python.exe -m pytest testing/unit_tests/ -v
 
 # On the Pi
-cd /opt/metixel && python -m pytest testing/unit_tests/ -v
+cd /opt/metixel/live && python -m pytest testing/unit_tests/ -v
 ```
 
 **Conventions:**
@@ -197,7 +198,7 @@ cd /opt/metixel && python -m pytest testing/unit_tests/ -v
 - Web route tests use the shared fixtures in
   `testing/unit_tests/backend/web/conftest.py` (real `create_app()` + mocked
   outbound dependencies).
-- Target Python is 3.9+; the codebase is shared across Phase 1 (Raspberry Pi)
+- Target Python is 3.11+; the codebase is shared across Phase 1 (Raspberry Pi)
   and Phase 2 (other SBCs) — keep platform-specific logic behind the display
   backend abstraction.
 
@@ -232,8 +233,8 @@ method with a mock, never a bare `# type: ignore`.
 
 The `testing/web-tests/` folder is a **Playwright end-to-end suite** for the
 web dashboard. It runs headless Chromium from your workstation and talks to
-a **live frame's Flask backend** over the LAN (nginx on **port 80** proxying
-to Flask on 8080) — no Pi-side tooling required.
+a **live frame's Flask backend** over the LAN (an iptables `REDIRECT` rule
+forwards **port 80** to Flask on 8080 — there is no nginx) — no Pi-side tooling required.
 
 **One-time setup:**
 
@@ -293,8 +294,9 @@ Full details in [`testing/web-tests/README.md`](testing/web-tests/README.md).
   `ruff format` / `ruff check src/metixel/ testing/` before submitting. Follow the
   existing clean-architecture layout (`src/` + `typing.Protocol` ports in
   `src/metixel/shared/ports.py`, adapters in `src/metixel/shared/adapters.py`).
-- **Line endings:** all repo files are **CRLF**. Normalise to CRLF when adding
-  or editing files.
+- **Line endings:** repo files are **LF** (`.gitattributes` normalises text
+  files; only `.bat`/`.ps1` are CRLF). Normalise to LF when adding or editing
+  files.
 - **Web JS:** native ES6 modules, **no bundler, no build step, no frameworks**
   — one module per page under `src/metixel/backend/web/static/js/`, shared
   infra in `core.js`, entry point `main.js`. Bump the `?v=` cache-buster on
@@ -310,9 +312,10 @@ Full details in [`testing/web-tests/README.md`](testing/web-tests/README.md).
 
 1. Make your change, then run the full quality gate:
    ```bash
-   ruff check src/metixel/     # lint
-   mypy src/metixel/           # type check
-   .\.venv\Scripts\python.exe -m pytest testing/unit_tests/ -v   # unit tests
+   ruff check src/metixel/ testing/            # lint
+   ruff format --check src/metixel/ testing/   # formatting
+   mypy src/metixel/ testing/                  # type check
+   pytest testing/unit_tests/ -q --no-cov      # unit tests
    ```
 2. If the change touches web UI behaviour, run the Playwright suite against a
    live frame (`cd testing/web-tests; npx playwright test`) to confirm the dashboard,

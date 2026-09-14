@@ -423,3 +423,87 @@ class TestFolderWatcherHeif:
 
         ensure_heif_support()
         ensure_heif_support()  # idempotent
+
+
+class TestMissingWatchRoot:
+    """A watch root that is temporarily absent (unmounted share, unplugged
+    USB stick) must NOT make everything under it look deleted — that used to
+    purge playlist entries, the journal AND the cached transcodes."""
+
+    def _watcher(self, mock_state, roots: list[Path]) -> FolderWatcher:
+        mock_state.config.sync["local"]["watch_paths"] = [str(r) for r in roots]
+        return FolderWatcher(mock_state)
+
+    def test_entries_under_missing_root_are_kept(self, mock_state, tmp_path, caplog):
+        import logging
+        import shutil
+
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        root_a.mkdir()
+        root_b.mkdir()
+        _make_valid_jpeg(root_a / "a.jpg")
+        _make_valid_jpeg(root_b / "b.jpg")
+        watcher = self._watcher(mock_state, [root_a, root_b])
+        watcher._scan()
+        b_key = (root_b / "b.jpg").resolve()
+        assert b_key in watcher._known_files
+
+        # Root B disappears (simulates an unmounted share).
+        shutil.move(str(root_b), str(tmp_path / "b_gone"))
+        mock_state.remove_playlist_items.reset_mock()
+        handle_deleted = mock.Mock(wraps=watcher._handle_deleted)
+        watcher._handle_deleted = handle_deleted  # type: ignore[method-assign]
+
+        with caplog.at_level(logging.INFO, logger="metixel.backend.sync.folder_watcher"):
+            watcher._scan()
+            watcher._scan()  # second scan — the warning must not repeat
+
+        assert b_key in watcher._known_files, "journal entry must survive a missing root"
+        handle_deleted.assert_not_called()
+        mock_state.remove_playlist_items.assert_not_called()
+        assert caplog.text.count("Watch path not found") == 1
+
+        # Root B comes back — nothing is re-discovered as new.
+        shutil.move(str(tmp_path / "b_gone"), str(root_b))
+        mock_state.add_playlist_items.reset_mock()
+        with caplog.at_level(logging.INFO, logger="metixel.backend.sync.folder_watcher"):
+            watcher._scan()
+        assert "Watch path available again" in caplog.text
+        assert b_key in watcher._known_files
+        mock_state.add_playlist_items.assert_not_called()
+        assert watcher._missing_roots == set()
+
+    def test_real_deletion_still_handled_while_other_root_missing(self, mock_state, tmp_path):
+        import shutil
+
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        root_a.mkdir()
+        root_b.mkdir()
+        _make_valid_jpeg(root_a / "a.jpg")
+        _make_valid_jpeg(root_b / "b.jpg")
+        watcher = self._watcher(mock_state, [root_a, root_b])
+        watcher._scan()
+
+        shutil.move(str(root_b), str(tmp_path / "b_gone"))
+        (root_a / "a.jpg").unlink()  # a genuine deletion in the live root
+        watcher._scan()
+
+        assert (root_a / "a.jpg").resolve() not in watcher._known_files
+        assert (tmp_path / "b_gone" / "b.jpg").exists()
+        assert (root_b / "b.jpg").resolve() in watcher._known_files
+
+
+class TestProgressPathHonoursRunDir:
+    def test_write_progress_uses_metixel_run_dir(self, tmp_path, monkeypatch):
+        import json
+
+        from metixel.backend.sync.folder_watcher import _write_progress
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(run_dir))
+        _write_progress("scanning", 3, 1, "x.jpg")
+        data = json.loads((run_dir / "processing_status.json").read_text())
+        assert data["phases"]["scanning"]["processed"] == 1

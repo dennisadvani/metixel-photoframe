@@ -64,7 +64,9 @@ DRY_RUN="no"
 SKIP_BOOT_CONFIG="no"
 
 usage() {
-    sed -n '2,45p' "$0"
+    # Print the whole header comment block (everything after the shebang up
+    # to the first non-comment line) so new options are never cut off.
+    awk 'NR == 1 { next } !/^#/ { exit } { print }' "$0"
 }
 
 while [ $# -gt 0 ]; do
@@ -95,6 +97,24 @@ done
 if [ "${DRY_RUN}" = "no" ] && [ "$(id -u)" -ne 0 ]; then
     echo "ERROR: this script must run as root (use sudo)." >&2
     exit 1
+fi
+
+# ── pi user check ──────────────────────────────────────────────────────────
+# The username `pi` is hard-coded throughout the install: the systemd units
+# run as pi, update.sh chowns the live symlink and data tree to pi:pi, and
+# reconcile.sh configures linger and Samba for pi.  An image written with a
+# different username fails much later with far less obvious errors, so refuse
+# here.  Warn-only in dry-run (which may run on a workstation).
+if ! id -u pi >/dev/null 2>&1; then
+    if [ "${DRY_RUN}" = "yes" ]; then
+        echo "WARNING: user 'pi' does not exist on this host (dry-run continues)" >&2
+    else
+        echo "ERROR: user 'pi' does not exist on this device." >&2
+        echo "       Metixel requires the username 'pi'.  In Raspberry Pi Imager, open" >&2
+        echo "       'OS customisation' → 'Set username and password' and enter 'pi' as" >&2
+        echo "       the username when writing the SD card, then run this installer again." >&2
+        exit 1
+    fi
 fi
 
 echo "╔══════════════════════════════════════════════════════════════╗"

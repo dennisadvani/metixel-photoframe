@@ -580,8 +580,10 @@ controls (next, previous, pause, power, etc.).
 ![Screenshot: Advanced page — Keyboard / Remote Control mapping table](images/keyboard-map.png)
 
 The frame responds to your remote immediately. (HDMI-CEC support for TV remotes
-is available but needs the optional `python3-libcec` package — see
-`docs/INSTALLATION.md`.)
+uses libcec — the `cec-utils` + `libcec-dev` system packages from
+`requirements-system.txt` and the PyPI `cec` package from `requirements-pip.txt`,
+all installed by the bootstrap installer. The Debian `python3-libcec` package
+does not exist on Trixie and is not used — see `docs/INSTALLATION.md`.)
 
 ---
 

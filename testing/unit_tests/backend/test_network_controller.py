@@ -99,3 +99,49 @@ class TestStateMachineInTestMode:
         ctrl = NetworkController({})
         state, _, _ = ctrl.tick()
         assert state == NetworkState.CLIENT_CONNECTED
+
+
+class TestApStartFailureRestoresEntryClock:
+    def test_state_entered_restored_when_ap_start_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed ``_start_ap()`` must restore ``_state_entered`` along with
+        ``_state`` — otherwise the grace-period clock restarts and the next
+        retry waits a whole extra ``ap_grace_period_seconds``."""
+        import time
+
+        monkeypatch.setattr(nc, "is_ap_mode_active", lambda: False)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        monkeypatch.setattr(nc, "_start_ap", lambda: False)
+
+        ctrl = NetworkController({"ap_grace_period_seconds": 300})
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+        entered = time.monotonic() - 1000.0
+        ctrl._state_entered = entered
+
+        ctrl._transition_to(NetworkState.AP_ACTIVE)
+
+        assert ctrl._state == NetworkState.CLIENT_DISCONNECTED
+        assert ctrl._state_entered == entered
+        assert ctrl._pending_actions == []
+        assert ctrl._pin == ""
+        # The retry is still due immediately (elapsed >= grace period).
+        assert ctrl._elapsed() >= 300
+
+    def test_state_entered_updated_when_ap_start_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import time
+
+        monkeypatch.setattr(nc, "is_ap_mode_active", lambda: False)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        monkeypatch.setattr(nc, "_start_ap", lambda: True)
+
+        ctrl = NetworkController({})
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+        ctrl._state_entered = time.monotonic() - 1000.0
+
+        ctrl._transition_to(NetworkState.AP_ACTIVE)
+
+        assert ctrl._state == NetworkState.AP_ACTIVE
+        assert ctrl._elapsed() < 5

@@ -12,7 +12,9 @@ under ``input.keyboard_map``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import selectors
 import threading
 import time
 from collections.abc import Callable
@@ -67,13 +69,13 @@ class KeyboardHandler:
         self._running = False
         self._thread: threading.Thread | None = None
 
-        # Load key map from config, merging with defaults
+        # Load the stored key map with the SAME semantics as set_key_map (the
+        # Learn / Clear routes): per-command replace over the defaults, and an
+        # empty list clears that command's default keys.  Merging additively
+        # here used to resurrect cleared/relearned defaults on every reboot.
         stored = self._config.get("keyboard_map", {})
-        # stored maps str → str, invert and merge with defaults
         self._key_map: dict[int, str] = dict(DEFAULT_KEY_MAP)
-        for cmd, codes in self._invert_map(stored).items():
-            for code in codes:
-                self._key_map[code] = cmd
+        self.set_key_map(self._invert_map(stored) if isinstance(stored, dict) else {})
 
         # Learn mode state (accessed across threads — simple flag is fine)
         self._learn_mode: bool = False
@@ -116,7 +118,9 @@ class KeyboardHandler:
         """Replace the key mapping, merging config overrides with defaults.
 
         Config entries with an empty list `[]` mean "clear all keys for
-        this command" (removes the defaults too).
+        this command" (removes the defaults too).  ``__init__`` uses the
+        same routine so the on-disk map is interpreted identically after a
+        restart.
         """
         # Start from defaults
         self._key_map = dict(DEFAULT_KEY_MAP)
@@ -128,52 +132,61 @@ class KeyboardHandler:
             self._key_map = {k: v for k, v in self._key_map.items() if v != cmd}
             # Add new mappings
             for code in codes:
-                self._key_map[code] = cmd
+                try:
+                    self._key_map[int(code)] = cmd
+                except (TypeError, ValueError):
+                    logger.debug("Ignoring non-integer key code %r for %s", code, cmd)
+
+    #: How often (seconds) to look for newly plugged-in input devices.
+    _RESCAN_INTERVAL = 5.0
 
     def run(self) -> None:
-        """Find keyboard devices and process key events.  Blocks."""
-        try:
-            import selectors
+        """Find keyboard devices and process key events.  Blocks.
 
+        Devices are rescanned every :attr:`_RESCAN_INTERVAL` seconds, so a
+        remote that is unplugged (its fd is dropped from the selector — see
+        :meth:`_drop_device`) is picked up again when it is plugged back in,
+        and a device that was absent at boot is found later.
+        """
+        try:
             import evdev  # type: ignore[import-untyped]
         except ImportError:
             logger.warning("python3-evdev not installed — keyboard input disabled")
             return
 
-        devices = [evdev.InputDevice(path) for path in evdev.list_devices()]
-        keyboards = [d for d in devices if evdev.ecodes.EV_KEY in d.capabilities()]
-
-        if not keyboards:
-            logger.debug("No keyboard input devices found")
-            return
-
         # Build a selector so we block until a key event arrives,
         # rather than busy-polling read_one() which misses events.
         sel = selectors.DefaultSelector()
-        fd_to_kbd: dict[int, evdev.InputDevice] = {}
-        for kbd in keyboards:
-            try:
-                sel.register(kbd.fd, selectors.EVENT_READ)
-                fd_to_kbd[kbd.fd] = kbd
-            except Exception:
-                pass
-
-        names = [k.name for k in keyboards]
-        logger.info("Keyboard handler listening on: %s", names)
+        fd_to_kbd: dict[int, Any] = {}
+        self._rescan_devices(evdev, sel, fd_to_kbd)
+        if not fd_to_kbd:
+            logger.debug(
+                "No keyboard input devices found — rescanning every %.0fs",
+                self._RESCAN_INTERVAL,
+            )
+        last_rescan = time.monotonic()
 
         self._running = True
         while self._running:
             try:
                 for key, _ in sel.select(timeout=1.0):
-                    fileobj = key.fileobj
-                    if not isinstance(fileobj, int):
-                        fileobj = fileobj.fileno()
-                    kbd = fd_to_kbd.get(fileobj)
+                    fd = key.fd
+                    kbd = fd_to_kbd.get(fd)
                     if kbd is None:
                         continue
                     try:
-                        events = kbd.read()
+                        # read() is a generator — the ENODEV of an unplugged
+                        # device surfaces on the first next(), so consume it
+                        # here rather than in the loop below.
+                        events = list(kbd.read())
+                    except BlockingIOError:
+                        continue
                     except OSError:
+                        # Unplugged.  epoll keeps reporting the dead fd as
+                        # ready, so it MUST be unregistered — otherwise this
+                        # loop spins at 100% CPU.  The periodic rescan picks
+                        # the device up again on replug.
+                        self._drop_device(sel, fd_to_kbd, fd)
                         continue
                     for event in events:
                         if event.type != evdev.ecodes.EV_KEY:
@@ -202,12 +215,72 @@ class KeyboardHandler:
                             logger.debug("Key %s (%s) → %s", event.code, key_name, cmd)
                             self._dispatch(cmd)
 
+                now = time.monotonic()
+                if now - last_rescan >= self._RESCAN_INTERVAL:
+                    last_rescan = now
+                    self._rescan_devices(evdev, sel, fd_to_kbd)
+
             except Exception:
+                logger.debug("Keyboard handler loop error", exc_info=True)
                 time.sleep(0.1)
+
+        for fd in list(fd_to_kbd):
+            self._drop_device(sel, fd_to_kbd, fd, quiet=True)
+        with contextlib.suppress(Exception):
+            sel.close()
 
     def stop(self) -> None:
         """Signal the handler thread to stop."""
         self._running = False
+
+    @staticmethod
+    def _rescan_devices(evdev: Any, sel: selectors.BaseSelector, fd_to_kbd: dict[int, Any]) -> None:
+        """Register any EV_KEY-capable evdev device not already tracked."""
+        known_paths = {getattr(dev, "path", None) for dev in fd_to_kbd.values()}
+        try:
+            paths = list(evdev.list_devices())
+        except Exception:
+            logger.debug("evdev device listing failed", exc_info=True)
+            return
+        for path in paths:
+            if path in known_paths:
+                continue
+            dev = None
+            try:
+                dev = evdev.InputDevice(path)
+                if evdev.ecodes.EV_KEY not in dev.capabilities():
+                    dev.close()
+                    continue
+                sel.register(dev.fd, selectors.EVENT_READ)
+                fd_to_kbd[dev.fd] = dev
+                logger.info("Keyboard handler listening on: %s (%s)", dev.name, path)
+            except Exception:
+                logger.debug("Cannot open input device %s", path, exc_info=True)
+                if dev is not None:
+                    with contextlib.suppress(Exception):
+                        dev.close()
+
+    @staticmethod
+    def _drop_device(
+        sel: selectors.BaseSelector,
+        fd_to_kbd: dict[int, Any],
+        fd: int,
+        *,
+        quiet: bool = False,
+    ) -> None:
+        """Unregister *fd*, close its device and forget it."""
+        kbd = fd_to_kbd.pop(fd, None)
+        with contextlib.suppress(Exception):
+            sel.unregister(fd)
+        if kbd is not None:
+            with contextlib.suppress(Exception):
+                kbd.close()
+            if not quiet:
+                logger.info(
+                    "Keyboard device disconnected: %s (%s)",
+                    getattr(kbd, "name", "?"),
+                    getattr(kbd, "path", fd),
+                )
 
     def _dispatch(self, cmd: str) -> None:
         """Dispatch a command.

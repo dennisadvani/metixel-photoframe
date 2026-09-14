@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import re
 import subprocess
 
 from flask import Blueprint, jsonify
@@ -23,6 +25,8 @@ DEFAULT_NTP_SERVERS = [
     "1.debian.pool.ntp.org",
     "2.debian.pool.ntp.org",
 ]
+
+_WHITESPACE_RE = re.compile(r"\s")
 
 
 @time_bp.route("", methods=["GET"])
@@ -56,11 +60,12 @@ def set_timezone():
     Requires a NOPASSWD sudoers entry for timedatectl.
     """
     data = get_body()
-    missing = data.get("timezone", "").strip() if isinstance(data, dict) else ""
-    if not missing:
+    tz = data.get("timezone", "")
+    if not isinstance(tz, str):
+        return jsonify_error("'timezone' must be a string", 400)
+    tz = tz.strip()
+    if not tz:
         return jsonify_error("Missing or empty 'timezone' in JSON body", 400)
-
-    tz = missing
 
     try:
         result = subprocess.run(
@@ -174,36 +179,55 @@ def configure_ntp():
     servers = data.get("servers", [])
     if not isinstance(servers, list):
         servers = []
+    # Each entry is written verbatim as an ``NTP=`` line in timesyncd.conf,
+    # so it must be a plain hostname-like token: a string with no whitespace
+    # (a newline would inject an extra config line).  Blank entries are
+    # simply dropped (the defaults kick in below).
+    cleaned: list[str] = []
+    for entry in servers:
+        if not isinstance(entry, str):
+            return jsonify_error("'servers' entries must be strings", 400)
+        stripped = entry.strip()
+        if not stripped:
+            continue
+        if _WHITESPACE_RE.search(stripped):
+            return jsonify_error("'servers' entries must not contain whitespace", 400)
+        cleaned.append(stripped)
+    servers = cleaned
 
     try:
         if enabled:
             # Fall back to the Debian pool defaults when no servers given.
-            if not servers or not any(s.strip() for s in servers):
+            if not servers:
                 servers = list(DEFAULT_NTP_SERVERS)
             # Write timesyncd.conf with custom NTP servers
-            ntp_lines = "\n".join(f"NTP={s}" for s in servers if s.strip())
-            conf = f"[Time]\n{ntp_lines}\n" if ntp_lines else "[Time]\n"
-            # Write to temp file, then sudo cp to /etc
+            ntp_lines = "\n".join(f"NTP={s}" for s in servers)
+            conf = f"[Time]\n{ntp_lines}\n"
+            # Write to temp file, then sudo cp to /etc.  The temp file is
+            # removed whether or not the copy succeeds.
             import tempfile
 
             with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False) as tf:
                 tf.write(conf)
                 tmp_path = tf.name
-            subprocess.run(
-                ["sudo", "-n", "cp", tmp_path, "/etc/systemd/timesyncd.conf"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=True,
-            )
-            os.unlink(tmp_path)
+            try:
+                subprocess.run(
+                    ["sudo", "-n", "cp", tmp_path, "/etc/systemd/timesyncd.conf"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=True,
+                )
+            finally:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
             subprocess.run(
                 ["sudo", "-n", "systemctl", "restart", "systemd-timesyncd"],
                 capture_output=True,
                 text=True,
                 timeout=15,
             )
-            logger.info("NTP enabled with %d server(s)", len([s for s in servers if s.strip()]))
+            logger.info("NTP enabled with %d server(s)", len(servers))
             return jsonify({"status": "ok", "ntp": "enabled", "servers": servers})
         else:
             subprocess.run(

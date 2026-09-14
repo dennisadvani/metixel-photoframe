@@ -77,6 +77,9 @@ HEALTH_URL="${METIXEL_HEALTH_URL:-http://127.0.0.1:8080/api/health}"
 # the gate, be declared a success, and leave the frame on a black screen with
 # no rollback.  That was a real hole; do not "simplify" this back to HEALTH_URL.
 HEALTH_PROBE_URL="${HEALTH_URL}?require=render"
+# Exception — a deliberately HEADLESS device (metixel-cage not enabled) has no
+# frontend to demand, so the gate is relaxed to the backend-only probe there.
+# Decided right before the health loop (after reconcile.sh has run), see below.
 HEALTH_TIMEOUT="${METIXEL_HEALTH_TIMEOUT:-60}"   # seconds to wait for healthy boot
 HEALTH_INTERVAL="${METIXEL_HEALTH_INTERVAL:-3}"  # poll interval
 
@@ -130,6 +133,21 @@ while [ $# -gt 0 ]; do
  done
 export DRY_RUN
 
+# The `pi` user is hard-coded throughout (systemd units run as pi, the live
+# symlink / data tree are chown'd pi:pi, reconcile.sh configures linger and
+# Samba for pi).  A device imaged with a different username fails much later
+# and far less clearly, so refuse up front.  Warn-only in dry-run, which is
+# documented as safe to run anywhere (e.g. a workstation without a pi user).
+if ! id -u pi >/dev/null 2>&1; then
+    if [ "${DRY_RUN}" = "yes" ]; then
+        echo "WARNING: user 'pi' does not exist on this host (dry-run continues)" >&2
+    else
+        _die "user 'pi' does not exist. Metixel requires the username 'pi': set it" \
+             "under 'Set username and password' in Raspberry Pi Imager when writing" \
+             "the SD card (the default suggestion), then re-run this script."
+    fi
+fi
+
 # In dry-run mode nothing is written, so the root check is relaxed and the log
 # tee is skipped (there may be no data dir to write it to yet).
 if [ "${DRY_RUN}" = "no" ]; then
@@ -139,7 +157,12 @@ if [ "${DRY_RUN}" = "no" ]; then
     # script).  Create it BEFORE the tee, or `tee` fails and the whole run
     # loses its log — including any error that caused the failure.
     mkdir -p "$(dirname "${LOG_FILE}")" 2>/dev/null || true
-    exec > >(tee -a "${LOG_FILE}") 2>&1
+    # The backend's OTA wrapper (update_manager._build_update_script) already
+    # tees its stdout/stderr to this SAME file and exports
+    # METIXEL_UPDATE_LOG_ATTACHED=1; a second tee here wrote every line twice.
+    if [ "${METIXEL_UPDATE_LOG_ATTACHED:-}" != "1" ]; then
+        exec > >(tee -a "${LOG_FILE}") 2>&1
+    fi
 fi
 
 # Normalise a git ref (`refs/tags/v1.2.0`, `origin/main`, …) to a bare tag or
@@ -181,6 +204,11 @@ _restore_units() {
 }
 
 # ── Guard: not already present ─────────────────────────────────────────────
+# NAMING CONVENTION (mirrored by update_manager._ref_to_release_name): the
+# release folder is the tag name AS-IS (v1.2.6), a branch name for branches
+# (main), or — for `dev` — the short commit SHA (re-computed after the clone,
+# see below).  Keep the two sides in sync or the app's "already installed"
+# checks silently stop matching.
 if [ -e "${RELEASE_DIR}" ]; then
     _die "Release already exists at ${RELEASE_DIR} — aborting"
 fi
@@ -260,6 +288,19 @@ if [ "${VERSION}" = "dev" ] && [ "${DRY_RUN}" = "no" ]; then
     STAGING_VERSION="${COMMIT}"
     RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"
     echo "  dev staging → release folder: ${STAGING_VERSION}"
+    # The folder name was unknowable before the clone, so the "already
+    # present" guard above could not cover it.  Re-check now: a stale copy of
+    # the same commit (installed earlier, then rolled back) is replaced; the
+    # LIVE release is never touched — `mv` onto an existing directory would
+    # otherwise nest the clone INSIDE it.
+    if [ -e "${RELEASE_DIR}" ]; then
+        if [ -n "${PREV_LIVE}" ] && [ "$(readlink -f "${RELEASE_DIR}")" = "${PREV_LIVE}" ]; then
+            rm -rf "${STAGING_DIR}"
+            _die "dev commit ${STAGING_VERSION} is already the live release (${PREV_LIVE}) — nothing to update"
+        fi
+        echo "  removing stale release folder ${RELEASE_DIR} (not live)"
+        rm -rf "${RELEASE_DIR}"
+    fi
 fi
 if [ "${DRY_RUN}" = "no" ]; then
     mv "${STAGING_DIR}" "${RELEASE_DIR}"
@@ -279,7 +320,14 @@ _cleanup_staging() {
     _CLEANUP_DONE="yes"
     echo ""
     echo "--- Update failed — removing staging release ${RELEASE_DIR} ---"
-    rm -rf "${RELEASE_DIR}"
+    # Belt and braces: never delete the release that is (or was) live.  The
+    # guards above make this unreachable, but this trap is the one place an
+    # rm -rf must be provably unable to take the running system down.
+    if [ -n "${PREV_LIVE}" ] && [ "$(readlink -f "${RELEASE_DIR}" 2>/dev/null || true)" = "${PREV_LIVE}" ]; then
+        echo "REFUSING to remove ${RELEASE_DIR}: it is the live release"
+    else
+        rm -rf "${RELEASE_DIR}"
+    fi
     # On a fresh install we point `live` at the staged release BEFORE running
     # the installer.  If we now remove that release, `live` would be left
     # DANGLING — systemd units resolve /opt/metixel/live — so remove the
@@ -421,13 +469,24 @@ systemctl restart metixel-backend 2>/dev/null || true
 systemctl restart metixel-cage 2>/dev/null || true
 systemctl restart metixel-cursor-hider 2>/dev/null || true
 
+# A deliberately headless setup has metixel-cage DISABLED (not merely
+# stopped).  Only then is the frontend not part of the gate: the probe drops
+# to the backend-only form.  When the unit is enabled the strict
+# ?require=render probe stays, so a crash-looping frontend still fails the
+# gate and triggers a rollback.  The string compare is deliberate — `static`,
+# `masked`, `disabled` and a missing unit are all "not enabled".
+CAGE_ENABLED="$(systemctl is-enabled metixel-cage.service 2>/dev/null || true)"
+if [ "${CAGE_ENABLED}" != "enabled" ]; then
+    echo "  metixel-cage.service is '${CAGE_ENABLED:-absent}' (headless) — gating on the backend only"
+    HEALTH_PROBE_URL="${HEALTH_URL}"
+fi
+
 echo "  Waiting up to ${HEALTH_TIMEOUT}s for health endpoint…"
 elapsed=0
 healthy=""
 while [ "${elapsed}" -lt "${HEALTH_TIMEOUT}" ]; do
-    # The frontend is not required to be ACTIVE for the device to be usable in
-    # a deliberately headless setup, so the gate asks the endpoint rather than
-    # probing the unit.  systemd's verdict is logged alongside for diagnosis.
+    # systemd's verdict on the frontend is logged alongside the probe for
+    # diagnosis; the gate itself asks the endpoint (see CAGE_ENABLED above).
     if ! systemctl is-active --quiet metixel-cage.service 2>/dev/null; then
         echo "    note: metixel-cage.service is not active"
     fi

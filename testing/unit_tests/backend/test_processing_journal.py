@@ -251,3 +251,13 @@ class TestStateManagerJournalIntegration:
     def test_flush_journal_noop_when_unused(self, tmp_path: Path) -> None:
         sm = self._make_state(tmp_path)
         sm.flush_journal()  # should not raise
+
+
+class TestProcessingJournalMalformedFiles:
+    @pytest.mark.parametrize("payload", ['{"files": [1, 2]}', '{"files": "nope"}', '{"files": 3}'])
+    def test_non_dict_files_treated_as_empty(self, tmp_path: Path, payload: str) -> None:
+        path = tmp_path / "processing_state.json"
+        path.write_text(payload, encoding="utf-8")
+        journal = ProcessingJournal(path)  # must not raise
+        assert journal.snapshot() == {}
+        assert journal.paths() == []

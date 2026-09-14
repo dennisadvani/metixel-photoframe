@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING
 from metixel.backend.dependencies import ensure_runtime_dependencies
 from metixel.backend.frontend_liveness import FrontendLiveness
 from metixel.backend.state import StateManager
+from metixel.shared.config import DEFAULT_CONFIG, parse_schedule_time
 from metixel.shared.ipc import IPCClient
 from metixel.shared.paths import frontend_heartbeat_path, live_dir
 from metixel.shared.paths import run_dir as default_run_dir
@@ -60,6 +62,9 @@ class BackendDaemon:
         )
         self._ipc = IPCClient()
         self._running = False
+        # Set once shutdown() has run so a second SIGTERM/SIGINT (or an
+        # explicit call after the signal) is a no-op.
+        self._shutdown_done = threading.Event()
         self._config = self._state.config
         self._threads: list[threading.Thread] = []
         self._update_mgr: UpdateManager | None = None
@@ -73,7 +78,16 @@ class BackendDaemon:
         # Display power state — read by Web UI / MQTT.  Initialised from the
         # schedule so HA gets the correct state on boot (MQTT starts before
         # the scheduler thread).  Falls back to True when schedule disabled.
-        self._display_on: bool = self._display_should_be_on()
+        # Guarded: a malformed saved schedule must never prevent startup
+        # (a crash here would crash-loop the service on every boot).
+        try:
+            self._display_on: bool = self._display_should_be_on()
+        except Exception:
+            logger.warning(
+                "Could not evaluate the display schedule at startup — assuming display ON",
+                exc_info=True,
+            )
+            self._display_on = True
         # The MQTT client (set in _start_mqtt_client) — used by
         # set_display_power() to push screen-state changes to HA immediately.
         self._mqtt_client: MQTTClient | None = None
@@ -101,6 +115,7 @@ class BackendDaemon:
         self._start_network_monitor()
         self._start_update_manager()
         self._start_display_scheduler()
+        self._install_signal_handlers()
         self._start_web_server()
 
         logger.info(
@@ -113,8 +128,18 @@ class BackendDaemon:
         self._join_threads()
 
     def shutdown(self) -> None:
-        """Gracefully stop all services."""
+        """Gracefully stop all services.  Safe to call more than once."""
+        if self._shutdown_done.is_set():
+            return
+        self._shutdown_done.set()
         self._running = False
+        # Ask the long-running workers to stop (best effort — they are daemon
+        # threads, so a stuck one cannot block exit).
+        for attr in ("_opt_queue", "_folder_watcher", "_keyboard_handler"):
+            svc = getattr(self, attr, None)
+            if svc is not None:
+                with contextlib.suppress(Exception):
+                    svc.stop()
         if self._update_mgr is not None:
             with contextlib.suppress(Exception):
                 self._update_mgr.shutdown()
@@ -122,6 +147,36 @@ class BackendDaemon:
         # where we left off (no re-probe of unchanged, already-processed files).
         with contextlib.suppress(Exception):
             self._state.flush_journal()
+
+    def _install_signal_handlers(self) -> None:
+        """Route SIGTERM/SIGINT through :meth:`shutdown`.
+
+        systemd stops the service with SIGTERM; without a handler Python
+        dies immediately and the journal flush, UpdateManager shutdown, IPC
+        close and thread join in :meth:`run` never happen.  The handler runs
+        ``shutdown()`` and then raises ``KeyboardInterrupt``, which
+        werkzeug's ``serve_forever()`` swallows — so ``app.run()`` returns
+        normally and :meth:`run` completes its usual teardown.
+
+        Signal handlers can only be installed from the main thread; when
+        ``run()`` is driven from elsewhere (tests, embedding) this is a
+        logged no-op.
+        """
+
+        def _handle(signum: int, _frame: object) -> None:
+            try:
+                name = signal.Signals(signum).name
+            except ValueError:
+                name = str(signum)
+            logger.info("Received %s — shutting down backend", name)
+            self.shutdown()
+            raise KeyboardInterrupt
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, _handle)
+            except (ValueError, OSError):
+                logger.debug("Cannot install handler for %s (not the main thread)", sig)
 
     def _ensure_runtime_dependencies(self) -> None:
         """Install any missing runtime Python dependencies on startup.
@@ -279,6 +334,7 @@ class BackendDaemon:
                 self._ipc,
                 cec=self._ports.cec,
                 display_power=self.set_display_power,
+                display_is_on=lambda: self._display_on,
             )
             t = threading.Thread(target=cec.run, name="cec-handler", daemon=True)
             t.start()
@@ -444,7 +500,8 @@ class BackendDaemon:
 
         # Give the boot screen time to finish its fade-out animation
         # before showing any messages (welcome, PIN, etc.).  The fade
-        # takes ~0.8s — 2s is a safe buffer.
+        # takes ~0.8s; 10s also leaves headroom for a slow first render
+        # on a Pi 2/3 so the message is not drawn under the boot layer.
         time.sleep(10.0)
 
         # ── Initial boot: only wait if NOT already connected ──────
@@ -747,17 +804,16 @@ class BackendDaemon:
         config = self._state.config
         if not config.display.get("schedule_enabled", False):
             return True
-        on_str = config.display.get("schedule_on_time", "07:00")
-        off_str = config.display.get("schedule_off_time", "22:00")
-
-        def _parse_time(t: str) -> int:
-            parts = t.strip().split(":")
-            return int(parts[0]) * 60 + int(parts[1])
+        defaults = DEFAULT_CONFIG["display"]
+        on_min = self._parse_time(
+            config.display.get("schedule_on_time"), defaults["schedule_on_time"]
+        )
+        off_min = self._parse_time(
+            config.display.get("schedule_off_time"), defaults["schedule_off_time"]
+        )
 
         now = time.localtime()
         now_minutes = now.tm_hour * 60 + now.tm_min
-        on_min = _parse_time(on_str)
-        off_min = _parse_time(off_str)
 
         if on_min < off_min:
             # Same-day on-window.
@@ -765,6 +821,22 @@ class BackendDaemon:
         # Wrapped (overnight) on-window: on from on_min through midnight
         # until off_min.  (on_min == off_min → always on.)
         return now_minutes >= on_min or now_minutes < off_min
+
+    @staticmethod
+    def _parse_time(value: object, default: str) -> int:
+        """Parse an ``HH:MM`` schedule time to minutes since midnight.
+
+        A malformed or out-of-range value (the web UI can post ``""``) is
+        logged once per call and replaced by *default* — never raised, so a
+        bad saved schedule cannot crash the daemon.
+        """
+        minutes = parse_schedule_time(value)
+        if minutes is None:
+            logger.warning("Invalid display schedule time %r — falling back to %s", value, default)
+            minutes = parse_schedule_time(default)
+            if minutes is None:  # pragma: no cover — defaults are always valid
+                raise ValueError(f"Invalid default schedule time: {default!r}")
+        return minutes
 
     def _start_display_scheduler(self) -> None:
         """Start the display power scheduler in a background thread.
