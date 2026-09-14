@@ -314,8 +314,15 @@ import {
         }
     }
 
+    /** Observer that auto-loads the next page when "Load more" scrolls into view. */
+    var _loadMoreObserver = null;
+
     function _updateLoadMoreButton(el) {
-        // Remove existing button
+        // Remove existing button (and the observer watching it)
+        if (_loadMoreObserver) {
+            _loadMoreObserver.disconnect();
+            _loadMoreObserver = null;
+        }
         var existing = document.getElementById("media-load-more");
         if (existing) existing.remove();
 
@@ -325,11 +332,27 @@ import {
             btn.textContent = "Load more\u2026";
             btn.className = "btn--secondary";
             btn.style.marginTop = "1rem";
-            btn.addEventListener("click", function () {
+            var loadNext = function () {
+                if (_mediaLoading) return;
                 setButtonBusy(btn, "Loading\u2026");
                 _fetchMediaPage(_mediaOffset);
-            });
+            };
+            btn.addEventListener("click", loadNext);
             el.appendChild(btn);
+
+            // Infinite scroll: fetch the next page as the button nears the
+            // viewport, so the user rarely has to tap it.  The button stays
+            // as a visible fallback / progress indicator.  _fetchMediaPage's
+            // own in-flight guard prevents double loads, and this observer is
+            // torn down above whenever the button is re-rendered.
+            if ("IntersectionObserver" in window) {
+                _loadMoreObserver = new IntersectionObserver(function (entries) {
+                    if (entries.some(function (e) { return e.isIntersecting; })) {
+                        loadNext();
+                    }
+                }, { rootMargin: "0px 0px 300px 0px" });
+                _loadMoreObserver.observe(btn);
+            }
         }
     }
 
