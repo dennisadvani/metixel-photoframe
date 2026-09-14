@@ -9,6 +9,7 @@ monkeypatch :func:`data_dir` for the relative-path / default-path cases.
 
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 
 
@@ -300,4 +301,172 @@ class TestBrowseCreateFolder:
         assert resp.status_code == 400
 
         resp = client.post("/api/browse/create", json={"name": "x"})
+        assert resp.status_code == 400
+
+
+class TestBrowseCheck:
+    """``POST /api/browse/check`` — existence / creatability of watch paths."""
+
+    def test_reports_existing_missing_and_outside(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        (root / "media" / "have").mkdir(parents=True)
+        outside = tmp_path / "elsewhere" / "nope"
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post(
+            "/api/browse/check",
+            json={"paths": ["media/have/", "media/missing/", str(outside), ""]},
+        )
+
+        assert resp.status_code == 200
+        results = resp.get_json()["results"]
+        assert [r["path"] for r in results] == ["media/have/", "media/missing/", str(outside), ""]
+
+        have, missing, out, blank = results
+        assert have["exists"] is True and have["is_dir"] is True and have["creatable"] is False
+        assert missing["exists"] is False and missing["creatable"] is True
+        assert missing["resolved"] == str((root / "media" / "missing").resolve())
+        # Missing but outside the data tree → must not be offered for creation.
+        assert out["exists"] is False and out["creatable"] is False
+        assert blank["exists"] is False and blank["creatable"] is False
+
+    def test_traversal_out_of_data_tree_not_creatable(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post("/api/browse/check", json={"paths": ["../escape/"]})
+        assert resp.status_code == 200
+        assert resp.get_json()["results"][0]["creatable"] is False
+
+    def test_requires_list(self, client):
+        resp = client.post("/api/browse/check", json={"paths": "media/"})
+        assert resp.status_code == 400
+
+
+class TestBrowseMkdir:
+    """``POST /api/browse/mkdir`` — create a watch folder inside the data tree."""
+
+    def test_creates_nested_folder_with_mode_700(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        (root / "media").mkdir(parents=True)
+        (root / "media").chmod(0o755)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post("/api/browse/mkdir", json={"path": "media/holiday/2026/"})
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "ok"
+        assert data["created"] is True
+        target = root / "media" / "holiday" / "2026"
+        assert target.is_dir()
+        # Every *new* directory is 700; the pre-existing parent is untouched.
+        assert stat.S_IMODE(target.stat().st_mode) == 0o700
+        assert stat.S_IMODE((root / "media" / "holiday").stat().st_mode) == 0o700
+        assert stat.S_IMODE((root / "media").stat().st_mode) == 0o755
+
+    def test_attempts_chown_to_pi(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+        chowned: list[tuple[str, str, str]] = []
+        monkeypatch.setattr(
+            browse_mod.shutil, "chown", lambda p, u, g: chowned.append((str(p), u, g))
+        )
+
+        resp = client.post("/api/browse/mkdir", json={"path": "media/new/"})
+
+        assert resp.status_code == 200
+        assert chowned == [
+            (str((root / "media" / "new").resolve()), "pi", "pi"),
+            (str((root / "media").resolve()), "pi", "pi"),
+        ]
+
+    def test_chown_failure_is_not_fatal(self, client, tmp_path: Path, monkeypatch):
+        """On a dev box there is no ``pi`` user — creation must still succeed."""
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        def _no_user(p, u, g):
+            raise LookupError("no such user: pi")
+
+        monkeypatch.setattr(browse_mod.shutil, "chown", _no_user)
+
+        resp = client.post("/api/browse/mkdir", json={"path": "media/new/"})
+        assert resp.status_code == 200
+        assert (root / "media" / "new").is_dir()
+
+    def test_existing_folder_is_idempotent(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        (root / "media" / "have").mkdir(parents=True)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post("/api/browse/mkdir", json={"path": "media/have/"})
+        assert resp.status_code == 200
+        assert resp.get_json()["created"] is False
+
+    def test_refuses_outside_data_tree(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+        outside = tmp_path / "elsewhere" / "nope"
+
+        resp = client.post("/api/browse/mkdir", json={"path": str(outside)})
+        assert resp.status_code == 403
+        assert not outside.exists()
+
+    def test_refuses_traversal_out_of_data_tree(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir()
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post("/api/browse/mkdir", json={"path": "media/../../escape/"})
+        assert resp.status_code == 403
+        assert not (tmp_path / "escape").exists()
+
+    def test_refuses_symlink_escaping_data_tree(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir()
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (root / "link").symlink_to(elsewhere)
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post("/api/browse/mkdir", json={"path": "link/new/"})
+        assert resp.status_code == 403
+        assert not (elsewhere / "new").exists()
+
+    def test_existing_file_at_path_is_409(self, client, tmp_path: Path, monkeypatch):
+        import metixel.backend.web.routes.browse as browse_mod
+
+        root = tmp_path / "data"
+        root.mkdir()
+        (root / "afile").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(browse_mod, "data_dir", lambda: root)
+
+        resp = client.post("/api/browse/mkdir", json={"path": "afile"})
+        assert resp.status_code == 409
+
+    def test_requires_path(self, client):
+        resp = client.post("/api/browse/mkdir", json={})
         assert resp.status_code == 400

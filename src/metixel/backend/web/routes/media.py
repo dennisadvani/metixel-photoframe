@@ -18,15 +18,18 @@ from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
 
+from metixel.backend.web.helpers import get_body, jsonify_error
 from metixel.backend.web.media_service import (
     clear_cache,
     convert_heic,
+    delete_source_file,
     has_free_space,
     lookup_thumbnail,
     probe_image,
     probe_video,
     relative_to_any,
     resolve_cache_dir,
+    resolve_library_file,
     resolve_upload_dir,
     sanitize_filename,
     serve_resized_frame_bytes,
@@ -40,6 +43,7 @@ from metixel.shared.media import (
     VIDEO_EXTENSIONS,
     content_hash,
 )
+from metixel.shared.paths import resolve_install_path
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +103,32 @@ def find_thumbnail(state: Any, name: str) -> tuple[Path, bool] | None:
         if frame_path.is_file():
             return frame_path, True
     return None
+
+
+def _immich_sync_dir(config: Any) -> Path | None:
+    """Resolved Immich sync folder, or ``None`` when not configured."""
+    immich_cfg = config.sync.get("immich") or {}
+    sync_dir = immich_cfg.get("sync_dir") or "media/sync/immich/"
+    try:
+        return resolve_install_path(sync_dir).resolve()
+    except OSError:
+        return None
+
+
+def _is_synced(path: Path, sync_dir: Path | None) -> bool:
+    """True when ``path`` lives under the Immich sync folder.
+
+    Synced files are owned by the Immich syncer — deleting one locally is
+    pointless (the next sync restores it), so the UI hides Delete for them
+    and the delete endpoint refuses them.
+    """
+    if sync_dir is None:
+        return False
+    try:
+        path.resolve().relative_to(sync_dir)
+        return True
+    except (OSError, ValueError):
+        return False
 
 
 @media_bp.route("/thumbnail/<path:filename>")
@@ -242,6 +272,7 @@ def list_media():
 
     # ── Slice the requested page ─────────────────────────────────────
     page_paths = filtered_paths[offset : offset + limit]
+    sync_dir = _immich_sync_dir(config)
 
     items = []
     for entry in page_paths:
@@ -271,6 +302,7 @@ def list_media():
                 "size_kb": round(entry.stat().st_size / 1024, 1),
                 "media_type": "video" if is_video else "image",
                 "thumbnail_url": thumbnail_url,
+                "synced": _is_synced(entry, sync_dir),
             }
 
             # Attach transcode queue status for videos
@@ -294,6 +326,7 @@ def list_media():
                     "size_kb": round(entry.stat().st_size / 1024, 1),
                     "media_type": "video" if is_video else "image",
                     "thumbnail_url": None,
+                    "synced": _is_synced(entry, sync_dir),
                 }
             )
 
@@ -310,13 +343,32 @@ def list_media():
     )
 
 
+def _resolve_watch_folder_by_name(state: Any, folder: str) -> Path | None:
+    """Map a watch-folder *name* (as the library lists it) to its path.
+
+    Only enabled watch paths qualify — an upload into a disabled folder
+    would never reach the slideshow.  Returns ``None`` when nothing matches.
+    """
+    from metixel.shared.config import resolve_watch_paths
+
+    for wp in resolve_watch_paths(state.config):
+        if wp.name == folder:
+            return wp
+    return None
+
+
 @media_bp.route("/upload", methods=["POST"])
 def upload_media():
     """Upload media files into the user-media watch folder.
 
     Accepts ``multipart/form-data`` with multiple files under the ``files``
-    field name.  Files land in ``media/my_media/`` (an enabled watch path),
-    are auto-renamed on name collision, and must satisfy the extension
+    field name.  The optional ``folder`` field names the *enabled watch
+    folder* to save into (the ``folder`` value shown by ``/api/media/list``
+    and the Media Library folder filter); an unknown or disabled folder is
+    rejected.  Without ``folder`` the legacy destination is used (the
+    ``system.upload_dir`` config value, else ``media/my_media/``).
+
+    Files are auto-renamed on name collision and must satisfy the extension
     whitelist.  HEIC/HEIF images are converted to JPEG on arrival because
     the media pipeline only handles the classic image formats.  Uploads are
     rejected when they would leave less than 5% of the filesystem free.
@@ -333,8 +385,26 @@ def upload_media():
 
     # Only touch the filesystem once we know there is something to save.
     state = current_app.config["METIXEL_STATE"]
+    folder = (request.form.get("folder") or "").strip()
     try:
-        upload_dir = _resolve_upload_dir(state)
+        if folder:
+            upload_dir = _resolve_watch_folder_by_name(state, folder)
+            if upload_dir is None:
+                return (
+                    jsonify(
+                        {
+                            "status": "error",
+                            "error": f"Unknown folder: {folder}",
+                            "message": f"'{folder}' is not an enabled watch folder",
+                            "saved": [],
+                            "errors": [{"name": None, "error": f"Unknown folder: {folder}"}],
+                        }
+                    ),
+                    400,
+                )
+            upload_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            upload_dir = _resolve_upload_dir(state)
     except OSError as exc:
         logger.error("Cannot create upload directory: %s", exc)
         return (
@@ -402,6 +472,59 @@ def upload_media():
         ),
         status,
     )
+
+
+@media_bp.route("/delete", methods=["POST"])
+def delete_library_media():
+    """Delete one file from the media library.
+
+    Body: ``{"folder": "<watch folder name>", "path": "<relative path>"}`` —
+    the ``folder`` and ``path`` fields exactly as ``/api/media/list``
+    publishes them, so the browser never handles absolute paths.
+
+    Safety: the file is looked up inside the enabled watch folders only
+    (traversal outside them is rejected), and files under the Immich sync
+    folder are refused because the syncer owns them.  The file is removed
+    from disk and from the playlist immediately; the folder watcher cleans
+    up cached derivatives on its next scan.
+
+    Returns:
+        JSON ``{"status": "ok", "deleted": true, "name": "<file name>"}``.
+    """
+    state = current_app.config["METIXEL_STATE"]
+    data = get_body()
+    folder = str(data.get("folder") or "").strip()
+    rel_path = str(data.get("path") or "").strip()
+    if not rel_path:
+        return jsonify_error(
+            "Missing 'path'",
+            400,
+            hint='Send {"folder": "<watch folder>", "path": "sub/photo.jpg"}',
+        )
+
+    from metixel.shared.config import resolve_watch_paths
+
+    watch_paths = resolve_watch_paths(state.config)
+    target = resolve_library_file(folder, rel_path, watch_paths)
+    if target is None:
+        logger.warning("Refusing to delete unknown library file: %s / %s", folder, rel_path)
+        return jsonify_error("File not found in the media library", 404)
+
+    if _is_synced(target, _immich_sync_dir(state.config)):
+        return jsonify_error(
+            "This file is managed by Immich sync and cannot be deleted here",
+            403,
+            hint="Remove it from the synced album in Immich instead",
+        )
+
+    try:
+        deleted = delete_source_file(state, target)
+    except OSError:
+        logger.warning("Could not delete media file: %s", target, exc_info=True)
+        return jsonify_error("Could not delete file", 500)
+
+    logger.info("[MEDIA] Deleted library file: %s", target)
+    return jsonify({"status": "ok", "deleted": deleted, "name": target.name})
 
 
 @media_bp.route("/cache/clear", methods=["POST"])

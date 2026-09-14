@@ -7,9 +7,9 @@
 
 import {
     apiGet,
-    apiPut,
+    apiPost,
+    confirmDialog,
     escapeHtml,
-    openFolderBrowser,
     setButtonBusy,
     showToast
 } from "./core.js";
@@ -22,8 +22,8 @@ import {
     var _mediaLoading = false;
     /** Guard so upload/drop bindings are attached once */
     var _mediaUploadBound = false;
-    /** Guard so the upload-destination browse button is bound once. */
-    var _mediaDestBound = false;
+    /** Guard so the per-item "⋮" menu delegation is attached once. */
+    var _mediaMenuBound = false;
 
     async function loadMedia() {
         _mediaOffset = 0;
@@ -33,11 +33,7 @@ import {
         var el = document.getElementById("media-list");
         el.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
 
-        // Single /config fetch shared by the upload-destination control and
-        // the folder-filter dropdown below.
         var config = await apiGet("/config");
-
-        _setupUploadDestination(config);
 
         // Populate folder filter dropdown from enabled watch paths only.
         // The media API only scans enabled paths, so a disabled folder
@@ -46,6 +42,9 @@ import {
             var paths = config.sync.local.watch_paths;
             var sel = document.getElementById("media-filter-folder");
             if (sel) {
+                // Keep the current choice across reloads (e.g. after an
+                // upload) — it also decides where uploads go.
+                var previous = sel.value;
                 // Keep the "All folders" option
                 sel.innerHTML = '<option value="">All folders</option>';
                 paths.forEach(function (p) {
@@ -61,12 +60,15 @@ import {
                         sel.appendChild(opt);
                     }
                 });
+                if (previous) sel.value = previous;
             }
         }
+        _updateUploadState();
 
         await _fetchMediaPage(0);
 
         _bindUpload();
+        _bindMediaMenus();
         _setupSambaHelp();
     }
 
@@ -108,6 +110,7 @@ import {
         if (nameInput) nameInput.value = "";
         if (folderSel) folderSel.value = "";
         if (typeSel) typeSel.value = "";
+        _updateUploadState();
         _applyMediaFilters();
     }
 
@@ -197,7 +200,9 @@ import {
         _mediaFiltersBound = true;
 
         // Folder & type apply immediately on change (single discrete events).
+        // The folder choice also gates + targets uploads.
         document.getElementById("media-filter-folder")?.addEventListener("change", function () {
+            _updateUploadState();
             _applyMediaFilters();
         });
         document.getElementById("media-filter-type")?.addEventListener("change", function () {
@@ -272,9 +277,29 @@ import {
             } else {
                 infoText = item.width + '\u00d7' + item.height + ' \u00b7 ' + item.size_kb + ' KB';
             }
+            // Per-item "⋮" menu. Files pulled in by an image sync (Immich)
+            // are owned by the syncer — deleting one locally would just be
+            // undone on the next sync — so they get no menu at all.
+            var menuHtml = '';
+            if (!item.synced) {
+                menuHtml = '<div class="media-menu">'
+                    + '<button type="button" class="media-menu-btn" aria-label="More actions for '
+                    + escapeHtml(item.name) + '" aria-haspopup="menu" aria-expanded="false" title="More actions">'
+                    + '<span class="material-symbols-outlined">more_vert</span></button>'
+                    + '<div class="media-menu-dropdown" role="menu">'
+                    + '<button type="button" class="media-menu-item media-menu-item--danger media-delete" role="menuitem">'
+                    + '<span class="material-symbols-outlined">delete</span> Delete</button>'
+                    + '</div></div>';
+            }
+
             var div = document.createElement("div");
             div.className = "media-item";
-            div.innerHTML = thumbHtml
+            div.setAttribute("data-name", item.name);
+            div.setAttribute("data-folder", item.folder || "");
+            div.setAttribute("data-path", item.path || item.name);
+            div.setAttribute("data-type", item.media_type || "image");
+            div.innerHTML = menuHtml
+                + thumbHtml
                 + '<div class="media-name">' + escapeHtml(item.name) + badges + '</div>'
                 + folderHtml
                 + '<div class="media-info">' + infoText + '</div>';
@@ -308,82 +333,157 @@ import {
         }
     }
 
-// -- Upload destination --------------------------------------------------
+// -- Per-item "⋮" menu --------------------------------------------------
 
-/**
- * Initialise the "where uploads are copied" control in the media toolbar.
- *
- * Reads the persisted ``system.upload_dir`` config value (relative paths are
- * resolved under the persistent data dir) and lets the user browse for a new
- * destination via the shared folder browser.  The chosen folder is saved to
- * config immediately on Select.
- */
-async function _setupUploadDestination(config) {
-    var btn = document.getElementById("btn-upload-destination");
-    var label = document.getElementById("media-upload-destination");
-
-    // Nothing to wire up if the toolbar control isn't present.
-    if (!btn && !label) return;
-
-    var configured = (config && config.system && config.system.upload_dir) || "";
-    var value = String(configured || "").trim();
-
-    if (label) {
-        // Fall back to the legacy default when nothing is persisted yet.
-        label.textContent = value || "media/my_media/";
-        label.title = value || "Default destination (media/my_media/) \u2014 uploads must land in an enabled folder to reach the slideshow";
-    }
-
-    if (!_mediaDestBound) {
-        _mediaDestBound = true;
-        if (btn) {
-            btn.addEventListener("click", function () {
-                // Start at the currently shown destination (fresh each click —
-                // the label is updated on every loadMedia and after each save).
-                var curLabel = document.getElementById("media-upload-destination");
-                openFolderBrowser(null, {
-                    initialPath: curLabel ? curLabel.textContent.trim() : "",
-                    onSelect: function (absPath, browseData) {
-                        var relPath = relativeForConfig(absPath, browseData && browseData.base_path);
-                        _saveUploadDestination(relPath);
-                    }
-                });
-            });
-        }
-    }
+/** Close every open item menu (optionally all except ``keep``). */
+function _closeMediaMenus(keep) {
+    document.querySelectorAll(".media-menu.open").forEach(function (m) {
+        if (m === keep) return;
+        m.classList.remove("open");
+        var b = m.querySelector(".media-menu-btn");
+        if (b) b.setAttribute("aria-expanded", "false");
+    });
 }
 
-/** Persist the chosen upload destination (data-dir-relative) to config. */
-async function _saveUploadDestination(relPath) {
-    var result = await apiPut("/config/system", { upload_dir: relPath });
-    if (result) {
-        var label = document.getElementById("media-upload-destination");
-        if (label) {
-            label.textContent = relPath;
-            label.title = relPath + " \u2014 uploads must land in an enabled folder to reach the slideshow";
+/**
+ * Wire the per-item "⋮" menus.  Delegated on #media-list so items rendered
+ * by later pages ("Load more") and re-renders keep working without
+ * re-binding.  Bound once per page lifetime.
+ */
+function _bindMediaMenus() {
+    if (_mediaMenuBound) return;
+    _mediaMenuBound = true;
+
+    var list = document.getElementById("media-list");
+    if (!list) return;
+
+    list.addEventListener("click", function (e) {
+        var toggle = e.target.closest ? e.target.closest(".media-menu-btn") : null;
+        if (toggle) {
+            e.preventDefault();
+            e.stopPropagation();
+            var menu = toggle.closest(".media-menu");
+            var opening = !menu.classList.contains("open");
+            _closeMediaMenus(menu);
+            menu.classList.toggle("open", opening);
+            toggle.setAttribute("aria-expanded", opening ? "true" : "false");
+            return;
         }
-        showToast("Upload destination set to " + relPath, "success");
+
+        var del = e.target.closest ? e.target.closest(".media-delete") : null;
+        if (del) {
+            e.preventDefault();
+            e.stopPropagation();
+            _closeMediaMenus();
+            var itemEl = del.closest(".media-item");
+            if (itemEl) _deleteMediaItem(itemEl);
+        }
+    });
+
+    // Click anywhere else / Escape closes any open menu.
+    document.addEventListener("click", function (e) {
+        if (e.target.closest && e.target.closest(".media-menu")) return;
+        _closeMediaMenus();
+    });
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") _closeMediaMenus();
+    });
+}
+
+/**
+ * Confirm and delete one library item.  On success the tile is removed
+ * in place (no full reload — that would drop the user's scroll position
+ * and any "Load more" pages) and the summary count is adjusted.
+ */
+async function _deleteMediaItem(itemEl) {
+    var name = itemEl.getAttribute("data-name") || "this file";
+    var folder = itemEl.getAttribute("data-folder") || "";
+    var path = itemEl.getAttribute("data-path") || name;
+
+    var ok = await confirmDialog("Delete " + name + "?", {
+        title: "Delete media",
+        okText: "Yes",
+        danger: true
+    });
+    if (!ok) return;
+
+    itemEl.classList.add("media-item--busy");
+    var result = await apiPost("/media/delete", { folder: folder, path: path });
+    if (result && result.status === "ok") {
+        itemEl.remove();
+        _mediaOffset = Math.max(0, _mediaOffset - 1);
+        _adjustMediaSummary(itemEl.getAttribute("data-type"));
+        showToast("Deleted " + name, "success");
     } else {
-        showToast("Failed to save the upload destination", "error");
+        itemEl.classList.remove("media-item--busy");
+        var msg = (result && (result.message || result.error)) || "Failed to delete " + name;
+        showToast(msg, "error");
     }
 }
 
 /**
- * Convert an absolute data-dir path to the relative form config stores
- * (relative paths resolve under the persistent data dir on the backend).
- * Separators are normalised to forward slashes so values stay portable
- * across OSes (Windows dev runs produce backslash paths otherwise).
- * Falls back to the absolute path when the folder isn't under the data dir.
+ * Adjust the "N images, M videos" summary after an in-place removal so it
+ * stays honest without a refetch.  ``mediaType`` is "image" or "video".
  */
-function relativeForConfig(absPath, basePath) {
-    var base = String(basePath || "/opt/metixel/data").replace(/\\/g, "/");
-    var p = String(absPath || "").replace(/\\/g, "/");
-    if (p.indexOf(base) === 0) {
-        var rel = p.substring(base.length).replace(/^\/+/, "");
-        if (rel && rel[rel.length - 1] !== "/") rel += "/";
-        return rel;
+function _adjustMediaSummary(mediaType) {
+    var summary = document.querySelector("#media-list .media-summary");
+    if (!summary) return;
+    var word = mediaType === "video" ? "video" : "image";
+    var re = new RegExp("(\\d+)\\s+" + word + "s?");
+    var text = summary.textContent;
+    var m = text.match(re);
+    if (m) {
+        var n = Math.max(0, parseInt(m[1], 10) - 1);
+        text = text.replace(re, n + " " + word + (n === 1 ? "" : "s"));
+    } else {
+        // Fallback shape: "T files"
+        text = text.replace(/(\d+)\s+files?/, function (_, t) {
+            var n = Math.max(0, parseInt(t, 10) - 1);
+            return n + " file" + (n === 1 ? "" : "s");
+        });
     }
-    return p;
+    summary.textContent = text;
+}
+
+// -- Upload target ------------------------------------------------------
+
+var _UPLOAD_HINT_READY = "Tap to pick photos/videos, or drag & drop onto the grid";
+var _UPLOAD_HINT_NEED_FOLDER = "Select a folder to enable Upload Media";
+
+/** The watch-folder name chosen in the folder filter, or "" for All folders. */
+function _selectedUploadFolder() {
+    var sel = document.getElementById("media-filter-folder");
+    return sel ? (sel.value || "") : "";
+}
+
+/** Human-readable path of the selected folder (the option's label). */
+function _selectedUploadFolderLabel() {
+    var sel = document.getElementById("media-filter-folder");
+    if (!sel || !sel.value) return "";
+    var opt = sel.options[sel.selectedIndex];
+    return opt ? opt.textContent : sel.value;
+}
+
+/**
+ * Uploads always go into the folder picked in the folder filter, so the
+ * Upload button (and drag & drop) is disabled while "All folders" is
+ * selected.  Called on load and whenever the folder filter changes.
+ */
+function _updateUploadState() {
+    var btn = document.getElementById("btn-upload-media");
+    var hint = document.getElementById("media-toolbar-hint");
+    var folder = _selectedUploadFolder();
+    if (btn) {
+        btn.disabled = !folder;
+        btn.title = folder
+            ? "Upload into " + _selectedUploadFolderLabel()
+            : _UPLOAD_HINT_NEED_FOLDER;
+    }
+    if (hint) {
+        hint.textContent = folder
+            ? "Uploads go to " + _selectedUploadFolderLabel() + " \u2014 " + _UPLOAD_HINT_READY
+            : _UPLOAD_HINT_NEED_FOLDER;
+    }
 }
 
 // -- Upload -------------------------------------------------------------
@@ -398,6 +498,10 @@ function _bindUpload() {
 
     if (btn && input) {
         btn.addEventListener("click", function () {
+            if (!_selectedUploadFolder()) {
+                showToast(_UPLOAD_HINT_NEED_FOLDER, "info");
+                return;
+            }
             input.click();
         });
         input.addEventListener("change", function () {
@@ -414,7 +518,8 @@ function _bindUpload() {
         list.addEventListener("dragenter", function (e) {
             e.preventDefault();
             depth++;
-            list.classList.add("drop-active");
+            // No drop target highlight while uploads are disabled.
+            if (_selectedUploadFolder()) list.classList.add("drop-active");
         });
         list.addEventListener("dragover", function (e) {
             e.preventDefault();
@@ -428,6 +533,10 @@ function _bindUpload() {
             e.preventDefault();
             depth = 0;
             list.classList.remove("drop-active");
+            if (!_selectedUploadFolder()) {
+                showToast(_UPLOAD_HINT_NEED_FOLDER, "info");
+                return;
+            }
             if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
                 _uploadFiles(e.dataTransfer.files);
             }
@@ -439,7 +548,14 @@ function _uploadFiles(files) {
     var list = Array.prototype.slice.call(files);
     if (!list.length) return;
 
+    var folder = _selectedUploadFolder();
+    if (!folder) {
+        showToast(_UPLOAD_HINT_NEED_FOLDER, "info");
+        return;
+    }
+
     var form = new FormData();
+    form.append("folder", folder);
     list.forEach(function (f) {
         form.append("files", f, f.name);
     });
@@ -488,7 +604,7 @@ function _renderUploadResults(resp) {
 
     if (saved.length === 0 && errors.length === 0) {
         prog.style.display = "none";
-        showToast("Upload failed", "error");
+        showToast((resp && (resp.message || resp.error)) || "Upload failed", "error");
         return;
     }
 

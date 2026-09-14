@@ -184,3 +184,71 @@ def test_upload_saves_into_relative_upload_dir(app, client, mock_state, tmp_path
 
     assert resp.status_code == 201
     assert (expected / "photo.jpg").read_bytes() == b"\xff\xd8\xff\xe0fakejpeg"
+
+
+def _upload_to(client, folder: str, files: list[tuple[str, bytes]]):
+    """POST files with the ``folder`` form field the Media Library sends."""
+    return client.post(
+        "/api/media/upload",
+        data={
+            "folder": folder,
+            "files": [(io.BytesIO(blob), name) for name, blob in files],
+        },
+        content_type="multipart/form-data",
+    )
+
+
+def test_upload_into_named_watch_folder(app, client, mock_state, tmp_path):
+    """``folder`` selects the enabled watch path with that name."""
+    holiday = tmp_path / "holiday"
+    mock_state.update_config(
+        "sync",
+        {"local": {"watch_paths": [{"path": str(holiday), "enabled": True}]}},
+    )
+
+    resp = _upload_to(client, "holiday", [("photo.jpg", b"\xff\xd8\xff\xe0fakejpeg")])
+
+    assert resp.status_code == 201
+    assert resp.get_json()["saved"][0]["saved_as"] == "photo.jpg"
+    assert (holiday / "photo.jpg").read_bytes() == b"\xff\xd8\xff\xe0fakejpeg"
+    # The legacy default destination is not touched.
+    assert not (tmp_path / "media" / "my_media").exists()
+
+
+def test_upload_unknown_folder_rejected(app, client, mock_state, tmp_path):
+    mock_state.update_config(
+        "sync",
+        {"local": {"watch_paths": [{"path": str(tmp_path / "holiday"), "enabled": True}]}},
+    )
+
+    resp = _upload_to(client, "nope", [("photo.jpg", b"\xff\xd8\xff\xe0x")])
+
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["saved"] == []
+    assert "nope" in body["error"]
+    assert not list(tmp_path.rglob("photo.jpg"))
+
+
+def test_upload_into_disabled_watch_folder_rejected(app, client, mock_state, tmp_path):
+    """A disabled watch folder is never scanned, so uploads there are refused."""
+    off = tmp_path / "off"
+    mock_state.update_config(
+        "sync",
+        {"local": {"watch_paths": [{"path": str(off), "enabled": False}]}},
+    )
+
+    resp = _upload_to(client, "off", [("photo.jpg", b"\xff\xd8\xff\xe0x")])
+
+    assert resp.status_code == 400
+    assert not (off / "photo.jpg").exists()
+
+
+def test_upload_without_folder_keeps_legacy_destination(app, client, mock_state, tmp_path):
+    """Omitting ``folder`` (older clients) still lands in media/my_media."""
+    mock_state.update_config("system", {"media_dir": str(tmp_path / "media")})
+
+    resp = _upload_to(client, "", [("photo.jpg", b"\xff\xd8\xff\xe0x")])
+
+    assert resp.status_code == 201
+    assert (tmp_path / "media" / "my_media" / "photo.jpg").exists()

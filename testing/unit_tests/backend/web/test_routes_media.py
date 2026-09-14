@@ -243,3 +243,175 @@ class TestListMediaFilters:
         data2 = json.loads(resp2.data)
         assert len(data2["items"]) == 1
         assert data2["has_more"] is False
+
+
+class TestListMediaSyncedFlag:
+    """Items under the Immich sync folder are flagged ``synced`` so the UI
+    can hide the per-item Delete menu for them."""
+
+    def test_synced_flag_reflects_immich_sync_dir(self, client, mock_state, tmp_path, monkeypatch):
+        from PIL import Image
+
+        import metixel.shared.config as config_mod
+
+        local = tmp_path / "my_media"
+        synced = tmp_path / "immich"
+        local.mkdir()
+        synced.mkdir()
+        Image.new("RGB", (2, 3)).save(local / "mine.png")
+        Image.new("RGB", (2, 3)).save(synced / "theirs.png")
+        mock_state.update_config("sync", {"immich": {"sync_dir": str(synced)}})
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [local, synced])
+
+        resp = client.get("/api/media/list")
+        assert resp.status_code == 200
+        by_name = {i["name"]: i for i in json.loads(resp.data)["items"]}
+        assert by_name["mine.png"]["synced"] is False
+        assert by_name["theirs.png"]["synced"] is True
+
+
+class TestDeleteLibraryMedia:
+    """``POST /api/media/delete`` — delete one library item by folder + path."""
+
+    @staticmethod
+    def _library(tmp_path):
+        from PIL import Image
+
+        root = tmp_path / "my_media"
+        (root / "sub").mkdir(parents=True)
+        Image.new("RGB", (2, 3)).save(root / "top.png")
+        Image.new("RGB", (2, 3)).save(root / "sub" / "nested.png")
+        return root
+
+    def test_deletes_file_by_folder_and_relative_path(
+        self, client, mock_state, tmp_path, monkeypatch
+    ):
+        import metixel.shared.config as config_mod
+
+        root = self._library(tmp_path)
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [root])
+
+        resp = client.post(
+            "/api/media/delete", json={"folder": "my_media", "path": "sub/nested.png"}
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["status"] == "ok"
+        assert body["deleted"] is True
+        assert body["name"] == "nested.png"
+        assert not (root / "sub" / "nested.png").exists()
+        assert (root / "top.png").exists()
+
+    def test_deleted_file_disappears_from_next_listing(
+        self, client, mock_state, tmp_path, monkeypatch
+    ):
+        """The file-list cache must be invalidated so the UI doesn't keep
+        showing a file that is gone."""
+        import metixel.shared.config as config_mod
+
+        root = self._library(tmp_path)
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [root])
+
+        first = json.loads(client.get("/api/media/list").data)
+        assert first["total"] == 2
+
+        client.post("/api/media/delete", json={"folder": "my_media", "path": "top.png"})
+
+        second = json.loads(client.get("/api/media/list").data)
+        assert second["total"] == 1
+        assert [i["name"] for i in second["items"]] == ["nested.png"]
+
+    def test_removes_matching_playlist_item(self, client, mock_state, tmp_path, monkeypatch):
+        import metixel.shared.config as config_mod
+        from metixel.shared.models import MediaItem, MediaType
+
+        root = self._library(tmp_path)
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [root])
+        target = (root / "top.png").resolve()
+        mock_state.add_playlist_items(
+            [
+                MediaItem(
+                    id="top",
+                    original_path=target,
+                    cached_path=target,
+                    media_type=MediaType.IMAGE,
+                    width=2,
+                    height=3,
+                )
+            ]
+        )
+
+        resp = client.post("/api/media/delete", json={"folder": "my_media", "path": "top.png"})
+        assert resp.status_code == 200
+        assert all(i.id != "top" for i in mock_state.get_playlist())
+
+    def test_falls_back_to_any_watch_path_when_folder_name_is_wrong(
+        self, client, mock_state, tmp_path, monkeypatch
+    ):
+        import metixel.shared.config as config_mod
+
+        root = self._library(tmp_path)
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [root])
+
+        resp = client.post("/api/media/delete", json={"folder": "", "path": "top.png"})
+        assert resp.status_code == 200
+        assert not (root / "top.png").exists()
+
+    def test_requires_path(self, client):
+        resp = client.post("/api/media/delete", json={"folder": "my_media"})
+        assert resp.status_code == 400
+
+    def test_unknown_file_is_404(self, client, mock_state, tmp_path, monkeypatch):
+        import metixel.shared.config as config_mod
+
+        root = self._library(tmp_path)
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [root])
+
+        resp = client.post("/api/media/delete", json={"folder": "my_media", "path": "nope.png"})
+        assert resp.status_code == 404
+
+    @pytest.mark.parametrize(
+        "bad_path",
+        ["../outside.png", "sub/../../outside.png", "/etc/passwd"],
+    )
+    def test_refuses_paths_outside_watch_folder(
+        self, client, mock_state, tmp_path, monkeypatch, bad_path
+    ):
+        import metixel.shared.config as config_mod
+
+        root = self._library(tmp_path)
+        outside = tmp_path / "outside.png"
+        outside.write_bytes(b"x")
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [root])
+
+        resp = client.post("/api/media/delete", json={"folder": "my_media", "path": bad_path})
+        assert resp.status_code == 404
+        assert outside.exists()
+
+    def test_refuses_symlink_escaping_watch_folder(self, client, mock_state, tmp_path, monkeypatch):
+        import metixel.shared.config as config_mod
+
+        root = self._library(tmp_path)
+        outside = tmp_path / "outside.png"
+        outside.write_bytes(b"x")
+        (root / "link.png").symlink_to(outside)
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [root])
+
+        resp = client.post("/api/media/delete", json={"folder": "my_media", "path": "link.png"})
+        assert resp.status_code == 404
+        assert outside.exists()
+
+    def test_refuses_immich_synced_file(self, client, mock_state, tmp_path, monkeypatch):
+        from PIL import Image
+
+        import metixel.shared.config as config_mod
+
+        synced = tmp_path / "immich"
+        synced.mkdir()
+        Image.new("RGB", (2, 3)).save(synced / "theirs.png")
+        mock_state.update_config("sync", {"immich": {"sync_dir": str(synced)}})
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [synced])
+
+        resp = client.post("/api/media/delete", json={"folder": "immich", "path": "theirs.png"})
+        assert resp.status_code == 403
+        assert (synced / "theirs.png").exists()

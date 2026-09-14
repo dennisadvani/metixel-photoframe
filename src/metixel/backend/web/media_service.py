@@ -239,6 +239,74 @@ def serve_resized_frame_bytes(path: Path) -> bytes | None:
         return None
 
 
+def invalidate_file_list_cache() -> None:
+    """Drop the in-memory file-list cache so the next listing re-scans."""
+    with _file_list_lock:
+        file_list_cache.clear()
+
+
+def resolve_library_file(folder: str, rel_path: str, watch_paths: list[Path]) -> Path | None:
+    """Map a ``/api/media/list`` item back to a file on disk.
+
+    ``folder`` is the watch-folder name and ``rel_path`` the path relative to
+    that watch folder, exactly as the list endpoint publishes them.  The
+    lookup is confined to the watch paths (``..`` segments, absolute paths
+    and symlink escapes are rejected) so the web UI can only ever address
+    files the library itself exposes.  Returns the resolved path or ``None``
+    when no watch path contains such a file.
+    """
+    rel = str(rel_path or "").strip().replace("\\", "/")
+    if not rel or rel.startswith("/") or ".." in rel.split("/"):
+        return None
+    # Prefer the watch path whose name matches, but fall back to any root —
+    # the folder name is not guaranteed unique across watch paths.
+    ordered = sorted(watch_paths, key=lambda wp: wp.name != folder)
+    for root in ordered:
+        try:
+            root_resolved = root.resolve()
+            candidate = (root / rel).resolve()
+            candidate.relative_to(root_resolved)
+        except (OSError, ValueError):
+            continue
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def delete_source_file(state, target: Path) -> bool:
+    """Delete a media source file and forget it everywhere the backend tracks it.
+
+    Removes matching playlist items (so it stops playing right away rather
+    than on the next folder scan), drops its processing-journal entry, and
+    invalidates the file-list cache so the library listing is fresh.  The
+    folder watcher's next scan cleans up cached derivatives.
+
+    Returns ``True`` when a file was actually unlinked.  Raises ``OSError``
+    if the file exists but could not be removed.
+    """
+    resolved = target.resolve()
+
+    ids = set()
+    for item in state.get_playlist():
+        try:
+            if item.original_path.resolve() == resolved:
+                ids.add(item.id)
+        except OSError:
+            pass
+    if ids:
+        state.remove_playlist_items(ids)
+
+    state.journal.remove(resolved)
+
+    deleted = False
+    if target.is_file():
+        target.unlink()
+        deleted = True
+
+    invalidate_file_list_cache()
+    return deleted
+
+
 def clear_cache(state) -> tuple[int, int]:
     """Delete all processed cache files, returning ``(deleted_files, freed_bytes)``.
 

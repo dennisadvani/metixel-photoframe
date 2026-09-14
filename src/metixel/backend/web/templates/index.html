@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=43">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=44">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -299,14 +299,11 @@
                 <div id="card-media-library" class="card">
                     <h2>Media Library</h2>
                     <div class="media-toolbar">
-                        <button id="btn-upload-media" type="button">
+                        <button id="btn-upload-media" type="button" disabled>
                             <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">upload</span> Upload Media
                         </button>
-                        <button id="btn-upload-destination" type="button" class="btn--secondary btn--sm" aria-label="Choose where uploaded media is saved" title="Choose where uploaded media is saved">
-                            <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span> Save to&nbsp;<span id="media-upload-destination">media/my_media/</span>
-                        </button>
                         <input type="file" id="file-upload" accept="image/*,video/*" multiple style="display:none">
-                        <span class="media-toolbar-hint">Tap to pick photos/videos, or drag &amp; drop onto the grid</span>
+                        <span class="media-toolbar-hint" id="media-toolbar-hint">Select a folder to enable Upload Media</span>
                     </div>
                     <details class="media-smb" id="media-smb">
                         <summary>
@@ -858,6 +855,7 @@
                         <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
                         <span class="font-semibold text-[0.9rem] text-text-secondary">Server Time</span>
                         <span id="server-clock" class="font-mono text-[1.05rem] ml-1 text-text">--:--:--</span>
+                        <span id="server-clock-tz" class="text-[0.72rem] text-text-muted"></span>
                     </div>
                     <div class="setting-row">
                         <div class="setting-label">
@@ -865,8 +863,8 @@
                         </div>
                         <div class="setting-control">
                             <div class="flex gap-2 items-center">
-                                <select id="cfg-timezone" class="select-premium input-premium w-56">
-                                    <option value="">Auto-detect</option>
+                                <select id="cfg-timezone" class="select-premium input-premium w-56" aria-label="System timezone">
+                                    <option value="">Loading…</option>
                                 </select>
                                 <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
                             </div>
@@ -892,7 +890,10 @@
                     <div class="flex justify-end mt-2">
                         <button id="btn-add-ntp-server" class="btn--secondary btn--sm">+ Add Server</button>
                     </div>
-                    <div class="flex justify-end mt-2">
+                    <div class="flex justify-end gap-2 flex-wrap mt-2">
+                        <button id="btn-sync-time" class="btn--secondary" title="Contact the NTP servers and set the clock now">
+                            <span class="material-symbols-outlined" style="font-size:1.1rem;vertical-align:middle">sync</span> Sync Time Now
+                        </button>
                         <button id="btn-save-time" class="btn--primary">Save Time Settings</button>
                     </div>
 
@@ -1666,6 +1667,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=69"></script>
+    <script type="module" src="/static/js/main.js?v=70"></script>
 </body>
 </html>

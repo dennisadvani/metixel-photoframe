@@ -964,25 +964,22 @@ button:focus-visible {
     margin-right: 0;
 }
 
+/* Upload is only allowed into a specific folder — greyed out until one is
+   picked in the folder filter. */
+.media-toolbar #btn-upload-media:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+    box-shadow: none;
+    background: var(--primary);
+    transform: none;
+}
+
 .media-toolbar .media-toolbar-hint {
     /* The hint lives on its own line under the upload controls. */
     flex-basis: 100%;
     font-size: 0.78rem;
     color: var(--text-muted);
     margin-top: -0.35rem;
-}
-
-#btn-upload-destination {
-    margin-top: 0;
-    margin-right: 0;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-#btn-upload-destination .material-symbols-outlined {
-    flex-shrink: 0;
 }
 
 /* "Open the SMB share" accordion under the Upload Media button */
@@ -1229,11 +1226,109 @@ button:focus-visible {
 }
 
 .media-item {
+    position: relative;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     padding: 0.65rem;
-    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+    transition: box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+
+/* Tile is being deleted — fade and block further clicks until the API answers */
+.media-item--busy {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* Per-item "⋮" actions menu (top-right corner of the tile) */
+.media-menu {
+    position: absolute;
+    top: 0.85rem;
+    right: 0.85rem;
+    z-index: 2;
+}
+
+.media-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface) 85%, transparent);
+    color: var(--text-secondary);
+    cursor: pointer;
+    line-height: 1;
+    box-shadow: var(--shadow);
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.media-menu-btn .material-symbols-outlined {
+    font-size: 1.1rem;
+}
+
+.media-menu-btn:hover,
+.media-menu-btn:focus-visible,
+.media-menu.open .media-menu-btn {
+    background: var(--surface-hover);
+    color: var(--text);
+    outline: none;
+}
+
+.media-menu-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    min-width: 8.5rem;
+    padding: 0.25rem;
+    background: var(--surface-raised);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+}
+
+.media-menu.open .media-menu-dropdown {
+    display: block;
+}
+
+.media-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    margin: 0;
+    padding: 0.45rem 0.6rem;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text);
+    font-size: 0.8rem;
+    text-align: left;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.media-menu-item .material-symbols-outlined {
+    font-size: 1rem;
+}
+
+.media-menu-item:hover,
+.media-menu-item:focus-visible {
+    background: var(--surface-hover);
+    outline: none;
+}
+
+.media-menu-item--danger {
+    color: var(--danger);
+}
+
+.media-menu-item--danger:hover,
+.media-menu-item--danger:focus-visible {
+    background: rgba(220, 38, 38, 0.12);
 }
 
 .media-item:hover {

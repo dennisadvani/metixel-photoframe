@@ -5,7 +5,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shutil
+import stat
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
@@ -33,6 +36,49 @@ def _resolve_browse_path(requested: str) -> Path | None:
         return requested_path.resolve()
     except (OSError, RuntimeError):
         return None
+
+
+#: Owner applied to folders created via ``/api/browse/mkdir``.  The backend
+#: normally *runs* as this user (so new dirs are already pi:pi); the chown is
+#: only a correction for the case where it was launched as root.
+_CREATED_DIR_OWNER = ("pi", "pi")
+_CREATED_DIR_MODE = stat.S_IRWXU  # 0o700
+
+
+def _inside_data_tree(path: Path) -> bool:
+    """True if *path* (resolved) is inside (or is) the persistent data dir.
+
+    Watch folders may be created anywhere under ``/opt/metixel/data`` — but
+    never outside it, so a typo in the path box can't scatter directories
+    across the filesystem.
+    """
+    try:
+        path.resolve().relative_to(data_dir().resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _existing_ancestor(path: Path) -> Path:
+    """Deepest existing ancestor of *path* (or *path* itself if it exists)."""
+    current = path
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    return current
+
+
+def _apply_created_dir_perms(path: Path) -> None:
+    """``chmod 700`` and (best effort) ``chown pi:pi`` a freshly created dir."""
+    try:
+        os.chmod(path, _CREATED_DIR_MODE)
+    except OSError as e:
+        logger.warning("Could not chmod %s: %s", path, e)
+    try:
+        shutil.chown(path, *_CREATED_DIR_OWNER)
+    except (OSError, LookupError, PermissionError) as e:
+        # Not root (the normal case — already owned by pi) or no such user
+        # on a dev box.  Either way the folder is usable; just note it.
+        logger.debug("Skipped chown of %s to %s: %s", path, ":".join(_CREATED_DIR_OWNER), e)
 
 
 def _can_create_under(path: Path) -> bool:
@@ -174,6 +220,107 @@ def create_folder():
 
     logger.info("Folder created via web UI: %s", target)
     return jsonify({"status": "ok", "path": str(target), "name": name_raw})
+
+
+@browse_bp.route("/check", methods=["POST"])
+def check_paths():
+    """Report whether each given folder path exists and could be created.
+
+    Request body: ``{"paths": ["media/my_media/", "/abs/other", ...]}`` —
+    the values exactly as typed in the watch-path boxes (relative paths
+    resolve against the persistent data dir).
+
+    Returns ``{"results": [{path, resolved, exists, is_dir, creatable}, ...]}``
+    in the same order.  ``creatable`` is true only for a missing path inside
+    the data tree — the UI uses it to offer "Create this folder?" on save.
+    """
+    body = request.get_json(silent=True) or {}
+    raw_paths = body.get("paths")
+    if not isinstance(raw_paths, list):
+        return jsonify({"error": "'paths' must be a list"}), 400
+
+    results = []
+    for raw in raw_paths:
+        raw_str = str(raw or "").strip()
+        resolved = _resolve_browse_path(raw_str) if raw_str else None
+        if resolved is None:
+            results.append(
+                {
+                    "path": raw_str,
+                    "resolved": None,
+                    "exists": False,
+                    "is_dir": False,
+                    "creatable": False,
+                }
+            )
+            continue
+        exists = resolved.exists()
+        results.append(
+            {
+                "path": raw_str,
+                "resolved": str(resolved),
+                "exists": exists,
+                "is_dir": resolved.is_dir(),
+                "creatable": (not exists) and _inside_data_tree(resolved),
+            }
+        )
+    return jsonify({"results": results})
+
+
+@browse_bp.route("/mkdir", methods=["POST"])
+def make_folder():
+    """Create a (possibly nested) folder inside the persistent data tree.
+
+    Request body: ``{"path": "media/holiday/2026/"}`` — absolute, or
+    relative to the data dir.  Missing parents are created too.  Every
+    directory this call creates gets mode ``700`` and owner ``pi:pi``.
+
+    Creation is refused outside ``<data dir>`` (403).  An existing
+    directory is reported as ``created: false`` rather than an error, so
+    the UI can call this idempotently.
+
+    Returns ``{status: "ok", path: <abs path>, created: bool}``.
+    """
+    body = request.get_json(silent=True) or {}
+    raw = str(body.get("path") or "").strip()
+    if not raw:
+        return jsonify({"error": "'path' is required"}), 400
+
+    target = _resolve_browse_path(raw)
+    if target is None:
+        return jsonify({"error": "Invalid path"}), 400
+    if not _inside_data_tree(target):
+        return (
+            jsonify(
+                {
+                    "error": f"Folders can only be created inside {data_dir()}",
+                    "path": str(target),
+                }
+            ),
+            403,
+        )
+
+    if target.exists():
+        if not target.is_dir():
+            return jsonify({"error": f"Not a directory: {target}"}), 409
+        return jsonify({"status": "ok", "path": str(target), "created": False})
+
+    # Remember where the existing tree ends so only the *new* directories
+    # get their permissions rewritten — never an existing parent.
+    existing = _existing_ancestor(target)
+    try:
+        target.mkdir(parents=True, mode=_CREATED_DIR_MODE)
+    except OSError as e:
+        logger.warning("Failed to create folder %s: %s", target, e)
+        return jsonify({"error": f"Cannot create folder: {e}", "path": str(target)}), 500
+
+    current = target
+    while current != existing and current != current.parent:
+        _apply_created_dir_perms(current)
+        current = current.parent
+
+    logger.info("Folder created via web UI: %s", target)
+    return jsonify({"status": "ok", "path": str(target), "created": True})
 
 
 def _safe_fallback(missing: Path, base: Path) -> Path | None:

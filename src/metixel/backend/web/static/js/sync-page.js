@@ -21,6 +21,59 @@ import {
 import { loadMedia } from "./media-page.js";
 import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings-page.js";
 
+    // -- Watch-folder creation ---------------------------------------------
+
+    /**
+     * For each watch path that doesn't exist yet, ask whether to create it
+     * and do so on Yes.  Folders can only be created inside the frame's
+     * data tree (the backend enforces this); anything else is reported so
+     * the user can create it by hand.
+     *
+     * @param {Array<{path:string, enabled:boolean}>} watchPaths
+     * @returns {Promise<number>} how many folders were created.
+     */
+    async function _offerToCreateMissingFolders(watchPaths) {
+        if (!watchPaths.length) return 0;
+        var check = await apiPost("/browse/check", {
+            paths: watchPaths.map(function (p) { return p.path; })
+        });
+        if (!check || !Array.isArray(check.results)) return 0;
+
+        var created = 0;
+        for (var i = 0; i < check.results.length; i++) {
+            var r = check.results[i];
+            if (r.exists) continue;
+
+            if (!r.creatable) {
+                showToast(
+                    "Folder " + r.path + " doesn\u2019t exist and is outside the Metixel data folder \u2014 create it manually",
+                    "info",
+                    6000
+                );
+                continue;
+            }
+
+            var yes = await confirmDialog(
+                "The folder " + r.path + " doesn\u2019t exist.\nCreate it now?"
+                    + (r.resolved ? "\n\n" + r.resolved : ""),
+                { title: "Create folder?", okText: "Yes" }
+            );
+            if (!yes) continue;
+
+            var made = await apiPost("/browse/mkdir", { path: r.path });
+            if (made && made.status === "ok") {
+                if (made.created) created++;
+            } else {
+                showToast(
+                    "Could not create " + r.path + ": " + ((made && made.error) || "unknown error"),
+                    "error",
+                    6000
+                );
+            }
+        }
+        return created;
+    }
+
     // -- Sync ---------------------------------------------------------------
 
     var _syncBound = false;
@@ -161,16 +214,25 @@ import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings
             document.getElementById("btn-add-watch-path")?.addEventListener("click", function () {
                 addWatchPathRow("", true, true);
             });
-            document.getElementById("btn-save-local-sync")?.addEventListener("click", async () => {
+            document.getElementById("btn-save-local-sync")?.addEventListener("click", async function () {
+                var btn = this;
+                var restore = setButtonBusy(btn, "Saving\u2026");
+                var watchPaths = collectWatchPaths();
+                var created = await _offerToCreateMissingFolders(watchPaths);
                 var result = await apiPut("/config/sync", {
                     local: {
                         enabled: document.getElementById("cfg-local-enabled").checked,
-                        watch_paths: collectWatchPaths(),
+                        watch_paths: watchPaths,
                         poll_interval_seconds: sanitizeInt(document.getElementById("cfg-local-interval").value, 30),
                     },
                 });
+                restore();
                 if (result) {
-                    showToast("Local sync settings saved!", "success");
+                    showToast(
+                        "Local sync settings saved!"
+                            + (created ? " Created " + created + " folder" + (created === 1 ? "" : "s") + "." : ""),
+                        "success"
+                    );
                 } else {
                     showToast("Failed to save local sync settings", "error");
                 }
