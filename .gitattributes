@@ -3,6 +3,7 @@
 
 # Shell scripts must always be LF (CRLF breaks bash on Linux)
 *.sh text eol=lf
+scripts/pre-commit text eol=lf
 
 # Batch/PowerShell scripts are Windows-native, keep CRLF
 *.bat text eol=crlf
