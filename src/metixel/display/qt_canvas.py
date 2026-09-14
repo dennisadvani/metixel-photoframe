@@ -74,6 +74,9 @@ class FrameCanvas(QWidget):
         # whole "virtual mat over live video" mechanism: this canvas paints the
         # ring layers opaquely and leaves the middle transparent.
         self._video_underlay: bool = False
+        # Notified with (width, height) whenever the surface resizes, so the
+        # backend can track the real display size.  See set_resize_callback.
+        self._resize_callback: Any = None
         # The canvas fully repaints every frame, so Qt does not need to erase
         # first — and skipping the erase avoids a visible flash on the video
         # path where the widget beneath is showing through.
@@ -92,6 +95,27 @@ class FrameCanvas(QWidget):
         if self._video_underlay != enabled:
             self._video_underlay = enabled
             self.update()
+
+    def set_resize_callback(self, callback: Any) -> None:
+        """Register a callable invoked with ``(width, height)`` on resize.
+
+        The canvas is a ``QWidget``, so it can legitimately receive resize events;
+        the backend is a plain Python object and cannot use ``installEventFilter``
+        (which requires a ``QObject``).  Routing through the canvas is therefore
+        the correct way to observe the surface size from the backend.
+        """
+        self._resize_callback = callback
+
+    def resizeEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        callback = self._resize_callback
+        if callback is None:
+            return
+        try:
+            callback(int(self.width()), int(self.height()))
+        except Exception:
+            # A callback failure must never break painting or the event loop.
+            logger.debug("resize callback failed", exc_info=True)
 
     def update_plan(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
         """Store the plan (and optional artwork) for the next repaint.

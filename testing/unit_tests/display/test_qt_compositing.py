@@ -135,11 +135,64 @@ class TestSurfaceSizeDetection:
         assert "def _wait_for_stable_size" in source
 
     def test_size_is_re_read_on_resize(self) -> None:
-        """A late-configured surface must still be picked up."""
-        source = _source(_BACKEND)
-        assert "installEventFilter" in source
-        assert "def eventFilter" in source
-        assert "QEvent.Type.Resize" in source
+        """A late-configured surface must still be picked up.
+
+        Regression: the first attempt at this installed an event filter on the
+        container via ``container.installEventFilter(self)``.  The backend is NOT
+        a ``QObject``, so PySide6 raised
+
+            TypeError: installEventFilter called with wrong argument types
+              PySide6.QtCore.QObject.installEventFilter(PySide6Backend)
+              Supported signatures: installEventFilter(QObject, /)
+
+        and because ``create()`` runs before the render loop, that exception
+        escaped as a startup failure and the service crash-looped 39 times.  The
+        resize signal is now routed through FrameCanvas, which IS a QWidget.
+        """
+        backend = _source(_BACKEND)
+        # Check for a CALL, not the string: the comment above the callback
+        # explains why installEventFilter is wrong, so a raw substring search
+        # matches the prose and fails. (Same trap as
+        # test_logging_conf_is_fully_retired in test_update_manager.py.)
+        tree = ast.parse(backend)
+        called = {
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert "installEventFilter" not in called, (
+            "the backend is not a QObject and cannot be an event filter; this "
+            "raised TypeError at startup and crash-looped the service"
+        )
+        assert "set_resize_callback" in called
+
+        canvas = _source(_CANVAS)
+        assert "def resizeEvent" in canvas, (
+            "the canvas must override resizeEvent to report the new surface size"
+        )
+        assert "def set_resize_callback" in canvas
+
+    def test_no_qt_object_is_used_as_an_event_filter(self) -> None:
+        """Guard the general shape: only QObjects may be event filters.
+
+        `PySide6Backend` is a plain class (it derives from `DisplayBackend`, an
+        ABC, not from QObject), so any use of it as a Qt receiver is a TypeError.
+        This is asserted explicitly because the failure mode is a startup crash
+        that is only visible on hardware.
+        """
+        tree = ast.parse(_source(_BACKEND))
+        backend_cls = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "PySide6Backend"
+        )
+        base_names = {b.id for b in backend_cls.bases if isinstance(b, ast.Name)} | {
+            b.attr for b in backend_cls.bases if isinstance(b, ast.Attribute)
+        }
+        assert "QObject" not in base_names, (
+            "PySide6Backend must not become a QObject just to satisfy an event "
+            "filter; route the signal through FrameCanvas instead"
+        )
 
     def test_absurd_size_is_treated_as_unknown(self) -> None:
         """A tiny placeholder must not be accepted as the real resolution."""

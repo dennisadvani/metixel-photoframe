@@ -207,9 +207,9 @@ class PySide6Backend(DisplayBackend):
         # trusting it — every layout decision downstream, mat geometry included,
         # depends on this being the real size.
         #
-        # The settle loop is bounded, and the value is also re-read whenever Qt
-        # reports a resize (see ``_on_container_resized``), so a slow compositor
-        # cannot latch a wrong size for the whole session.
+        # The settle loop is bounded, and the value is also re-read whenever the
+        # canvas reports a resize (see ``_on_surface_resized``), so a slow
+        # compositor cannot latch a wrong size for the whole session.
         settled = self._wait_for_stable_size(container)
         if not settled:
             logger.warning(
@@ -221,8 +221,13 @@ class PySide6Backend(DisplayBackend):
             )
 
         self._width, self._height = self._read_surface_size(container)
-        # Keep the size current for the rest of the session.
-        container.installEventFilter(self)
+        # Keep the size current for the rest of the session.  The callback is
+        # invoked from FrameCanvas.resizeEvent, NOT from an event filter here:
+        # installEventFilter requires a QObject, and this backend is a plain
+        # Python class.  Passing it was a TypeError that crash-looped the service
+        # 39 times on hardware, because create() is called before the render loop
+        # so the exception escaped as a startup failure.
+        self._canvas.set_resize_callback(self._on_surface_resized)
         self._container = container
         self._running = True
 
@@ -267,32 +272,26 @@ class PySide6Backend(DisplayBackend):
             last = current
         return False
 
-    def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802 - Qt naming
-        """Track the container's real size for the whole session.
+    def _on_surface_resized(self, width: int, height: int) -> None:
+        """Handle the canvas reporting a new surface size.
 
-        Installed because the initial read after ``show()`` is not guaranteed to
-        observe the final geometry, and nothing else updates ``width``/``height``
-        afterwards — so a single bad early read would otherwise be reported as
-        the display resolution (and drive mat geometry) until restart.
+        Called from the GUI thread during ``resizeEvent``.  A too-small value is
+        ignored: it means the compositor has not finished configuring the
+        surface, not that the display shrank.
         """
-        try:
-            from PySide6.QtCore import QEvent
-
-            if event.type() == QEvent.Type.Resize and watched is getattr(self, "_container", None):
-                new_w, new_h = self._read_surface_size(watched)
-                if (new_w, new_h) != (self._width, self._height):
-                    logger.info(
-                        "Display surface resized: %dx%d → %dx%d",
-                        self._width,
-                        self._height,
-                        new_w,
-                        new_h,
-                    )
-                    self._width, self._height = new_w, new_h
-                    self._publish_display_info()
-        except Exception:
-            logger.debug("resize handling failed", exc_info=True)
-        return False
+        if width < 100 or height < 100:
+            return
+        if (width, height) == (self._width, self._height):
+            return
+        logger.info(
+            "Display surface resized: %dx%d → %dx%d",
+            self._width,
+            self._height,
+            width,
+            height,
+        )
+        self._width, self._height = width, height
+        self._publish_display_info()
 
     def _publish_display_info(self) -> None:
         """Best-effort re-publish of ``display_info.json`` after a resize.
