@@ -72,6 +72,7 @@ class PySide6Backend(DisplayBackend):
     def __init__(self) -> None:
         self._app: Any = None
         self._window: Any = None
+        self._container: Any = None
         self._canvas: Any = None
         self._mpv_widget: Any = None
         self._running: bool = False
@@ -167,12 +168,22 @@ class PySide6Backend(DisplayBackend):
         # context and forces a re-init on the next video (dropping the video
         # track).  Keeping both children alive and only changing which one is
         # raised avoids that entirely.
+        #
+        # StackAll (NOT StackOne) is load-bearing, and getting it wrong is not
+        # obvious from the symptom.  Under StackOne only the *current* widget is
+        # visible, so `setCurrentWidget(mpv_widget)` hides the canvas — and the
+        # canvas is what paints the matte ring.  The result is video filling the
+        # whole surface with no virtual mat, while every photo still gets one
+        # (photos never switch pages).  StackAll makes both children visible at
+        # once, with `raise_()` deciding the z-order, which is what the design
+        # above actually requires: mpv underneath, canvas painting the ring over
+        # it in the same frame.
         container = QWidget()
         layout = QStackedLayout(container)
-        layout.setStackingMode(QStackedLayout.StackingMode.StackOne)
+        layout.setStackingMode(QStackedLayout.StackingMode.StackAll)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._canvas)
         layout.addWidget(self._mpv_widget)
+        layout.addWidget(self._canvas)
 
         self._window = container
         container.setWindowTitle("Metixel Photoframe")
@@ -188,13 +199,31 @@ class PySide6Backend(DisplayBackend):
         else:
             container.resize(width or 1280, height or 720)
             container.show()
-        self._app.processEvents()
 
-        # Trust the surface Qt actually got, not the requested size: cage may
-        # have given us a different mode, and every layout decision downstream
-        # (mat geometry included) depends on this being the real size.
-        self._width = int(container.width()) or (width or 1920)
-        self._height = int(container.height()) or (height or 1200)
+        # A Wayland surface is NOT necessarily at its final size when show()
+        # returns: the compositor configures it asynchronously, so an immediate
+        # read can return a placeholder (observed on a Pi 5 as "200x100").  Pump
+        # the event loop until the size settles, rather than sampling once and
+        # trusting it — every layout decision downstream, mat geometry included,
+        # depends on this being the real size.
+        #
+        # The settle loop is bounded, and the value is also re-read whenever Qt
+        # reports a resize (see ``_on_container_resized``), so a slow compositor
+        # cannot latch a wrong size for the whole session.
+        settled = self._wait_for_stable_size(container)
+        if not settled:
+            logger.warning(
+                "Display surface size did not stabilise within the timeout "
+                "(last seen %dx%d) — using it, but the reported resolution may "
+                "be wrong until the next resize",
+                container.width(),
+                container.height(),
+            )
+
+        self._width, self._height = self._read_surface_size(container)
+        # Keep the size current for the rest of the session.
+        container.installEventFilter(self)
+        self._container = container
         self._running = True
 
         global _QT_READY
@@ -208,6 +237,89 @@ class PySide6Backend(DisplayBackend):
             rotation,
             refresh_rate,
         )
+
+    # -- Surface size --------------------------------------------------------
+
+    @staticmethod
+    def _read_surface_size(container: Any) -> tuple[int, int]:
+        """Return the container's size, falling back to sensible defaults."""
+        w = int(container.width())
+        h = int(container.height())
+        # A zero or absurdly small size means the compositor has not configured
+        # the surface yet; treat it as "unknown" rather than accepting it.
+        if w < 100 or h < 100:
+            return (w or 1920, h or 1200)
+        return (w, h)
+
+    def _wait_for_stable_size(self, container: Any, *, attempts: int = 20) -> bool:
+        """Pump the event loop until the surface size stops changing.
+
+        Returns True if the size settled (two consecutive reads agreeing), False
+        if the attempt budget ran out.  A Wayland surface is configured
+        asynchronously, so the first read after ``show()`` can be a placeholder.
+        """
+        last: tuple[int, int] | None = None
+        for _ in range(attempts):
+            self._app.processEvents()
+            current = (int(container.width()), int(container.height()))
+            if current == last and current[0] >= 100 and current[1] >= 100:
+                return True
+            last = current
+        return False
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:  # noqa: N802 - Qt naming
+        """Track the container's real size for the whole session.
+
+        Installed because the initial read after ``show()`` is not guaranteed to
+        observe the final geometry, and nothing else updates ``width``/``height``
+        afterwards — so a single bad early read would otherwise be reported as
+        the display resolution (and drive mat geometry) until restart.
+        """
+        try:
+            from PySide6.QtCore import QEvent
+
+            if event.type() == QEvent.Type.Resize and watched is getattr(self, "_container", None):
+                new_w, new_h = self._read_surface_size(watched)
+                if (new_w, new_h) != (self._width, self._height):
+                    logger.info(
+                        "Display surface resized: %dx%d → %dx%d",
+                        self._width,
+                        self._height,
+                        new_w,
+                        new_h,
+                    )
+                    self._width, self._height = new_w, new_h
+                    self._publish_display_info()
+        except Exception:
+            logger.debug("resize handling failed", exc_info=True)
+        return False
+
+    def _publish_display_info(self) -> None:
+        """Best-effort re-publish of ``display_info.json`` after a resize.
+
+        The backend daemon reads this file to size media optimisation and the web
+        UI reads it for the Display card, so a stale size here is visible in both
+        places.
+        """
+        try:
+            import json
+
+            from metixel.shared.paths import run_dir
+
+            run_dir().mkdir(parents=True, exist_ok=True)
+            payload = {
+                "width": self._width,
+                "height": self._height,
+                "backend": type(self).__name__,
+                "output": self.connected_output(),
+                "rotation": self._rotation,
+            }
+            target = run_dir() / "display_info.json"
+            tmp = target.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(target)
+        except Exception:
+            logger.debug("could not re-publish display_info.json", exc_info=True)
 
     def destroy(self) -> None:
         self._running = False
@@ -337,16 +449,23 @@ class PySide6Backend(DisplayBackend):
     # -- Video ---------------------------------------------------------------
 
     def play_video(self, path: Path, plan: RenderPlan) -> bool:
-        """Start mpv playback and bring its widget to the front.
+        """Start mpv playback with the canvas painting the matte over it.
 
         Returns ``False`` when the mpv pipeline is unavailable so the presenter
         advances instead of waiting for frames that will never arrive.
+
+        The mpv widget is *not* brought to the front.  It is already underneath
+        (see ``create``), and the canvas above it keeps painting the ring layers
+        while leaving the Mat Window transparent — that is what puts a video in
+        the same virtual mat as a photo.
         """
         if self._mpv_widget is None:
             return False
         try:
             self._video_path = Path(path)
-            self._window.layout().setCurrentWidget(self._mpv_widget)
+            # The canvas keeps its z-order; only its middle becomes a hole.
+            self._canvas.set_video_underlay(True)
+            self._canvas.raise_()
             self._mpv_widget.ensure_gl_init()
             self._mpv_widget.play(str(path))
             # Paint the frame's ring layers over the live video by presenting the
@@ -358,7 +477,7 @@ class PySide6Backend(DisplayBackend):
             return False
 
     def stop_video(self) -> None:
-        """Stop playback and return the canvas to the front.  Idempotent."""
+        """Stop playback and repaint the Mat Window.  Idempotent."""
         if self._mpv_widget is None:
             return
         try:
@@ -367,8 +486,11 @@ class PySide6Backend(DisplayBackend):
             logger.debug("Error stopping mpv", exc_info=True)
         finally:
             self._video_path = None
-            if self._window is not None and self._canvas is not None:
-                self._window.layout().setCurrentWidget(self._canvas)
+            # Close the hole again, or the frame behind the video would stay
+            # transparent and show the black container.
+            if self._canvas is not None:
+                self._canvas.set_video_underlay(False)
+                self._canvas.update()
 
     def pause_video(self, paused: bool = True) -> None:
         """Pause/resume mpv in place, keeping the decoder warm.

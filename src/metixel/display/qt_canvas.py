@@ -69,6 +69,11 @@ class FrameCanvas(QWidget):
         self._overlay: list[OverlayElement] = []
         # Artwork opacity, used by the crossfade.  Rings stay opaque.
         self._image_alpha: float = 1.0
+        # When True, the layer inside the Mat Window is left UNPAINTED so a
+        # sibling widget underneath (the mpv surface) shows through.  That is the
+        # whole "virtual mat over live video" mechanism: this canvas paints the
+        # ring layers opaquely and leaves the middle transparent.
+        self._video_underlay: bool = False
         # The canvas fully repaints every frame, so Qt does not need to erase
         # first — and skipping the erase avoids a visible flash on the video
         # path where the widget beneath is showing through.
@@ -76,6 +81,17 @@ class FrameCanvas(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
     # -- Public API ----------------------------------------------------------
+
+    def set_video_underlay(self, enabled: bool) -> None:
+        """Leave the Mat Window unpainted so a video surface shows through.
+
+        Enabled while a video owns the surface and disabled when it ends.  The
+        ring layers are still painted, so the mat is continuous with the image
+        path — only the artwork rectangle becomes a hole.
+        """
+        if self._video_underlay != enabled:
+            self._video_underlay = enabled
+            self.update()
 
     def update_plan(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
         """Store the plan (and optional artwork) for the next repaint.
@@ -115,18 +131,27 @@ class FrameCanvas(QWidget):
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)
         try:
-            painter.fillRect(self.rect(), self._background)
             plan = self._plan
+            # Background fill.  Skipped while a video is underneath: an opaque
+            # fill over the whole rect would hide mpv's frames entirely, and the
+            # transparent middle is what lets them through the Mat Window.
+            if not self._video_underlay:
+                painter.fillRect(self.rect(), self._background)
             if plan is not None:
                 # 1. Ambient fill — the only full-rectangle layer.  Absent
                 #    whenever a mat ring exists, because the Mat Window is then
                 #    cut to the artwork and no residue is left for fill.
-                if plan.ambient is not None:
+                if plan.ambient is not None and not self._video_underlay:
                     self._fill(painter, plan.ambient, _qcolor(plan.ambient_colour))
 
-                # 2. Artwork.  Skipped for video (image is None), which is what
-                #    lets mpv's frames show through the Mat Window.
-                if self._image is not None and self._image_alpha > 0.01:
+                # 2. Artwork.  Skipped for video (image is None, or the underlay
+                #    is active), which is what lets mpv's frames show through the
+                #    Mat Window.
+                if (
+                    self._image is not None
+                    and self._image_alpha > 0.01
+                    and not self._video_underlay
+                ):
                     painter.setOpacity(self._image_alpha)
                     try:
                         self._draw_artwork(painter, plan)
@@ -134,7 +159,8 @@ class FrameCanvas(QWidget):
                         painter.setOpacity(1.0)
 
                 # 3–5. Ring layers, outermost last so the moulding reads as the
-                #      frame edge.  Annuli: disjoint from the artwork.
+                #      frame edge.  Annuli: disjoint from the artwork.  These
+                #      paint over a video too — it is the matte.
                 for rect in plan.whitespace:
                     self._fill(painter, rect, _qcolor(plan.whitespace_colour))
                 for rect in plan.matte:

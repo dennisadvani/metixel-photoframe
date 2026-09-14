@@ -202,13 +202,26 @@ class MpvRenderWidget(QOpenGLWidget):
         logger.debug("mpv playing %s", path)
 
     def stop(self) -> None:
-        """Stop playback.  Idempotent — called on advance, reset and shutdown."""
+        """Stop playback.  Idempotent — called on advance, reset and shutdown.
+
+        Resets ``_eof`` as well as the play flags.  Leaving ``_eof`` set after a
+        stop makes the NEXT video appear to be already finished: ``is_finished()``
+        returns True immediately, so the presenter calls ``_video_finished()`` on
+        its first tick and skips the item entirely.  That reads as "playback locks
+        up when a video ends" rather than as a stale flag, because the visible
+        symptom is the next slide never playing.
+        """
         self._playing = False
         self._paused = False
+        self._eof = False
         if self._mpv is None:
             return
         try:
             self._mpv.command("stop")
+            # A paint after stop clears the last frame out of the FBO; without it
+            # the widget can keep showing the final frame of the video it just
+            # stopped until something else forces a repaint.
+            self.update()
         except Exception:
             logger.debug("mpv stop failed", exc_info=True)
 
@@ -250,9 +263,17 @@ class MpvRenderWidget(QOpenGLWidget):
     # -- mpv callbacks (invoked from mpv's thread) ---------------------------
 
     def _on_eof_reached(self, _name: str, value: Any) -> None:
+        """mpv reached the end of the stream.
+
+        Emits ``frame_ready`` so a repaint is scheduled: without it the widget
+        keeps displaying the last decoded frame and nothing runs on the GUI
+        thread, so the presenter's poll can be the only thing making progress and
+        the surface appears frozen at the end of every video.
+        """
         if value:
             self._eof = True
             self._playing = False
+            self.frame_ready.emit()
 
     def _on_pause_changed(self, _name: str, value: Any) -> None:
         self._paused = bool(value)
