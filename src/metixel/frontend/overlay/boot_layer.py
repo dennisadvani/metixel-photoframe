@@ -122,6 +122,14 @@ class BootLayer(OverlayLayer):
         """True during the fade-out animation."""
         return self._state == "fading"
 
+    @property
+    def needs_repaint(self) -> bool:
+        """The spinner rotates every tick while the boot screen is up.
+
+        Once ``done`` the layer contributes nothing, so the manager can idle.
+        """
+        return self._state != "done"
+
     def reactivate(self) -> None:
         """Re-show the boot screen after a pipeline reset.
 

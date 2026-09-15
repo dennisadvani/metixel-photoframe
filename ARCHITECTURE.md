@@ -951,8 +951,8 @@ single upgrade**, the backend runs a dependency self-heal on startup
    install --break-system-packages -r requirements-pip.txt`.
 
 The install is run through `systemd-run` (a fresh, non-hardened transient
-unit) because the backend service is hardened (`ProtectHome=yes` →
-`/home` read-only; `ProtectSystem=full` → `/usr` read-only), so it can neither
+unit) because the backend service is hardened (`InaccessiblePaths=/home /root`
+plus `ProtectSystem=full` → `/usr` read-only), so it can neither
 write to `~/.local` nor to the system dist-packages — and plain `sudo` would
 inherit the hardened mount namespace. Running as root into the **system**
 dist-packages also keeps deps in the same location the OTA installs to,

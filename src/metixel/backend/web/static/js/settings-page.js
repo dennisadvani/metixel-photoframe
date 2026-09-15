@@ -297,7 +297,11 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
         var ttLabel = document.getElementById("cfg-transition-duration-label");
         if (ttLabel) ttLabel.textContent = (s.transition_duration_ms || 1500) + " ms";
         setValue("cfg-transition", s.transition_style || "crossfade");
-        setValue("cfg-fit", s.fit_mode || "contain");
+        // "fill" (stretch) was retired — the framing engine has no
+        // aspect-distorting mode, and the frontend falls back to cover for it.
+        // Normalise here too, or a config written by an older release leaves
+        // the select blank and the next save writes an empty fit_mode.
+        setValue("cfg-fit", s.fit_mode === "contain" ? "contain" : "cover");
         setChecked("cfg-smart-cover", s.smart_cover !== false);
         setChecked("cfg-shuffle", s.shuffle !== false);
 

@@ -10,6 +10,7 @@ import subprocess
 from flask import Blueprint, current_app, jsonify
 
 from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
+from metixel.display.screenshot import capture, clear_screenshots, resolve_screenshot_dir
 from metixel.shared.paths import live_dir
 from metixel.shared.platform import read_device_tree_model, read_vcgencmd_mem_str
 from metixel.shared.subprocess import schedule_sudo
@@ -264,3 +265,70 @@ def get_system_info():
     info["hostname"] = _platform.node() or "unknown"
 
     return jsonify(info)
+
+
+@system_bp.route("/screenshot", methods=["POST"])
+def take_screenshot():
+    """Capture the composited frame to a PNG in the configured directory.
+
+    Served by the backend rather than the frontend because grim is an ordinary
+    Wayland client: it reaches cage's socket with the same minimal environment
+    ``wlr-randr`` already uses (see ``metixel.display.hardware.wayland_env``), so
+    no IPC round-trip to the render process is needed.
+
+    grim captures the *compositor's* output, which is what makes this correct:
+    the PNG includes the video surface (an mpv ``QOpenGLWidget`` that a Qt
+    widget grab cannot see) and the rotation, which is applied as a compositor
+    output transform rather than by Qt.
+
+    Returns:
+        JSON: ``{"status": "ok", "file": ..., "path": ..., "size_bytes": N}``,
+        or a 500 with the capture error as ``message``.
+    """
+    state = current_app.config["METIXEL_STATE"]
+    destination = resolve_screenshot_dir(state.config.system.get("screenshot_dir"))
+
+    result = capture(destination)
+    if not result.ok:
+        # A capture failure is never fatal: the frame keeps running (rule 7).
+        return jsonify_error(result.error or "Screen capture failed", 500)
+
+    return jsonify(
+        {
+            "status": "ok",
+            "file": result.filename,
+            "path": str(result.path),
+            "size_bytes": result.size_bytes,
+        }
+    )
+
+
+@system_bp.route("/screenshot/clear", methods=["POST"])
+def clear_screenshot_dir():
+    """Delete every screenshot in the configured directory.
+
+    Nothing prunes screenshots automatically — retention is deliberately manual,
+    because a capture is a user action and an unbounded background writer is
+    exactly what ``AGENTS.md`` rule 9 forbids.  This endpoint is the explicit
+    user action that bounds it.
+
+    Returns:
+        JSON: ``{"status": "ok", "deleted_files": N, "freed_bytes": B}``
+    """
+    state = current_app.config["METIXEL_STATE"]
+    destination = resolve_screenshot_dir(state.config.system.get("screenshot_dir"))
+
+    deleted, freed = clear_screenshots(destination)
+    return jsonify(
+        {
+            "status": "ok",
+            "deleted_files": deleted,
+            "freed_bytes": freed,
+            "freed_mb": round(freed / (1024 * 1024), 2),
+            "message": (
+                f"Cleared {deleted} screenshot{'s' if deleted != 1 else ''}"
+                if deleted
+                else "No screenshots to clear"
+            ),
+        }
+    )

@@ -43,6 +43,16 @@ LAN by default — the password is the access boundary.
 - `POST /api/system/reboot` — Reboot the system
 - `POST /api/system/shutdown` — Shut down the system
 - `POST /api/system/quiet-boot` — Toggle quiet boot
+- `POST /api/system/screenshot` — Capture what the panel is showing to a PNG in
+  the configured screenshot directory (default `media/screenshots/`, inside the
+  media Samba share).  Returns `{"status": "ok", "file", "path", "size_bytes"}`,
+  or a 500 whose `message` names the cause (e.g. `grim is not installed on this
+  device`).  Captured with `grim` via `wlr-screencopy`, so the file includes the
+  video surface and the applied rotation — see `metixel.display.screenshot`.
+- `POST /api/system/screenshot/clear` — Delete every screenshot in that
+  directory.  Returns `{"status": "ok", "deleted_files", "freed_bytes",
+  "freed_mb"}`.  Nothing prunes screenshots automatically; this is the explicit
+  user action that bounds the folder.
 - `GET /api/system/info` — System/version info (Pi model, GPU memory, DRM driver)
 - `GET /api/system/mqtt-status` — MQTT broker connection state
   (`disabled` | `connected` | `auth_error` | `connecting` | `not_responding`), plus

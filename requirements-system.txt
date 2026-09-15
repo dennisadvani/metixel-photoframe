@@ -17,6 +17,11 @@ libopenblas0
 # QT_QPA_PLATFORM=wayland pinned in metixel-cage.service.
 cage
 wlr-randr
+# grim captures the composited output via wlr-screencopy (the dashboard's
+# Take Screenshot button).  It is a Wayland client of cage, driven by the
+# backend with the same minimal env wlr-randr already uses — see
+# metixel/display/screenshot.py.
+grim
 seatd
 # xwayland is retained for now. Nothing at runtime needs an X server any more —
 # mpv embeds via the libmpv render API and Qt uses the Wayland plugin — but it

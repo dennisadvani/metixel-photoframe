@@ -56,9 +56,40 @@ from metixel.shared.platform import detect_pi_model, hwdec_for_model
 
 logger = logging.getLogger(__name__)
 
+#: Frames per second when ``display.fps_limit`` is missing or non-positive.
+#: Matches the config default.
+DEFAULT_FPS_LIMIT = 30
+
 #: Set by :meth:`PySide6Backend.create` once ``QApplication`` exists, so the
 #: heartbeat thread (started outside Qt) can post repaints safely if needed.
 _QT_READY = False
+
+
+def tick_interval_ms(fps_limit: int | None) -> int:
+    """Return the render timer's interval in milliseconds for *fps_limit*.
+
+    Separate from :meth:`PySide6Backend.schedule` so the arithmetic is testable
+    without Qt, because the trap here is not obvious: ``QTimer.setInterval(0)``
+    does **not** mean "no timer" or "as fast as needed" — it means "fire as soon
+    as the event loop can drain", i.e. unbounded.  Measured on a Pi 5 that was
+    56 fps against a configured 30, so the frame budget was nearly doubled for
+    free.  The interval is therefore never below 1 ms, and a missing or
+    non-positive limit falls back to :data:`DEFAULT_FPS_LIMIT` rather than to
+    unbounded rendering.
+
+    The cost of honouring the limit is up to one interval of input/IPC latency:
+    33 ms at 30 fps, which is imperceptible.
+    """
+    try:
+        fps = int(fps_limit)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        # Absent, or a hand-edited config.json holding a non-number.
+        fps = DEFAULT_FPS_LIMIT
+    if fps <= 0:
+        # A negative rate is nonsense; treat it as "unset" rather than clamping to
+        # 1 fps, which would render one frame a second and look like a hang.
+        fps = DEFAULT_FPS_LIMIT
+    return max(1, round(1000 / fps))
 
 
 def _make_resize_filter(callback: Any) -> Any:
@@ -287,8 +318,8 @@ class PySide6Backend(DisplayBackend):
         by hand and raise_() decides which is on top.
 
         The mpv widget is set first and the canvas second so the canvas stays the
-        upper sibling for photos; the z-order is then adjusted per frame by
-        raise_() in present()/play_video().
+        upper sibling for photos; z-order after that is owned by whoever changes
+        the surface mode — FrameCanvas.set_overlay_only() and play_video().
         """
         target = container if container is not None else self._container
         if target is None:
@@ -517,13 +548,13 @@ class PySide6Backend(DisplayBackend):
             if self._mpv_widget is not None:
                 self._mpv_widget.set_matte(self._matte_bands(plan))
             self._canvas.update_plan(plan, None, alpha)
-            self._canvas.update()
             return
 
+        # No raise_() and no update() here: the canvas raises itself when the
+        # surface mode changes, and repaints only when the picture actually
+        # changed.  The mpv widget repaints itself from set_matte().
         self._canvas.set_overlay_only(False)
-        self._canvas.raise_()
         self._canvas.update_plan(plan, image, alpha)
-        self._canvas.update()
 
     def present_transition(
         self,
@@ -551,7 +582,6 @@ class PySide6Backend(DisplayBackend):
             return
 
         self._canvas.set_overlay_only(False)
-        self._canvas.raise_()
         self._canvas.update_transition(
             plan,
             image,
@@ -560,7 +590,6 @@ class PySide6Backend(DisplayBackend):
             prev_image,
             prev_alpha,
         )
-        self._canvas.update()
 
     # -- Overlay -------------------------------------------------------------
 
@@ -580,17 +609,19 @@ class PySide6Backend(DisplayBackend):
         ``FrameCanvas.set_overlay_only`` owns that mode, including the
         ``WA_OpaquePaintEvent`` flag.  That flag is a contract ("I paint every
         pixel"), and breaking it while still claiming it is what made the earlier
-        transparent-hole attempt render black rather than see-through.
+        transparent-hole attempt render black rather than see-through.  That
+        method also owns the z-order, because the surface mode is what decides it.
+
+        An EMPTY *elements* is meaningful and must be passed through: it is how
+        the canvas learns to drop the previous overlay.  Returning early here
+        left a dismissed message painted on screen for good — invisible only
+        because the message had already slid off the edge.
         """
         if self._canvas is None:
             return
-        if not elements:
-            return
         overlay_only = self._video_path is not None
         self._canvas.set_overlay_only(overlay_only)
-        self._canvas.raise_()
         self._canvas.update_overlay(elements)
-        self._canvas.update()
 
     # -- Artwork -------------------------------------------------------------
 
@@ -716,8 +747,10 @@ class PySide6Backend(DisplayBackend):
             if self._canvas is not None:
                 # Leave overlay-only mode: the canvas is the only surface again,
                 # so it must paint the artwork, the rings and a real background.
+                # set_overlay_only() raises the canvas and repaints when the mode
+                # toggles; the explicit update() covers the case where playback
+                # never actually entered overlay-only mode.
                 self._canvas.set_overlay_only(False)
-                self._canvas.raise_()
                 self._canvas.update()
 
     def pause_video(self, paused: bool = True) -> None:
@@ -824,11 +857,11 @@ class PySide6Backend(DisplayBackend):
             logger.error("schedule() called before create() — no QApplication")
             return
 
-        # 0ms interval: Qt runs the timer as soon as the event queue drains, and
-        # the presenter's own slide clock decides when a frame actually changes.
-        # A fixed interval here would fight that clock and add latency to input.
+        # Honour ``display.fps_limit``.  See :func:`tick_interval_ms` for why the
+        # interval is never 0 and why that mattered (it measured 56 fps against a
+        # configured 30 on a Pi 5, nearly doubling the frame budget for nothing).
         timer = QTimer()
-        timer.setInterval(0)
+        timer.setInterval(tick_interval_ms(self._fps_limit))
         self._timer = timer
 
         def _on_tick() -> None:

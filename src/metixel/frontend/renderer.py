@@ -21,6 +21,7 @@ from metixel.display import detect_backend
 from metixel.display.backend import DisplayBackend
 from metixel.frontend.overlay import MessageLayer, OverlayManager
 from metixel.frontend.presentation.presenter import Presenter
+from metixel.shared import logging_setup
 from metixel.shared.config import Config
 from metixel.shared.io import atomic_write_json
 from metixel.shared.ipc import ControlMessage, IPCServer
@@ -846,42 +847,27 @@ class FrontendRenderer:
             return 0.0
 
     def _apply_file_log_level(self) -> None:
-        """Apply the persisted log level to all FileHandlers in this process.
+        """Apply the persisted log level to this process.
 
-        This runs at frontend startup and whenever the config changes,
-        ensuring the frontend's file handlers stay in sync with what
-        the user selected in the web UI (which only directly updates
-        the backend process).
+        Delegates to :mod:`metixel.shared.logging_setup` so the frontend cannot
+        resolve ``system.log_level`` differently from the backend.  It used to
+        have its own copy of the walk, and the two processes diverged on the
+        default: one built its handlers at DEBUG and wrote a full log, while the
+        other honoured ``NONE``.
+
+        Both loggers and handlers are set.  Setting only the handlers is what made
+        "Debug" inert — ``logging`` discards a record at the *logger* before any
+        handler is consulted, so a handler level can only remove records, never
+        add them.
         """
-        level_name = self._config.system.get("log_level", "NONE").upper()
-        file_levels = {
-            "DEBUG": logging.DEBUG,
-            "INFO": logging.INFO,
-            "WARNING": logging.WARNING,
-            "ERROR": logging.ERROR,
-            "NONE": 100,
-        }
-        target_level = file_levels.get(level_name, 100)
-
-        updated = 0
-        for logger_obj in logging.Logger.manager.loggerDict.values():
-            if not isinstance(logger_obj, logging.Logger):
-                continue
-            for handler in logger_obj.handlers:
-                if isinstance(handler, logging.FileHandler):
-                    handler.setLevel(target_level)
-                    updated += 1
-        for handler in logging.getLogger().handlers:
-            if isinstance(handler, logging.FileHandler):
-                handler.setLevel(target_level)
-                updated += 1
-
-        if updated:
-            logger.debug(
-                "Frontend file log level set to %s (%d handler(s) updated)",
-                level_name,
-                updated,
-            )
+        level = logging_setup.parse_level(self._config.system.get("log_level", "NONE"))
+        effective = logging_setup.apply_level(level)
+        logger.info(
+            "Frontend log level applied: %s (file=%s, metixel logger=%s)",
+            self._config.system.get("log_level", "NONE"),
+            logging.getLevelName(level),
+            logging.getLevelName(effective),
+        )
 
     # -- IPC -----------------------------------------------------------------
 

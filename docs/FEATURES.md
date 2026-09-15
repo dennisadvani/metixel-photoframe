@@ -10,7 +10,7 @@ A comprehensive list of every feature in Metixel Photoframe, organized by subsys
 - **Automatic native resolution detection** — set `width: 0` in config and the renderer takes the display's native mode
 - **Two-texture ping-pong GPU pipeline** — active slot displayed while inactive slot preloads the next image
 - **Smooth transitions** — crossfade, fade-through-black, or instant cut; configurable duration (default 2500ms)
-- **Configurable fit modes** — contain, cover, fill, with smart-cover for opposite-orientation images
+- **Configurable fit modes** — contain or cover, with smart cover for square / opposite-orientation images
 - **Boot screen** — animated Metixel logo with rotating spinner; smooth 0.8s ease-out fade to first slide
 - **Display sleep scheduler** — configurable on/off times (e.g. off at 22:00, on at 07:00)
 - **Display power control** — DRM DPMS via sysfs on KMS, or `vcgencmd display_power` on legacy
@@ -96,7 +96,8 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **Config hot-reload** | mtime polling detects file changes; both backend and frontend reload without restart |
 | **Graceful degradation** | Never crash, never show a traceback — log errors and continue with available media |
 | **Quiet boot** | No kernel messages, no login prompt — display goes straight to the boot screen |
-| **Log rotation** | 5 log files, configurable log level applied to both processes |
+| **Dashboard screenshots** | Capture what the panel is showing to a PNG via `grim` + `wlr-screencopy` (includes video and the applied rotation). Configurable folder (default `media/screenshots/`, inside the media share); manual clearing, never pruned on a timer |
+| **Log rotation** | 5 log files per process, size-bounded; the level set in the web UI applies to the file, and the live log view follows it down to Debug |
 | **Samba share** | Production: media folder only (`metixel-media`) |
 
 ---

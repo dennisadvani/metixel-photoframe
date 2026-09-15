@@ -13,6 +13,7 @@ import os
 
 from flask import Blueprint, current_app, jsonify
 
+from metixel.shared import logging_setup
 from metixel.shared.paths import data_dir
 
 logger = logging.getLogger(__name__)
@@ -30,15 +31,15 @@ _LEGACY_LOG_NAME = "metixel.log"
 
 
 def _read_from_ring_buffer(count: int = 200) -> list[dict]:
-    """Read recent log entries from the in-memory ring buffer."""
-    root = logging.getLogger("metixel")
-    for handler in root.handlers:
-        # Import here to avoid circular import at module level
-        from metixel.shared.log_buffer import LogRingBuffer  # noqa: PLC0415
+    """Read recent log entries from this process's in-memory ring buffer.
 
-        if isinstance(handler, LogRingBuffer):
-            return handler.get_recent(count)
-    return []
+    Lookup goes through the shared owner rather than reaching for a specific
+    logger's handlers: the buffer is attached to the ROOT logger (attaching it to
+    both root and ``metixel`` used to capture every Metixel record twice and show
+    each line in duplicate on the Logs card).
+    """
+    buffer = logging_setup.ring_buffer()
+    return buffer.get_recent(count) if buffer is not None else []
 
 
 def _tail_file(path: str, lines: int = 200) -> list[str]:
@@ -149,10 +150,6 @@ def _tail_files(count: int) -> list[str]:
     return [item[3] for item in tagged][-count:]
 
 
-# Sentinel level — above CRITICAL (50); no log record passes this filter.
-_NONE_LEVEL = 100
-
-
 def _count_file_handlers() -> int:
     """Count FileHandler instances across all loggers (for reporting only)."""
     seen: set[int] = set()
@@ -193,30 +190,20 @@ def set_log_level():
     if "level" not in data:
         return jsonify_error("Missing 'level' in JSON body", 400)
 
-    level_name = data["level"].upper()
-    valid_levels = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-        "NONE": _NONE_LEVEL,
-    }
-    if level_name not in valid_levels:
+    level_name = str(data["level"]).upper()
+    if level_name not in logging_setup.LOG_LEVELS:
         return jsonify_error(
             f"Invalid level: {data['level']}",
             400,
-            valid=sorted(valid_levels.keys()),
+            valid=sorted(logging_setup.LOG_LEVELS),
         )
 
-    new_level = valid_levels[level_name]
+    new_level = logging_setup.parse_level(level_name)
 
-    # ── 1. Update every FileHandler across all loggers ──────────────────
-    #     Reuses the same walk as startup so the runtime control and the
-    #     persisted setting cannot apply levels differently.  Ring buffers and
-    #     console handlers are deliberately skipped.
-    from metixel.__main__ import _apply_file_handler_levels
-
-    _apply_file_handler_levels(new_level)
+    # ── 1. Apply across this process's loggers, file handlers and live view ──
+    #     Through the shared owner, so the runtime control, the startup path and
+    #     the frontend's hot-reload cannot resolve the same setting differently.
+    effective = logging_setup.apply_level(new_level)
     updated = _count_file_handlers()
 
     # ── 2. Persist to config so it survives a restart ──────────────────
@@ -227,15 +214,20 @@ def set_log_level():
         logger.exception("Failed to persist log level to config")
 
     logger.warning(
-        "File log level changed to %s — %d file handlers updated (ring buffer + console unchanged)",
+        "Log level changed to %s — %d file handler(s) updated, %s logger now %s "
+        "(live view keeps %s and above)",
         level_name,
         updated,
+        logging_setup.PACKAGE_LOGGER,
+        logging.getLevelName(effective),
+        logging.getLevelName(logging_setup.live_view_level(new_level)),
     )
     return jsonify(
         {
             "status": "ok",
             "level": level_name,
             "file_handlers_updated": updated,
+            "logger_level": logging.getLevelName(effective),
         }
     )
 

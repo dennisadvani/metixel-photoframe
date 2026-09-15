@@ -99,3 +99,50 @@ class TestPhantomOutputRationale:
             "cage_launch.sh must not re-attribute the phantom-output cleanup to "
             "XWayland — the cleanup would be required regardless of the toolkit."
         )
+
+
+class TestBackendReachesTheWaylandSocket:
+    """``ProtectHome=yes`` silently cuts the backend off from cage.
+
+    There is nothing in the log when it happens — every Wayland client the
+    backend starts just reports ``failed to create display``, which reads like a
+    broken tool rather than a sandbox.  It cost a real bug: the dashboard's
+    screenshot capture always failed on hardware while working perfectly over
+    SSH, because an SSH session is not sandboxed.
+
+    These guards exist so re-adding the line is a test failure with the reason
+    attached, rather than another silent hardware-only regression.
+    """
+
+    def test_backend_unit_does_not_mask_the_runtime_dir(self) -> None:
+        """``ProtectHome`` masks /home, /root **and** /run/user.
+
+        /run/user/1000 is where cage publishes ``wayland-0``.  ``BindPaths=``
+        cannot undo it either — systemd applies the Protect* mounts after the
+        bind mounts — so the only fix is not to use ProtectHome here.
+        """
+        lines = [
+            ln.strip()
+            for ln in BACKEND_UNIT.read_text(encoding="utf-8").splitlines()
+            if ln.strip().startswith("ProtectHome=")
+        ]
+        assert lines == ["ProtectHome=no"], (
+            "metixel-backend.service must not set ProtectHome=yes: it masks "
+            "/run/user, so the backend cannot reach cage's Wayland socket and "
+            "every grim/wlr-randr call fails with 'failed to create display'. "
+            "Use InaccessiblePaths=/home and /root instead — see the comment "
+            "in the unit. If you are changing this deliberately, take a "
+            "screenshot from the dashboard on real hardware first."
+        )
+
+    def test_home_trees_are_still_masked(self) -> None:
+        """Dropping ProtectHome must not mean dropping the hardening."""
+        text = BACKEND_UNIT.read_text(encoding="utf-8")
+        assert "InaccessiblePaths=/home" in text, (
+            "metixel-backend.service must still mask /home — it is the same "
+            "hardening ProtectHome=yes provided, minus /run/user."
+        )
+        assert "InaccessiblePaths=/root" in text, (
+            "metixel-backend.service must still mask /root — it is the same "
+            "hardening ProtectHome=yes provided, minus /run/user."
+        )

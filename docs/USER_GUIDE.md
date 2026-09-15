@@ -308,10 +308,10 @@ The dashboard gives you a live overview:
 ### Settings page
 
 - **Slideshow** — how long each photo stays (default 15 s), transition style
-  and speed, and shuffle on/off.
-- **Display** — fit mode (`cover` fills the screen and crops, `contain` shows
-  the whole image with bars), and the **sleep schedule** for turning the screen
-  off overnight.
+  and speed, fit mode (`cover` fills the screen and crops, `contain` shows the
+  whole image with bars), smart cover, and shuffle on/off.
+- **Display** — screen orientation, and the **sleep schedule** for turning the
+  screen off overnight.
 - **Monitor Control (DDC/CI)** — optional. Enable to probe the attached
   monitor and adjust picture settings it supports (brightness, contrast,
   input source, etc.). Only reported features appear as controls. Needs
@@ -337,11 +337,32 @@ networks, or forget a saved network.
 
 ### Advanced page
 
-- **System** — Pi model, OS, kernel, Python, GPU memory, and hostname.
+- **System** — Pi model, OS, kernel, Python, GPU memory, and hostname. Also the
+  **Take Screenshot** button (see below), the **Cache Dir** and **Screenshot
+  Dir** folders, the file log level, and **Restart / Reboot / Shutdown**.
 - **Updates** — check for and install updates (see [section 8](#8-ota-updates)).
 - **Keyboard / Remote Control** — map a remote (see [section 7](#7-keyboard--remote-control)).
 - **MQTT / Home Assistant** — connect the frame to your smart-home hub (see [section 6](#6-mqtt--home-assistant-detailed)).
 - **Reboot / Shutdown** — restart or power off the frame cleanly.
+
+#### Screenshots
+
+**Take Screenshot** captures whatever the frame is showing at that moment and
+saves it as a PNG. This is handy for a bug report — it records the real output,
+including video and screen rotation, exactly as the panel rendered it.
+
+Screenshots go to the folder set in **Screenshot Dir**, which defaults to
+`media/screenshots/`. That folder sits inside the media share, so you can
+collect the files over Samba from the same network location as your photos
+(see [section 3](#3-adding-your-own-photos)). Names are timestamped, e.g.
+`screenshot-20260915-143012.png`.
+
+Nothing deletes screenshots automatically — use **Clear Screenshots** when you
+want the space back.
+
+> **Note:** do not point **Screenshot Dir** at a folder the frame watches for
+> media, or the screenshots will start appearing in your slideshow. The default
+> location is safe because `media/screenshots/` is not a watch path.
 
 ---
 
@@ -669,6 +690,9 @@ Quick fixes for common issues. See also `docs/FAQ.md` for more.
 - **Immich downloads:** `/opt/metixel/data/media/sync/immich/album_<id>/` on the frame.
 - **Optimised/thumbnail cache:** `/opt/metixel/data/cache/` — safe to clear if
   you ever need space (the frame regenerates it).
+- **Screenshots:** `/opt/metixel/data/media/screenshots/` by default — inside the
+  media share, so they are reachable over Samba. Change the location with
+  **Advanced → System → Screenshot Dir**.
 
 For advanced setup, hardware notes, and developer docs, see `docs/INSTALLATION.md`
 and `docs/WIDGET_DEV.md`.

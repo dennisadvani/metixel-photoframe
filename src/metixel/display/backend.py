@@ -174,12 +174,16 @@ class DisplayBackend(ABC):
             image: An opaque handle from :meth:`load_image` for the artwork, or
                 ``None`` to paint the frame without artwork (a pure mat preview,
                 or a video whose frames arrive out of band).
-            alpha: Opacity of the *artwork*, used by the crossfade.  The frame
-                rings always paint opaque, so a fading photo does not reveal the
-                matte behind it.  Painting twice at complementary alpha is what
-                implements the transition — there is no separate blend entry
-                point, which keeps transitions independent of backend blend
-                capability.
+            alpha: Opacity of the *artwork*.  The frame rings always paint
+                opaque, so a fading photo does not reveal the matte behind it.
+
+                This is a single-layer entry point: what is already on screen is
+                replaced.  A blend therefore cannot be built by calling it twice
+                with complementary alphas — the second call super-imposes the
+                incoming artwork on the *background*, not on the outgoing frame,
+                so the panel dims through the middle and the visible change
+                collapses towards the middle of the duration.  Use
+                :meth:`present_transition` for that.
         """
         ...
 
@@ -196,6 +200,17 @@ class DisplayBackend(ABC):
         composed once per item, whereas overlay layers animate every frame
         (boot spinner, message slide-in).  Folding them together would force a
         full re-composite of the matte on every animation tick.
+
+        An EMPTY list is meaningful, not a no-op: it tells the backend that the
+        overlay is now clear, and a backend that keeps the previous frame must
+        act on it or a dismissed overlay stays painted.
+
+        A backend may be called only when something actually changed — the
+        overlay manager skips the pass when no visible layer reports a repaint,
+        and a canvas should skip its own repaint when the stored layers are
+        unchanged.  Repainting an identical frame is pure cost: measured on a
+        Pi 5, an unconditional 31 fps composite of an unchanging 1920x1200 frame
+        was 83% of a core, against 0.9% for an idle Qt event loop.
 
         Default is a no-op, so a backend may present frames without overlay
         support rather than being forced to implement it.

@@ -117,6 +117,13 @@ class FrameCanvas(QWidget):
         what is underneath — the region shows uninitialised framebuffer, i.e.
         black.  So the attribute must be cleared for the duration of overlay-only
         mode, and the widget must also be told not to erase to black.
+
+        The z-order is raised here, and only here, because the mode is exactly
+        what decides it: overlay-only means a video is underneath and the canvas
+        must sit above it; leaving the mode means the canvas is the only surface
+        again.  Asking for that order from ``present()`` and ``present_overlay()``
+        instead meant a ``raise_()`` every frame — a restack request to the
+        compositor, 31 times a second, for an order that was already in place.
         """
         if self._overlay_only == enabled:
             return
@@ -124,6 +131,7 @@ class FrameCanvas(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, not enabled)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, enabled)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, enabled)
+        self.raise_()
         self.update()
         logger.debug("Canvas overlay-only mode: %s", "on" if enabled else "off")
 
@@ -157,13 +165,19 @@ class FrameCanvas(QWidget):
         Any pending outgoing crossfade layer is dropped: this is the single-layer
         entry point, and leaving a stale outgoing image behind would make the
         next ordinary slide paint a ghost of the previous one.
+
+        Repaints only if this is genuinely a different picture — see
+        :meth:`_store_layers`.  A static slide calls this every tick with the
+        same plan and the same image, and must therefore cost nothing.
         """
-        self._plan = plan
-        self._image = image if isinstance(image, QImage) else None
-        self._image_alpha = max(0.0, min(1.0, alpha))
-        self._prev_plan = None
-        self._prev_image = None
-        self._prev_alpha = 0.0
+        self._store_layers(
+            plan,
+            image if isinstance(image, QImage) else None,
+            max(0.0, min(1.0, alpha)),
+            None,
+            None,
+            0.0,
+        )
 
     def update_transition(
         self,
@@ -184,39 +198,103 @@ class FrameCanvas(QWidget):
 
         Both alphas come from :class:`~metixel.frontend.presentation.transitions.
         TransitionEngine`, so the easing curves stay in one place.
+
+        The incoming alpha moves every tick of a transition, so this repaints
+        throughout — which is the point.  Between transitions, with both layers
+        and both alphas unchanged, it does not.
         """
-        self._plan = plan
-        self._image = image if isinstance(image, QImage) else None
-        self._image_alpha = max(0.0, min(1.0, alpha))
-        self._prev_plan = prev_plan
-        self._prev_image = prev_image if isinstance(prev_image, QImage) else None
-        self._prev_alpha = max(0.0, min(1.0, prev_alpha))
+        self._store_layers(
+            plan,
+            image if isinstance(image, QImage) else None,
+            max(0.0, min(1.0, alpha)),
+            prev_plan,
+            prev_image if isinstance(prev_image, QImage) else None,
+            max(0.0, min(1.0, prev_alpha)),
+        )
 
     def clear_plan(self) -> None:
         """Drop the current plan so the next paint is a bare background."""
-        self._plan = None
-        self._image = None
-        self._image_alpha = 1.0
-        self._prev_plan = None
-        self._prev_image = None
-        self._prev_alpha = 0.0
+        self._store_layers(None, None, 1.0, None, None, 0.0)
+
+    def _store_layers(
+        self,
+        plan: RenderPlan | None,
+        image: QImage | None,
+        alpha: float,
+        prev_plan: RenderPlan | None,
+        prev_image: QImage | None,
+        prev_alpha: float,
+    ) -> None:
+        """Store the layers to composite, repainting ONLY if that changed.
+
+        This is the whole idle-rendering mechanism, and it lives here because
+        this class is the only thing that knows what was last painted.  Qt's
+        contract for a custom widget is exactly this: ``paintEvent`` paints
+        whatever is stored, and only the code that changes what is stored may ask
+        for a repaint.  Qt cannot make that judgement itself — it has no way to
+        know what a ``paintEvent`` draws — so ``update()`` is an explicit request,
+        never something Qt does on its own.
+
+        Skipping the repaint is what makes a static slide free.  The presenter
+        calls ``present()`` every tick with the SAME cached plan and the SAME
+        cached image handle, so identity (``is``) is both an exact and a free
+        test.  Equality would be neither: comparing ``QImage`` values walks every
+        pixel.
+
+        Measured on a Pi 5: asking Qt to composite an unchanging 1920x1200 frame
+        31 times a second was **83% of a core**, while Qt's own event loop used
+        **0.9%** to run 178 timer ticks and paint once.  The overhead was
+        entirely self-inflicted.
+        """
+        if (
+            plan is self._plan
+            and image is self._image
+            and alpha == self._image_alpha
+            and prev_plan is self._prev_plan
+            and prev_image is self._prev_image
+            and prev_alpha == self._prev_alpha
+        ):
+            return
+        self._plan = plan
+        self._image = image
+        self._image_alpha = alpha
+        self._prev_plan = prev_plan
+        self._prev_image = prev_image
+        self._prev_alpha = prev_alpha
+        self.update()
 
     def set_background(self, color: tuple[float, float, float, float]) -> None:
         """Set the canvas clear colour."""
         r, g, b = (int(max(0.0, min(1.0, c)) * 255) for c in color[:3])
-        self._background = QColor(r, g, b)
+        background = QColor(r, g, b)
+        if background == self._background:
+            return
+        self._background = background
+        self.update()
 
     def update_overlay(self, elements: list[OverlayElement]) -> None:
         """Store the overlay elements for the next repaint.
 
         The list arrives already flattened and sorted (largest ``z`` first) from
         the overlay manager, so the canvas only has to paint it in order.
+
+        The reference is kept rather than copied, and compared by identity, so
+        the canvas can tell whether the overlay changed without comparing element
+        values — :class:`OverlayElement` carries image handles, and comparing
+        those compares every pixel.  **The caller must not mutate the list after
+        handing it over.**  The overlay manager rebuilds a fresh list whenever a
+        layer reports a change and passes the identical object when none has,
+        which is what makes the comparison meaningful.
         """
-        self._overlay = list(elements)
+        if elements is self._overlay:
+            return
+        self._overlay = elements
+        self.update()
 
     def clear_overlay(self) -> None:
         """Drop the overlay so the next frame paints only the slideshow."""
-        self._overlay = []
+        if self._overlay:
+            self.update_overlay([])
 
     # -- Painting ------------------------------------------------------------
 

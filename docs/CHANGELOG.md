@@ -29,6 +29,32 @@ backend, the video player, and the dependencies are all different. Read
 - **Rolling back is safe.** The previous release stays on disk, so the Updates
   card can switch back to it at any time.
 
+### Added
+
+- **Take a screenshot from the dashboard** (System card).  The **Take
+  Screenshot** button captures what the panel is showing *right now* and writes
+  a PNG to the **Screenshot Dir**, which defaults to `media/screenshots/` —
+  inside the existing media Samba share, so screenshots can be collected over
+  the network without SSH.  Files are named `screenshot-YYYYMMDD-HHMMSS.png`.
+  A **Clear Screenshots** button empties the folder; nothing prunes it
+  automatically, deliberately, because an unbounded background writer is the
+  SD-card wear the card warns about.
+  - The capture is done by `grim`, asking the compositor for its output over
+    `wlr-screencopy`.  That is what makes the file match the panel: a Qt widget
+    grab would miss the video surface (an mpv `QOpenGLWidget` draws into its own
+    framebuffer) and would come out unrotated, because rotation is a compositor
+    output transform rather than a Qt one.
+  - `grim` is added to `requirements-system.txt`, so it arrives on existing
+    devices with their next update.
+- **The Slideshow Settings card is now fully wired to the frontend** — image
+  duration, transition duration, transition style, fit mode, smart cover and
+  shuffle all take effect on save, with no service restart.  Previously fit
+  mode, smart cover and shuffle were stored but never read, and a transition
+  style change was ignored until the frame was rebooted.
+  - **Fit Mode no longer offers "Fill (stretch)"**, which the new framing engine
+    cannot honour (it has no aspect-distorting mode).  A config that still says
+    `fill` is treated as `cover` and the dropdown normalises on load.
+
 ### Changed
 
 - **The renderer is now PySide6 + mpv, running Wayland-native under `cage`.**
@@ -91,6 +117,87 @@ backend, the video player, and the dependencies are all different. Read
 
 ### Fixed
 
+- **The frontend composited an unchanging frame 31 times a second.**  The tick
+  called `update()` unconditionally, so a completely static slide burned ~83% of
+  a core.  Qt was never at fault: `update()` is an explicit request to repaint,
+  and a `paintEvent` draws whatever the widget has stored, so Qt cannot skip a
+  repaint it was asked for.  Benchmarked on a Pi 5, an idle Qt event loop used
+  **0.9% CPU to run 178 timer ticks and paint once**.  The canvas now repaints
+  only when the picture actually changed — an identity comparison on the plan,
+  image and alpha, which the presenter caches for the whole slide — and overlay
+  layers report whether their own animation moved, so the manager can skip the
+  pass entirely.  Three related defects went with it:
+  - `MessageLayer.render()` read the clock itself, so the painted position came
+    from something no change signal could observe; it worked only because every
+    animation phase also happened to mutate `alpha` or `state`.  The slide
+    position is now derived from the tick time stored by `update()`.
+  - The canvas was restacked (`raise_()`) every frame — a compositor request for
+    an order that was already in place.  Z-order is now owned by the surface-mode
+    switch, which is the thing that actually decides it.
+  - An emptied overlay was dropped instead of presented as empty, so the canvas
+    was never told to clear the last message.  It was invisible only because the
+    message had already slid off the edge.
+  Guarded by `testing/unit_tests/frontend/test_overlay_repaint.py` and
+  `TestRepaintIsRequestedOnlyOnChange` in
+  `testing/unit_tests/display/test_qt_compositing.py`.
+- **The frontend rendered at nearly double the configured frame rate on the
+  Qt backend.**  The render loop used `QTimer.setInterval(0)`, on the theory that
+  "the presenter's own slide clock decides when a frame actually changes".  The
+  first half is true and the second is not — the tick repaints unconditionally —
+  so a 0 ms interval means "fire as soon as the event loop can drain".  Measured
+  on a Pi 5: **56 fps against a configured 30**.  `display.fps_limit` had been
+  plumbed all the way into `create()` and was then never read (the tkinter backend
+  has always honoured it).  The interval is now derived from the limit — 33 ms at
+  30 fps, never below 1 ms, with a missing or non-positive value falling back to
+  the default rather than to unbounded rendering.  Measured: **156% → 83% CPU**,
+  FPS 31.2 against a target of 30.  The cost is up to one interval of extra input
+  latency, which at 30 fps is imperceptible.  Guarded by
+  `testing/unit_tests/display/test_tick_interval.py`.
+- **The crossfade still looked too fast for its configured duration.**  The
+  incoming layer's alpha *was* ramped 0 → 1 across the whole window, but through
+  `ease_in_out_cubic`, which does almost nothing for the first and last ~20% of
+  it: 90% of the change happened inside the middle ~54%.  A configured 5 s
+  dissolve therefore read as a ~2.5 s one.  The ramp is now linear, so 10% of the
+  duration is 10% of the fade.  Guarded by
+  `testing/unit_tests/frontend/test_transitions.py`, which asserts proportionality
+  — the previous tests only checked the endpoints, which an S-curve satisfies
+  perfectly.
+- **The dashboard's screenshot capture failed on every device**
+  (`failed to create display`).  `metixel-backend.service` set `ProtectHome=yes`,
+  which masks `/home`, `/root` **and** `/run/user` — and `/run/user/1000` is where
+  cage publishes its Wayland socket.  grim could never reach the compositor,
+  whatever environment it was handed, which is why the capture worked over SSH
+  (unsandboxed) but failed from the dashboard.
+  - The unit now masks the two home trees explicitly instead
+    (`ProtectHome=no` plus `InaccessiblePaths=/home /root`): the same hardening
+    for what matters, leaving `/run/user` alone.  `BindPaths=` does **not** work
+    as a fix — systemd applies the `Protect*` mounts after the bind mounts, so
+    the mask wins.
+  - This also restores the backend's `wlr-randr` monitor-mode fallback behind
+    `/api/health/display/modes`, which had been failing silently for the same
+    reason and returning the hardcoded resolution list instead.
+  - Guarded by `testing/unit_tests/display/test_host_config_guards.py`, so
+    re-adding `ProtectHome=yes` now fails a test with the reason attached.
+- **The crossfade dimmed the panel and made "Transition Duration" look
+  ineffective.**  The canvas composites the incoming artwork *over* the outgoing
+  one on an opaque background, so fading **both** layers (the old "complementary
+  alpha" pair, `1 - t` and `t`) double-counts the outgoing layer's transparency:
+  the frame becomes `next·t + outgoing·(1-t)²`, which is 25% dark at the
+  midpoint.  It also bunches the motion — the mix reached 50/50 at about 16% of
+  the window and the rest of the duration barely changed, so 1.5 s and 5 s looked
+  much the same.
+  - A crossfade now holds the outgoing layer fully opaque and dissolves the
+    incoming one over it, giving a true `next·t + outgoing·(1-t)`.
+    `fade_through_black` still fades both, because its dip to black is the
+    intended effect.
+  - Measured on a Pi 5 by screenshotting a transition: the old pair produced a
+    midpoint brightness of 73.25 where a correct dissolve gives 112.7 (and the
+    old model predicts 73.8) — a value below *both* photos' brightness, which no
+    correct blend can produce.  After the fix every sample stays inside the two
+    photos' range and rises monotonically to the new photo.
+  - Guarded by `testing/unit_tests/frontend/test_transitions.py`, which asserts
+    the layers always cover the frame (no dimming) and that the transition is
+    genuinely half-way through at half-way.
 - **`vlc_start` never had a matching entry in the timeout defaults**, so the
   timeout it described was not actually applied. Removed rather than repaired.
 - **The obsolete-package removal step removed nothing on a device that had never
@@ -106,6 +213,43 @@ backend, the video player, and the dependencies are all different. Read
 - **The requirements parser depended on the ambient locale.** It now pins UTF-8
   explicitly, which matters because the OTA runs it under `systemd-run` with no
   locale set.
+- **"File Log Level: Debug" produced no debug output at all** — in the log file
+  *or* on the dashboard.  `system.log_level` was wired only to the *handler*
+  levels, but Python's `logging` discards a record at the **logger** before any
+  handler is consulted.  The root logger was pinned at `INFO` (raiseable only by
+  the developer-only `--debug` flag), so a handler's level could only ever remove
+  records, never add them.  Two consequences:
+  - a device set to `Debug` wrote no debug lines to `metixel-backend.log` /
+    `metixel-frontend.log`;
+  - the Logs card's live view — whose ring buffer is documented as always
+    capturing DEBUG — could never show a single Debug line, so its Debug filter
+    was dead.
+
+  Levels are now applied by a new single owner, `metixel.shared.logging_setup`:
+
+  | sink | level |
+  |---|---|
+  | log file | `system.log_level` exactly — the user's choice, and the only sink that costs SD-card writes |
+  | Logs card (ring buffer, RAM-only) | always Info and above, and Debug when Debug is selected, so the card is never blank under the default `NONE` |
+  | `metixel` logger | the most permissive of those, and no further, so record-creation cost is only paid when something can observe it |
+
+  The root logger is deliberately *not* opened up, so third-party DEBUG chatter
+  (urllib3 logs every connection-pool event) can neither fill the log file nor
+  evict useful lines from the 500-entry ring buffer.
+- **Every Metixel log line appeared twice on the Logs card.**  The ring buffer was
+  attached to *both* the root logger and `metixel`.  A record propagates up the
+  hierarchy and `logging` does not de-duplicate a handler shared between an
+  ancestor and a descendant, so each record was captured twice.  It is now
+  attached to the root logger only — which sees everything anyway, third-party
+  lines included.
+- **The name → level map and the "apply the level" logic existed in four places**
+  (the CLI bootstrap, the API route, the frontend renderer, and the Logs card's
+  HTML).  Each process resolving the same setting through its own copy is how the
+  backend and frontend previously disagreed — one wrote a full DEBUG log while the
+  other honoured `NONE`.  Both now go through `metixel.shared.logging_setup`.
+  Guarded by `testing/unit_tests/test_main_logging.py`, which now asserts the
+  *observable* outcome (a debug line actually reaching a sink) rather than handler
+  levels — asserting handler levels is why the old tests stayed green throughout.
 
 ### Internal
 

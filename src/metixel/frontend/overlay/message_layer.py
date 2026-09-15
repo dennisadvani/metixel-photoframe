@@ -134,6 +134,24 @@ class MessageLayer(OverlayLayer):
         # with no backend argument, so anything it needs from the backend has to
         # be remembered from the one call that receives one.
         self._screen_w: int = 0
+        # Monotonic time of the current tick, stored by update().  render() reads
+        # this rather than the clock, so its output is a pure function of state.
+        self._now: float = 0.0
+        # Whether this tick's output differs from what was last painted.
+        # Starts True so the first frame always paints.
+        self._dirty: bool = True
+
+    @property
+    def needs_repaint(self) -> bool:
+        """True while a message is animating, or has just changed state.
+
+        A message that is merely *visible* needs no repaint: its position and
+        alpha are fixed until the dismiss timer fires, and that transition marks
+        the layer dirty from :meth:`_tick`.  So a five-second message costs one
+        composite per animated frame and nothing at all while it is simply
+        sitting there.
+        """
+        return self._dirty
 
     # -- Public API (thread-safe) -------------------------------------------
 
@@ -182,12 +200,14 @@ class MessageLayer(OverlayLayer):
         m.state = "sliding_out"
         m._anim_start = time.monotonic()
         m._from_x = m._x
+        self._dirty = True
 
     # -- OverlayLayer interface ---------------------------------------------
 
     def update(self, shared_state: dict[str, Any] | None = None) -> None:
         self._video_playing = (shared_state or {}).get("video_playing", False)
         now = time.monotonic()
+        self._now = now
         with self._lock:
             for m in self._msgs:
                 self._tick(m, now)
@@ -204,6 +224,7 @@ class MessageLayer(OverlayLayer):
             m._from_x = 2000  # off-screen right (will be adjusted in draw)
             m._to_x = 0
             m._alpha = 0.0
+            self._dirty = True
         elif m.state == "sliding_in":
             t = (now - m._anim_start) * 1000.0 / SLIDE_IN_MS
             if t >= 1.0:
@@ -213,9 +234,9 @@ class MessageLayer(OverlayLayer):
                 m._paused_since = 0.0
                 m._paused_total = 0.0
             else:
-                # ease_out_cubic
-                1.0 - (1.0 - t) ** 3
                 m._alpha = min(1.0, t / 0.5)
+            # Alpha and/or the slide position advance every tick.
+            self._dirty = True
         elif m.state == "visible":
             if self._video_playing:
                 # Pause the auto-dismiss timer while a video covers the
@@ -237,6 +258,8 @@ class MessageLayer(OverlayLayer):
             if t >= 1.0:
                 m.state = "done"
                 m._alpha = 0.0
+            # The message slides until it is done, so every tick repaints.
+            self._dirty = True
 
     def draw(self, backend: DisplayBackend) -> None:
         """Deprecated — the overlay manager composites via :meth:`render`.
@@ -265,6 +288,13 @@ class MessageLayer(OverlayLayer):
         Background and accent bar are now ``rect`` elements rather than 1x1
         textures: those existed solely to work around a pi3d colour-space bug in
         ``draw_rect``, which the retained-mode canvas does not have.
+
+        Everything drawn here comes from stored state — :attr:`_now`, set by
+        :meth:`update`, and the messages' own fields.  It must stay that way:
+        this used to read ``time.monotonic()`` directly, which made the painted
+        position depend on a clock that no change signal can observe.  That
+        worked only by accident, because every animation phase also happened to
+        mutate ``_alpha`` or ``state``.  ``test_overlay_repaint.py`` pins it.
         """
         if self._screen_w <= 0:
             return []
@@ -288,17 +318,21 @@ class MessageLayer(OverlayLayer):
                 y_offset += mh + MSG_GAP
                 elements.extend(self._render_one(m, bw, target_x))
 
+        # This layer's output has been captured for this frame, so the flag is
+        # retired here rather than in update(): the manager only calls render()
+        # once it has decided to repaint, which makes this the honest moment.
+        self._dirty = False
         return elements
 
     def _render_one(self, m: _Message, bw: int, target_x: int) -> list[OverlayElement]:
         """Build the elements for one message, advancing its slide animation."""
         # Compute the x position (animated).
         if m.state == "sliding_in":
-            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_IN_MS
+            t = (self._now - m._anim_start) * 1000.0 / SLIDE_IN_MS
             et = 1.0 - (1.0 - min(t, 1.0)) ** 3
             m._x = bw + MSG_MARGIN - (bw + MSG_MARGIN - target_x) * et
         elif m.state == "sliding_out":
-            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_OUT_MS
+            t = (self._now - m._anim_start) * 1000.0 / SLIDE_OUT_MS
             et = min(t, 1.0) ** 3
             m._x = m._from_x + (bw + MSG_MARGIN - m._from_x) * et
         else:

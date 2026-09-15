@@ -173,8 +173,9 @@ def get_display_modes():
     if modes:
         return jsonify({"modes": _dedupe_modes(modes), "source": "monitor"})
 
-    # Fallback: query wlr-randr directly (works when the backend is not
-    # sandboxed away from the Wayland socket).
+    # Fallback: query wlr-randr directly.  This needs the Wayland socket, which
+    # is why metixel-backend.service must not set ProtectHome (it masks
+    # /run/user) — see the comment in that unit.
     from metixel.display.hardware import WlrOutput
 
     modes = WlrOutput().list_modes()

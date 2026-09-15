@@ -35,6 +35,17 @@ class OverlayManager:
                 return ly
         return None
 
+    @property
+    def needs_repaint(self) -> bool:
+        """Whether any visible layer's output would differ from what is painted.
+
+        Conservative by construction: :attr:`OverlayLayer.needs_repaint` is
+        ``True`` by default, so a layer that cannot tell keeps repainting.  Only
+        the layers themselves know whether an animation moved, which is why the
+        question is asked of them rather than guessed from the element list.
+        """
+        return any(layer.needs_repaint for layer in self._layers if layer.visible)
+
     def update(self, shared_state: dict[str, Any] | None = None) -> None:
         state = shared_state or {}
         for layer in self._layers:
@@ -58,6 +69,11 @@ class OverlayManager:
         """
         if not backend:
             return
+        if not self.needs_repaint:
+            # Nothing moved: the canvas already holds this exact picture, and
+            # asking Qt to composite it again is what kept a core busy on a
+            # static screen.
+            return
 
         elements: list[OverlayElement] = []
         for layer in self._layers:
@@ -76,14 +92,14 @@ class OverlayManager:
             except Exception:
                 logger.exception("Layer render failed: %s", layer.name)
 
-        if not elements:
-            return
-
         # Descending z: the largest z paints first, the smallest last (closest to
         # the viewer).  Matches the old GL_LESS convention so existing z-offsets
         # in the layers keep their meaning.
         elements.sort(key=lambda e: e.z, reverse=True)
         try:
+            # Always presented, even when empty: an empty list is how the canvas
+            # learns to drop the previous overlay.  Returning early here left a
+            # dismissed message painted for good.
             backend.present_overlay(elements)
         except AttributeError:
             # A backend without overlay compositing (or an older one) simply

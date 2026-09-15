@@ -323,3 +323,58 @@ def test_qt_backend_is_importable_without_qt() -> None:
         line = next(ln for ln in source.splitlines() if lazy in ln)
         indent = len(line) - len(line.lstrip())
         assert indent > 0, f"{lazy!r} must be indented (inside create()), not at module scope"
+
+
+def _method_body(path: Path, name: str) -> str:
+    """Source of one method, by name, from *path*."""
+    source = _source(path)
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_source_segment(source, node) or ""
+    raise AssertionError(f"{name} not found in {path.name}")
+
+
+class TestRepaintIsRequestedOnlyOnChange:
+    """Qt repaints when told to, and only then.
+
+    So nothing may ask for a repaint it does not need, and nothing may take the
+    repaint decision away from the object that knows what was last painted.
+    Measured on a Pi 5, an unconditional 31 fps composite of an unchanging
+    1920x1200 frame was 83% of a core, against 0.9% for an idle Qt event loop.
+    """
+
+    def test_canvas_setters_delegate_the_decision(self) -> None:
+        """They must not assign the fields and repaint regardless."""
+        for name in ("update_plan", "update_transition", "clear_plan"):
+            body = _method_body(_CANVAS, name)
+            assert "_store_layers(" in body, f"{name} must delegate to _store_layers"
+            assert "self.update()" not in body, f"{name} must not repaint unconditionally"
+
+    def test_canvas_overlay_compares_before_repainting(self) -> None:
+        body = _method_body(_CANVAS, "update_overlay")
+        assert "is self._overlay" in body, (
+            "identity, not value: comparing OverlayElement images is per-pixel"
+        )
+        assert "self.update()" in body, "a changed overlay must repaint"
+
+    def test_backend_never_repaints_or_restacks_unconditionally(self) -> None:
+        for name in ("present", "present_transition", "present_overlay"):
+            body = _method_body(_BACKEND, name)
+            assert "self._canvas.update()" not in body, (
+                f"{name} must let the canvas decide whether to repaint"
+            )
+            assert "self._canvas.raise_()" not in body, (
+                f"{name} must not restack the surfaces every frame"
+            )
+
+    def test_an_empty_overlay_is_not_dropped(self) -> None:
+        body = _method_body(_BACKEND, "present_overlay")
+        assert "if not elements" not in body, (
+            "an empty overlay is how the canvas is told to clear the last one"
+        )
+
+    def test_stop_video_still_repaints(self) -> None:
+        """Leaving video mode must repaint, even if the mode was never toggled."""
+        body = _method_body(_BACKEND, "stop_video")
+        assert "set_overlay_only(False)" in body
+        assert "self._canvas.update()" in body

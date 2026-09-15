@@ -19,6 +19,7 @@ The backend is a fake, so these run on a machine with no display, no Qt and no m
 from __future__ import annotations
 
 import json
+import random
 import time
 from pathlib import Path
 
@@ -473,3 +474,173 @@ class TestReadiness:
             width=0,
             height=0,
         )
+
+
+def _reloaded(presenter: Presenter, **slideshow: object) -> Config:
+    """A *new* Config with *slideshow* merged in, as the hot-reload path builds.
+
+    ``Config.load()`` in the renderer constructs a fresh instance rather than
+    mutating the running one, so a test that mutates ``presenter._config`` in
+    place would not exercise the repointing that ``reload_config`` has to do.
+    """
+    cfg = Config(presenter._config.to_dict())
+    cfg.update("slideshow", dict(slideshow))
+    return cfg
+
+
+class TestFitMode:
+    """``fit_mode`` + ``smart_cover`` decide how an artwork meets the panel.
+
+    The card's vocabulary (contain/cover) is mapped onto the framing engine's
+    overflow axis (fill/crop); these assert on the resulting
+    :class:`RenderPlan`, which is what the canvas actually paints.
+    """
+
+    #: A landscape panel, as the FakeBackend reports it.
+    LANDSCAPE = (3000, 2000)
+    PORTRAIT = (1080, 1920)
+
+    def test_cover_crops_a_same_orientation_photo(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        presenter.set_queue([_image_item("l", tmp_path / "l.jpg", *self.LANDSCAPE)])
+        plan = presenter._current_plan()
+        assert plan is not None
+        assert plan.overflow == "crop"
+        # Cropped, so only part of the source is sampled.
+        assert plan.artwork_src[3] < self.LANDSCAPE[1]
+
+    def test_contain_letterboxes_without_cropping(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        presenter._config.update("slideshow", {"fit_mode": "contain"})
+        presenter.set_queue([_image_item("l", tmp_path / "l.jpg", *self.LANDSCAPE)])
+        plan = presenter._current_plan()
+        assert plan is not None
+        assert plan.overflow == "fill"
+        assert plan.ambient is not None, "the residue must be filled, not left blank"
+        assert plan.artwork_src == (0.0, 0.0, 3000.0, 2000.0), "nothing may be cropped"
+
+    def test_smart_cover_contains_an_opposite_orientation_photo(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """A portrait photo on a landscape panel would lose its top and bottom."""
+        presenter.set_queue([_image_item("p", tmp_path / "p.jpg", *self.PORTRAIT)])
+        plan = presenter._current_plan()
+        assert plan is not None
+        assert plan.overflow == "fill"
+
+    def test_smart_cover_off_crops_it_instead(self, presenter: Presenter, tmp_path: Path) -> None:
+        presenter._config.update("slideshow", {"smart_cover": False})
+        presenter.set_queue([_image_item("p", tmp_path / "p.jpg", *self.PORTRAIT)])
+        plan = presenter._current_plan()
+        assert plan is not None
+        assert plan.overflow == "crop"
+
+    def test_smart_cover_does_not_apply_to_contain_mode(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """Contain already keeps the whole photo; smart cover must not fight it."""
+        presenter._config.update("slideshow", {"fit_mode": "contain", "smart_cover": True})
+        presenter.set_queue([_image_item("l", tmp_path / "l.jpg", *self.LANDSCAPE)])
+        plan = presenter._current_plan()
+        assert plan is not None
+        assert plan.overflow == "fill"
+
+    def test_retired_fill_mode_falls_back_to_cover(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """An older config can still say 'fill' (stretch); the engine cannot."""
+        presenter._config.update("slideshow", {"fit_mode": "fill"})
+        presenter.set_queue([_image_item("l", tmp_path / "l.jpg", *self.LANDSCAPE)])
+        plan = presenter._current_plan()
+        assert plan is not None
+        assert plan.overflow == "crop"
+
+
+class TestShuffle:
+    def test_disabled_keeps_the_backend_scan_order(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        ids = [f"i{n}" for n in range(10)]
+        presenter.set_queue([_image_item(i, tmp_path / f"{i}.jpg") for i in ids])
+        assert [item.id for item in presenter.queue] == ids
+
+    def test_enabled_randomises_the_play_order(self, presenter: Presenter, tmp_path: Path) -> None:
+        presenter._config.update("slideshow", {"shuffle": True})
+        random.seed(1234)
+        ids = [f"i{n}" for n in range(20)]
+        presenter.set_queue([_image_item(i, tmp_path / f"{i}.jpg") for i in ids])
+        order = [item.id for item in presenter.queue]
+        assert sorted(order) == sorted(ids), "shuffling must not lose or duplicate items"
+        assert order != ids, "…and must actually reorder them"
+
+    def test_new_items_never_land_behind_the_playhead(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """Scattering new items must not re-order what has already been shown."""
+        presenter._config.update("slideshow", {"shuffle": True})
+        random.seed(7)
+        presenter.set_queue([_image_item(f"a{n}", tmp_path / f"a{n}.jpg") for n in range(6)])
+        presenter.next_item()
+
+        played = [item.id for item in presenter.queue[:2]]
+        presenter.add_items([_image_item(f"n{n}", tmp_path / f"n{n}.jpg") for n in range(4)])
+
+        assert [item.id for item in presenter.queue[:2]] == played
+        assert len(presenter.queue) == 10
+
+
+class TestSettingsHotReload:
+    """Saving the Slideshow card restarts nothing, so the Presenter must reload.
+
+    ``routes/config.py`` only bounces a service for processing-affecting
+    sections, so every slideshow setting has to land through
+    :meth:`Presenter.reload_config`.
+    """
+
+    def test_transition_style_applies_without_a_restart(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        presenter.set_queue(
+            [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
+        )
+        assert presenter._transition_seconds() > 0
+
+        presenter.reload_config(_reloaded(presenter, transition_style="none"))
+        assert presenter._transition_seconds() == 0.0
+
+        backend.presented.clear()
+        presenter._item_start_time = time.monotonic() - 30.05
+        presenter.render()
+
+        assert presenter.current_index == 1
+        assert [a for _plan, _img, a in backend.presented] == [1.0], (
+            "a 'none' style must cut, not blend two frames"
+        )
+
+    def test_transition_duration_applies_without_a_restart(self, presenter: Presenter) -> None:
+        presenter.reload_config(_reloaded(presenter, transition_duration_ms=800))
+        assert presenter._transition_seconds() == 0.8
+
+    def test_fit_mode_change_re_lays_the_frame_on_screen(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """The plan cached for the slide on screen must be rebuilt."""
+        presenter.set_queue([_image_item("l", tmp_path / "l.jpg", 3000, 2000)])
+        cached = presenter._current_plan()
+        assert cached is not None and cached.overflow == "crop"
+
+        presenter.reload_config(_reloaded(presenter, fit_mode="contain"))
+
+        replanned = presenter._current_plan()
+        assert replanned is not None and replanned.overflow == "fill"
+
+    def test_an_unrelated_save_keeps_the_frame_visible(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """Only a real change may invalidate the frame, or the boot fade reruns."""
+        presenter.set_queue([_image_item("l", tmp_path / "l.jpg", 3000, 2000)])
+        assert presenter.has_visible_frame
+        presenter.reload_config(_reloaded(presenter, image_duration_seconds=45))
+        assert presenter.has_visible_frame

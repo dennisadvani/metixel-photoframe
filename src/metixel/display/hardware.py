@@ -41,6 +41,22 @@ _WLR_ENV: dict[str, str] = {
     "HOME": os.environ.get("HOME", "/home/pi"),
 }
 
+
+def wayland_env() -> dict[str, str]:
+    """Return the minimal environment for talking to cage's Wayland socket.
+
+    Shared by every helper that runs a Wayland *client* as a subprocess:
+    ``wlr-randr`` (display mode and DPMS) and ``grim`` (screenshots).  The
+    backend service is not started by the cage unit, so it inherits no
+    ``WAYLAND_DISPLAY`` of its own — supplying one explicitly is what lets it
+    reach the socket at ``/run/user/1000/wayland-0`` however it was launched.
+
+    A copy is returned, so a caller can add variables without mutating the
+    module default.
+    """
+    return dict(_WLR_ENV)
+
+
 #: Map a clockwise rotation in degrees to the wlr-randr ``--transform`` value.
 _WLR_TRANSFORMS: dict[int, str] = {
     0: "normal",

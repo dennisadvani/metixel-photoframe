@@ -56,7 +56,18 @@ MemoryMax=768M
 # privileged commands via sudo for AP mode (hostapd/dnsmasq control).
 PrivateTmp=yes
 ProtectSystem=full
-ProtectHome=yes
+# ProtectHome=yes is deliberately NOT used.  It masks /home, /root AND
+# /run/user, and /run/user/1000 is where cage publishes its Wayland socket.
+# With it set, every Wayland client started by the backend fails with
+# "failed to create display" — which silently broke the dashboard's screenshot
+# capture (grim) and the wlr-randr monitor-mode fallback.  `BindPaths=` does
+# not undo it, because systemd applies the Protect* mounts afterwards.
+#
+# Masking the two home trees explicitly is the same hardening for what actually
+# matters while leaving /run/user alone.
+ProtectHome=no
+InaccessiblePaths=/home
+InaccessiblePaths=/root
 ReadWritePaths=/opt/metixel/releases /opt/metixel/data /opt/metixel/live /tmp /boot/firmware /etc/systemd /etc/sysctl.d
 
 [Install]

@@ -140,7 +140,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
       `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
       installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
       for HEIC) even for devices upgrading from code that predates the hand-off.
-    - **Ownership/sudo:** the backend service is hardened (`ProtectHome=yes` → `/home` read-only;
+    - **Ownership/sudo:** the backend service is hardened (`InaccessiblePaths=/home /root`;
       `ProtectSystem=full` → `/usr` read-only), so it CANNOT install to `~/.local` or the system
       dist-packages, and plain `sudo` inherits the hardened mount namespace. The self-heal must
       run pip as **root** via `sudo -n systemd-run --wait --collect --unit=metixel-deps` into the
@@ -153,7 +153,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
       `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
       installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
       for HEIC) even for devices upgrading from code that predates the hand-off.
-    - **Ownership/sudo:** the backend service is hardened (`ProtectHome=yes` → `/home` read-only;
+    - **Ownership/sudo:** the backend service is hardened (`InaccessiblePaths=/home /root`;
       `ProtectSystem=full` → `/usr` read-only), so it CANNOT install to `~/.local` or the system
       dist-packages, and plain `sudo` inherits the hardened mount namespace. The self-heal must
       run pip as **root** via `sudo -n systemd-run --wait --collect --unit=metixel-deps` into the
@@ -162,6 +162,24 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
     - Runtime deps go in `requirements-pip.txt`, NOT only in pyproject optional extras (those are
       skipped by `pip install -e .` and were the root cause of the HEIC/HEIF OTA bug).
     - Guarded by `testing/unit_tests/backend/test_update_manager.py` and `testing/unit_tests/backend/test_dependencies.py`.
+
+18. **Installation / OTA scripts require explicit approval before modification.** Do **not** edit
+    `scripts/bootstrap.sh`, `scripts/update.sh`, `scripts/ota_install.sh`, `scripts/reconcile.sh`,
+    `scripts/uninstall_metixel.sh`, `scripts/quiet_boot.sh`, `scripts/configure_boot.sh`,
+    `scripts/legacy_setup_trixie_metixel.sh`, `scripts/fixups/*`, or anything else on the
+    install/upgrade path without the user's approval first.
+    - **Why:** these scripts are the only way a device gets fixed if they are wrong, and the
+      failure modes are the worst in the project — a bad `update.sh` can brick every device on
+      the next OTA, and a bad `reconcile.sh` can leave a host half-configured with no way back.
+    - **They cannot be validated by the unit test suite.** Verifying a change requires real
+      hardware work: a **fresh install** (flash → bootstrap → first boot), an **OTA upgrade**
+      from the previous release, and a **pi-gen** image build. None of that runs in CI, so a
+      green test run proves almost nothing here.
+    - **Ask first, then change.** Propose the edit, explain what needs re-testing, and wait for
+      approval. If a task seems to require touching one of these files, surface that instead of
+      making the change.
+    - This does not restrict *reading* them, or changing an unrelated file that merely mentions
+      them.
 
 ## Web UI Style Guide
 
@@ -322,6 +340,7 @@ mypy src/metixel/
 | `src/metixel/shared/ports.py` | Clean Architecture **ports** — `typing.Protocol` interfaces (HttpGateway, MqttGateway, CecController, IrSocket, DisplayDriver) + `Ports` bundle |
 | `src/metixel/shared/adapters.py` | Concrete **adapters** wrapping the real libraries (RequestsHttpGateway, PahoMqttGateway, LibCecAdapter, LircSocketAdapter) |
 | `src/metixel/shared/system_stats.py` | `/proc` system stats + GPU log formatting — single home for meminfo/stat/loadavg parsers |
+| `src/metixel/shared/logging_setup.py` | **Single owner of log levels** — the `system.log_level` name→level map, and `apply_level()` (loggers + file handlers + live view) used by the CLI bootstrap, `POST /api/logs/level` and the frontend's hot-reload. Read its docstring before changing logging: `logging` filters at the *logger* before any handler, so setting handler levels alone can only ever remove records |
 | `src/metixel/shared/platform.py` | Raspberry Pi detection (`is_raspberry_pi`, `detect_pi_model`) + `vcgencmd get_mem` helpers |
 | `src/metixel/backend/daemon.py` | Main daemon + `build_backend()` composition-root factory |
 | `src/metixel/frontend/renderer.py` | Frontend renderer + `build_renderer()` composition-root factory |

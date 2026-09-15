@@ -61,7 +61,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "video_max_duration_seconds": 0,  # Legacy — prefer video.max_duration_seconds
         "transition_duration_ms": 2500,
         "transition_style": "crossfade",  # crossfade, fade_through_black, none
-        "fit_mode": "cover",  # contain, cover, fill
+        "fit_mode": "cover",  # contain, cover (an unknown value falls back to cover)
         "smart_cover": True,  # use contain for square/opposite-orientation images in cover mode
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
@@ -211,6 +211,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # Empty = the legacy default (media/my_media).  The chosen folder
         # should be an enabled watch path so uploads reach the slideshow.
         "upload_dir": "",
+        # Where the dashboard's Take Screenshot button writes its PNGs.
+        # Resolved like cache_dir/upload_dir, so the default lands at
+        # <data>/media/screenshots — inside the media tree on purpose, so the
+        # existing [metixel-media] Samba share exposes it with no second share.
+        # It is not a watch path, so screenshots never enter the slideshow.
+        "screenshot_dir": "media/screenshots/",
         "log_level": "NONE",
         "quiet_boot": False,
         "first_run": True,

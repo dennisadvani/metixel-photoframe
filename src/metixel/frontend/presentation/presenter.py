@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import random
 import time
 from typing import Any, Literal
 
@@ -75,18 +76,44 @@ VIDEO_POSTER_LOOKAHEAD = 1
 #: to work before anything else: a looping photo slideshow that fills the panel.
 #:
 #: ``borderless`` drops the Mat Ring (no matte, no moulding band read as a mat),
-#: and ``crop`` samples the centred cover window so the artwork covers the
-#: frame instead of being letterboxed inside it.  ``EDGE_MARGIN_MM`` is pinned
-#: to zero as well: the template default insets the artwork to hide the bezel,
-#: which would leave a 7 px border at 1920x1200 — i.e. a "mat" by another name.
+#: and ``EDGE_MARGIN_MM`` is pinned to zero as well: the template default insets
+#: the artwork to hide the bezel, which would leave a 7 px border at 1920x1200 —
+#: i.e. a "mat" by another name.
 #:
 #: The ring layers are still *computed* (the framing engine keeps its fit check
 #: and the physical branch stays supported); they simply resolve to the full
 #: panel and the moulding annulus falls outside the canvas, so nothing is
 #: drawn.  That keeps this a presentation choice, not a fork of the geometry.
 SLIDESHOW_FRAMING_STYLE = "borderless"
-SLIDESHOW_FRAMING_OVERFLOW = "crop"
 SLIDESHOW_EDGE_MARGIN_MM = 0.0
+
+#: The Slideshow Settings card's fit modes mapped onto the framing engine's
+#: *overflow* axis.
+#:
+#: The two vocabularies describe one choice from opposite ends.  The card asks
+#: how a photo should fill the frame; the framing engine asks what happens to
+#: the residue when a fixed Mat Window meets a mismatched aspect ratio:
+#:
+#: ============  ==========  =================================================
+#: UI fit mode    overflow    Result
+#: ============  ==========  =================================================
+#: ``cover``      ``crop``    The artwork covers the panel and the overflowing
+#:                            edges are sampled away (``RenderPlan.artwork_src``).
+#: ``contain``    ``fill``    The artwork is contained and the ambient fill
+#:                            absorbs the residue, so nothing is cropped.
+#: ============  ==========  =================================================
+#:
+#: There is deliberately no third mapping.  The engine has no aspect-distorting
+#: mode, and the card no longer offers the old "fill (stretch)" option that
+#: would have needed one.
+_FIT_MODE_TO_OVERFLOW: dict[str, str] = {
+    "cover": "crop",
+    "contain": "fill",
+}
+
+#: Fit mode used when the config omits it or names an unknown one.  Matches
+#: ``DEFAULT_CONFIG["slideshow"]["fit_mode"]``.
+DEFAULT_FIT_MODE = "cover"
 
 
 class Presenter:
@@ -116,12 +143,14 @@ class Presenter:
 
         sw = backend.width or config.display.get("width") or 1920
         sh = backend.height or config.display.get("height") or 1080
+        # ``overflow`` is left unset on purpose: it is a per-item decision
+        # (``fit_mode`` plus ``smart_cover``), supplied by ``_plan_for``.
         self._layout = layout or LayoutEngine(
             screen_w=sw,
             screen_h=sh,
             rotation=int(config.display.get("rotation", 0) or 0),
             style=SLIDESHOW_FRAMING_STYLE,
-            overflow=SLIDESHOW_FRAMING_OVERFLOW,
+            overflow=None,
             edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
         )
 
@@ -146,11 +175,15 @@ class Presenter:
         self._prev_image: Any = None
 
         logger.info(
-            "Presenter: %dx%d, style=%s, transition=%s, image_duration=%ss",
+            "Presenter: %dx%d, style=%s (pinned), fit=%s, smart_cover=%s, "
+            "shuffle=%s, transition=%s, image_duration=%ss",
             sw,
             sh,
-            config.slideshow.get("framing_style", "gallery"),
-            config.slideshow.get("transition_style", "crossfade"),
+            SLIDESHOW_FRAMING_STYLE,
+            self._fit_mode(),
+            config.slideshow.get("smart_cover", True),
+            self._shuffle_enabled(),
+            self._transitions.style,
             config.slideshow.get("image_duration_seconds", 30),
         )
 
@@ -193,21 +226,57 @@ class Presenter:
     # -- Queue ---------------------------------------------------------------
 
     def set_queue(self, items: list[MediaItem]) -> None:
-        """Replace the playlist and start from the first playable item."""
+        """Replace the playlist and start from the first playable item.
+
+        With ``slideshow.shuffle`` on, the play order is randomised, so a fresh
+        queue starts somewhere other than the top of the backend's scan order.
+        The backend's ``playlist.json`` is left in scan order on purpose: it is
+        the pipeline's record of *what* is playable (and what the SPA's playlist
+        view lists), not a statement about play order.
+        """
         self._queue = list(items)
+        if self._shuffle_enabled():
+            random.shuffle(self._queue)
         self._queue_loaded = True
         self._cache.clear()
         self._current_idx = -1
         self._advance(initial=True)
 
     def add_items(self, items: list[MediaItem]) -> int:
-        """Append items, returning how many were new."""
+        """Append items, returning how many were new.
+
+        With shuffle on, new items are scattered through the *not yet played*
+        tail rather than appended, so a batch that arrives from an Immich sync
+        is not played back-to-back in download order.  Positions at or before
+        the playhead are never disturbed: re-ordering behind the cursor would
+        point it at a different photo than the one on screen.
+        """
         existing = {item.id for item in self._queue}
         added = [item for item in items if item.id not in existing]
+        if not added:
+            return 0
+
         self._queue.extend(added)
-        if added and self._current_idx < 0:
+        if self._shuffle_enabled():
+            self._scatter_tail(len(added))
+        if self._current_idx < 0:
             self._advance(initial=True)
         return len(added)
+
+    def _scatter_tail(self, count: int) -> None:
+        """Re-insert the last *count* queue items at random tail positions."""
+        start = len(self._queue) - count
+        fresh = self._queue[start:]
+        del self._queue[start:]
+
+        # The tail begins after the playhead, so the item on screen and the
+        # history behind it keep their places.
+        lowest = max(self._current_idx + 1, 0)
+        # Invariant: ``_current_idx`` is a valid index of the queue as it was
+        # before the additions, so after removing them ``lowest`` never exceeds
+        # the length and ``randint`` stays in range.
+        for item in fresh:
+            self._queue.insert(random.randint(lowest, len(self._queue)), item)
 
     def remove_items(self, item_ids: set[str]) -> int:
         """Remove items by id, adjusting the cursor.  Returns the count removed."""
@@ -302,35 +371,64 @@ class Presenter:
     def reload_config(self, config: Config) -> None:
         """Apply a hot-reloaded config without restarting the slideshow.
 
-        The framing style and overflow are **not** taken from the config: they
-        are pinned to the slideshow's full-bleed presentation (see
+        Everything the Slideshow Settings card exposes has to take effect here,
+        because saving that card restarts nothing — it only rewrites
+        ``config.json``, which the render loop notices by mtime.  Image
+        duration, transition style/duration, fit mode and smart cover are all
+        read live from the config, so only the derived state needs rebuilding:
+        the layout (when the panel geometry moved) and the cached plans (when
+        the fit decision changed).
+
+        The framing **style** is the one setting that is not taken from config:
+        it stays pinned to the slideshow's full-bleed presentation (see
         :data:`SLIDESHOW_FRAMING_STYLE`), so a stale ``framing_style`` in
-        ``config.json`` cannot reintroduce a mat on the next reload.  Only the
-        rotation — which genuinely changes the panel geometry — is honoured.
+        ``config.json`` cannot reintroduce a mat on the next reload.
         """
+        # Read the outgoing fit decision before adopting the new config, so a
+        # change can be detected and the stale plans dropped.
+        previous_fit = (
+            self._fit_mode(),
+            bool(self._config.slideshow.get("smart_cover", True)),
+        )
+
         self._config = config
+        self._transitions.reload_config(config)
+
         rotation = int(config.display.get("rotation", 0) or 0)
-        style = SLIDESHOW_FRAMING_STYLE
-        overflow = SLIDESHOW_FRAMING_OVERFLOW
-        if (rotation, style, overflow) != (
-            self._layout.rotation,
-            self._layout.style,
-            self._layout.overflow,
-        ):
+        geometry_changed = rotation != self._layout.rotation
+        if geometry_changed:
             sw = self._backend.width or config.display.get("width") or 1920
             sh = self._backend.height or config.display.get("height") or 1080
             self._layout = LayoutEngine(
                 screen_w=sw,
                 screen_h=sh,
                 rotation=rotation,
-                style=style,
-                overflow=overflow,
+                style=SLIDESHOW_FRAMING_STYLE,
+                overflow=None,
                 edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
             )
-            # The geometry changed, so the cached plans are stale.
+            logger.info(
+                "Presenter layout reloaded: rotation=%d style=%s", rotation, SLIDESHOW_FRAMING_STYLE
+            )
+
+        fit_changed = previous_fit != (
+            self._fit_mode(),
+            bool(config.slideshow.get("smart_cover", True)),
+        )
+
+        # The cached plans are the frame on screen and the crossfade's outgoing
+        # layer; both are invalid once the geometry or the fit decision moved.
+        # Cleared only when something actually changed — dropping them on every
+        # save would blank ``has_visible_frame`` and re-run the boot fade.
+        if geometry_changed or fit_changed:
             self._shown_plan = None
             self._prev_plan = None
-            logger.info("Presenter layout reloaded: rotation=%d style=%s", rotation, style)
+        if fit_changed:
+            logger.info(
+                "Presenter fit settings reloaded: fit_mode=%s smart_cover=%s",
+                self._fit_mode(),
+                config.slideshow.get("smart_cover", True),
+            )
 
     # -- Frame loop ----------------------------------------------------------
 
@@ -434,7 +532,7 @@ class Presenter:
         three styles in one place rather than reimplementing them here.
         """
         next_item = self._queue[(self._current_idx + 1) % len(self._queue)]
-        next_plan = self._layout.compute(
+        next_plan = self._plan_for(
             MediaSize(next_item.width, next_item.height, self._media_type(next_item))
         )
         next_image = self._image_for(next_item)
@@ -610,6 +708,55 @@ class Presenter:
 
     # -- Helpers -------------------------------------------------------------
 
+    def _fit_mode(self) -> str:
+        """The configured fit mode, normalised to a supported value.
+
+        A config written by an older release can still hold ``fill`` (stretch),
+        which this frontend cannot honour, so an unknown value falls back to
+        the default rather than being passed to the framing engine.
+        """
+        mode = str(self._config.slideshow.get("fit_mode", DEFAULT_FIT_MODE))
+        if mode not in _FIT_MODE_TO_OVERFLOW:
+            logger.warning("Unsupported slideshow fit_mode %r — using %r", mode, DEFAULT_FIT_MODE)
+            return DEFAULT_FIT_MODE
+        return mode
+
+    def _shuffle_enabled(self) -> bool:
+        """Whether the user asked for a random play order."""
+        return bool(self._config.slideshow.get("shuffle", True))
+
+    def _overflow_for(self, media: MediaSize) -> str:
+        """The framing overflow to use for *media* under the current settings.
+
+        This is where ``smart_cover`` lives.  In ``cover`` mode an artwork whose
+        orientation opposes the panel loses a large part of itself to the crop —
+        a portrait photo on a landscape screen is cropped top and bottom — so
+        with smart cover on those items are contained instead.  A square artwork
+        counts as opposing, because at 1:1 it has as much to lose as a portrait
+        one does.
+
+        Orientation is compared against the panel the plan is computed for
+        (``LayoutEngine.screen_w`` / ``screen_h``), not the config's nominal
+        size, so the decision always matches the geometry the renderer uses.
+        """
+        mode = self._fit_mode()
+        overflow = _FIT_MODE_TO_OVERFLOW[mode]
+        if mode != "cover" or not self._config.slideshow.get("smart_cover", True):
+            return overflow
+        if not media.is_valid:
+            return overflow
+
+        screen_ratio = self._layout.screen_w / max(self._layout.screen_h, 1)
+        media_ratio = media.width / max(media.height, 1)
+        opposes_panel = (screen_ratio >= 1.0 and media_ratio <= 1.0) or (
+            screen_ratio < 1.0 and media_ratio >= 1.0
+        )
+        return _FIT_MODE_TO_OVERFLOW["contain"] if opposes_panel else overflow
+
+    def _plan_for(self, media: MediaSize) -> RenderPlan:
+        """Lay out one item, applying the configured fit behaviour."""
+        return self._layout.compute(media, overflow=self._overflow_for(media))
+
     def _current_plan(self) -> RenderPlan | None:
         """Return the layout for the item on screen, computing it once."""
         if self._shown_plan is not None and self._shown_item is self.current_item:
@@ -620,7 +767,7 @@ class Presenter:
         if item.width <= 0 or item.height <= 0:
             logger.debug("Item %s has no dimensions yet — deferring layout", item.id)
             return None
-        return self._layout.compute(MediaSize(item.width, item.height, self._media_type(item)))
+        return self._plan_for(MediaSize(item.width, item.height, self._media_type(item)))
 
     def _next_plan(self) -> RenderPlan | None:
         """Return the next item's plan, or ``None`` if it is not ready.
@@ -634,7 +781,7 @@ class Presenter:
         nxt = self._queue[(self._current_idx + 1) % len(self._queue)]
         if nxt.width <= 0 or nxt.height <= 0:
             return None
-        return self._layout.compute(MediaSize(nxt.width, nxt.height, self._media_type(nxt)))
+        return self._plan_for(MediaSize(nxt.width, nxt.height, self._media_type(nxt)))
 
     def _image_for(self, item: MediaItem | None) -> Any:
         """Return a displayable handle for *item*, loading synchronously if needed.
@@ -672,10 +819,15 @@ class Presenter:
         return "video" if item.media_type == MediaType.VIDEO else "image"
 
     def _transition_seconds(self) -> float:
-        style = self._config.slideshow.get("transition_style", "crossfade")
-        if style == "none":
+        """Seconds the transition runs for; zero when there is no transition.
+
+        Read from :class:`TransitionEngine` rather than re-derived from the
+        config, so the blend's duration and its easing curves cannot disagree
+        (the ``none`` style is a hard cut, so it takes no time at all).
+        """
+        if self._transitions.style == "none":
             return 0.0
-        return float(self._config.slideshow.get("transition_duration_ms", 1500)) / 1000.0
+        return self._transitions.duration_s
 
     def _item_duration(self, item: MediaItem) -> float:
         """Seconds to show *item*.

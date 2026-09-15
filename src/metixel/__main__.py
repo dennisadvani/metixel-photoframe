@@ -15,11 +15,16 @@ import sys
 from pathlib import Path
 
 from metixel import __version__
+from metixel.shared import logging_setup
 from metixel.shared.paths import data_dir
 
 #: Sentinel level above CRITICAL (50): no log record can pass this filter, so
 #: setting it on the file handler effectively disables on-disk logging.
-_LOG_LEVEL_NONE = 100
+#:
+#: The canonical value and the whole name → level map live in
+#: :mod:`metixel.shared.logging_setup`; this alias is kept as the name the CLI
+#: and its tests use, so the *value* still has a single owner.
+_LOG_LEVEL_NONE = logging_setup.NONE
 
 
 def _log_file_for_mode(mode: str | None) -> Path:
@@ -46,24 +51,16 @@ def _read_persisted_log_level(config_path: Path) -> int:
     (``Config.load`` creates it later, in the daemon), so defaulting to ``NONE``
     here is the documented default — not a fallback for an error.
     """
-    file_levels = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-        "NONE": _LOG_LEVEL_NONE,  # Above CRITICAL — disables disk logging
-    }
     try:
         import json as _json
 
         if config_path.exists():
             raw = _json.loads(config_path.read_text(encoding="utf-8"))
-            persisted = str(raw.get("system", {}).get("log_level", "NONE")).upper()
-            return file_levels.get(persisted, _LOG_LEVEL_NONE)
+            return logging_setup.parse_level(raw.get("system", {}).get("log_level", "NONE"))
     except Exception:
         # Unreadable/corrupt config: fall through to the safe default.
         pass
-    return _LOG_LEVEL_NONE
+    return logging_setup.NONE
 
 
 def _setup_logging(
@@ -80,10 +77,21 @@ def _setup_logging(
     user-editable logging config file.
     Also attaches a ``LogRingBuffer`` for the web UI.
 
-    The **file handler** level is read from ``config.json`` →
-    ``system.log_level`` so the user can control log file size
-    via the web UI.  The ring buffer is always ``DEBUG`` so the
-    dashboard severity checkboxes can filter the full stream.
+    Three levels are in play, and :mod:`metixel.shared.logging_setup` owns the
+    relationship between them (read its docstring before changing anything
+    here):
+
+    * the **file** gets ``system.log_level`` exactly — the user's choice, and the
+      only sink that costs SD-card writes;
+    * the **live view** (the ring buffer behind the Logs card) always keeps INFO
+      and above, and follows the setting down to DEBUG, so the card is never
+      blank under the default ``NONE``;
+    * the **logger** is opened up to the most permissive of those and no further,
+      because a handler's level can only ever remove records, never add them.
+
+    The levels are applied by :func:`~metixel.shared.logging_setup.apply_level`
+    *after* every handler is attached — see the note at the call site.
+
     When ``file_logging`` is False (root-run entry points such as the
     cursor-hider daemon or the ``--clear-web-password`` one-shot) only the
     console and ring-buffer handlers are attached: the persistent on-disk
@@ -101,6 +109,10 @@ def _setup_logging(
     root = logging.getLogger()
     root.setLevel(log_level)
     root.addHandler(console)
+
+    # A process with no file sink has no file level: NONE keeps it out of the
+    # calculation below rather than silently adopting the user's file setting.
+    file_level = logging_setup.NONE
 
     if file_logging:
         # File handler — path and rotation are decided in code, NOT read from a
@@ -137,7 +149,6 @@ def _setup_logging(
                 maxBytes=10_485_760,
                 backupCount=5,
             )
-            file_handler.setLevel(file_level)
             file_handler.setFormatter(fmt)
             root.addHandler(file_handler)
         except OSError as exc:
@@ -154,69 +165,37 @@ def _setup_logging(
                 exc,
             )
 
-        # Re-apply across the hierarchy: modules that configured a logger before
-        # this ran still need the level, and the web UI changes it at runtime
-        # through the same helper, so startup and runtime cannot diverge.
-        _apply_file_handler_levels(file_level)
-
-    # 3. Ring buffer for web UI — attach to BOTH root and metixel loggers.
-    #    The web API reads from the metixel logger's handlers, but non-
-    #    metixel messages (werkzeug, urllib3, etc.) flow through root
-    #    and should also be captured.
-    #    Always DEBUG so the dashboard checkboxes can filter the full
-    #    stream of log entries.
+    # 3. Ring buffer for the dashboard's live log view.
+    #
+    #    Attached to the ROOT logger ONLY.  Attaching the same handler to both
+    #    root and "metixel" captured every metixel record twice: a record
+    #    propagates up the hierarchy and `logging` does not de-duplicate a
+    #    handler shared between an ancestor and a descendant, so the Logs card
+    #    showed every Metixel line in duplicate.  Root alone sees everything —
+    #    metixel's records by propagation, and third-party records (werkzeug,
+    #    urllib3) directly.
     from metixel.shared.log_buffer import LogRingBuffer
 
     ring_buffer = LogRingBuffer(capacity=500)
-    ring_buffer.setLevel(logging.DEBUG)
     ring_buffer.setFormatter(fmt)
     root.addHandler(ring_buffer)
 
-    # Attach the same buffer to the metixel logger so the web API finds it
-    metixel_logger = logging.getLogger("metixel")
-    metixel_logger.addHandler(ring_buffer)
-
-
-def _apply_file_handler_levels(level: int) -> None:
-    """Set every ``FileHandler`` across all loggers to *level*.
-
-    Walks the logger hierarchy explicitly instead of iterating
-    ``Logger.manager.loggerDict``.  That dict only holds *named* loggers that
-    exist as direct values — handlers attached directly to a named logger such
-    as ``metixel.backend.state`` were skipped, so those escaped the level set
-    at startup and wrote DEBUG lines even when the user had selected INFO.  The
-    root logger is included for completeness.
-
-    Does **not** touch console handlers or ring buffers — only file-based
-    handlers are affected.  This is the mechanism that lets the web UI control
-    log file verbosity independently of the dashboard view.
-    """
-    seen: set[int] = set()
-
-    def _apply(logger_obj: logging.Logger) -> None:
-        if id(logger_obj) in seen:
-            return
-        seen.add(id(logger_obj))
-        for handler in logger_obj.handlers:
-            if isinstance(handler, logging.FileHandler):
-                handler.setLevel(level)
-
-    # Every logger in the manager, plus the root, plus (defensively) the
-    # metixel package logger and each already-instantiated metixel.* logger.
-    for logger_obj in logging.Logger.manager.loggerDict.values():
-        if isinstance(logger_obj, logging.Logger):
-            _apply(logger_obj)
-        elif isinstance(logger_obj, logging.PlaceHolder):
-            continue
-    _apply(logging.getLogger())
-    _apply(logging.getLogger("metixel"))
-
-    # Handlers can also be attached to a logger that was created lazily and is
-    # therefore not yet in loggerDict at call time; walk the known metixel
-    # namespaces to catch those.
-    for name in list(logging.Logger.manager.loggerDict):
-        if name == "metixel" or name.startswith("metixel."):
-            _apply(logging.getLogger(name))
+    # 4. Apply the levels LAST, once every handler exists.
+    #
+    #    Ordering is load-bearing.  Handlers decide *what gets written*, but the
+    #    logger decides what is *created*, and a handler's level can only ever
+    #    remove records — never add them.  Applying the file level before the
+    #    ring buffer existed is why the buffer's level had to be hardcoded, and
+    #    why selecting "Debug" produced no debug output anywhere.  One call,
+    #    after the handlers are in place, keeps all three levels consistent.
+    effective = logging_setup.apply_level(file_level, terminal_level=log_level)
+    logging.getLogger("metixel").debug(
+        "Logging configured: file=%s, live view=%s, %s logger=%s",
+        logging.getLevelName(file_level),
+        logging.getLevelName(logging_setup.live_view_level(file_level)),
+        logging_setup.PACKAGE_LOGGER,
+        logging.getLevelName(effective),
+    )
 
 
 def _wants_file_logging(mode: str | None) -> bool:

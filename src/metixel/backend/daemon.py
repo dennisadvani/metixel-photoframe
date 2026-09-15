@@ -817,7 +817,9 @@ class BackendDaemon:
         )
         t.start()
         self._threads.append(t)
-        logger.info("Display scheduler started")
+        # Deliberately no log here: ``_scheduler_loop`` announces itself on its
+        # first instruction.  Logging in both places printed the identical line
+        # twice at every boot, which reads as "the scheduler started twice".
 
     def _start_web_server(self) -> None:
         """Start the Flask web server — this BLOCKS the main thread."""

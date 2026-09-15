@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 
 import metixel.__main__ as main_mod
+from metixel.shared import logging_setup
+from metixel.shared.log_buffer import LogRingBuffer
 
 
 @pytest.fixture
@@ -349,3 +351,191 @@ class TestUnwritableLogFileGuard:
         main_mod._setup_logging(tmp_path / "config.json", logging.DEBUG, file_logging=True)
 
         assert _root_file_handlers() == []
+
+
+@pytest.fixture
+def metixel_logger_level():
+    """Restore the package logger's level.
+
+    Both :func:`~metixel.shared.logging_setup.apply_level` and ``_setup_logging``
+    set it on a module-global logger, so a test that changes it must put it back
+    or it leaks into every later test in the run.
+    """
+    metixel = logging.getLogger("metixel")
+    before = metixel.level
+    yield metixel
+    metixel.setLevel(before)
+
+
+def _configure(tmp_path, monkeypatch, level: str, *, terminal: int = logging.INFO) -> Path:
+    """Run ``_setup_logging`` with *level* persisted; return the log file path."""
+    import json
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"system": {"log_level": level}}), encoding="utf-8")
+    monkeypatch.setattr(main_mod, "data_dir", lambda: tmp_path)
+    main_mod._setup_logging(config, terminal, file_logging=True)
+    return tmp_path / "logs" / "metixel.log"
+
+
+def _flush() -> None:
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+
+class TestLogLevelMap:
+    """``system.log_level`` has exactly one name → level map."""
+
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("DEBUG", logging.DEBUG),
+            ("info", logging.INFO),  # case-insensitive: config.json is hand-editable
+            ("Warning", logging.WARNING),
+            ("ERROR", logging.ERROR),
+            ("NONE", logging_setup.NONE),
+        ],
+    )
+    def test_parses_known_names(self, name, expected) -> None:
+        assert logging_setup.parse_level(name) == expected
+
+    @pytest.mark.parametrize("name", ["", "off", "TRACE", None, 42])
+    def test_unknown_names_fall_back_to_none(self, name) -> None:
+        """A bad value in ``config.json`` must not stop the frame booting."""
+        assert logging_setup.parse_level(name) == logging_setup.NONE
+
+    def test_names_round_trip(self) -> None:
+        for name in logging_setup.LOG_LEVELS:
+            assert logging_setup.level_name(logging_setup.parse_level(name)) == name
+
+    def test_none_sits_above_critical(self) -> None:
+        """The sentinel must filter out *everything*, not just CRITICAL."""
+        assert logging_setup.NONE > logging.CRITICAL
+
+    def test_live_view_is_never_quieter_than_info(self) -> None:
+        """The Logs card must not be blank under the default ``NONE``."""
+        assert logging_setup.live_view_level(logging_setup.NONE) == logging.INFO
+        assert logging_setup.live_view_level(logging.ERROR) == logging.INFO
+        assert logging_setup.live_view_level(logging.DEBUG) == logging.DEBUG
+
+
+class TestLevelsActuallyTakeEffect:
+    """Regression guards for a setting that silently did nothing.
+
+    ``logging`` filters at two independent points: the logger decides whether a
+    record is *created*, each handler decides whether it is *written*.  Setting
+    only handler levels therefore cannot enable anything below the logger's level.
+
+    ``system.log_level`` used to be wired to the handlers alone while the root
+    logger stayed at INFO, so choosing "Debug" produced no debug output anywhere —
+    not in the log file, and not in the dashboard's live view (whose ring buffer
+    claimed to always capture DEBUG, so the Logs card's Debug filter could never
+    show a single line).
+
+    Every earlier test in this file asserted *handler* levels, which is why they
+    all stayed green through the whole bug.  These assert the observable outcome
+    instead: that a ``logger.debug`` call actually lands somewhere.
+    """
+
+    def test_debug_line_reaches_the_file(
+        self, clean_root_logger, metixel_logger_level, tmp_path, monkeypatch
+    ) -> None:
+        log_file = _configure(tmp_path, monkeypatch, "DEBUG")
+
+        logging.getLogger("metixel.regression").debug("DEBUG-MARKER")
+        _flush()
+
+        assert "DEBUG-MARKER" in log_file.read_text(encoding="utf-8"), (
+            "selecting log_level=DEBUG must put debug lines in the log file"
+        )
+
+    def test_logger_is_opened_up_to_serve_the_file(
+        self, clean_root_logger, metixel_logger_level, tmp_path, monkeypatch
+    ) -> None:
+        _configure(tmp_path, monkeypatch, "DEBUG")
+        assert logging.getLogger("metixel").level == logging.DEBUG
+
+    def test_none_silences_the_file_but_not_the_live_view(
+        self, clean_root_logger, metixel_logger_level, tmp_path, monkeypatch
+    ) -> None:
+        """The two sinks are deliberately different levels.
+
+        ``NONE`` is the default and exists to stop SD-card wear, not to make the
+        dashboard's diagnostics useless — so the file goes quiet while the RAM-only
+        live view keeps Info and above.
+        """
+        log_file = _configure(tmp_path, monkeypatch, "NONE")
+
+        logging.getLogger("metixel.regression").info("INFO-MARKER")
+        _flush()
+
+        assert "INFO-MARKER" not in log_file.read_text(encoding="utf-8")
+        buffer = logging_setup.ring_buffer()
+        assert buffer is not None
+        assert any(entry["message"] == "INFO-MARKER" for entry in buffer.get_recent(50))
+        # The logger is at the live-view level, not at NONE — otherwise the live
+        # view could never receive anything either.
+        assert logging.getLogger("metixel").level == logging.INFO
+
+    def test_third_party_debug_is_not_opened_up(
+        self, clean_root_logger, metixel_logger_level, tmp_path, monkeypatch
+    ) -> None:
+        """Only the ``metixel`` tree is opened up, never the root logger.
+
+        urllib3 logs every connection-pool event at DEBUG, and the dashboard polls
+        the API constantly — opening up the root logger would fill the 500-entry
+        ring buffer with that noise and evict the lines the Logs card exists to
+        show.
+        """
+        _configure(tmp_path, monkeypatch, "DEBUG")
+        assert logging.getLogger().level == logging.INFO
+        assert not logging.getLogger("urllib3").isEnabledFor(logging.DEBUG)
+
+    def test_runtime_change_applies_the_same_way(
+        self, clean_root_logger, metixel_logger_level, tmp_path, monkeypatch
+    ) -> None:
+        """What ``POST /api/logs/level`` does must match the startup path."""
+        _configure(tmp_path, monkeypatch, "NONE")
+        assert not logging.getLogger("metixel").isEnabledFor(logging.DEBUG)
+
+        logging_setup.apply_level(logging_setup.parse_level("DEBUG"))
+
+        assert logging.getLogger("metixel").isEnabledFor(logging.DEBUG)
+
+
+class TestRingBufferCapture:
+    def test_each_record_is_captured_exactly_once(
+        self, clean_root_logger, metixel_logger_level, tmp_path, monkeypatch
+    ) -> None:
+        """The buffer must not be attached twice.
+
+        It used to be added to *both* the root logger and ``metixel``.  A record
+        propagates up the hierarchy and ``logging`` does not de-duplicate a
+        handler shared between an ancestor and a descendant, so every Metixel line
+        appeared **twice** on the Logs card.
+        """
+        _configure(tmp_path, monkeypatch, "INFO")
+        buffer = logging_setup.ring_buffer()
+        assert buffer is not None
+        buffer.clear()
+
+        log = logging.getLogger("metixel.regression")
+        log.debug("MARKER-DEBUG")
+        log.info("MARKER-INFO")
+        log.warning("MARKER-WARNING")
+
+        messages = [entry["message"] for entry in buffer.get_recent(50)]
+        for marker in ("MARKER-INFO", "MARKER-WARNING"):
+            assert messages.count(marker) == 1, f"{marker} captured {messages.count(marker)} times"
+
+    def test_buffer_is_attached_to_the_root_logger(
+        self, clean_root_logger, metixel_logger_level, tmp_path, monkeypatch
+    ) -> None:
+        """One attachment point, on root, so it sees Metixel *and* third-party lines."""
+        _configure(tmp_path, monkeypatch, "INFO")
+        root_buffers = [h for h in logging.getLogger().handlers if isinstance(h, LogRingBuffer)]
+        assert len(root_buffers) == 1
+        package_buffers = [
+            h for h in logging.getLogger("metixel").handlers if isinstance(h, LogRingBuffer)
+        ]
+        assert package_buffers == []

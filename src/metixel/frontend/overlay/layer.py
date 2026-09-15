@@ -65,6 +65,19 @@ class OverlayLayer(ABC):
     def visible(self, value: bool) -> None:
         self._visible = value
 
+    @property
+    def needs_repaint(self) -> bool:
+        """Whether this layer's output would differ from what was last painted.
+
+        Defaults to ``True`` — the conservative answer.  The overlay manager
+        skips a frame entirely when no visible layer asks for one, so a layer
+        that animates must be able to say so; one that cannot, or that has not
+        been migrated yet, keeps repainting rather than freezing on screen.
+        Opting IN to idling is the only safe default here: a missed repaint is a
+        frozen panel, which is far worse than a redundant composite.
+        """
+        return True
+
     # -- Z-value helpers ----------------------------------------------------
 
     def next_z(self, step: float = 0.001) -> float:
