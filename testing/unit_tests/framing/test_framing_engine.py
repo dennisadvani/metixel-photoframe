@@ -340,8 +340,9 @@ class TestPhysicalBranch:
 
     def test_the_solid_strategy_uses_the_configured_colour(self):
         result = calculate_framing(
-            request("gallery", 3 / 2, physical=True, ambient_strategy="solid",
-                    ambient_colour="#1717d3"),
+            request(
+                "gallery", 3 / 2, physical=True, ambient_strategy="solid", ambient_colour="#1717d3"
+            ),
         )
         assert result.ambient_fill.present is True
         assert result.ambient_fill.colour == "#1717d3"
@@ -354,8 +355,9 @@ class TestPhysicalBranch:
         appeared to do nothing.
         """
         result = calculate_framing(
-            request("gallery", 3 / 2, physical=True, ambient_strategy="bars",
-                    ambient_colour="#1717d3"),
+            request(
+                "gallery", 3 / 2, physical=True, ambient_strategy="bars", ambient_colour="#1717d3"
+            ),
         )
         assert result.ambient_fill.present is True
         assert result.ambient_fill.colour == "#000000"

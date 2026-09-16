@@ -124,7 +124,7 @@ class TestAmbientColourPlumbing:
         the edge of a letterboxed photo, which does not point at the colour.
         """
         body = _method_body(_PRESENTER, "_ambient_colour")
-        assert "startswith(\"#\")" in body, "hex form"
+        assert 'startswith("#")' in body, "hex form"
         assert "isinstance(value, (list, tuple))" in body, "array form"
         assert "_DEFAULT_AMBIENT_COLOUR" in body
 

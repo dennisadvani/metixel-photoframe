@@ -89,6 +89,21 @@ class RenderPlan:
     branch: str
     overflow: str
 
+    #: Ambient strategy (``solid``/``blur``/``bars``).  The canvas needs it
+    #: because ``blur`` paints a full-bleed blurred backdrop rather than a flat
+    #: colour, and both are decided at the same place.
+    #:
+    #: Defaults are supplied so existing unspecific constructions (tests, the
+    #: unusable-media fallback) keep working: "solid" reproduces the behaviour
+    #: before ``blur`` existed.
+    ambient_strategy: str = "solid"
+
+    #: Blur strength (larger = heavier) and dimming toward black, for
+    #: ``ambient_strategy == "blur"``.  Both are per-slide costs, so the canvas
+    #: caches the blurred backdrop and rebuilds it only when one changes.
+    ambient_blur_radius: float = 24.0
+    ambient_darken: float = 0.35
+
     @property
     def image_rect(self) -> PxRect:
         """Legacy alias for :attr:`artwork_dst`.
@@ -213,6 +228,8 @@ class LayoutEngine:
         overflow: str | None = None,
         ambient_strategy: str | None = None,
         ambient_colour: str | None = None,
+        ambient_blur_radius: float | None = None,
+        ambient_darken: float | None = None,
         edge_margin: float | None = None,
         moulding_width: float | None = None,
     ) -> None:
@@ -223,6 +240,8 @@ class LayoutEngine:
         self._overflow = overflow
         self._ambient_strategy = ambient_strategy
         self._ambient_colour = ambient_colour
+        self._ambient_blur_radius = ambient_blur_radius
+        self._ambient_darken = ambient_darken
         self._edge_margin = edge_margin
         self._moulding_width = moulding_width
 
@@ -285,6 +304,20 @@ class LayoutEngine:
         """
         return self._ambient_strategy
 
+    @property
+    def ambient_blur_radius(self) -> float | None:
+        """Blur strength for ``strategy == "blur"``; larger is heavier.
+
+        Surfaced so a config reload can detect a change and rebuild the engine,
+        for the same reason as :attr:`ambient_strategy`.
+        """
+        return self._ambient_blur_radius
+
+    @property
+    def ambient_darken(self) -> float | None:
+        """How far to dim the blurred backdrop toward black (``0.0``–``1.0``)."""
+        return self._ambient_darken
+
     # -- Public -------------------------------------------------------------
 
     def compute(
@@ -323,6 +356,8 @@ class LayoutEngine:
                 style=style or self._style,
                 branch="virtual",
                 overflow=overflow or self._overflow or "fill",
+                # An unprobed item is drawn full-bleed, so there is no residue
+                # for an ambient look to fill; "solid" is the honest report.
             )
 
         request: FramingRequest = resolve(
@@ -333,6 +368,8 @@ class LayoutEngine:
             whitespace=whitespace,
             ambient_strategy=self._ambient_strategy,
             ambient_colour=self._ambient_colour,
+            ambient_blur_radius=self._ambient_blur_radius,
+            ambient_darken=self._ambient_darken,
             edge_margin=self._edge_margin,
             moulding_width=self._moulding_width,
         )
@@ -388,6 +425,9 @@ class LayoutEngine:
             style=style or self._style,
             branch=result.branch,
             overflow=result.overflow,
+            ambient_strategy=result.ambient_fill.strategy,
+            ambient_blur_radius=result.ambient_fill.blur_radius,
+            ambient_darken=result.ambient_fill.darken,
         )
 
     # -- Debug --------------------------------------------------------------

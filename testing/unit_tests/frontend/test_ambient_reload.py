@@ -87,9 +87,7 @@ class TestTheAmbientEngineIsRebuilt:
         assert plan.ambient_colour == "#1717d3"
         assert plan.ambient is not None, "a contained 4:3 photo needs an ambient band"
 
-    def test_an_unchanged_ambient_does_not_rebuild_the_engine(
-        self, presenter: Presenter
-    ) -> None:
+    def test_an_unchanged_ambient_does_not_rebuild_the_engine(self, presenter: Presenter) -> None:
         """Rebuilding on every save would churn the engine for no reason."""
         engine = presenter._layout
         presenter.reload_config(presenter._config)

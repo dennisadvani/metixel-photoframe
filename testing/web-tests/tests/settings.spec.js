@@ -36,6 +36,64 @@ test.describe("settings", () => {
         expectNoErrors(errors);
     });
 
+    // The three Ambient Fill modes each use a different subset of the controls,
+    // so the irrelevant rows are hidden.  A visible control that does nothing is
+    // worse than a hidden one, and this is easy to get wrong when a mode is
+    // added: the colour row originally stayed visible in "blur" mode, offering a
+    // picker with no effect.
+    test.describe("ambient fill controls follow the selected mode", () => {
+        const select = "#cfg-ambient-strategy";
+        const colourRow = "#ambient-colour-row";
+        const blurRow = "#ambient-blur-row";
+        const darkenRow = "#ambient-darken-row";
+
+        test("solid colour shows only the colour picker", async ({ page }) => {
+            await goToPage(page, "playback");
+            await page.selectOption(select, "solid");
+            await expect(page.locator(colourRow)).toBeVisible();
+            await expect(page.locator(blurRow)).toBeHidden();
+            await expect(page.locator(darkenRow)).toBeHidden();
+        });
+
+        test("black bars hides every ambient control", async ({ page }) => {
+            await goToPage(page, "playback");
+            await page.selectOption(select, "bars");
+            await expect(page.locator(colourRow)).toBeHidden();
+            await expect(page.locator(blurRow)).toBeHidden();
+            await expect(page.locator(darkenRow)).toBeHidden();
+        });
+
+        test("blurred photo shows blur + brightness but NOT the colour picker", async ({ page }) => {
+            await goToPage(page, "playback");
+            await page.selectOption(select, "blur");
+            await expect(page.locator(colourRow)).toBeHidden();
+            await expect(page.locator(blurRow)).toBeVisible();
+            await expect(page.locator(darkenRow)).toBeVisible();
+        });
+
+        test("the visibility rule survives a reload after saving blur", async ({ page }) => {
+            // The mode is persisted, so the initial render must apply the rule
+            // rather than only the change handler doing it.
+            const errors = collectErrors(page);
+            await goToPage(page, "playback");
+            const original = await page.locator(select).inputValue();
+            await page.selectOption(select, "blur");
+            await page.click("#btn-save-slideshow");
+            await page.waitForTimeout(500);
+            await page.reload();
+            await page.waitForTimeout(500);
+
+            await expect(page.locator(colourRow)).toBeHidden();
+            await expect(page.locator(blurRow)).toBeVisible();
+
+            // Restore the frame's original configuration.
+            await page.selectOption(select, original);
+            await page.click("#btn-save-slideshow");
+            await page.waitForTimeout(500);
+            expectNoErrors(errors);
+        });
+    });
+
     test("slideshow duration save + restore", async ({ page }) => {
         await goToPage(page, "playback");
         await assertSaveRestores(page, {

@@ -63,12 +63,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "transition_style": "crossfade",  # crossfade, fade_through_black, none
         "fit_mode": "cover",  # contain, cover (an unknown value falls back to cover)
         "smart_cover": True,  # use contain for square/opposite-orientation images in cover mode
-        # Ambient look: the colour behind a contained image, and therefore the
-        # colour the transition curtain uses to wipe the outgoing image's
-        # letterbox bars.  "solid" is a flat fill of ambient_color; "bars" leaves
-        # the residue showing.  Anything unknown falls back to "solid".
-        "ambient_strategy": "solid",  # solid, bars
+        # Ambient look: what sits behind a contained image, and therefore what
+        # the transition curtain uses to wipe the outgoing image's letterbox
+        # bars.  "solid" is a flat fill of ambient_color; "bars" leaves the
+        # residue showing; "blur" stretches the artwork to fill the screen
+        # (aspect ignored) and blurs it, TV-style.  Anything unknown falls back
+        # to "solid".
+        "ambient_strategy": "solid",  # solid, bars, blur
         "ambient_color": "#101014",  # #rrggbb (an [r, g, b] list is also accepted)
+        # Blur mode only, and ignored otherwise.  ``ambient_blur_radius`` is the
+        # downscale factor for the blur: the artwork is shrunk to 1/radius and
+        # scaled back up, which is a cheap box blur — so a LARGER value is a
+        # HEAVIER blur.  ``ambient_darken`` dims the result toward black, which
+        # the TV-style effect needs so a bright photo does not glare behind the
+        # artwork.  Both are per-slide costs, not per-frame.
+        "ambient_blur_radius": 24,
+        "ambient_darken": 0.35,
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
         # Framing is pinned to the full-bleed slideshow presentation: no Mat

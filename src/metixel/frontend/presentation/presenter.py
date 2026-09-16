@@ -159,6 +159,64 @@ def _ambient_colour(config: Config) -> str:
 #: ``DEFAULT_CONFIG["slideshow"]["fit_mode"]``.
 DEFAULT_FIT_MODE = "cover"
 
+#: Defaults for the blur ambient look.  Match ``DEFAULT_CONFIG["slideshow"]`` and
+#: the framing engine's own ``AmbientFillSpec`` defaults.
+_DEFAULT_AMBIENT_BLUR_RADIUS = 24.0
+_DEFAULT_AMBIENT_DARKEN = 0.35
+
+#: Bounds for the blur controls.  The value is a pixel radius passed to
+#: ``PIL.ImageFilter.BoxBlur``, so larger is blurrier.  1 is the point below
+#: which there is no visible blur; 100 is the point past which the cost stops
+#: being worth it on a Pi 3, where the filter runs on the render thread.
+MIN_AMBIENT_BLUR_RADIUS = 1.0
+MAX_AMBIENT_BLUR_RADIUS = 100.0
+
+
+def _ambient_blur_radius(config: Config) -> float:
+    """Return the configured blur strength, clamped to a usable range.
+
+    This is a **pixel radius**, so a larger value is a heavier blur.  A
+    non-numeric value falls back to the default rather than propagating a
+    ``TypeError`` into the render loop, and the clamp keeps a hand-edited config
+    (say ``ambient_blur_radius: 0``) from reaching the filter at all.
+    """
+    value = config.slideshow.get("ambient_blur_radius", _DEFAULT_AMBIENT_BLUR_RADIUS)
+    try:
+        radius = float(value)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring unusable ambient_blur_radius %r — using the default", value)
+        return _DEFAULT_AMBIENT_BLUR_RADIUS
+    if radius < MIN_AMBIENT_BLUR_RADIUS or radius > MAX_AMBIENT_BLUR_RADIUS:
+        clamped = min(MAX_AMBIENT_BLUR_RADIUS, max(MIN_AMBIENT_BLUR_RADIUS, radius))
+        logger.warning(
+            "ambient_blur_radius %r is outside %s–%s — clamping to %s",
+            radius,
+            MIN_AMBIENT_BLUR_RADIUS,
+            MAX_AMBIENT_BLUR_RADIUS,
+            clamped,
+        )
+        return clamped
+    return radius
+
+
+def _ambient_darken(config: Config) -> float:
+    """Return how far to dim the blurred backdrop, clamped to ``0.0``–``1.0``.
+
+    ``1.0`` would make the backdrop pure black, which is a legitimate (if odd)
+    choice, so the range is inclusive rather than an error.
+    """
+    value = config.slideshow.get("ambient_darken", _DEFAULT_AMBIENT_DARKEN)
+    try:
+        darken = float(value)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring unusable ambient_darken %r — using the default", value)
+        return _DEFAULT_AMBIENT_DARKEN
+    if not 0.0 <= darken <= 1.0:
+        clamped = min(1.0, max(0.0, darken))
+        logger.warning("ambient_darken %r is outside 0.0–1.0 — clamping to %s", darken, clamped)
+        return clamped
+    return darken
+
 
 class Presenter:
     """Owns the slideshow clock, layout and playback for one display.
@@ -197,6 +255,8 @@ class Presenter:
             overflow=None,
             ambient_strategy=str(config.slideshow.get("ambient_strategy", "solid")),
             ambient_colour=_ambient_colour(config),
+            ambient_blur_radius=_ambient_blur_radius(config),
+            ambient_darken=_ambient_darken(config),
             edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
         )
 
@@ -447,6 +507,8 @@ class Presenter:
         previous_ambient = (
             self._layout.ambient_strategy,
             self._layout.ambient_colour,
+            self._layout.ambient_blur_radius,
+            self._layout.ambient_darken,
         )
 
         self._config = config
@@ -458,9 +520,16 @@ class Presenter:
         # An ambient change rebuilds the engine for the same reason a rotation
         # change does: the value is not consulted per item, so an engine built at
         # startup would keep the colour the user first had.
+        #
+        # The blur parameters are in this tuple because they are constructor
+        # arguments too.  Omitting them is precisely the bug that made the
+        # ambient colour look un-configurable, and it would have made the blur
+        # slider look dead in the same way.
         ambient_changed = previous_ambient != (
             config.slideshow.get("ambient_strategy", "solid"),
             _ambient_colour(config),
+            _ambient_blur_radius(config),
+            _ambient_darken(config),
         )
 
         if geometry_changed or ambient_changed:
@@ -474,14 +543,19 @@ class Presenter:
                 overflow=None,
                 ambient_strategy=str(config.slideshow.get("ambient_strategy", "solid")),
                 ambient_colour=_ambient_colour(config),
+                ambient_blur_radius=_ambient_blur_radius(config),
+                ambient_darken=_ambient_darken(config),
                 edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
             )
             logger.info(
-                "Presenter layout reloaded: rotation=%d style=%s (ambient=%s/%s)",
+                "Presenter layout reloaded: rotation=%d style=%s "
+                "(ambient=%s/%s blur=%.1f darken=%.2f)",
                 rotation,
                 SLIDESHOW_FRAMING_STYLE,
                 config.slideshow.get("ambient_strategy", "solid"),
                 _ambient_colour(config),
+                _ambient_blur_radius(config),
+                _ambient_darken(config),
             )
 
         fit_changed = previous_fit != (
@@ -526,11 +600,37 @@ class Presenter:
         duration = self._item_duration(current)
         transition_s = self._transition_seconds()
 
+        # ── Pre-warm the next item's backdrop ─────────────────────────────
+        # The blur is the expensive part of a transition (~56 ms at 1920x1200),
+        # so it is started as early as possible — while the current slide is
+        # still on screen — instead of on the transition's first frame, which is
+        # what made crossfades judder.  The canvas does the work on a worker
+        # thread; the finished result is adopted below, on this thread.
+        collect = getattr(self._backend, "collect_warm_backdrop", None)
+        if collect is not None:
+            collect()
+
+        if transition_s > 0 and not self._paused:
+            next_plan = self._next_plan()
+            if next_plan is not None:
+                warm = getattr(self._backend, "warm_backdrop", None)
+                if warm is not None:
+                    # ``_cache.get`` — NOT ``_image_for``.  The latter falls back
+                    # to a BLOCKING load on a miss, and this runs on every tick,
+                    # so using it here would reintroduce the very stall the warm
+                    # exists to remove.  The decode-ahead worker
+                    # (``_preload_next``) populates the cache during the current
+                    # slide, so a miss simply means "warm it next tick".
+                    nxt = self._queue[(self._current_idx + 1) % len(self._queue)]
+                    handle = self._cache.get(nxt.id)
+                    if handle is not None:
+                        warm(next_plan, handle)
+
         # ── Stall recovery ────────────────────────────────────────────────
         # A previous frame held the slide because the next item was not ready.
         # If it has since arrived, rewind the clock so the crossfade runs from
         # the start rather than jump-cutting part-way through.
-        if elapsed >= duration and self._transition_stall_logged and self._next_plan() is not None:
+        if elapsed >= duration and self._transition_stall_logged and self._transition_ready():
             self._item_start_time = time.monotonic() - duration
             elapsed = duration
             self._transition_stall_logged = False
@@ -538,12 +638,16 @@ class Presenter:
 
         if elapsed >= duration + transition_s:
             # ── Advance, or hold ──────────────────────────────────────────
-            next_plan = self._next_plan()
-            if next_plan is None:
+            if not self._transition_ready():
                 stall_elapsed = elapsed - (duration + transition_s)
                 if stall_elapsed < STALL_TIMEOUT_S:
                     # HOLD: a blank frame is worse than an overlong slide, so
-                    # keep showing the current item and wait.
+                    # keep showing the current item and wait.  This covers both
+                    # an item whose dimensions are unknown and one whose blurred
+                    # backdrop is still being built — starting the transition
+                    # without the backdrop would show a flat band and then
+                    # repaint with the blur part-way through, which reads as a
+                    # flicker.
                     if not self._transition_stall_logged:
                         self._transition_stall_logged = True
                         logger.warning(
@@ -567,6 +671,37 @@ class Presenter:
             self._present_transition(progress)
         else:
             self._present_current()
+
+    def _transition_ready(self) -> bool:
+        """Whether the next item can be transitioned to right now.
+
+        Two conditions, both required:
+
+        * the next item is laid out (its dimensions have been probed), and
+        * if the ambient look is ``blur``, that item's blurred backdrop already
+          exists.
+
+        The backdrop test is what implements "do not start a transition until the
+        blur has finished": the expensive work is pre-warmed while the current
+        slide is showing, and if it has not completed the slide is simply held.
+        A non-blur strategy is always ready — there is nothing to wait for.
+        """
+        next_plan = self._next_plan()
+        if next_plan is None:
+            return False
+        if next_plan.ambient_strategy != "blur":
+            return True
+        ready = getattr(self._backend, "backdrop_ready", None)
+        if ready is None:
+            return True  # a backend without backdrops cannot be waiting on one
+        nxt = self._queue[(self._current_idx + 1) % len(self._queue)]
+        # Non-blocking lookup: this runs every frame while a slide is held, so a
+        # synchronous load here would stall exactly the frame we are trying to
+        # protect.  A miss means "not ready", which holds the slide — correct.
+        handle = self._cache.get(nxt.id)
+        if handle is None:
+            return False
+        return bool(ready(next_plan, handle))
 
     def represent(self) -> None:
         """Repaint the frame already on screen, immediately.

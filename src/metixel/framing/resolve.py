@@ -132,6 +132,8 @@ def resolve(
     whitespace: bool | None = None,
     ambient_strategy: str | None = None,
     ambient_colour: str | None = None,
+    ambient_blur_radius: float | None = None,
+    ambient_darken: float | None = None,
     edge_margin: float | None = None,
     moulding_width: float | None = None,
 ) -> FramingRequest:
@@ -194,6 +196,12 @@ def resolve(
         whitespace=whitespace,
         ambient_strategy=strategy_literal,
         ambient_colour=ambient_colour,
+        ambient_blur_radius=(
+            _DEFAULT_AMBIENT_BLUR if ambient_blur_radius is None else float(ambient_blur_radius)
+        ),
+        ambient_darken=(
+            _DEFAULT_AMBIENT_DARKEN if ambient_darken is None else float(ambient_darken)
+        ),
         edge_margin=edge_margin if edge_margin is not None else _UNSET_EDGE_MARGIN,
         moulding_width=moulding_width if moulding_width is not None else _UNSET_MOULDING_WIDTH,
     )
@@ -213,6 +221,8 @@ def _build_request_defaults() -> dict[str, float]:
     return {
         "edge_margin": float(params["edge_margin"].default),
         "moulding_width": float(params["moulding_width"].default),
+        "ambient_blur_radius": float(params["ambient_blur_radius"].default),
+        "ambient_darken": float(params["ambient_darken"].default),
     }
 
 
@@ -221,6 +231,8 @@ def _build_request_defaults() -> dict[str, float]:
 _DEFAULTS: dict[str, float] = _build_request_defaults()
 _UNSET_EDGE_MARGIN: float = _DEFAULTS["edge_margin"]
 _UNSET_MOULDING_WIDTH: float = _DEFAULTS["moulding_width"]
+_DEFAULT_AMBIENT_BLUR: float = _DEFAULTS["ambient_blur_radius"]
+_DEFAULT_AMBIENT_DARKEN: float = _DEFAULTS["ambient_darken"]
 
 
 def _as_overflow(value: str) -> Overflow:

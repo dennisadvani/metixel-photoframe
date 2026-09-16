@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=49">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=51">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -710,6 +710,7 @@
                             <select id="cfg-ambient-strategy" class="select-premium input-premium w-44">
                                 <option value="solid">Solid colour</option>
                                 <option value="bars">Black bars</option>
+                                <option value="blur">Blurred photo</option>
                             </select>
                         </div>
                     </div>
@@ -722,6 +723,30 @@
                         </div>
                         <div class="setting-control">
                             <input type="color" id="cfg-ambient-color" class="input-premium" value="#101014">
+                        </div>
+                    </div>
+
+                    <!-- Ambient Blur Amount (blur mode only) -->
+                    <div class="setting-row" id="ambient-blur-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Blur Amount</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">How soft the blurred backdrop is</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="range" id="cfg-ambient-blur" class="range-premium" min="1" max="100" step="1" value="24">
+                            <span id="cfg-ambient-blur-label" class="text-[0.75rem] text-text-muted ml-2">24</span>
+                        </div>
+                    </div>
+
+                    <!-- Ambient Brightness (blur mode only) -->
+                    <div class="setting-row" id="ambient-darken-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Backdrop Dimming</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Dim the blurred backdrop so the photo stands out</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="range" id="cfg-ambient-darken" class="range-premium" min="0" max="100" step="1" value="35">
+                            <span id="cfg-ambient-darken-label" class="text-[0.75rem] text-text-muted ml-2">35%</span>
                         </div>
                     </div>
 
@@ -1713,6 +1738,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=75"></script>
+    <script type="module" src="/static/js/main.js?v=77"></script>
 </body>
 </html>

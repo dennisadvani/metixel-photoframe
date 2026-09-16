@@ -377,6 +377,8 @@ def build_request(
     overflow: Literal["crop", "fill"] | None = None,
     ambient_strategy: Literal["solid", "blur", "bars"] | None = None,
     ambient_colour: str | None = None,
+    ambient_blur_radius: float = 24.0,
+    ambient_darken: float = 0.35,
     whitespace: bool | None = None,
     whitespace_gap: float | None = None,
     presentation: PresentationStyle = "virtual",
@@ -489,7 +491,11 @@ def build_request(
         ambient=AmbientFillSpec(
             strategy=strategy,
             colour=ambient_colour or AmbientFillSpec().colour,
-            darken=0.35,
+            # Both were hardcoded here, so a user-chosen blur amount or
+            # brightness silently never reached the engine even once the config
+            # carried them.  They only affect ``strategy == "blur"``.
+            blur_radius=float(ambient_blur_radius),
+            darken=float(ambient_darken),
         ),
         overflow=chosen_overflow,
         focal_position=focal_position,

@@ -591,6 +591,35 @@ class PySide6Backend(DisplayBackend):
             prev_alpha,
         )
 
+    # -- Backdrop warming ----------------------------------------------------
+
+    def backdrop_ready(self, plan: RenderPlan, image: Any) -> bool:
+        """Whether *plan*'s blurred backdrop is cached and usable.
+
+        The presenter polls this to decide whether it may start a transition —
+        see ``PresentationEngine._transition_ready``.  Cheap: a key comparison.
+        """
+        if self._canvas is None:
+            return True
+        return bool(self._canvas.backdrop_ready(plan, image))
+
+    def warm_backdrop(self, plan: RenderPlan, image: Any) -> None:
+        """Start building *plan*'s backdrop on a worker thread, if not cached.
+
+        Non-blocking and idempotent: repeated calls for the same backdrop are
+        free.  The finished blur is adopted by :meth:`collect_warm_backdrop` on
+        the GUI thread, because ``QPixmap`` must not be created off it.
+        """
+        if self._canvas is None:
+            return
+        self._canvas.warm_backdrop(plan, image)
+
+    def collect_warm_backdrop(self) -> bool:
+        """Adopt a finished warmed backdrop.  Returns ``True`` if one landed."""
+        if self._canvas is None:
+            return False
+        return bool(self._canvas.collect_warm_backdrop())
+
     # -- Overlay -------------------------------------------------------------
 
     def present_overlay(self, elements: list[OverlayElement]) -> None:

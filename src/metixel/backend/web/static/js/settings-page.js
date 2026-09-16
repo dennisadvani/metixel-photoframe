@@ -63,16 +63,37 @@ function ambientColourToHex(value, fallback) {
     }
 
     /**
-     * Show the Ambient Colour row only when the solid fill is selected.
+     * Show the controls that belong to the selected Ambient Fill mode.
      *
-     * "Black bars" fixes the colour, so offering a picker next to it would be a
-     * control that does nothing. Hiding it keeps the card honest.
+     * Only "Solid colour" uses the colour picker, so the row is hidden for the
+     * other two: "Black bars" fixes the colour to black, and "Blurred photo"
+     * uses the blur amount and brightness instead. A visible control that does
+     * nothing is worse than a hidden one.
      *
-     * @param {string} strategy - `solid` or `bars`.
+     * @param {string} strategy - `solid`, `bars` or `blur`.
      */
     function _toggleAmbientColour(strategy) {
-        var el = document.getElementById("ambient-colour-row");
-        if (el) el.style.display = strategy === "bars" ? "none" : "";
+        var colourRow = document.getElementById("ambient-colour-row");
+        if (colourRow) colourRow.style.display = strategy === "solid" ? "" : "none";
+        var isBlur = strategy === "blur";
+        var blurRow = document.getElementById("ambient-blur-row");
+        if (blurRow) blurRow.style.display = isBlur ? "" : "none";
+        var darkenRow = document.getElementById("ambient-darken-row");
+        if (darkenRow) darkenRow.style.display = isBlur ? "" : "none";
+    }
+
+    /**
+     * Normalise an ambient strategy to a value this release understands.
+     *
+     * A config from an older release holds `solid` or `bars`; anything unknown
+     * must fall back rather than leaving the select blank and writing an empty
+     * string back on the next save.
+     *
+     * @param {*} value
+     * @returns {string} `solid`, `bars` or `blur`.
+     */
+    function _ambientStrategy(value) {
+        return value === "bars" || value === "blur" ? value : "solid";
     }
 
     /**
@@ -357,9 +378,24 @@ function ambientColourToHex(value, fallback) {
         // transition curtain uses.  Normalise the mode the same way fit_mode is:
         // an unrecognised value would leave the select blank and the next save
         // would write an empty string.
-        setValue("cfg-ambient-strategy", s.ambient_strategy === "bars" ? "bars" : "solid");
+        var ambientStrategy = _ambientStrategy(s.ambient_strategy);
+        setValue("cfg-ambient-strategy", ambientStrategy);
         setValue("cfg-ambient-color", ambientColourToHex(s.ambient_color, "#101014"));
-        _toggleAmbientColour(s.ambient_strategy === "bars" ? "bars" : "solid");
+        var blurEl = document.getElementById("cfg-ambient-blur");
+        if (blurEl) blurEl.value = sanitizeInt(s.ambient_blur_radius, 24);
+        var blurLabel = document.getElementById("cfg-ambient-blur-label");
+        if (blurLabel) blurLabel.textContent = blurEl ? blurEl.value : "24";
+        var darkenEl = document.getElementById("cfg-ambient-darken");
+        if (darkenEl) {
+            // Config stores 0.0-1.0; the slider works in whole percent, which is
+            // what the user sees. Converting here keeps the two in step without
+            // a fractional slider step.
+            var darkenPct = Math.round(Number(s.ambient_darken) * 100);
+            darkenEl.value = Number.isFinite(darkenPct) ? Math.max(0, Math.min(100, darkenPct)) : 35;
+        }
+        var darkenLabel = document.getElementById("cfg-ambient-darken-label");
+        if (darkenLabel) darkenLabel.textContent = (darkenEl ? darkenEl.value : "35") + "%";
+        _toggleAmbientColour(ambientStrategy);
 
         // Matte color — parse RGB array to hex
         var matte = s.matte_color || [20, 20, 20];
@@ -572,8 +608,11 @@ function ambientColourToHex(value, fallback) {
                     fit_mode: document.getElementById("cfg-fit").value,
                     smart_cover: document.getElementById("cfg-smart-cover").checked,
                     shuffle: document.getElementById("cfg-shuffle").checked,
-                    ambient_strategy: document.getElementById("cfg-ambient-strategy").value,
+                    ambient_strategy: _ambientStrategy(document.getElementById("cfg-ambient-strategy").value),
                     ambient_color: document.getElementById("cfg-ambient-color").value,
+                    ambient_blur_radius: sanitizeInt(document.getElementById("cfg-ambient-blur").value, 24),
+                    // The slider is whole percent; config stores 0.0-1.0.
+                    ambient_darken: sanitizeInt(document.getElementById("cfg-ambient-darken").value, 35) / 100,
                     matte_color: [r, g, b],
                 });
                 if (result) {
@@ -589,6 +628,14 @@ function ambientColourToHex(value, fallback) {
             });
             document.getElementById("cfg-ambient-strategy")?.addEventListener("change", function () {
                 _toggleAmbientColour(this.value);
+            });
+            document.getElementById("cfg-ambient-blur")?.addEventListener("input", function () {
+                var lbl = document.getElementById("cfg-ambient-blur-label");
+                if (lbl) lbl.textContent = this.value;
+            });
+            document.getElementById("cfg-ambient-darken")?.addEventListener("input", function () {
+                var lbl = document.getElementById("cfg-ambient-darken-label");
+                if (lbl) lbl.textContent = this.value + "%";
             });
             document.getElementById("cfg-cpu-throttle-enabled")?.addEventListener("change", function () {
                 _toggleCpuThrottleGroup(this.checked);
