@@ -63,6 +63,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "transition_style": "crossfade",  # crossfade, fade_through_black, none
         "fit_mode": "cover",  # contain, cover (an unknown value falls back to cover)
         "smart_cover": True,  # use contain for square/opposite-orientation images in cover mode
+        # Ambient look: the colour behind a contained image, and therefore the
+        # colour the transition curtain uses to wipe the outgoing image's
+        # letterbox bars.  "solid" is a flat fill of ambient_color; "bars" leaves
+        # the residue showing.  Anything unknown falls back to "solid".
+        "ambient_strategy": "solid",  # solid, bars
+        "ambient_color": "#101014",  # #rrggbb (an [r, g, b] list is also accepted)
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
         # Framing is pinned to the full-bleed slideshow presentation: no Mat

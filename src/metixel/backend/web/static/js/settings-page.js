@@ -19,12 +19,60 @@ import {
 
 import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
 
+/**
+ * Normalise a colour from config into a `#rrggbb` string for a colour input.
+ *
+ * The backend accepts both forms: the colour picker writes a hex string while
+ * the neighbouring `matte_color` key is an `[r, g, b]` array, so a config
+ * hand-edited from one to the other must still populate the picker.  An
+ * `<input type="color">` silently ignores anything it cannot parse, leaving the
+ * previous value on screen and the next save writing it back — so an unusable
+ * value has to be replaced with the fallback here rather than passed through.
+ *
+ * @param {*} value - Hex string, `[r, g, b]` array, or anything else.
+ * @param {string} fallback - `#rrggbb` to use when the value is unusable.
+ * @returns {string} A `#rrggbb` colour.
+ */
+function ambientColourToHex(value, fallback) {
+    if (typeof value === "string") {
+        var text = value.trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(text)) return text.toLowerCase();
+        return fallback;
+    }
+    if (Array.isArray(value) && value.length >= 3) {
+        var parts = value.slice(0, 3).map(function (c) {
+            var n = Math.max(0, Math.min(255, parseInt(c, 10)));
+            return Number.isNaN(n) ? null : n;
+        });
+        if (parts.every(function (p) { return p !== null; })) {
+            return "#" + parts.map(function (p) {
+                var h = p.toString(16);
+                return h.length === 1 ? "0" + h : h;
+            }).join("");
+        }
+    }
+    return fallback;
+}
+
     function _toggleTranscodeSettings(enabled) {
         var el = document.getElementById("transcode-settings");
         if (el) {
             el.style.display = enabled ? "" : "none";
             el.style.opacity = enabled ? "1" : "0.5";
         }
+    }
+
+    /**
+     * Show the Ambient Colour row only when the solid fill is selected.
+     *
+     * "Black bars" fixes the colour, so offering a picker next to it would be a
+     * control that does nothing. Hiding it keeps the card honest.
+     *
+     * @param {string} strategy - `solid` or `bars`.
+     */
+    function _toggleAmbientColour(strategy) {
+        var el = document.getElementById("ambient-colour-row");
+        if (el) el.style.display = strategy === "bars" ? "none" : "";
     }
 
     /**
@@ -305,6 +353,14 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
         setChecked("cfg-smart-cover", s.smart_cover !== false);
         setChecked("cfg-shuffle", s.shuffle !== false);
 
+        // Ambient fill — the colour behind a contained photo, and the colour the
+        // transition curtain uses.  Normalise the mode the same way fit_mode is:
+        // an unrecognised value would leave the select blank and the next save
+        // would write an empty string.
+        setValue("cfg-ambient-strategy", s.ambient_strategy === "bars" ? "bars" : "solid");
+        setValue("cfg-ambient-color", ambientColourToHex(s.ambient_color, "#101014"));
+        _toggleAmbientColour(s.ambient_strategy === "bars" ? "bars" : "solid");
+
         // Matte color — parse RGB array to hex
         var matte = s.matte_color || [20, 20, 20];
         var matteHex = "#" + matte.map(function (c) {
@@ -516,6 +572,8 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
                     fit_mode: document.getElementById("cfg-fit").value,
                     smart_cover: document.getElementById("cfg-smart-cover").checked,
                     shuffle: document.getElementById("cfg-shuffle").checked,
+                    ambient_strategy: document.getElementById("cfg-ambient-strategy").value,
+                    ambient_color: document.getElementById("cfg-ambient-color").value,
                     matte_color: [r, g, b],
                 });
                 if (result) {
@@ -528,6 +586,9 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
             // ── Video Settings card ─────────────────────────────────────
             document.getElementById("cfg-transcode-enabled")?.addEventListener("change", function () {
                 _toggleTranscodeSettings(this.checked);
+            });
+            document.getElementById("cfg-ambient-strategy")?.addEventListener("change", function () {
+                _toggleAmbientColour(this.value);
             });
             document.getElementById("cfg-cpu-throttle-enabled")?.addEventListener("change", function () {
                 _toggleCpuThrottleGroup(this.checked);

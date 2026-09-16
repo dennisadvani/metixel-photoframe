@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=47">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=49">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -695,6 +695,33 @@
                         </div>
                         <div class="setting-control">
                             <input type="checkbox" id="cfg-shuffle" class="checkbox-premium" checked>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <!-- Ambient Fill Mode -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Ambient Fill</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Colour shown behind a contained photo (its letterbox bars)</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-ambient-strategy" class="select-premium input-premium w-44">
+                                <option value="solid">Solid colour</option>
+                                <option value="bars">Black bars</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Ambient Fill Colour -->
+                    <div class="setting-row" id="ambient-colour-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Ambient Colour</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Used with the solid fill</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="color" id="cfg-ambient-color" class="input-premium" value="#101014">
                         </div>
                     </div>
 
@@ -1686,6 +1713,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=72"></script>
+    <script type="module" src="/static/js/main.js?v=75"></script>
 </body>
 </html>

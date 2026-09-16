@@ -131,6 +131,7 @@ def resolve(
     overflow: str | None = None,
     whitespace: bool | None = None,
     ambient_strategy: str | None = None,
+    ambient_colour: str | None = None,
     edge_margin: float | None = None,
     moulding_width: float | None = None,
 ) -> FramingRequest:
@@ -149,6 +150,9 @@ def resolve(
         whitespace: Force the whitespace band on/off; ``None`` defers to the
             style and the presentation (see ``resolve_whitespace``).
         ambient_strategy: ``"solid"``, ``"blur"`` or ``"bars"``.
+        ambient_colour: ``"#rrggbb"`` for the ambient fill (and therefore for the
+            residue visible in ``contain``).  ``None`` keeps the framing
+            engine's own default.
         edge_margin: Inset from the screen edge, in mm (``None`` = the
             template default, which hides the bezel).
         moulding_width: Frame moulding width in mm (``None`` = template default).
@@ -189,6 +193,7 @@ def resolve(
         overflow=overflow_literal,
         whitespace=whitespace,
         ambient_strategy=strategy_literal,
+        ambient_colour=ambient_colour,
         edge_margin=edge_margin if edge_margin is not None else _UNSET_EDGE_MARGIN,
         moulding_width=moulding_width if moulding_width is not None else _UNSET_MOULDING_WIDTH,
     )

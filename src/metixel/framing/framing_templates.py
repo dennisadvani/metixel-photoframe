@@ -376,6 +376,7 @@ def build_request(
     edge_margin: float = 2.0,
     overflow: Literal["crop", "fill"] | None = None,
     ambient_strategy: Literal["solid", "blur", "bars"] | None = None,
+    ambient_colour: str | None = None,
     whitespace: bool | None = None,
     whitespace_gap: float | None = None,
     presentation: PresentationStyle = "virtual",
@@ -456,6 +457,10 @@ def build_request(
     # presented cropped or filled.  Defaults: fill, with the ambient look
     # implied by the presentation.
     chosen_overflow = overflow or "fill"
+    # The default strategy is keyed to the overflow: a cropped image has no
+    # residue to absorb, so "bars" is the honest default there, whereas a
+    # contained one wants a flat colour behind it.  A caller that sets the
+    # strategy explicitly (the slideshow does, from config) wins.
     strategy = ambient_strategy or ("bars" if chosen_overflow == "crop" else "solid")
 
     # A white border and ambient fill must never appear together: two competing
@@ -483,6 +488,7 @@ def build_request(
         whitespace=WhitespaceSpec(enabled=choice.enabled, gap=ws_gap, colour=choice.colour),
         ambient=AmbientFillSpec(
             strategy=strategy,
+            colour=ambient_colour or AmbientFillSpec().colour,
             darken=0.35,
         ),
         overflow=chosen_overflow,

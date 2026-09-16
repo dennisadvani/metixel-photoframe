@@ -338,6 +338,47 @@ class TestPhysicalBranch:
         assert result.ambient_fill.present is False
         assert result.artwork.bounds == result.mat.window
 
+    def test_the_solid_strategy_uses_the_configured_colour(self):
+        result = calculate_framing(
+            request("gallery", 3 / 2, physical=True, ambient_strategy="solid",
+                    ambient_colour="#1717d3"),
+        )
+        assert result.ambient_fill.present is True
+        assert result.ambient_fill.colour == "#1717d3"
+
+    def test_the_bars_strategy_forces_black(self):
+        """``bars`` means black bars, so the configured colour must be ignored.
+
+        Regression: the strategy was recorded on the result but nothing acted on
+        it, so ``bars`` painted the same colour as ``solid`` and the setting
+        appeared to do nothing.
+        """
+        result = calculate_framing(
+            request("gallery", 3 / 2, physical=True, ambient_strategy="bars",
+                    ambient_colour="#1717d3"),
+        )
+        assert result.ambient_fill.present is True
+        assert result.ambient_fill.colour == "#000000"
+
+    def test_the_bars_strategy_overrides_the_default_colour_too(self):
+        """Even with no colour configured, ``bars`` is black."""
+        result = calculate_framing(
+            request("gallery", 3 / 2, physical=True, ambient_strategy="bars"),
+        )
+        assert result.ambient_fill.colour == "#000000"
+
+    def test_the_strategy_is_still_reported_honestly(self):
+        """The colour is overridden, but the strategy is not rewritten to match."""
+        result = calculate_framing(
+            request("gallery", 3 / 2, physical=True, ambient_strategy="bars"),
+        )
+        assert result.ambient_fill.strategy == "bars"
+
+    def test_bars_is_the_default_for_a_cropped_presentation(self):
+        """A crop has no residue, so the default strategy there is ``bars``."""
+        result = calculate_framing(request("gallery", 3 / 2, physical=True, overflow="crop"))
+        assert result.ambient_fill.present is False
+
     def test_fill_contains_and_crops_does_not(self):
         filled = calculate_framing(request("gallery", 9 / 16, physical=True))
         cropped = calculate_framing(request("gallery", 9 / 16, physical=True, overflow="crop"))

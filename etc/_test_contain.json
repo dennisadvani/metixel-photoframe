@@ -1,0 +1,172 @@
+﻿{
+    "display":  {
+                    "width":  0,
+                    "height":  0,
+                    "fullscreen":  true,
+                    "fps_limit":  30,
+                    "refresh_rate":  0,
+                    "rotation":  0,
+                    "hide_cursor":  true,
+                    "schedule_enabled":  false,
+                    "schedule_on_time":  "07:00",
+                    "schedule_off_time":  "22:00"
+                },
+    "slideshow":  {
+                      "image_duration_seconds":  6,
+                      "video_playback_enabled":  true,
+                      "video_player_backend":  "auto",
+                      "video_max_duration_seconds":  0,
+                      "transition_duration_ms":  4000,
+                      "transition_style":  "crossfade",
+                      "fit_mode":  "contain",
+                      "smart_cover":  false,
+                      "matte_color":  [
+                                          0,
+                                          0,
+                                          0
+                                      ],
+                      "shuffle":  true
+                  },
+    "image":  {
+                  "optimisation_enabled":  true,
+                  "optimise_max_width":  0,
+                  "optimise_max_height":  0
+              },
+    "video":  {
+                  "playback_enabled":  true,
+                  "player_backend":  "auto",
+                  "max_duration_seconds":  0,
+                  "transcoding_enabled":  true,
+                  "transcoding_profile":  "",
+                  "keep_audio":  false,
+                  "transcode_max_width":  0,
+                  "transcode_max_height":  0,
+                  "transcode_quality":  23,
+                  "transcode_use_software_encoder":  true,
+                  "transcode_timeout_seconds":  7200,
+                  "cpu_throttle_enabled":  true,
+                  "cpu_throttle_percent":  100
+              },
+    "sync":  {
+                 "immich":  {
+                                "enabled":  false,
+                                "server_url":  "https://immich.example.com",
+                                "api_key":  "",
+                                "albums":  [
+
+                                           ],
+                                "strict_sync":  false,
+                                "sync_dir":  "media/sync/immich/",
+                                "poll_interval_seconds":  3600
+                            },
+                 "local":  {
+                               "enabled":  true,
+                               "watch_paths":  [
+                                                   {
+                                                       "path":  "media/sample_media/landscape/",
+                                                       "enabled":  true
+                                                   },
+                                                   {
+                                                       "path":  "media/sample_media/portrait/",
+                                                       "enabled":  false
+                                                   },
+                                                   {
+                                                       "path":  "media/sync/immich/",
+                                                       "enabled":  true
+                                                   },
+                                                   {
+                                                       "path":  "media/my_media/",
+                                                       "enabled":  true
+                                                   }
+                                               ],
+                               "poll_interval_seconds":  30
+                           }
+             },
+    "web":  {
+                "host":  "0.0.0.0",
+                "port":  8080,
+                "debug":  false,
+                "password":  "",
+                "screen_pin":  "",
+                "auth_secret":  "83c314f3cb6d712d6521064619535ef18fb88c7b8dd52fe82ab923ca93287294",
+                "session_timeout_minutes":  30,
+                "screen_pin_timeout_minutes":  60
+            },
+    "mqtt":  {
+                 "enabled":  false,
+                 "broker":  "localhost",
+                 "port":  1883,
+                 "device_id":  "",
+                 "username":  "",
+                 "password":  "",
+                 "discovery_enabled":  true,
+                 "discovery_prefix":  "homeassistant"
+             },
+    "ddc":  {
+                "enabled":  true,
+                "display":  1,
+                "poll_seconds":  0,
+                "timeout_seconds":  15.0
+            },
+    "input":  {
+                  "cec_enabled":  false,
+                  "ir_enabled":  false,
+                  "ir_device":  "/dev/lirc0",
+                  "keyboard_enabled":  true,
+                  "keyboard_map":  {
+
+                                   }
+              },
+    "messages":  {
+                     "enabled":  true,
+                     "default_duration":  5.0,
+                     "max_visible":  5,
+                     "persistent":  [
+
+                                    ]
+                 },
+    "network":  {
+                    "wifi_country":  "",
+                    "wifi_radio_first_run_done":  false,
+                    "ap_fallback_enabled":  true,
+                    "ap_timeout_seconds":  60,
+                    "ap_grace_period_seconds":  300,
+                    "ap_max_duration_seconds":  600,
+                    "connection_check_url":  "http://connectivity-check.ubuntu.com"
+                },
+    "system":  {
+                   "cache_dir":  "cache/",
+                   "upload_dir":  "",
+                   "log_level":  "NONE",
+                   "quiet_boot":  false,
+                   "first_run":  true,
+                   "timezone":  "",
+                   "ntp_enabled":  true,
+                   "ntp_servers":  [
+                                       ""
+                                   ],
+                   "db_path":  "cache/metixel.db"
+               },
+    "update":  {
+                   "channel":  "stable",
+                   "auto_check":  true,
+                   "auto_update":  true,
+                   "auto_update_day":  1,
+                   "auto_update_time":  "03:13",
+                   "check_interval_hours":  6,
+                   "github_repo":  "dennisadvani/metixel-photoframe",
+                   "last_auto_update":  null
+               },
+    "timeouts":  {
+                     "ffprobe_probe":  120,
+                     "ffprobe_validate":  60,
+                     "folder_watcher_probe":  120,
+                     "hw_codec_detect":  30,
+                     "thumbnail_extract":  300,
+                     "frame_extract_first":  180,
+                     "frame_extract_last":  120,
+                     "image_process":  120,
+                     "transcode":  7200,
+                     "vlc_start":  30
+                 }
+}

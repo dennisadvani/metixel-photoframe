@@ -33,8 +33,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QRegion
 from PySide6.QtWidgets import QWidget
 
 from metixel.display.overlay_element import OverlayElement
@@ -56,6 +56,26 @@ def _qcolor(spec: str) -> QColor:
         logger.debug("Unparseable plan colour %r — using grey", spec)
         return QColor(128, 128, 128)
     return colour
+
+
+def _int_rect(rect: tuple[float, float, float, float]) -> QRect:
+    """Round a plan rect to integers for ``QRegion``.
+
+    ``QRegion`` is integer-only and takes a ``QRect``; it does **not** accept a
+    plain 4-tuple (PySide6 does not coerce one into its
+    ``(int, int, int, int)`` overload, so passing a tuple raises at paint time —
+    on the device, not in CI).
+
+    The far edge rounds OUTWARD.  Clipping a pixel too far into the incoming
+    artwork is invisible, whereas stopping a pixel short leaves an unwiped
+    sliver of the outgoing image, which is a visible seam in exactly the case
+    this curtain exists to fix.
+    """
+    x, y, w, h = rect
+    left, top = int(x), int(y)
+    right = int(x + w + 0.9999)
+    bottom = int(y + h + 0.9999)
+    return QRect(left, top, max(0, right - left), max(0, bottom - top))
 
 
 class FrameCanvas(QWidget):
@@ -296,6 +316,49 @@ class FrameCanvas(QWidget):
         if self._overlay:
             self.update_overlay([])
 
+    def _paint_transition_curtain(self, painter: QPainter, plan: RenderPlan, alpha: float) -> None:
+        """Wipe the outgoing item's exposed residue at the incoming item's alpha.
+
+        Only ``contain`` needs this, and the reason is geometric.  The two items
+        are laid out independently, so in ``contain`` their artworks occupy
+        different rectangles.  The crossfade draws the outgoing layer once, over
+        the whole of ITS rect, at full opacity — because in the overlap it must
+        stay opaque or the blend double-counts the transparency and the panel
+        dims through the middle.  But that leaves the part of the outgoing artwork
+        the incoming one never reaches (its letterbox bars) sitting at a rock
+        steady 100% for the whole transition, and then ``_advance()`` drops the
+        outgoing layer entirely, so the residue SNAPS away in a single frame.
+        That snap is what breaks the effect.
+
+        A plain colour rect sharing the incoming item's alpha fixes it, because
+        covering a region with colour ``c`` at alpha ``a`` is equivalent to fading
+        what is already there by ``(1 - a)``: the residue now ramps down exactly
+        in step with the incoming artwork ramping up.
+
+        The clip is the whole point.  Drawn unclipped, the curtain would sit in
+        front of the OUTGOING layer too, and for the overlap the composite becomes
+        ``in*t + out*(1-t)^2`` — a 25% dim at the midpoint.  So it is clipped to
+        the complement of the incoming ``artwork_dst``, which is exactly the
+        residue, and is EMPTY for a full-bleed ``cover`` frame: the common case
+        draws nothing at all and the output is byte-identical to before.
+        """
+        if plan.artwork_dst == plan.screen:
+            return
+        _, _, dw, dh = plan.artwork_dst
+        if dw <= 0 or dh <= 0:
+            return
+        region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))
+        if region.isEmpty():
+            return
+        painter.save()
+        painter.setClipRegion(region)
+        painter.setOpacity(alpha)
+        try:
+            painter.fillRect(self.rect(), _qcolor(plan.ambient_colour))
+        finally:
+            painter.setOpacity(1.0)
+            painter.restore()
+
     # -- Painting ------------------------------------------------------------
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
@@ -338,6 +401,16 @@ class FrameCanvas(QWidget):
                         self._draw_artwork(painter, self._prev_plan, self._prev_image)
                     finally:
                         painter.setOpacity(1.0)
+
+                # 2b. Transition curtain — wipes the outgoing item's exposed
+                #     residue (its letterbox bars in ``contain``) at the incoming
+                #     item's alpha, so it fades instead of snapping when the
+                #     outgoing layer is dropped at the end of the transition.
+                #     Clipped to the incoming artwork's complement, so it never
+                #     reaches into the overlap, and a no-op for a full-bleed
+                #     ``cover`` frame.  See _paint_transition_curtain.
+                if self._prev_plan is not None and self._prev_alpha > 0.01:
+                    self._paint_transition_curtain(painter, plan, self._image_alpha)
 
                 if self._image is not None and self._image_alpha > 0.01:
                     painter.setOpacity(self._image_alpha)

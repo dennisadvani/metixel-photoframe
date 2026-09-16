@@ -1150,6 +1150,15 @@ def calculate_framing(request: FramingRequest) -> FramingResult:
         if residual.bottom > 1e-6:
             bars.append(Rect(window.x, ws_outer.bottom, window.width, residual.bottom))
 
+    # ``bars`` means "black bars" — the classic letterbox look — so the
+    # strategy, not just the configured colour, decides what is painted.  This
+    # is resolved HERE rather than at the canvas so every consumer of the colour
+    # agrees: the filled band, the transition curtain (which reuses
+    # ``ambient_colour`` to wipe the outgoing item's residue), and anything else
+    # that reads the result.  Resolving it later would let the band and the
+    # curtain disagree, which is exactly the flicker the curtain exists to stop.
+    ambient_colour = "#000000" if request.ambient.strategy == "bars" else request.ambient.colour
+
     # -- 5. Assemble ------------------------------------------------------
     frame_result = FrameResult(
         opening=opening,
@@ -1185,7 +1194,7 @@ def calculate_framing(request: FramingRequest) -> FramingResult:
         strategy=request.ambient.strategy,
         region=ambient_region,
         bars=bars,
-        colour=request.ambient.colour,
+        colour=ambient_colour,
         blur_radius=float(request.ambient.blur_radius),
         darken=float(request.ambient.darken),
     )

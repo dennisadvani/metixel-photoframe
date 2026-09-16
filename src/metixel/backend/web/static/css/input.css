@@ -125,6 +125,31 @@
     color: #5f6278;
   }
 
+  /* Colour input — the native swatch must survive ``.input-premium``.
+     The class paints a near-black fill with padding for text fields, which on
+     ``type="color"`` covers the swatch and leaves a dark box with only a sliver
+     of colour, so the user cannot see the colour they picked.  Reset the fill
+     and padding so the browser renders its own swatch, and keep the border and
+     radius so it still matches the other controls. */
+  input[type="color"].input-premium {
+    background: transparent;
+    padding: 2px;
+    width: 3rem;
+    height: 2rem;
+    cursor: pointer;
+  }
+  input[type="color"].input-premium::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  input[type="color"].input-premium::-webkit-color-swatch {
+    border: 1px solid #2a2f45;
+    border-radius: 4px;
+  }
+  input[type="color"].input-premium::-moz-color-swatch {
+    border: 1px solid #2a2f45;
+    border-radius: 4px;
+  }
+
   /* Refined range slider — thin track, tactile thumb */
   input[type="range"].range-premium {
     -webkit-appearance: none;

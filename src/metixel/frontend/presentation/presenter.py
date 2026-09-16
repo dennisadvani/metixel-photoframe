@@ -111,6 +111,50 @@ _FIT_MODE_TO_OVERFLOW: dict[str, str] = {
     "contain": "fill",
 }
 
+#: Ambient colour used when the config omits it or holds something unusable.
+#: Matches ``DEFAULT_CONFIG["slideshow"]["ambient_color"]`` and the framing
+#: engine's own ``AmbientFillSpec.colour``.
+_DEFAULT_AMBIENT_COLOUR = "#101014"
+
+
+def _ambient_colour(config: Config) -> str:
+    """Return the configured ambient colour as ``#rrggbb``.
+
+    Accepts either a hex string or an ``[r, g, b]`` list, because the
+    slideshow card's colour picker writes a hex string while the older
+    ``matte_color`` key next to it is a list — and a config hand-edited from
+    one to the other should not silently fall back to the default.
+
+    The colour matters beyond the ambient band itself: it is what the canvas
+    paints as the transition curtain, so a wrong value shows up as a flicker
+    at the edge of a letterboxed photo rather than as an obviously wrong band.
+    """
+    value = config.slideshow.get("ambient_color", _DEFAULT_AMBIENT_COLOUR)
+
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate.startswith("#") and len(candidate) == 7:
+            try:
+                int(candidate[1:], 16)
+            except ValueError:
+                pass
+            else:
+                return candidate.lower()
+        logger.warning("Ignoring unusable ambient_color %r — using the default", value)
+        return _DEFAULT_AMBIENT_COLOUR
+
+    if isinstance(value, (list, tuple)) and len(value) >= 3:
+        try:
+            r, g, b = (max(0, min(255, int(c))) for c in value[:3])
+        except (TypeError, ValueError):
+            pass
+        else:
+            return f"#{r:02x}{g:02x}{b:02x}"
+
+    logger.warning("Ignoring unusable ambient_color %r — using the default", value)
+    return _DEFAULT_AMBIENT_COLOUR
+
+
 #: Fit mode used when the config omits it or names an unknown one.  Matches
 #: ``DEFAULT_CONFIG["slideshow"]["fit_mode"]``.
 DEFAULT_FIT_MODE = "cover"
@@ -151,6 +195,8 @@ class Presenter:
             rotation=int(config.display.get("rotation", 0) or 0),
             style=SLIDESHOW_FRAMING_STYLE,
             overflow=None,
+            ambient_strategy=str(config.slideshow.get("ambient_strategy", "solid")),
+            ambient_colour=_ambient_colour(config),
             edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
         )
 
@@ -391,12 +437,33 @@ class Presenter:
             bool(self._config.slideshow.get("smart_cover", True)),
         )
 
+        # Ambient look is a *constructor* argument of the layout engine, so the
+        # old values have to be read before the swap to tell whether the engine
+        # needs rebuilding.  Reading it from the live engine rather than from the
+        # outgoing config is deliberate: it is the engine's state that has to
+        # change, and the two can only diverge if a previous rebuild was skipped
+        # — exactly the bug that made the ambient colour appear un-configurable
+        # while ``fit_mode`` (read per item, never baked in) kept working.
+        previous_ambient = (
+            self._layout.ambient_strategy,
+            self._layout.ambient_colour,
+        )
+
         self._config = config
         self._transitions.reload_config(config)
 
         rotation = int(config.display.get("rotation", 0) or 0)
         geometry_changed = rotation != self._layout.rotation
-        if geometry_changed:
+
+        # An ambient change rebuilds the engine for the same reason a rotation
+        # change does: the value is not consulted per item, so an engine built at
+        # startup would keep the colour the user first had.
+        ambient_changed = previous_ambient != (
+            config.slideshow.get("ambient_strategy", "solid"),
+            _ambient_colour(config),
+        )
+
+        if geometry_changed or ambient_changed:
             sw = self._backend.width or config.display.get("width") or 1920
             sh = self._backend.height or config.display.get("height") or 1080
             self._layout = LayoutEngine(
@@ -405,10 +472,16 @@ class Presenter:
                 rotation=rotation,
                 style=SLIDESHOW_FRAMING_STYLE,
                 overflow=None,
+                ambient_strategy=str(config.slideshow.get("ambient_strategy", "solid")),
+                ambient_colour=_ambient_colour(config),
                 edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
             )
             logger.info(
-                "Presenter layout reloaded: rotation=%d style=%s", rotation, SLIDESHOW_FRAMING_STYLE
+                "Presenter layout reloaded: rotation=%d style=%s (ambient=%s/%s)",
+                rotation,
+                SLIDESHOW_FRAMING_STYLE,
+                config.slideshow.get("ambient_strategy", "solid"),
+                _ambient_colour(config),
             )
 
         fit_changed = previous_fit != (
@@ -420,7 +493,11 @@ class Presenter:
         # layer; both are invalid once the geometry or the fit decision moved.
         # Cleared only when something actually changed — dropping them on every
         # save would blank ``has_visible_frame`` and re-run the boot fade.
-        if geometry_changed or fit_changed:
+        #
+        # ``ambient_changed`` drops them too: the engine was replaced, and the
+        # cached plan was produced by the old one, so keeping it would paint the
+        # previous colour until the next slide regardless.
+        if geometry_changed or fit_changed or ambient_changed:
             self._shown_plan = None
             self._prev_plan = None
         if fit_changed:
@@ -490,6 +567,40 @@ class Presenter:
             self._present_transition(progress)
         else:
             self._present_current()
+
+    def represent(self) -> None:
+        """Repaint the frame already on screen, immediately.
+
+        Called after a hot reload so a change that alters the layout — the fit
+        mode, ``smart_cover``, the panel geometry — is visible on the slide the
+        user is looking at rather than on the next one.
+
+        Deliberately NOT a general-purpose "refresh": it re-presents whatever the
+        current state already says should be showing, so it cannot skip a slide,
+        restart a transition, or disturb the slide clock.  A transition in flight
+        is re-presented at its current progress for the same reason.
+
+        Adding a plan is not required — the presenter does not own the overlay,
+        and ``render()`` will composite the overlay on the next tick as usual.
+        """
+        if self._current_idx < 0 or not self._queue:
+            return
+        if self.current_item is None:
+            return
+
+        transition_s = self._transition_seconds()
+        if not self._paused and transition_s > 0:
+            elapsed = time.monotonic() - self._item_start_time
+            duration = self._item_duration(self.current_item)
+            if duration <= elapsed < duration + transition_s:
+                self._present_transition(min(1.0, (elapsed - duration) / transition_s))
+                return
+
+        # A stale outgoing plan would paint a ghost of a layout that no longer
+        # applies, so drop it before re-presenting the current item.
+        self._prev_plan = None
+        self._prev_image = None
+        self._present_current()
 
     def _present_current(self, with_artwork: bool = True) -> None:
         """Show the current item, loading it synchronously if necessary.

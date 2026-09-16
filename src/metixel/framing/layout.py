@@ -211,6 +211,8 @@ class LayoutEngine:
         rotation: int = 0,
         style: str = "gallery",
         overflow: str | None = None,
+        ambient_strategy: str | None = None,
+        ambient_colour: str | None = None,
         edge_margin: float | None = None,
         moulding_width: float | None = None,
     ) -> None:
@@ -219,6 +221,8 @@ class LayoutEngine:
         self._rotation = rotation
         self._style = style
         self._overflow = overflow
+        self._ambient_strategy = ambient_strategy
+        self._ambient_colour = ambient_colour
         self._edge_margin = edge_margin
         self._moulding_width = moulding_width
 
@@ -258,6 +262,28 @@ class LayoutEngine:
     def overflow(self) -> str | None:
         """The overflow mode override, or ``None`` to use the style's default."""
         return self._overflow
+
+    @property
+    def ambient_colour(self) -> str | None:
+        """Configured ambient colour (``#rrggbb``), or ``None`` for the default.
+
+        Surfaced as a property because the canvas needs it for the transition
+        curtain: in ``contain`` the two items' artworks have different rects, and
+        the residue left by the outgoing one has to be wiped at the incoming
+        item's alpha or it vanishes in a single frame when the transition ends.
+        """
+        return self._ambient_colour
+
+    @property
+    def ambient_strategy(self) -> str | None:
+        """Configured ambient strategy (``solid``/``blur``/``bars``), or ``None``.
+
+        Exposed alongside :attr:`ambient_colour` so a config reload can tell
+        whether the ambient look actually changed and needs a new engine — both
+        are constructor arguments, so an engine built at startup otherwise keeps
+        the user's original choice forever.
+        """
+        return self._ambient_strategy
 
     # -- Public -------------------------------------------------------------
 
@@ -305,6 +331,8 @@ class LayoutEngine:
             style=style or self._style,
             overflow=overflow if overflow is not None else self._overflow,
             whitespace=whitespace,
+            ambient_strategy=self._ambient_strategy,
+            ambient_colour=self._ambient_colour,
             edge_margin=self._edge_margin,
             moulding_width=self._moulding_width,
         )

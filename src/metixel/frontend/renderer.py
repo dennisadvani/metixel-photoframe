@@ -75,7 +75,7 @@ class FrontendRenderer:
         self._running = False
         self._frame_count: int = 0
         self._last_config_check: float = 0.0
-        self._config_mtime: float = 0.0
+        self._config_mtime_ns: int = 0
         # Playlist hot-reload tracking
         self._playlist_path: Path = run_path("playlist.json")
         self._playlist_mtime: float = 0.0
@@ -278,7 +278,7 @@ class FrontendRenderer:
             logger.debug("IPC server unavailable (expected on dev/Win) — controls disabled")
 
         # Track config file mtime for hot reload
-        self._config_mtime = self._get_config_mtime()
+        self._config_mtime_ns = self._get_config_mtime_ns()
 
         # Apply persisted log level to this process's file handlers.
         # (The backend API can also change it at runtime — the periodic
@@ -639,19 +639,31 @@ class FrontendRenderer:
         self._last_config_check = now
 
         # -- Config hot reload --
-        new_mtime = self._get_config_mtime()
-        if new_mtime > self._config_mtime:
-            logger.info("Config file changed — hot reloading")
-            old_log_level = self._config.system.get("log_level", "NONE")
-            self._config = Config.load(self._config_path)
-            self._config_mtime = new_mtime
-            # Re-initialize components that depend on config
-            if self._presentation:
-                self._presentation.reload_config(self._config)
-            # Re-apply file log level if it changed (matches backend behaviour)
-            new_log_level = self._config.system.get("log_level", "NONE")
-            if new_log_level != old_log_level:
-                self._apply_file_log_level()
+        #
+        # Compared with ``!=`` rather than ``>``, and in nanoseconds rather than
+        # float seconds.  Both matter:
+        #
+        # * ``>`` against a baseline captured at startup silently drops any change
+        #   whose mtime is not strictly greater than that baseline — a clock step,
+        #   a restore from backup, or an atomic ``os.replace()`` that lands on the
+        #   same timestamp.  A dropped change produced NO log line at all, so a
+        #   save that appeared to do nothing was indistinguishable from a save
+        #   that never happened.  That is what made "I can't change the fit mode"
+        #   look like a wiring bug when every layer was in fact correct.
+        # * ``float`` seconds lose precision: two saves inside the same
+        #   sub-microsecond window compare equal.  ``st_mtime_ns`` is exact.
+        new_mtime_ns = self._get_config_mtime_ns()
+        if new_mtime_ns != self._config_mtime_ns:
+            if new_mtime_ns == 0:
+                logger.debug("Config file unreadable — keeping the loaded configuration")
+            else:
+                logger.info(
+                    "Config file changed — hot reloading (mtime %d -> %d)",
+                    self._config_mtime_ns,
+                    new_mtime_ns,
+                )
+                self._reload_config()
+            self._config_mtime_ns = new_mtime_ns
 
         # -- Playlist hot reload (backend may add items from Immich sync) --
         # Poll every 0.5s when the queue is empty (boot phase) so the
@@ -839,12 +851,45 @@ class FrontendRenderer:
                 len(self._presentation._queue),
             )
 
-    def _get_config_mtime(self) -> float:
-        """Get the modification time of the config file."""
+    def _reload_config(self) -> None:
+        """Adopt a freshly written config and make the change visible at once.
+
+        Split out of :meth:`_check_config_changed` so the reload is testable and
+        so its two jobs are stated together.
+
+        The re-present at the end is the part that matters to the user.  Saving
+        the slideshow card already restarted nothing — ``routes/config.py`` only
+        bounces the services for pipeline-affecting sections — so the frame has
+        to pick the change up itself.  ``Presenter.reload_config`` clears the
+        cached plans when the fit decision or the panel geometry moves, but
+        clearing them only means the *next* ``_present_current()`` recomputes:
+        without an immediate repaint the change lands whenever the slide clock
+        next happens to tick, which for a long slide reads as "the setting did
+        nothing".  Re-presenting here makes it instant.
+        """
+        old_log_level = self._config.system.get("log_level", "NONE")
+        self._config = Config.load(self._config_path)
+        if self._presentation:
+            self._presentation.reload_config(self._config)
+            # Repaint the frame already on screen so a fit/geometry change is
+            # visible immediately rather than on the next slide.
+            self._presentation.represent()
+        # Re-apply file log level if it changed (matches backend behaviour)
+        new_log_level = self._config.system.get("log_level", "NONE")
+        if new_log_level != old_log_level:
+            self._apply_file_log_level()
+
+    def _get_config_mtime_ns(self) -> int:
+        """Modification time of the config file in nanoseconds, or 0 if absent.
+
+        Nanoseconds rather than float seconds so the change test is exact — the
+        slideshow card writes with an atomic ``os.replace()``, and two saves can
+        otherwise compare equal.
+        """
         try:
-            return os.path.getmtime(self._config_path)
+            return self._config_path.stat().st_mtime_ns
         except OSError:
-            return 0.0
+            return 0
 
     def _apply_file_log_level(self) -> None:
         """Apply the persisted log level to this process.
