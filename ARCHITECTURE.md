@@ -653,26 +653,37 @@ At most three textures are GPU-resident at any time (current, next, blend).
 ### Video Playback Architecture (Frontend)
 
 Video is rendered **into the same scene** as the slideshow, via the libmpv render
-API (``vo=libmpv``). mpv hands each decoded frame to a callback that draws into the
-Qt canvas's framebuffer object, so video is simply another layer — there is no
-second window, and therefore nothing to "cover".
+API (``vo=libmpv``). mpv renders into its OWN widget's framebuffer
+(``MpvRenderWidget``, a ``QOpenGLWidget``), and that widget is a sibling of the
+frame canvas, positioned by hand over exactly the plan's artwork rectangle. The
+canvas — which sits ABOVE it — paints every layer it normally would EXCEPT the
+artwork, leaving that rectangle unpainted so the video shows through the hole.
 
-That removes the entire class of bug the previous design existed to work around:
-with no window-vs-underlay race there is no last-frame swap timer and no window
-ordering to get right. The last frame is still pre-extracted during OPTIMISE and
-used as the fallback if mpv fails to start.
+So a video is a framed item, not a video-shaped hole: it carries the same ambient
+fill, the same ring layers (once a mat is configured) and the same overlay as a
+photo, because the canvas that paints those for a photo paints them for a video
+too. Ring geometry has exactly ONE owner — the canvas.
+
+There is still no second window, so there is nothing to "cover" and no
+window-vs-underlay race. The last frame is pre-extracted during OPTIMISE and is
+the fallback if mpv fails to start.
 
 ```
-┌─ ① First frame already in the artwork slot (normal preload → advance flow)
-
-│ ② Load the pre-extracted last frame if present — used as the fallback
+┌─ ① The poster (the pre-generated first-frame JPEG) is presented as an ordinary
+│    image, so the fade-IN is the normal crossfade
 │
-│ ③ Create/attach the mpv render context, then play()
-│    hwdec is chosen per board (see the table below)
+│ ② Create/attach the mpv render context. The widget is sized to the artwork
+│    rectangle, and for ``cover`` ``panscan`` is set so the video crops to fill
+│    it (``contain`` is already mpv's default letterbox) — _apply_video_geometry
 │
-│ ④ mpv renders frames into the canvas FBO; overlays draw on top in z-order
+│ ③ The canvas enters video-surface mode: it stops painting the artwork and
+│    clips its base layers out of that rectangle, so the video shows through
 │
-│ ⑤ On end-of-file, advance to the next slide normally
+│ ④ mpv renders frames into the mpv widget's FBO; the canvas paints the ambient,
+│    the rings and the overlay OVER it, in z-order
+│
+│ ⑤ On end-of-file, stop the video and return to images, so the fade-OUT is the
+│    normal crossfade
 └───────────────────────────────────────────────────────────────
 
 Key invariants
@@ -680,9 +691,19 @@ Key invariants
       window, which under a Wayland kiosk compositor means video appears
       independently of the slideshow scene and overlays stop working.
 
-    • ``fbo`` must be the canvas's ``defaultFramebufferObject()``, **not** ``0``.
-      Qt renders into its own FBO; passing 0 draws to the window's default
+    • ``fbo`` must be the mpv widget's ``defaultFramebufferObject()``, **not**
+      ``0``. Qt renders into its own FBO; passing 0 draws to the window's default
       framebuffer and the picture is invisible or misplaced.
+
+    • The canvas must NOT claim ``WA_OpaquePaintEvent`` while it leaves the
+      artwork rectangle unpainted. That flag is a CONTRACT meaning "I paint every
+      pixel of myself"; breaking it shows undefined framebuffer content, i.e. a
+      black rectangle where the video should be. ``set_video_surface`` owns the
+      attribute and the z-order.
+
+    • The hole must not be revealed before the first frame exists
+      (``video_ready()``). Before that the widget's framebuffer is undefined, so
+      the mode switch waits rather than showing black.
 
     • ``ensure_gl_init()`` must run **before** ``play()``. mpv resolves its GL
       entry points against a current context.
@@ -692,9 +713,10 @@ Key invariants
       numeric options with ``strtod`` — a comma-decimal locale silently
       corrupts values such as ``--speed``.
 
-    • Do NOT swap the canvas and mpv widget with ``QStackedWidget``: hiding the
-      mpv widget tears down its GL context. Use sibling widgets in a plain
-      ``QStackedLayout`` container instead.
+    • Use sibling widgets with their geometry set by hand. A ``QVBoxLayout``
+      tiles them (the slideshow drew halfway down the screen) and a
+      ``QStackedLayout`` makes them mutually exclusive pages. Do NOT hide the mpv
+      widget to switch surfaces: hiding it tears down its GL context.
 
     • Overlay elements paint in ascending ``z`` order (largest last).
 

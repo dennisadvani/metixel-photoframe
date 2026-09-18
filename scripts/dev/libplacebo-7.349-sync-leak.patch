@@ -1,0 +1,29 @@
+Upstream fix for the per-frame sync_file descriptor leak, backported to v7.349.0.
+
+Original: libplacebo commit c93aa134ab62365ce1177efff99b8e1e66a818e7
+          "opengl/util: fix sync object leak" (moi15moi, 2026-02-18)
+          Fixes mpv-player/mpv#12708, mpv-android/mpv-android#977
+
+Why it matters here
+-------------------
+`gl_poll_callbacks()` pops a callback and, on the SUCCESS path, never deletes the
+`GLsync` it waited on.  Mesa backs GL sync objects with kernel fences, so each
+leaked `GLsync` holds an open `sync_file` descriptor.  mpv registers a poll
+callback per rendered frame, so the descriptor count grows ~1/draw call and the
+frontend dies of `OSError: [Errno 24] Too many open files` after ~27s of video.
+
+The `GL_WAIT_FAILED` branch already deletes its sync; only the success path — the
+one taken every frame — leaks.  Applied to v7.349.0, which is what Debian Trixie
+and Raspberry Pi OS ship (`libplacebo349 7.349.0-3`); v7.360.1 already has it.
+
+--- a/src/opengl/utils.c
++++ b/src/opengl/utils.c
+@@ -47,6 +47,7 @@ void gl_poll_callbacks(pl_gpu gpu)
+         switch (res) {
+         case GL_ALREADY_SIGNALED:
+         case GL_CONDITION_SATISFIED:
+             PL_ARRAY_REMOVE_AT(p->callbacks, 0);
++            gl->DeleteSync(cb.sync);
+             cb.callback(cb.priv);
+             continue;
+ 

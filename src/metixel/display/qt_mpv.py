@@ -25,7 +25,7 @@ They were established experimentally on a Pi 5 under cage:
    ``QApplication`` is constructed — see :mod:`metixel.display.qt_backend`.
 
 ``osd_level=0`` disables mpv's on-screen text, which would otherwise be baked
-into the frame and appear behind the matte.
+into the frame and appear under the canvas's ring layers.
 
 Hardware decoding: `drm-copy`, NOT `v4l2m2m`
 --------------------------------------------
@@ -63,7 +63,6 @@ import logging
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPainter
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import QWidget
 
@@ -73,8 +72,14 @@ logger = logging.getLogger(__name__)
 class MpvRenderWidget(QOpenGLWidget):
     """Renders mpv video frames into a Qt OpenGL widget.
 
-    The widget is a sibling of the frame canvas and sits underneath it, so the
-    canvas can paint the matte ring over the video.
+    The widget is a sibling of the frame canvas and sits underneath it.  The
+    backend sizes it to the plan's artwork rectangle, and the canvas leaves that
+    same rectangle unpainted (``FrameCanvas.set_video_surface``), so the video
+    shows through the hole while the canvas paints the ambient and the rings
+    around it.
+
+    It therefore paints no frame of its own beyond the video: the ring geometry
+    lives in the canvas, and giving it a second owner would let the two disagree.
     """
 
     #: Emitted from mpv's thread; connected to ``update()`` so the repaint
@@ -92,9 +97,13 @@ class MpvRenderWidget(QOpenGLWidget):
         self._paused = False
         self._eof = False
         self._playing = False
-        # (QRect, QColor) pairs painted over the video each frame, covering the
-        # ring layers.  Set by the backend from the current RenderPlan.
-        self._matte_rects: list[tuple[Any, Any]] | None = None
+        # Readiness for revealing the canvas's artwork hole.  mpv must have BOTH
+        # configured the video and rendered a frame; until then the widget's
+        # framebuffer is undefined and revealing the hole would show black.  That
+        # is measured, not assumed: the PHASE-0 spike's mpv_idle case rendered
+        # solid black because paintGL returns early with no render context.
+        self._params_known = False
+        self._rendered = False
 
         self.frame_ready.connect(self.update)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
@@ -201,6 +210,8 @@ class MpvRenderWidget(QOpenGLWidget):
         self._eof = False
         self._paused = False
         self._playing = True
+        self._params_known = False
+        self._rendered = False
         self._mpv.play(path)
         logger.debug("mpv playing %s", path)
 
@@ -217,6 +228,8 @@ class MpvRenderWidget(QOpenGLWidget):
         self._playing = False
         self._paused = False
         self._eof = False
+        self._params_known = False
+        self._rendered = False
         if self._mpv is None:
             return
         try:
@@ -284,6 +297,7 @@ class MpvRenderWidget(QOpenGLWidget):
     def _on_video_params(self, _name: str, value: Any) -> None:
         if isinstance(value, dict) and value.get("w") and value.get("h"):
             self._video_size = (int(value["w"]), int(value["h"]))
+            self._params_known = True
 
     def _on_mpv_frame(self) -> None:
         """mpv has a new frame — hop to the GUI thread to repaint."""
@@ -313,47 +327,41 @@ class MpvRenderWidget(QOpenGLWidget):
             logger.debug("mpv render failed", exc_info=True)
             return
 
+        # A rendered frame is half of the readiness signal; the other half is mpv
+        # having configured the video.  See video_ready.
+        self._rendered = True
+
         # Defer report_swap until after Qt has presented the frame; calling it
         # here would make mpv believe frames are shown earlier than they are and
         # wreck frame pacing on GPUs without swap control.
         QTimer.singleShot(0, self._report_swap)
 
-        self._paint_matte_over_video(w, h)
+    def video_ready(self) -> bool:
+        """Whether there is a picture to show yet.
 
-    def _paint_matte_over_video(self, w: int, h: int) -> None:
-        """Paint the matte ring over the video, in THIS widget.
-
-        mpv renders full-size into the widget's framebuffer and letterboxes the
-        video itself (object-fit: contain).  The matte is then painted on top,
-        leaving only the artwork rectangle showing video — the same recipe the
-        working prototype uses.
-
-        Doing it here rather than in the canvas above matters: a transparent hole
-        in an overlying widget depends on Qt compositing two surfaces correctly,
-        which is exactly what produced a black rectangle instead of video.  One
-        widget owning both the video and its matte has no such dependency.
+        The canvas leaves the artwork rectangle unpainted while a video plays, so
+        until this is true, revealing that hole would show the widget's undefined
+        framebuffer — black.  Both halves are required: mpv must have configured
+        the video AND rendered a frame into this widget.
         """
-        if self._matte_rects is None:
+        return self._params_known and self._rendered
+
+    def set_panscan(self, enabled: bool) -> None:
+        """Fill (crop) the widget with the video instead of letterboxing it.
+
+        Maps mpv's ``panscan`` onto the framing engine's ``cover``: the artwork
+        rectangle is then the whole panel and the overflowing edges must be
+        sampled away, which for a centred crop is exactly what ``panscan = 1.0``
+        does.  ``contain`` needs nothing — mpv's default letterboxes inside the
+        widget, and the backend has already sized that widget to the contained
+        rect, so the two agree without further work.
+        """
+        if self._mpv is None:
             return
-        painter = QPainter(self)
         try:
-            for rect, colour in self._matte_rects:
-                painter.fillRect(rect, colour)
+            self._mpv.panscan = 1.0 if enabled else 0.0
         except Exception:
-            logger.debug("matte paint failed", exc_info=True)
-        finally:
-            painter.end()
-
-    def set_matte(self, bands: list[tuple[Any, Any]] | None) -> None:
-        """Set the matte bands to paint over the video.
-
-        ``bands`` is a list of ``(QRect, QColor)`` pairs covering the ring layers
-        (whitespace, mat, moulding) — everything except the artwork rectangle.
-        ``None`` clears them, which is what a backend should do when playback
-        stops so a stale ring is never left behind.
-        """
-        self._matte_rects = bands
-        self.update()
+            logger.debug("mpv panscan=%s failed", enabled, exc_info=True)
 
     def _report_swap(self) -> None:
         """Tell mpv the frame reached the display."""

@@ -36,6 +36,7 @@ import pytest
 
 _DISPLAY_DIR = Path(__file__).resolve().parents[3] / "src" / "metixel" / "display"
 _CANVAS = _DISPLAY_DIR / "qt_canvas.py"
+_GEOMETRY = _DISPLAY_DIR / "geometry.py"
 _PRESENTER = (
     Path(__file__).resolve().parents[3]
     / "src"
@@ -138,17 +139,20 @@ class TestAmbientColourPlumbing:
         )
 
 
-def test_canvas_helpers_round_outwards() -> None:
+def test_the_rect_rounding_is_shared_and_rounds_outwards() -> None:
     """A curtain clipped a pixel INTO the artwork shows as a line down its edge.
 
-    ``QRegion`` is integer-only, so the incoming rect is rounded outwards:
-    over-wiping by a pixel is invisible, under-wiping leaves a visible seam.
+    ``QRegion`` is integer-only, so the rect is rounded outwards: over-wiping by
+    a pixel is invisible, under-wiping leaves a visible seam.  The rule lives in
+    ``display.geometry`` because the mpv widget is positioned from the SAME rect
+    — see ``test_geometry.py`` for its behaviour.
     """
-    source = _source(_CANVAS)
-    assert "def _int_rect" in source
-    assert "+ 0.9999" in source, "round the far edge outward, not to nearest"
+    assert "int(x + w + 0.9999)" in _source(_GEOMETRY), "round the far edge outward, not to nearest"
+    # ...and the canvas consumes it rather than restating the rule.
+    assert "def _qr" in _source(_CANVAS)
+    assert "int_rect(rect)" in _source(_CANVAS)
 
 
-@pytest.mark.parametrize("name", ["_paint_transition_curtain", "_int_rect"])
+@pytest.mark.parametrize("name", ["_paint_transition_curtain", "_qr"])
 def test_helpers_exist(name: str) -> None:
     assert name in _source(_CANVAS)

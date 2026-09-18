@@ -36,6 +36,7 @@ import pytest
 
 _DISPLAY_DIR = Path(__file__).resolve().parents[3] / "src" / "metixel" / "display"
 _CANVAS = _DISPLAY_DIR / "qt_canvas.py"
+_GEOMETRY = _DISPLAY_DIR / "geometry.py"
 _TK_BACKEND = _DISPLAY_DIR / "tk_backend.py"
 
 
@@ -199,21 +200,23 @@ class TestNoSeamBetweenTheArtworkAndTheCurtain:
     """The artwork and the curtain must tile the screen with no unpainted column.
 
     Regression: the pixmap was sized ``int(dw)`` (truncated DOWN) while the
-    curtain's clip used ``_int_rect``, which rounds its far edge UP.  For a
+    curtain's clip used the rounded rect, which rounds its far edge UP.  For a
     fractional ``artwork_dst`` such as ``w = 1581.467`` the pixmap was 1581 px
     wide and the curtain started past 1582, so one column was painted by neither
     and the dark background showed through as a thin line at the artwork edge —
     the visible seam.
 
     Not an aliasing artefact: a rounding disagreement between two call sites that
-    are supposed to be complements.
+    are supposed to be complements.  Both now take the rect from ``_qr``, which
+    delegates to the shared ``display.geometry.int_rect`` — the same value the
+    mpv widget is positioned from, because a seam there is just as visible.
     """
 
     def test_the_pixmap_uses_the_same_rect_as_the_curtain(self) -> None:
         """One rect, derived once, shared by both sides."""
         scaled = _method_body(_CANVAS, "_scaled_artwork")
-        assert "_int_rect(plan.artwork_dst)" in scaled, (
-            "the pixmap size must come from _int_rect, not from int(dw)"
+        assert "_qr(plan.artwork_dst)" in scaled, (
+            "the pixmap size must come from the shared rounded rect, not int(dw)"
         )
         # Check the CODE, not the prose.  The docstring and comments here quote
         # ``int(dw)`` precisely to explain the old bug, so grepping the whole
@@ -226,7 +229,7 @@ class TestNoSeamBetweenTheArtworkAndTheCurtain:
 
     def test_the_blit_uses_that_rects_origin(self) -> None:
         body = _method_body(_CANVAS, "_draw_artwork")
-        assert "_int_rect(plan.artwork_dst)" in body
+        assert "_qr(plan.artwork_dst)" in body
         assert "rect.left(), rect.top()" in body, (
             "the blit origin must come from the same rect as the size"
         )
@@ -234,26 +237,27 @@ class TestNoSeamBetweenTheArtworkAndTheCurtain:
     def test_the_curtain_still_clips_to_the_complement(self) -> None:
         """The curtain's side of the contract must not drift."""
         body = _method_body(_CANVAS, "_paint_transition_curtain")
-        assert "_int_rect(plan.artwork_dst)" in body
+        assert "_qr(plan.artwork_dst)" in body
         assert "subtracted" in body
 
     def test_the_fallback_uses_the_same_rect_too(self) -> None:
         """A fallback frame must not reintroduce the seam."""
         body = _method_body(_CANVAS, "_draw_artwork")
         tail = body[body.index("Fallback") :]
-        assert "_int_rect(plan.artwork_dst)" in tail, (
-            "the fallback draw must use the same rounded rect"
-        )
+        assert "_qr(plan.artwork_dst)" in tail, "the fallback draw must use the same rounded rect"
 
     def test_rounding_is_outward_so_the_artwork_can_only_overlap(self) -> None:
         """Overlapping by a pixel is invisible; a gap is a visible line.
 
-        This is the asymmetry ``_int_rect`` exists for, and it is why the pixmap
-        must match it rather than round to nearest.
+        This is the asymmetry the shared helper exists for, and it is why the
+        pixmap must match it rather than round to nearest.  The rule itself lives
+        in ``display.geometry`` — ``test_geometry.py`` pins its behaviour — and
+        the canvas must consume it rather than re-derive it.
         """
-        body = _method_body(_CANVAS, "_int_rect")
-        assert "0.9999" in body, "the far edge must round outward"
-        assert "int(x + w + 0.9999)" in body
+        assert "int(x + w + 0.9999)" in _source(_GEOMETRY), "the far edge must round outward"
+        assert "int_rect(rect)" in _source(_CANVAS), (
+            "the canvas must consume the shared helper, not restate the rule"
+        )
 
 
 class TestFailureDegradesRatherThanBlanks:

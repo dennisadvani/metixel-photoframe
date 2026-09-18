@@ -24,6 +24,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from metixel.display.geometry import int_rect
+from metixel.display.qt_backend import _artwork_rect, _fills_frame
+from metixel.framing.layout import RenderPlan
+
 _DISPLAY_DIR = Path(__file__).resolve().parents[3] / "src" / "metixel" / "display"
 _BACKEND = _DISPLAY_DIR / "qt_backend.py"
 _CANVAS = _DISPLAY_DIR / "qt_canvas.py"
@@ -34,12 +38,12 @@ def _source(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-class TestVideoMatteComposition:
-    """The video must appear inside the same virtual mat as a photo.
+class TestVideoSurfaceComposition:
+    """A video must sit inside the SAME frame a photo would.
 
-    This has now been wrong in three different ways, each with a symptom that did
-    not point at its cause, so the guards below pin the STRUCTURE that makes the
-    matte work rather than any particular idiom:
+    Wrong in four different ways, each with a symptom that did not point at its
+    cause, so the guards below pin the STRUCTURE rather than any particular
+    idiom:
 
     1. ``QStackedLayout(StackOne)`` — only the current widget is visible, so
        bringing the mpv widget forward hid the canvas that painted the ring.
@@ -53,9 +57,18 @@ class TestVideoMatteComposition:
        ``WA_OpaquePaintEvent`` widget that leaves part of itself unpainted gives
        undefined framebuffer content, which Qt rendered as a solid black
        rectangle where the video should be.
+    4. Working around (3) by having the mpv widget paint its own matte.  That
+       restored the ring but put the frame geometry in TWO places and left the
+       video unable to carry the ambient fill, the fit modes or a crossfade: a
+       video-shaped hole with a ring around it, not a framed item.
 
-    The working structure is the prototype's: a plain layout, and the widget that
-    renders the video also paints its own matte.
+    The resolution is that (3) was the paint ATTRIBUTE, not the architecture.  A
+    PHASE-0 spike on a Pi 5 (cage/Wayland, Qt 6.8.2) rendered a partial hole
+    correctly over a raster sibling, over a ``QOpenGLWidget``, and over the real
+    ``MpvRenderWidget`` while playing — see ``scripts/dev/_spike_video_hole.py``.
+
+    So the canvas owns the frame again: it paints every layer except the artwork
+    rectangle, and the mpv widget is sized to exactly that rectangle underneath.
     """
 
     def test_uses_no_layout_manager(self) -> None:
@@ -93,43 +106,55 @@ class TestVideoMatteComposition:
         assert "self._canvas" in body, "the canvas must be sized"
         assert "target.rect()" in body
 
-    def test_the_mpv_widget_paints_its_own_matte(self) -> None:
-        """One widget owning video AND matte is the whole point.
+    def test_the_mpv_widget_paints_no_ring(self) -> None:
+        """The widget owns the video and nothing else.
 
-        Compositing the ring from a separate widget above the video requires a
-        transparent hole, which Qt renders as black.  If this ever moves back out
-        of MpvRenderWidget, the black rectangle returns.
+        Ring geometry has exactly one owner — the canvas.  A second painter in
+        the mpv widget would be positioned from the same plan by different code,
+        and the two would eventually disagree.
         """
         source = _source(_MPV)
-        assert "def _paint_matte_over_video" in source
-        assert "def set_matte" in source
-        # And it is actually called from the video paint path.
-        assert "self._paint_matte_over_video(w, h)" in source
+        assert "set_matte" not in source
+        assert "_paint_matte_over_video" not in source
+        # What it must expose instead: readiness for the hole, and the fit.
+        assert "def video_ready" in source
+        assert "def set_panscan" in source
 
-    def test_matte_bands_exclude_the_artwork_rect(self) -> None:
-        """Only the ring layers are painted; the artwork rect is the video hole."""
-        source = _source(_BACKEND)
-        # The band builder must cover exactly the three ring layers.
+    def test_the_canvas_holes_the_artwork_while_a_video_plays(self) -> None:
+        """The base must be clipped out of the artwork rect and the artwork skipped."""
+        body = _method_body(_CANVAS, "paintEvent")
+        assert "self._video_surface" in body, "paintEvent must honour the mode"
+        assert "subtracted" in body, "the base must be clipped out of the hole"
+        assert body.count("if not self._video_surface:") == 2, (
+            "BOTH artwork draws (outgoing and incoming) must be skipped, or the "
+            "hole is painted over"
+        )
+        # The rings are still painted: they are disjoint annuli, so they belong
+        # on top of the video exactly as they are on top of a photo.
         for layer in ("plan.whitespace", "plan.matte", "plan.moulding"):
-            assert layer in source, f"{layer} must paint over the video"
-        # artwork_dst must NOT be painted, or the video would be hidden.
-        assert "_add(plan.artwork_dst" not in source
+            assert layer in body, f"{layer} must still paint over the video"
 
-    def test_stop_video_clears_the_matte_bands(self) -> None:
-        """A stale ring must not survive into the next photo."""
-        source = _source(_BACKEND)
-        assert "set_matte(None)" in source, (
-            "stop_video must clear the bands, or the video's frame is left "
-            "painted over the following photo"
-        )
+    def test_stop_video_releases_the_hole(self) -> None:
+        """A stale hole must not survive into the next photo.
 
-    def test_present_does_not_raise_the_canvas_over_video(self) -> None:
-        """Raising the canvas during video would cover the frame."""
-        source = _source(_BACKEND)
-        # The video branch of present() must raise the mpv widget, not the canvas.
-        assert "self._mpv_widget.raise_()" in source, (
-            "present() must keep mpv on top while a video plays"
-        )
+        Left in video-surface mode, the following photo would be painted around an
+        unpainted rectangle — showing whatever the mpv widget left behind.
+        """
+        body = _method_body(_BACKEND, "stop_video")
+        assert "set_video_surface(False)" in body
+        assert "_video_geometry = None" in body, "the artwork-sized rect must be dropped"
+
+    def test_the_mpv_widget_covers_exactly_the_artwork_rect(self) -> None:
+        """The widget and the canvas's hole must be the same rectangle.
+
+        They are siblings, so a disagreement is a black seam at the artwork edge.
+        """
+        body = _method_body(_BACKEND, "_apply_video_geometry")
+        assert "setGeometry(*rect)" in body, "the widget is placed at the artwork rect"
+        assert "_artwork_rect(plan)" in body
+        assert "set_panscan(" in body, "cover must crop; contain must letterbox"
+        # And the rect is the shared conversion, not a second copy of the rule.
+        assert "int_rect(plan.artwork_dst)" in _source(_BACKEND)
 
 
 class TestSurfaceSizeDetection:
@@ -376,5 +401,43 @@ class TestRepaintIsRequestedOnlyOnChange:
     def test_stop_video_still_repaints(self) -> None:
         """Leaving video mode must repaint, even if the mode was never toggled."""
         body = _method_body(_BACKEND, "stop_video")
-        assert "set_overlay_only(False)" in body
+        assert "set_video_surface(False)" in body
         assert "self._canvas.update()" in body
+
+
+class TestVideoGeometry:
+    """The mpv widget must cover exactly the rect the canvas leaves unpainted.
+
+    They are SIBLING widgets, so a one-pixel disagreement is a black seam along
+    the artwork edge — and a seam reads as a paint bug rather than an arithmetic
+    one.  Both sides therefore use :func:`metixel.display.geometry.int_rect`.
+    """
+
+    @staticmethod
+    def _plan(artwork_dst: tuple[float, float, float, float], overflow: str) -> RenderPlan:
+        return RenderPlan(
+            screen=(0.0, 0.0, 1920.0, 1200.0),
+            ambient=None,
+            artwork_dst=artwork_dst,
+            artwork_src=(0.0, 0.0, 100.0, 100.0),
+            whitespace=(),
+            matte=(),
+            moulding=(),
+            matte_colour="#ffffff",
+            whitespace_colour="#ffffff",
+            ambient_colour="#101014",
+            style="borderless",
+            branch="virtual",
+            overflow=overflow,
+        )
+
+    def test_the_rect_is_the_shared_rounding_of_the_artwork(self) -> None:
+        plan = self._plan((7.4, 7.4, 1905.17, 1185.19), "crop")
+        assert _artwork_rect(plan) == (7, 7, 1906, 1186)
+        # Not a copy of the rule: the very same conversion the canvas uses.
+        assert _artwork_rect(plan) == int_rect(plan.artwork_dst)
+
+    def test_contain_letterboxes_and_cover_crops(self) -> None:
+        """``cover`` maps onto mpv's panscan; ``contain`` needs nothing."""
+        assert _fills_frame(self._plan((0.0, 0.0, 1920.0, 1200.0), "crop")) is True
+        assert _fills_frame(self._plan((560.0, 0.0, 800.0, 1200.0), "fill")) is False

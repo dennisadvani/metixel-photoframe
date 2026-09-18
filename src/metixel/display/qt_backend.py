@@ -23,10 +23,16 @@ per-frame ``draw_*`` calls, and the GL depth ordering the pi3d backend needed.
 
 Layering note — the one thing that must not be "simplified"
 ----------------------------------------------------------
-mpv renders into the widget's own framebuffer, and the matte is then painted on
-top with ``QPainter``.  A second framebuffer plus ``glBlitFramebuffer`` is the
-obvious-looking alternative and it **segfaults on the Pi** (blitting between a
-depth-attached FBO and the default FBO).  Do not reintroduce it.
+mpv renders into the widget's own framebuffer, and the ring layers are painted
+over it by the canvas ABOVE, which leaves exactly the plan's artwork rectangle
+unpainted so the video shows through that hole.  A second framebuffer plus
+``glBlitFramebuffer`` is the obvious-looking alternative and it **segfaults on
+the Pi** (blitting between a depth-attached FBO and the default FBO).  Do not
+reintroduce it.
+
+The hole rests on one Qt detail: while the canvas leaves a region unpainted it
+must NOT claim ``WA_OpaquePaintEvent``, or that region shows undefined
+framebuffer content — black.  ``FrameCanvas.set_video_surface`` owns that.
 
 Startup ordering — all three are load-bearing
 ---------------------------------------------
@@ -49,12 +55,37 @@ from pathlib import Path
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.geometry import int_rect
 from metixel.display.hardware import DisplayPower, WlrOutput
 from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
 from metixel.shared.platform import detect_pi_model, hwdec_for_model
 
 logger = logging.getLogger(__name__)
+
+
+def _artwork_rect(plan: RenderPlan) -> tuple[int, int, int, int]:
+    """The plan's artwork rectangle, rounded exactly as the canvas rounds it.
+
+    The mpv widget is a SIBLING of the canvas, not a child, so this rect and the
+    hole the canvas leaves unpainted have to agree to the pixel; a one-pixel
+    disagreement is a black seam down the edge of the video.  Both therefore go
+    through :func:`metixel.display.geometry.int_rect`.
+    """
+    return int_rect(plan.artwork_dst)
+
+
+def _fills_frame(plan: RenderPlan) -> bool:
+    """Whether the video must be cropped to fill its rect rather than letterboxed.
+
+    This is the framing engine's ``cover`` (``overflow == "crop"``): the artwork
+    rectangle is the whole panel and the overflowing edges are sampled away, which
+    is a centred crop and therefore exactly mpv's ``panscan``.  ``contain`` needs
+    nothing — letterboxing inside the widget is already mpv's default, and the
+    backend sizes that widget to the contained rect.
+    """
+    return plan.overflow == "crop"
+
 
 #: Frames per second when ``display.fps_limit`` is missing or non-positive.
 #: Matches the config default.
@@ -145,6 +176,13 @@ class PySide6Backend(DisplayBackend):
         self._wlr = WlrOutput()
         self._display_power = DisplayPower(self._wlr)
         self._video_path: Path | None = None
+        # The artwork rect the mpv widget currently occupies, or ``None`` when no
+        # video is playing.  Kept so _relayout() does not stretch the video back
+        # over the whole container on a resize.
+        self._video_geometry: tuple[int, int, int, int] | None = None
+        # The plan the geometry was last applied from, so re-applying it on every
+        # present() is free.  See _apply_video_geometry.
+        self._video_plan: RenderPlan | None = None
         self._timer: Any = None
 
     # -- Properties ----------------------------------------------------------
@@ -319,7 +357,7 @@ class PySide6Backend(DisplayBackend):
 
         The mpv widget is set first and the canvas second so the canvas stays the
         upper sibling for photos; z-order after that is owned by whoever changes
-        the surface mode — FrameCanvas.set_overlay_only() and play_video().
+        the surface mode — FrameCanvas.set_video_surface() and play_video().
         """
         target = container if container is not None else self._container
         if target is None:
@@ -328,6 +366,13 @@ class PySide6Backend(DisplayBackend):
         for widget in (self._mpv_widget, self._canvas):
             if widget is not None:
                 widget.setGeometry(rect)
+        # A playing video owns only the artwork rect, so a resize must not stretch
+        # the mpv surface back over the whole container.  The presenter repaints
+        # with a freshly computed plan, which re-applies the geometry for the new
+        # size (see _apply_video_geometry) — so a stale value here lasts at most
+        # one frame.
+        if self._mpv_widget is not None and self._video_geometry is not None:
+            self._mpv_widget.setGeometry(*self._video_geometry)
 
     def _read_surface_size(self, container: Any) -> tuple[int, int]:
         """Return the surface size, preferring the launcher's authoritative value.
@@ -522,16 +567,14 @@ class PySide6Backend(DisplayBackend):
     def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
         """Paint *plan* on the canvas.
 
-        Two distinct cases, and conflating them is what produced a black
-        rectangle instead of video:
+        Two distinct cases:
 
-        * **Photo** (``image`` given) — the canvas is raised and paints the
-          artwork *and* the rings.  It is the only visible surface.
-        * **Video** (``image`` is ``None``) — the mpv widget is raised and paints
-          the video plus its own matte (see ``MpvRenderWidget``).  The canvas must
-          NOT be raised here or it would cover the video; the only thing the
-          canvas still owns over video is the overlay, and ``present_overlay``
-          handles that.
+        * **Photo** — the canvas paints the artwork *and* the rings, and is the
+          only visible surface.
+        * **Video** — the frames come from the mpv widget, which is a sibling
+          BELOW the canvas.  The canvas keeps every layer it normally paints but
+          leaves the artwork rectangle unpainted, so the video shows through that
+          hole.  See ``FrameCanvas.set_video_surface``.
 
         ``alpha`` applies to the artwork, so two complementary calls produce the
         crossfade.  The rings always paint opaque.
@@ -539,25 +582,27 @@ class PySide6Backend(DisplayBackend):
         if self._canvas is None or self._window is None:
             return
 
-        if self._video_path is not None and image is None:
-            # Video case: mpv owns the frame and the matte.  Refresh the bands
-            # from the new plan so a config change (style, ambient) shows up
-            # without a restart.
+        if self._video_path is not None:
+            # The plan is re-applied on every present so a config change (style,
+            # ambient) and a resize both take effect without a restart.
             #
-            # Z-order note: do NOT raise the mpv widget here.  The canvas sits
-            # above it in overlay-only mode (transparent, overlay elements only),
-            # and raising mpv every frame would flip the order back and forth —
-            # making the video appear to flicker behind the overlay.  mpv is
-            # raised once in play_video(); after that the canvas stays on top.
-            if self._mpv_widget is not None:
-                self._mpv_widget.set_matte(self._matte_bands(plan))
-            self._canvas.update_plan(plan, None, alpha)
+            # The artwork handle is passed through deliberately: it is what the
+            # ambient backdrop is keyed to, so a video keeps the same STILL
+            # blurred surround a photo of it would have.  The handle's own artwork
+            # is never drawn — that rectangle is the hole.
+            #
+            # Z-order note: no raise_() here.  set_video_surface() owns the order,
+            # and asking for it every frame would be a restack request to the
+            # compositor 31 times a second for an order already in place.
+            self._canvas.set_video_surface(True)
+            self._apply_video_geometry(plan)
+            self._canvas.update_plan(plan, image, alpha)
             return
 
         # No raise_() and no update() here: the canvas raises itself when the
         # surface mode changes, and repaints only when the picture actually
-        # changed.  The mpv widget repaints itself from set_matte().
-        self._canvas.set_overlay_only(False)
+        # changed.
+        self._canvas.set_video_surface(False)
         self._canvas.update_plan(plan, image, alpha)
 
     def present_transition(
@@ -585,7 +630,11 @@ class PySide6Backend(DisplayBackend):
         if self._canvas is None or self._window is None:
             return
 
-        self._canvas.set_overlay_only(False)
+        # A crossfade is an image transition: the outgoing layer here is an image
+        # handle, never a live video surface.  Leaving video-surface mode is
+        # therefore part of the contract, and doing it here means a stale mode can
+        # never leave the artwork unpainted over the following photo.
+        self._canvas.set_video_surface(False)
         self._canvas.update_transition(
             plan,
             image,
@@ -630,21 +679,12 @@ class PySide6Backend(DisplayBackend):
     def present_overlay(self, elements: list[OverlayElement]) -> None:
         """Composite the overlay elements above whatever is showing.
 
-        Layout, and why this is not simply "raise the canvas":
-
-        * **Photo** — the canvas is the only surface: it paints the artwork, the
-          rings and the overlay.
-        * **Video** — the mpv widget holds the frame AND its own matte.  Raising
-          the canvas here would draw its opaque black background over the video,
-          which is what produced a solid black centre.  Instead the canvas goes
-          into overlay-only mode: no background fill, no artwork, no rings —
-          just the overlay elements on a transparent surface.
-
-        ``FrameCanvas.set_overlay_only`` owns that mode, including the
-        ``WA_OpaquePaintEvent`` flag.  That flag is a contract ("I paint every
-        pixel"), and breaking it while still claiming it is what made the earlier
-        transparent-hole attempt render black rather than see-through.  That
-        method also owns the z-order, because the surface mode is what decides it.
+        The canvas paints the overlay in BOTH surface modes — over the artwork
+        and rings for a photo, and over the rings for a video — so there is
+        nothing to switch here.  Which surface mode is active is owned by
+        ``play_video`` / ``present`` / ``stop_video`` via
+        ``FrameCanvas.set_video_surface``; this method only replaces the element
+        list.
 
         An EMPTY *elements* is meaningful and must be passed through: it is how
         the canvas learns to drop the previous overlay.  Returning early here
@@ -653,8 +693,6 @@ class PySide6Backend(DisplayBackend):
         """
         if self._canvas is None:
             return
-        overlay_only = self._video_path is not None
-        self._canvas.set_overlay_only(overlay_only)
         self._canvas.update_overlay(elements)
 
     # -- Artwork -------------------------------------------------------------
@@ -709,30 +747,29 @@ class PySide6Backend(DisplayBackend):
     # -- Video ---------------------------------------------------------------
 
     def play_video(self, path: Path, plan: RenderPlan) -> bool:
-        """Start mpv playback with the video matted by its own widget.
+        """Start mpv playback, positioned over the plan's artwork rectangle.
 
-        Returns ``False`` when the mpv pipeline is unavailable so the presenter
+        Returns ``False`` when the mpv pipeline is unavailable, so the presenter
         advances instead of waiting for frames that will never arrive.
 
-        The mpv widget paints the matte itself (see ``MpvRenderWidget``), so the
-        video and its frame are one surface — the same structure the working
-        prototype uses.  Compositing the matte from a *separate* widget above the
-        video required a transparent hole in that widget, which Qt rendered as a
-        black rectangle.
+        The widget is a sibling BELOW the canvas and is sized to the artwork rect;
+        the canvas leaves that same rect unpainted, so the video shows through it
+        while the canvas paints the ambient and the rings around it.  That is what
+        lets a video carry the same framing, ambient fill and overlay as a photo
+        (see the PHASE-0 spike in ``scripts/dev/_spike_video_hole.py``).
+
+        The plan and its artwork handle are left as the preceding ``present()``
+        set them, so a video keeps the still blurred backdrop built from its
+        poster; nothing here clears them.
         """
-        if self._mpv_widget is None:
+        if self._mpv_widget is None or self._canvas is None:
             return False
         try:
             self._video_path = Path(path)
-            self._mpv_widget.set_matte(self._matte_bands(plan))
-            # mpv owns the surface while it plays: the frame AND the matte.
-            self._mpv_widget.raise_()
-            # The canvas goes to overlay-only mode so it contributes the clock and
-            # messages WITHOUT covering the video.  Raising it in its normal mode
-            # here would paint its opaque background straight over the frame —
-            # that was the solid black centre.
-            self._canvas.set_overlay_only(True)
-            self._canvas.raise_()
+            self._apply_video_geometry(plan)
+            # The canvas raises itself above the mpv widget and releases the
+            # artwork hole, so the rings and the overlay paint OVER the frame.
+            self._canvas.set_video_surface(True)
             self._mpv_widget.ensure_gl_init()
             self._mpv_widget.play(str(path))
             return True
@@ -740,34 +777,36 @@ class PySide6Backend(DisplayBackend):
             logger.warning("mpv failed to play %s", path, exc_info=True)
             return False
 
-    def _matte_bands(self, plan: RenderPlan) -> list[tuple[Any, Any]]:
-        """Convert a plan's ring layers into ``(QRect, QColor)`` paints.
+    def _apply_video_geometry(self, plan: RenderPlan) -> None:
+        """Place the mpv widget over *plan*'s artwork rect and set its fit.
 
-        Only the ring layers are returned — the artwork rectangle is the hole the
-        video shows through.  The plan guarantees those layers are disjoint from
-        the artwork, which is what makes painting them unconditionally correct.
+        The rect comes from the shared rounding helper because the canvas clips
+        its artwork hole to the same rect — see ``_artwork_rect``.
+
+        Called on every ``present()`` while a video plays, so it MUST be a no-op
+        when nothing moved.  Only the plan IDENTITY is compared, which is both
+        exact and free: the presenter caches the current plan and hands back the
+        same object each tick, recomputing it only when the geometry or the fit
+        settings actually change.
+
+        Re-applying regardless is not merely wasteful: ``setGeometry`` pushes a
+        resize through a ``QOpenGLWidget``, and mpv renders into that widget's
+        framebuffer.  Doing it 30 times a second re-creates the surface mpv's
+        hardware-decode interop is bound to.
         """
-        from PySide6.QtCore import QRect
-        from PySide6.QtGui import QColor
-
-        bands: list[tuple[Any, Any]] = []
-
-        def _add(rects: Any, colour_spec: str) -> None:
-            colour = QColor(colour_spec)
-            if not colour.isValid():
-                colour = QColor(128, 128, 128)
-            for x, y, w, h in rects or ():
-                if w > 0 and h > 0:
-                    bands.append((QRect(int(x), int(y), int(w), int(h)), colour))
-
-        _add(plan.whitespace, plan.whitespace_colour)
-        _add(plan.matte, plan.matte_colour)
-        # The moulding reads as the outer frame edge.  Black, matching the canvas.
-        _add(plan.moulding, "#000000")
-        return bands
+        if self._mpv_widget is None or plan is self._video_plan:
+            return
+        self._video_plan = plan
+        rect = _artwork_rect(plan)
+        self._video_geometry = rect
+        self._mpv_widget.setGeometry(*rect)
+        self._mpv_widget.set_panscan(_fills_frame(plan))
 
     def stop_video(self) -> None:
-        """Stop playback, drop the matte bands, and restore the canvas.  Idempotent."""
+        """Stop playback, release the artwork hole, and restore the canvas.
+
+        Idempotent — called on item advance, on queue reset, and during shutdown.
+        """
         if self._mpv_widget is None:
             return
         try:
@@ -776,16 +815,20 @@ class PySide6Backend(DisplayBackend):
             logger.debug("Error stopping mpv", exc_info=True)
         finally:
             self._video_path = None
-            # Clear the bands so a stale ring is never left over a photo.
-            self._mpv_widget.set_matte(None)
+            self._video_geometry = None
+            self._video_plan = None
             if self._canvas is not None:
-                # Leave overlay-only mode: the canvas is the only surface again,
-                # so it must paint the artwork, the rings and a real background.
-                # set_overlay_only() raises the canvas and repaints when the mode
-                # toggles; the explicit update() covers the case where playback
-                # never actually entered overlay-only mode.
-                self._canvas.set_overlay_only(False)
+                # Leave video-surface mode: the canvas is the only surface again,
+                # so it must paint the artwork and stop claiming transparency.
+                # set_video_surface() raises and repaints when the mode toggles;
+                # the explicit update() covers the case where playback never
+                # actually entered the mode.
+                self._canvas.set_video_surface(False)
                 self._canvas.update()
+            # Grow the mpv widget back to the container.  It is hidden by the
+            # canvas either way, but a stale artwork-sized rect would be reused
+            # by the next video before its own geometry is applied.
+            self._relayout()
 
     def pause_video(self, paused: bool = True) -> None:
         """Pause/resume mpv in place, keeping the decoder warm.
@@ -813,6 +856,19 @@ class PySide6Backend(DisplayBackend):
             return False
         try:
             return bool(self._mpv_widget.is_finished())
+        except Exception:
+            return False
+
+    def video_ready(self) -> bool:
+        """Whether mpv has a frame to show yet (see ``MpvRenderWidget``).
+
+        The canvas's artwork hole must not be revealed before this is true, or
+        the hole shows the widget's undefined framebuffer — black.
+        """
+        if self._mpv_widget is None:
+            return False
+        try:
+            return bool(self._mpv_widget.video_ready())
         except Exception:
             return False
 

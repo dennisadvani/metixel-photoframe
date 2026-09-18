@@ -286,10 +286,15 @@ class DisplayBackend(ABC):
         return ``False`` (and report ``supports_video = False``) so the caller
         can advance instead of waiting on a stream that will never arrive.
 
-        Video renders **under** the frame's ring layers: the presentation layer
-        then calls :meth:`present` with ``image=None`` to paint the matte over
-        the live video.  That is how the virtual mat composites on top of a
-        playing video without a second framebuffer.
+        The video occupies *plan*'s artwork rectangle and is rendered UNDER the
+        frame's ring layers: :meth:`present` paints everything except that
+        rectangle, so the video shows through it with the same ambient fill,
+        rings and overlay a photo of it would have.  That is how the virtual mat
+        composites over a playing video without a second framebuffer.
+
+        :meth:`present` should keep being called while the video plays — it is
+        what keeps the plan (and therefore the geometry and the ambient) current
+        across a resize or a config change.
         """
         return False
 
@@ -317,6 +322,19 @@ class DisplayBackend(ABC):
 
         The presentation state machine polls this instead of guessing from
         timers, so a video that ends early advances immediately.
+        """
+        return False
+
+    def video_ready(self) -> bool:  # noqa: B027
+        """Whether there is a decoded frame on screen yet.
+
+        The video occupies a *hole* in the frame that a backend leaves unpainted,
+        so revealing that hole before the first frame exists shows whatever the
+        surface holds — undefined content, in practice black.  A backend should
+        report ``False`` until it genuinely has a picture.
+
+        Distinct from :meth:`video_playing`: playback can have started while the
+        first frame is still being decoded.
         """
         return False
 

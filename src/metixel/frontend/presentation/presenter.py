@@ -31,13 +31,24 @@ freeze the frame forever.  Two consequences of that decision are load-bearing:
 
 Video
 -----
-**Video playback has been removed from the frontend** while the basics are
-rebuilt; it will be re-inserted later.  A video item is still accepted and is
-presented as a still: its *poster* is the pre-generated first-frame JPEG, which
-the backend loads as an ordinary image.  The backend media pipeline (Phase 2:
-OPTIMISE) continues to probe and optimise videos — only the frontend's
-``play_video`` / ``stop_video`` usage is gone, so nothing is lost when playback
-returns.
+A video's slide has three parts, and only the middle one involves mpv:
+
+1. **Fade in, paused.**  The item's *poster* — the pre-generated first-frame
+   JPEG — is presented as an ordinary image, so the incoming crossfade is the
+   same code path a photo uses and a video fades in on a still frame.
+2. **Play.**  Once the item is current, the video is handed to the backend's
+   player and the canvas starts showing it through an unpainted artwork rect
+   (see :mod:`metixel.display.qt_canvas`).  The still blurred ambient surround
+   was built from the poster, so it does not move while the video plays.
+3. **Fade out, paused.**  At end-of-file — or when the item's window expires —
+   the player is STOPPED and the outgoing layer becomes the pre-generated
+   *last*-frame JPEG.  The crossfade is an ordinary image blend again, which is
+   what gives a video's fade-out the curtain, the incoming backdrop and the
+   easing curves for free.
+
+Stopping first is what makes part 3 work: a crossfade composites two images, and
+a live video surface is not one.  The seam between the last decoded frame and
+its JPEG is the price, and it is why OPTIMISE pre-extracts the last frame.
 """
 
 from __future__ import annotations
@@ -295,10 +306,16 @@ class Presenter:
         self._shown_plan: RenderPlan | None = None
         self._shown_item: MediaItem | None = None
 
-        # -- Crossfade: the outgoing frame is retained for the transition
-        #    duration.  A dict-free pair rather than the old texture slots.
-        self._prev_plan: RenderPlan | None = None
-        self._prev_image: Any = None
+        # -- Video playback --
+        # True while the backend is playing the current item's video.  The
+        # canvas holds an unpainted artwork rect open only while this holds, so
+        # it is the single source of truth for entering and leaving that mode.
+        self._video_active: bool = False
+        # The id of a video whose playback has ENDED but which is still on
+        # screen (its out-fade may be running).  Its outgoing layer must be the
+        # LAST frame rather than the poster, or the fade-out would jump back to
+        # the video's opening image — see ``_image_for``.
+        self._video_ended_id: str | None = None
 
         logger.info(
             "Presenter: %dx%d, style=%s (pinned), fit=%s, smart_cover=%s, "
@@ -330,6 +347,15 @@ class Presenter:
     @property
     def paused(self) -> bool:
         return self._paused
+
+    @property
+    def video_active(self) -> bool:
+        """Whether a video is playing on the backend right now.
+
+        False for a still, for a video being shown as its poster (a backend with
+        no player, or playback switched off), and once a video has ended.
+        """
+        return self._video_active
 
     @property
     def current_item(self) -> MediaItem | None:
@@ -365,8 +391,11 @@ class Presenter:
             random.shuffle(self._queue)
         self._queue_loaded = True
         self._cache.clear()
+        # A playing video belongs to the queue being replaced.
+        self._stop_video()
+        self._video_ended_id = None
         self._current_idx = -1
-        self._advance(initial=True)
+        self._advance()
 
     def add_items(self, items: list[MediaItem]) -> int:
         """Append items, returning how many were new.
@@ -387,7 +416,7 @@ class Presenter:
         if self._shuffle_enabled():
             self._scatter_tail(len(added))
         if self._current_idx < 0:
-            self._advance(initial=True)
+            self._advance()
         return len(added)
 
     def _scatter_tail(self, count: int) -> None:
@@ -422,13 +451,15 @@ class Presenter:
             return 0
 
         if current is not None and current.id in item_ids:
-            # The item on screen was deleted: clamp the cursor and re-show
-            # whatever now occupies that position.
+            # The item on screen was deleted: stop its playback first, then clamp
+            # the cursor and re-show whatever now occupies that position.
+            self._stop_video()
+            self._video_ended_id = None
             self._current_idx = min(self._current_idx, len(self._queue) - 1)
             self._shown_plan = None
             self._shown_item = None
             if self._current_idx >= 0:
-                self._advance(initial=False)
+                self._advance()
             else:
                 # Nothing left to show — clear the dashboard's Now Playing card
                 # rather than leave it naming a deleted file.
@@ -447,7 +478,7 @@ class Presenter:
         if not self._queue:
             return
         self._paused = False
-        self._advance(initial=False)
+        self._advance()
 
     def prev_item(self) -> None:
         """Skip back."""
@@ -457,10 +488,10 @@ class Presenter:
         self._current_idx = (self._current_idx - 1) % len(self._queue)
         self._item_start_time = time.monotonic()
         self._transition_stall_logged = False
-        # A jump is a cut, not a transition: drop the outgoing frame so no
-        # crossfade plays.
-        self._prev_plan = None
-        self._prev_image = None
+        # A jump is a cut, not a transition, so there is no outgoing frame to
+        # blend from — and any video on screen must stop.
+        self._stop_video()
+        self._video_ended_id = None
         self._present_current()
         self._write_current_media()
 
@@ -474,6 +505,12 @@ class Presenter:
         instead of resuming".
         """
         self._paused = True
+        # Pause the PLAYER rather than stopping it, so the decoder keeps its
+        # buffers warm and resuming is immediate.  Stopping would also give up
+        # the video surface, blanking the artwork rect the canvas holds open.
+        if self._video_active:
+            with contextlib.suppress(Exception):
+                self._backend.pause_video(True)
         self._write_current_media()
 
     def resume(self) -> None:
@@ -485,6 +522,9 @@ class Presenter:
         """
         self._paused = False
         self._item_start_time = time.monotonic()
+        if self._video_active:
+            with contextlib.suppress(Exception):
+                self._backend.pause_video(False)
         self._write_current_media()
 
     def switch_album(self, album_id: str) -> None:
@@ -603,7 +643,6 @@ class Presenter:
         # previous colour until the next slide regardless.
         if geometry_changed or fit_changed or ambient_changed:
             self._shown_plan = None
-            self._prev_plan = None
         if fit_changed:
             logger.info(
                 "Presenter fit settings reloaded: fit_mode=%s smart_cover=%s",
@@ -643,6 +682,19 @@ class Presenter:
         elapsed = time.monotonic() - self._item_start_time
         duration = self._item_duration(current)
         transition_s = self._transition_seconds()
+
+        # ── A playing video ends its own slide ────────────────────────────
+        # Either the stream reached its end, or the item's window is up (its own
+        # length, capped by ``video.max_duration_seconds``).
+        #
+        # The player is stopped FIRST because the out-transition is an image
+        # blend and a live video surface is not an image: stopping here is what
+        # lets a video's fade-out reuse that path, curtain and incoming backdrop
+        # included.  ``_end_video`` also rewinds the clock, so the ordinary
+        # transition branch below takes it from here.
+        if self._video_active and (self._backend.video_finished() or elapsed >= duration):
+            self._end_video(current)
+            elapsed = time.monotonic() - self._item_start_time
 
         # ── Ambient backdrop for the upcoming slide ───────────────────────
         # The blur runs in a throttled subprocess (see ``display.ambient_blur``),
@@ -687,7 +739,7 @@ class Presenter:
                     STALL_TIMEOUT_S,
                 )
 
-            self._advance(initial=False)
+            self._advance()
             return
 
         # ── Transition ────────────────────────────────────────────────────
@@ -898,10 +950,11 @@ class Presenter:
                 self._present_transition(min(1.0, (elapsed - duration) / transition_s))
                 return
 
-        # A stale outgoing plan would paint a ghost of a layout that no longer
-        # applies, so drop it before re-presenting the current item.
-        self._prev_plan = None
-        self._prev_image = None
+        # No plan is dropped here: ``reload_config`` has already cleared
+        # ``_shown_plan`` if anything that affects the layout changed, and
+        # ``_current_plan`` recomputes it when it is missing.  A reload that
+        # changed nothing must keep the cached plan, or ``has_visible_frame``
+        # would blip and the boot fade would re-run.
         self._present_current()
 
     def _present_current(self, with_artwork: bool = True) -> None:
@@ -928,6 +981,10 @@ class Presenter:
         self._backend.present(plan, handle if with_artwork else None)
         self._shown_plan = plan
         self._shown_item = item
+        # Started AFTER the first present, so the frame shows the still poster
+        # before the video takes over the artwork rect on the next tick — which
+        # is the "fades in paused, then plays" the poster exists for.
+        self._start_video(item, plan)
 
     def _present_transition(self, progress: float) -> None:
         """Blend from the shown frame to the next item.
@@ -988,10 +1045,11 @@ class Presenter:
         advance.
 
         The payload is a contract with the SPA and must keep these keys:
-        ``file`` (the display name — the card shows "No media playing" when it
-        is absent), ``index``/``total`` (rendered as "Image 2 of 17"),
-        ``paused`` (the paused badge and pause button), ``media_type`` and
-        ``thumbnail_path`` (which the route resolves into ``thumbnail_url``).
+        ``id`` (the item's stable identity), ``file`` (the display name — the
+        card shows "No media playing" when it is absent), ``index``/``total``
+        (rendered as "Image 2 of 17"), ``paused`` (the paused badge and pause
+        button), ``media_type`` and ``thumbnail_path`` (which the route resolves
+        into ``thumbnail_url``).
 
         Writes to ``run_dir()``, which is tmpfs — a per-slide write there costs
         RAM, not SD-card erase cycles.  Best-effort: a read-only run dir must not
@@ -1049,6 +1107,7 @@ class Presenter:
                 thumb = str(item.first_frame_path)
 
             data = {
+                "id": item.id,
                 "file": str(item.original_path.name) if item.original_path else "unknown",
                 "index": self._current_idx,
                 "total": len(self._queue),
@@ -1060,15 +1119,16 @@ class Presenter:
         except OSError:
             pass
 
-    def _advance(self, *, initial: bool) -> None:
+    def _advance(self) -> None:
         """Move to the next item and begin showing it."""
         if not self._queue:
             return
 
-        # Retain the outgoing frame for the crossfade before the cursor moves.
-        if self._shown_plan is not None and not initial:
-            self._prev_plan = self._shown_plan
-            self._prev_image = self._image_for(self._shown_item) if self._shown_item else None
+        # Leaving the item: a playing video must stop here, or the mpv surface
+        # keeps its last frame on screen underneath the next item.  The ended
+        # marker goes too, so it cannot decide the NEXT item's poster.
+        self._stop_video()
+        self._video_ended_id = None
 
         self._current_idx = (self._current_idx + 1) % len(self._queue)
         self._item_start_time = time.monotonic()
@@ -1127,6 +1187,71 @@ class Presenter:
             return
         if handle is not None:
             self._cache.put(ready.key, handle)
+
+    # -- Video ---------------------------------------------------------------
+
+    def _start_video(self, item: MediaItem, plan: RenderPlan) -> None:
+        """Hand *item* to the player, once, if it is a video we should play.
+
+        Called from :meth:`_present_current`, which runs on every tick of the
+        slide, so it must be idempotent.
+
+        A backend that cannot play video, and a user who has switched playback
+        off, both degrade to the same thing: the poster stays on screen for the
+        whole slide.  That is the documented behaviour (never raise, never
+        blank), and it is why this returns quietly rather than failing.
+        """
+        if self._video_active or self._paused or item.media_type != MediaType.VIDEO:
+            return
+        if not self._video_playback_enabled():
+            logger.debug("Video playback is disabled — showing the poster for %s", item.id)
+            return
+        if not self._backend.supports_video:
+            logger.debug("Backend has no video pipeline — showing the poster for %s", item.id)
+            return
+        try:
+            started = bool(self._backend.play_video(item.cached_path, plan))
+        except Exception:
+            logger.warning("play_video failed for %s", item.original_path, exc_info=True)
+            started = False
+        if started:
+            self._video_active = True
+            logger.debug("Video playback started: %s", item.original_path)
+        else:
+            logger.info("Video playback unavailable — showing the poster for %s", item.id)
+
+    def _stop_video(self) -> None:
+        """Stop the player if one is running.  Idempotent.
+
+        Called on every move away from an item, so the mpv surface can never keep
+        its last frame on screen underneath the next one.
+        """
+        if not self._video_active:
+            return
+        self._video_active = False
+        with contextlib.suppress(Exception):
+            self._backend.stop_video()
+
+    def _end_video(self, item: MediaItem) -> None:
+        """Finish a video's slide: stop the player and mark the item ended.
+
+        The clock is rewound so the item's window is over, which hands the rest
+        of the slide to the ordinary out-transition path — the one a photo uses.
+        """
+        self._stop_video()
+        if item.media_type == MediaType.VIDEO:
+            # Remembered so ``_image_for`` hands the transition the LAST frame
+            # rather than the poster.
+            self._video_ended_id = item.id
+        self._item_start_time = time.monotonic() - self._item_duration(item)
+
+    def _video_playback_enabled(self) -> bool:
+        """Whether the user wants videos played rather than held as stills.
+
+        Read live from the config, so the dashboard's toggle takes effect on the
+        next slide rather than on the next restart.
+        """
+        return bool(self._config.video.get("playback_enabled", True))
 
     # -- Helpers -------------------------------------------------------------
 
@@ -1211,32 +1336,53 @@ class Presenter:
         Tries the cache first (which is populated by :meth:`_preload_next`), then
         falls back to a blocking load — the item is needed *now*, so waiting is
         better than showing nothing.
+
+        A video is drawn as its pre-generated FIRST-frame JPEG, except once its
+        playback has ended: then the outgoing layer must be the LAST frame, or the
+        fade-out would jump back to the video's opening image.  That frame is
+        loaded uncached on purpose — filing it under the item's id would displace
+        the first-frame handle the ambient backdrop is keyed to and orphan the
+        blur (see ``ImageCache.put``).
         """
         if item is None:
             return None
+        if (
+            item.media_type == MediaType.VIDEO
+            and item.id == self._video_ended_id
+            and item.last_frame_path is not None
+        ):
+            return self._load_uncached(item.last_frame_path)
+
         cached = self._cache.get(item.id)
         if cached is not None:
             return cached
 
         # A video is presented as its pre-generated first-frame JPEG.
         path = item.first_frame_path if item.media_type == MediaType.VIDEO else None
-        path = path or item.cached_path
-        try:
-            handle = self._backend.load_image(path)
-        except Exception:
-            logger.debug("Failed to load %s", path, exc_info=True)
-            return None
+        handle = self._load_uncached(path or item.cached_path)
         if handle is not None:
             self._cache.put(item.id, handle)
         return handle
+
+    def _load_uncached(self, path: Path) -> Any:
+        """Load *path* on this thread WITHOUT caching the result.
+
+        Returns ``None`` rather than raising: one unreadable frame must never
+        stop the slideshow.
+        """
+        try:
+            return self._backend.load_image(path)
+        except Exception:
+            logger.debug("Failed to load %s", path, exc_info=True)
+            return None
 
     @staticmethod
     def _media_type(item: MediaItem) -> FramingMediaType:
         """The framing engine's media-type literal.
 
-        Still reported accurately even though video is not *played*: the framing
-        engine keys some geometry off the media type, and a video's poster has a
-        known aspect that the layout should use.
+        Reported accurately for a video too: the framing engine keys some
+        geometry off the media type, and a video's poster and its player share
+        the same aspect, so the layout is the same whichever is on screen.
         """
         return "video" if item.media_type == MediaType.VIDEO else "image"
 
@@ -1254,10 +1400,19 @@ class Presenter:
     def _item_duration(self, item: MediaItem) -> float:
         """Seconds to show *item*.
 
-        With video playback removed there is nothing to play, so every item —
-        including a video's poster — is shown for the configured image duration.
+        A video runs for its own length, capped by ``video.max_duration_seconds``
+        (``0`` there means unlimited).  Anything else — including a video whose
+        duration the probe could not establish — uses the configured image
+        duration, so an unreadable duration degrades to a still rather than to a
+        zero-length slide.
         """
-        return float(self._config.slideshow.get("image_duration_seconds", 30))
+        image_duration = float(self._config.slideshow.get("image_duration_seconds", 30))
+        if item.media_type != MediaType.VIDEO or item.duration_seconds <= 0:
+            return image_duration
+        cap = float(self._config.video.get("max_duration_seconds", 0) or 0)
+        if cap > 0:
+            return min(float(item.duration_seconds), cap)
+        return float(item.duration_seconds)
 
     # -- Overlay integration -------------------------------------------------
 

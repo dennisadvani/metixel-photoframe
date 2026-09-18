@@ -113,15 +113,6 @@ class TestTheCachedPlansAreDropped:
 
         assert presenter._shown_plan is None
 
-    def test_an_ambient_change_drops_the_previous_plan(self, presenter: Presenter) -> None:
-        presenter.set_queue([_image_item("a", Path("a.jpg"), w=1600, h=1200)])
-        presenter._prev_plan = presenter._shown_plan
-
-        presenter._config.update("slideshow", {"ambient_color": "#1717d3"})
-        presenter.reload_config(presenter._config)
-
-        assert presenter._prev_plan is None
-
     def test_an_unrelated_change_keeps_the_shown_plan(self, presenter: Presenter) -> None:
         """Dropping the plans on every save would re-run the boot fade."""
         presenter.set_queue([_image_item("a", Path("a.jpg"), w=1600, h=1200)])

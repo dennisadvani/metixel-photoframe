@@ -21,11 +21,21 @@ composition order instead.
 
 Video compatibility
 -------------------
-``update_plan(plan, image=None)`` is the video case: the artwork layer is
-skipped so mpv's frames (rendered by a sibling widget underneath) show through
-the Mat Window, while the matte ring is still painted on top.  That is the whole
-trick behind "virtual mat over live video" — see the module docstring's warning
-against the ``glBlitFramebuffer`` alternative, which segfaults on the Pi.
+A playing video is the artwork layer: mpv draws it in a sibling widget underneath
+and this canvas leaves exactly that rectangle unpainted, so the frames show
+through it while the ambient, the ring layers and the overlay are painted around
+it.  :meth:`FrameCanvas.set_video_surface` owns that mode.
+
+This is the mechanism an earlier attempt got wrong, so the constraint is worth
+stating plainly: leaving part of a widget unpainted while it still claims
+``WA_OpaquePaintEvent`` yields undefined framebuffer content, which Qt rendered
+as a solid black rectangle.  The fix is the paint attribute, not a different
+architecture — ``set_video_surface`` clears it.
+
+A PHASE-0 spike confirmed this on hardware (Pi 5, cage/Wayland, Qt 6.8.2): a
+partial hole renders correctly over a raster sibling, over a ``QOpenGLWidget``,
+and over the real ``MpvRenderWidget`` while playing.  See
+``scripts/dev/_spike_video_hole.py``.
 """
 
 from __future__ import annotations
@@ -40,10 +50,23 @@ from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QWidget
 
 from metixel.display.ambient_blur import BackdropRequest, BackdropRunner
+from metixel.display.geometry import int_rect
 from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
 
 logger = logging.getLogger(__name__)
+
+
+def _qr(rect: tuple[float, float, float, float]) -> QRect:
+    """Return :func:`int_rect`'s result as a ``QRect``.
+
+    ``QRegion`` and ``QImage.copy`` need Qt types, so a conversion has to exist
+    somewhere.  Keeping it in one adaptor means the ROUNDING RULE still lives
+    exactly once, in :mod:`metixel.display.geometry` — which matters because the
+    mpv widget is positioned from the same rect and a disagreement of one pixel
+    shows up as a black seam at the artwork edge.
+    """
+    return QRect(*int_rect(rect))
 
 
 @dataclass(frozen=True, eq=False)
@@ -78,26 +101,6 @@ def _qcolor(spec: str) -> QColor:
         logger.debug("Unparseable plan colour %r — using grey", spec)
         return QColor(128, 128, 128)
     return colour
-
-
-def _int_rect(rect: tuple[float, float, float, float]) -> QRect:
-    """Round a plan rect to integers for ``QRegion``.
-
-    ``QRegion`` is integer-only and takes a ``QRect``; it does **not** accept a
-    plain 4-tuple (PySide6 does not coerce one into its
-    ``(int, int, int, int)`` overload, so passing a tuple raises at paint time —
-    on the device, not in CI).
-
-    The far edge rounds OUTWARD.  Clipping a pixel too far into the incoming
-    artwork is invisible, whereas stopping a pixel short leaves an unwiped
-    sliver of the outgoing image, which is a visible seam in exactly the case
-    this curtain exists to fix.
-    """
-    x, y, w, h = rect
-    left, top = int(x), int(y)
-    right = int(x + w + 0.9999)
-    bottom = int(y + h + 0.9999)
-    return QRect(left, top, max(0, right - left), max(0, bottom - top))
 
 
 class FrameCanvas(QWidget):
@@ -184,62 +187,57 @@ class FrameCanvas(QWidget):
         #: backdrop that cannot be built degrades to the flat fill instead of
         #: holding every slide that shows it.
         self._backdrop_failed: set[str] = set()
-        # When True, the layer inside the Mat Window is left UNPAINTED so a
-        # sibling widget underneath (the mpv surface) shows through.  That is the
-        # whole "virtual mat over live video" mechanism: this canvas paints the
-        # ring layers opaquely and leaves the middle transparent.
-        self._video_underlay: bool = False
+        # When True, the artwork rect is left UNPAINTED so the mpv surface below
+        # shows through it: the video IS the artwork layer, and this canvas paints
+        # the ambient, the rings and the overlay around it.  That is the whole
+        # "virtual mat over live video" mechanism.  See set_video_surface.
+        self._video_surface: bool = False
         # Notified with (width, height) whenever the surface resizes, so the
         # backend can track the real display size.  See set_resize_callback.
         self._resize_callback: Any = None
-        # True while a video plays: paint ONLY the overlay, on transparency.
-        # See set_overlay_only for why the paint attributes matter.
-        self._overlay_only: bool = False
         # The canvas paints every pixel of itself, so Qt can skip the erase pass.
-        #
-        # Do NOT reintroduce a mode where part of the canvas is left unpainted to
-        # let a video show through.  That was tried: leaving a hole while Qt still
-        # believed the widget was opaque produced a solid black rectangle over the
-        # video, because the unpainted region showed uninitialised framebuffer.
-        # The video widget now paints its own matte instead
-        # (see MpvRenderWidget._paint_matte_over_video), so this canvas is only
-        # ever used for photos, overlays, and the boot screen.
+        # Cleared for the duration of video-surface mode, where it deliberately
+        # does not — see set_video_surface.
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
     # -- Public API ----------------------------------------------------------
 
-    def set_overlay_only(self, enabled: bool) -> None:
-        """Switch to painting ONLY the overlay, on a transparent background.
+    def set_video_surface(self, enabled: bool) -> None:
+        """Show a video through the artwork rect, or go back to painting photos.
 
-        Used while a video plays: the mpv widget underneath owns the frame and
-        the matte, so this canvas must contribute nothing but the overlay (clock,
-        messages) — otherwise its opaque background covers the video, which is
-        what produced a solid black centre.
+        Enabled, the canvas paints everything it normally does for the current
+        plan — background, ambient, blurred backdrop, ring layers and overlay —
+        EXCEPT the artwork, which is left unpainted so the sibling mpv widget
+        underneath shows through exactly there.  The plan and its artwork handle
+        are still set via :meth:`update_plan`: the plan supplies the hole's
+        geometry and the handle is what the ambient backdrop is keyed to, so a
+        video keeps the SAME still blurred surround a photo of it would have.
 
         The load-bearing part is ``WA_OpaquePaintEvent``.  It is a CONTRACT with
         Qt meaning "this widget paints every pixel of itself".  When it is set and
-        the widget paints nothing in a region, Qt does not fall back to showing
+        the widget leaves a region unpainted, Qt does not fall back to showing
         what is underneath — the region shows uninitialised framebuffer, i.e.
-        black.  So the attribute must be cleared for the duration of overlay-only
-        mode, and the widget must also be told not to erase to black.
+        black.  That was the black rectangle in the earlier attempt, and it is why
+        the attribute is cleared here and ``WA_TranslucentBackground`` set in its
+        place.
 
-        The z-order is raised here, and only here, because the mode is exactly
-        what decides it: overlay-only means a video is underneath and the canvas
-        must sit above it; leaving the mode means the canvas is the only surface
-        again.  Asking for that order from ``present()`` and ``present_overlay()``
-        instead meant a ``raise_()`` every frame — a restack request to the
-        compositor, 31 times a second, for an order that was already in place.
+        Z-order is owned here, and only here, because the mode is exactly what
+        decides it: a video underneath means this canvas must sit above it to
+        paint the rings; leaving the mode means the canvas is the only surface
+        again.  Asking for that order from ``present()`` instead meant a
+        ``raise_()`` every frame — a restack request to the compositor, 31 times a
+        second, for an order that was already in place.
         """
-        if self._overlay_only == enabled:
+        if self._video_surface == enabled:
             return
-        self._overlay_only = enabled
+        self._video_surface = enabled
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, not enabled)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, enabled)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, enabled)
         self.raise_()
         self.update()
-        logger.debug("Canvas overlay-only mode: %s", "on" if enabled else "off")
+        logger.debug("Canvas video-surface mode: %s", "on" if enabled else "off")
 
     def set_resize_callback(self, callback: Any) -> None:
         """Register a callable invoked with ``(width, height)`` on resize.
@@ -430,11 +428,11 @@ class FrameCanvas(QWidget):
         request and the adoption can never disagree about what a backdrop is — a
         disagreement there would hold every slide forever.
         """
-        rect = _int_rect(plan.screen)
+        _, _, width, height = int_rect(plan.screen)
         return BackdropRequest.build(
             source,
-            rect.width(),
-            rect.height(),
+            width,
+            height,
             float(plan.ambient_blur_radius),
             str(plan.ambient_blur_filter),
         )
@@ -633,7 +631,7 @@ class FrameCanvas(QWidget):
         _, _, dw, dh = plan.artwork_dst
         if dw <= 0 or dh <= 0:
             return
-        region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))
+        region = QRegion(self.rect()).subtracted(QRegion(_qr(plan.artwork_dst)))
         if region.isEmpty():
             return
         painter.save()
@@ -661,7 +659,7 @@ class FrameCanvas(QWidget):
         the neutral one — a coloured band appearing for a frame or two reads as a
         flash of the wrong look, which is precisely what a glitch looks like.
         """
-        region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))
+        region = QRegion(self.rect()).subtracted(QRegion(_qr(plan.artwork_dst)))
         if region.isEmpty():
             return
         painter.save()
@@ -716,7 +714,7 @@ class FrameCanvas(QWidget):
         # here — rather than building a band-shaped image — is what keeps it
         # geometrically consistent with the item it belongs to: it reads as the
         # same photo continuing behind the artwork, not a separately-scaled smear.
-        region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))
+        region = QRegion(self.rect()).subtracted(QRegion(_qr(plan.artwork_dst)))
         if region.isEmpty():
             return
 
@@ -738,29 +736,39 @@ class FrameCanvas(QWidget):
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
         painter = QPainter(self)
         try:
-            if self._overlay_only:
-                # Video plays underneath and owns the frame and the matte.
-                # Paint nothing but the overlay: no fill, no artwork, no rings.
-                # The widget is non-opaque in this mode, so the unpainted area
-                # is genuinely transparent rather than black.
-                for element in self._overlay:
-                    self._draw_element(painter, element)
-                return
-
-            # The canvas always paints every pixel here (WA_OpaquePaintEvent
-            # holds), so Qt can skip the erase pass.
-            painter.fillRect(self.rect(), self._background)
             plan = self._plan
-            if plan is not None:
-                # 1. Ambient fill — the only full-rectangle layer.  Absent
-                #    whenever a mat ring exists, because the Mat Window is then
-                #    cut to the artwork and no residue is left for fill.
+            # 1. Base layers — the background, then the ambient fill.  Both are
+            #    full-rectangle, so while a video surface is showing they are
+            #    clipped out of the artwork rect: that rect is the hole the mpv
+            #    widget shows through, and painting over it would hide the video.
+            #
+            #    Kept LINEAR (setClipRegion, then setClipping(False)) rather than
+            #    wrapped in a try/finally: everything below — backdrops, artwork,
+            #    overlay — may legitimately paint inside the artwork rect, and a
+            #    plain reset says that without a second block.  It also keeps the
+            #    ambient guard a direct statement here, which is what the
+            #    blur-mode structural test inspects.
+            if self._video_surface and plan is not None:
+                painter.setClipRegion(
+                    QRegion(self.rect()).subtracted(QRegion(_qr(plan.artwork_dst)))
+                )
+            # The canvas paints every pixel of itself otherwise
+            # (WA_OpaquePaintEvent holds), so Qt can skip the erase pass.
+            painter.fillRect(self.rect(), self._background)
+            if plan is not None and plan.ambient is not None and plan.ambient_strategy != "blur":
+                # Ambient fill — the only full-rectangle layer.  Absent whenever a
+                # mat ring exists, because the Mat Window is then cut to the
+                # artwork and no residue is left for fill.
                 #
-                #    Skipped in blur mode: the per-item backdrop below covers the
-                #    same region, and painting a flat colour first would be hidden.
-                if plan.ambient is not None and plan.ambient_strategy != "blur":
-                    self._fill(painter, plan.ambient, _qcolor(plan.ambient_colour))
-
+                # Skipped in blur mode: the per-item backdrop below covers the
+                # same region, and painting a flat colour first would be hidden.
+                self._fill(painter, plan.ambient, _qcolor(plan.ambient_colour))
+            if self._video_surface:
+                # Release the artwork clip.  The blurred backdrop needs no clip of
+                # its own — it already excludes its own artwork rect (see
+                # _draw_backdrop_layer).
+                painter.setClipping(False)
+            if plan is not None:
                 # 2–5. The two crossfade items, each as a (backdrop, artwork)
                 #      PAIR, stacked outgoing-first.
                 #
@@ -795,11 +803,15 @@ class FrameCanvas(QWidget):
                             self._backdrop_for(self._prev_image),
                             self._prev_alpha,
                         )
-                    painter.setOpacity(self._prev_alpha)
-                    try:
-                        self._draw_artwork(painter, self._prev_plan, self._prev_image)
-                    finally:
-                        painter.setOpacity(1.0)
+                    # The outgoing artwork is skipped while a video surface is
+                    # showing: that layer IS the video, and the mpv widget below
+                    # already has it on screen.
+                    if not self._video_surface:
+                        painter.setOpacity(self._prev_alpha)
+                        try:
+                            self._draw_artwork(painter, self._prev_plan, self._prev_image)
+                        finally:
+                            painter.setOpacity(1.0)
 
                 if self._image is not None and self._image_alpha > 0.01:
                     # 3b. Transition curtain — wipes the outgoing item's exposed
@@ -823,6 +835,7 @@ class FrameCanvas(QWidget):
                         self._prev_plan is not None
                         and self._prev_alpha > 0.01
                         and plan.ambient_strategy != "blur"
+                        and not self._video_surface
                     ):
                         self._paint_transition_curtain(painter, plan, self._image_alpha)
 
@@ -833,11 +846,14 @@ class FrameCanvas(QWidget):
                             self._backdrop_for(self._image),
                             self._image_alpha,
                         )
-                    painter.setOpacity(self._image_alpha)
-                    try:
-                        self._draw_artwork(painter, plan)
-                    finally:
-                        painter.setOpacity(1.0)
+                    # Skipped for a video surface, where this layer is the video
+                    # itself and mpv is already showing it (the hole above).
+                    if not self._video_surface:
+                        painter.setOpacity(self._image_alpha)
+                        try:
+                            self._draw_artwork(painter, plan)
+                        finally:
+                            painter.setOpacity(1.0)
 
                 # 3–5. Ring layers, outermost last so the moulding reads as the
                 #      frame edge.  Annuli: disjoint from the artwork.
@@ -956,7 +972,7 @@ class FrameCanvas(QWidget):
             # stopped at ``int(x + w + 0.9999)`` (rounded UP), so the column
             # between them was painted by neither and showed the background
             # through as a thin line at the artwork edge.
-            rect = _int_rect(plan.artwork_dst)
+            rect = _qr(plan.artwork_dst)
             painter.drawPixmap(rect.left(), rect.top(), pixmap)
             return
 
@@ -966,12 +982,12 @@ class FrameCanvas(QWidget):
         #
         # Drawn into the SAME rounded rect as the cached path, so a fallback
         # frame has no seam either.
-        drawn = _int_rect(plan.artwork_dst)
+        drawn = _qr(plan.artwork_dst)
         # The same source mapping the cached path uses: the image being drawn is
         # not always the media the plan was laid out for.  Qt CLIPS a source
         # rectangle that runs past the image and rescales whatever it did find,
         # so a stale window is not harmless here either — just wrong differently.
-        window = _int_rect(plan.source_window(source_image.width(), source_image.height()))
+        window = _qr(plan.source_window(source_image.width(), source_image.height()))
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawImage(
             QRectF(
@@ -994,7 +1010,7 @@ class FrameCanvas(QWidget):
         per frame.  ``None`` means the caller must fall back to a direct scaled
         draw — a failed scale must degrade, never blank the frame.
 
-        The returned pixmap is exactly :func:`_int_rect`'s size for
+        The returned pixmap is exactly :func:`_qr`'s size for
         ``artwork_dst``, and the caller blits it at that rect's origin.  Both
         sides must use that one rect: the transition curtain fills the
         *complement* of it, so any disagreement about where the artwork ends
@@ -1019,7 +1035,7 @@ class FrameCanvas(QWidget):
         # the size any other way (e.g. ``int(dw)``) reintroduces the seam: the
         # curtain rounds its far edge outward, so a truncated pixmap is one
         # pixel short of it and neither paints that column.
-        target = _int_rect(plan.artwork_dst)
+        target = _qr(plan.artwork_dst)
         target_w, target_h = max(1, target.width()), max(1, target.height())
 
         # Crop to the source rect first, so the scale is a pure resample of
@@ -1033,7 +1049,7 @@ class FrameCanvas(QWidget):
         # video pixels then reaches past the poster's edge, and ``QImage.copy``
         # pads that overhang black instead of clipping it — the poster ended up in
         # the corner of the panel with the rest of the screen black.
-        window = _int_rect(plan.source_window(image.width(), image.height()))
+        window = _qr(plan.source_window(image.width(), image.height()))
         cropped = image.copy(window)
         if cropped.isNull():
             return None
