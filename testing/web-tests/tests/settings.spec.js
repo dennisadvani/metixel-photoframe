@@ -45,6 +45,7 @@ test.describe("settings", () => {
         const select = "#cfg-ambient-strategy";
         const colourRow = "#ambient-colour-row";
         const blurRow = "#ambient-blur-row";
+        const filterRow = "#ambient-blur-filter-row";
         const darkenRow = "#ambient-darken-row";
 
         test("solid colour shows only the colour picker", async ({ page }) => {
@@ -52,6 +53,7 @@ test.describe("settings", () => {
             await page.selectOption(select, "solid");
             await expect(page.locator(colourRow)).toBeVisible();
             await expect(page.locator(blurRow)).toBeHidden();
+            await expect(page.locator(filterRow)).toBeHidden();
             await expect(page.locator(darkenRow)).toBeHidden();
         });
 
@@ -60,6 +62,7 @@ test.describe("settings", () => {
             await page.selectOption(select, "bars");
             await expect(page.locator(colourRow)).toBeHidden();
             await expect(page.locator(blurRow)).toBeHidden();
+            await expect(page.locator(filterRow)).toBeHidden();
             await expect(page.locator(darkenRow)).toBeHidden();
         });
 
@@ -68,6 +71,7 @@ test.describe("settings", () => {
             await page.selectOption(select, "blur");
             await expect(page.locator(colourRow)).toBeHidden();
             await expect(page.locator(blurRow)).toBeVisible();
+            await expect(page.locator(filterRow)).toBeVisible();
             await expect(page.locator(darkenRow)).toBeVisible();
         });
 

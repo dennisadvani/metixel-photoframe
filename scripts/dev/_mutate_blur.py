@@ -4,6 +4,11 @@ Every mutation must make the blur tests fail.  A mutation that survives means th
 corresponding test is not actually guarding anything.
 """
 
+# The mutation patterns below are verbatim slices of the guarded source, so they
+# are exactly as long as the code they quote.  Wrapping them would defeat the
+# point: a pattern that no longer matches the source silently becomes a SKIP.
+# ruff: noqa: E501
+
 from __future__ import annotations
 
 import pathlib
@@ -11,56 +16,123 @@ import subprocess
 import sys
 
 CANVAS = pathlib.Path("src/metixel/display/qt_canvas.py")
+AMBIENT = pathlib.Path("src/metixel/display/ambient_blur.py")
 PRESENTER = pathlib.Path("src/metixel/frontend/presentation/presenter.py")
-TESTS = "testing/unit_tests/display/test_blur_backdrop.py"
+RENDERER = pathlib.Path("src/metixel/frontend/renderer.py")
+TESTS = [
+    "testing/unit_tests/display/test_blur_backdrop.py",
+    "testing/unit_tests/display/test_backdrop_warm.py",
+]
 
 MUTATIONS: list[tuple[str, pathlib.Path, str, str]] = [
     (
-        "no-cache: rebuild the blur every frame",
-        CANVAS,
-        "        if self._blur_key == key and self._blur_pixmap is not None:\n            return self._blur_pixmap\n        if self._prev_blur_key == key and self._prev_blur_pixmap is not None:\n            return self._prev_blur_pixmap",
-        "        if False:\n            return self._blur_pixmap",
+        "unthrottled: the cpu cap is dropped",
+        AMBIENT,
+        "WORKER_CPU_LIMIT = 50",
+        "WORKER_CPU_LIMIT = None",
     ),
     (
-        "darken-in-key: brightness invalidates the blur",
-        CANVAS,
-        "        key = (id(image), target_w, target_h, round(radius, 2))",
-        "        key = (id(image), target_w, target_h, round(radius, 2), plan.ambient_darken)",
+        "identity-blind: the blur radius is dropped from the identity",
+        AMBIENT,
+        '            f"|{self.width}x{self.height}|{self.radius}|{self.blur_filter}"',
+        '            f"|{self.width}x{self.height}|{self.blur_filter}"',
+    ),
+    (
+        "identity-blind: the source fingerprint is dropped",
+        AMBIENT,
+        '            f"{self.source}|{self.mtime_ns}|{self.size}"',
+        '            f"{self.source}"',
+    ),
+    (
+        "identity-blind: the blur kernel is dropped from the identity",
+        AMBIENT,
+        '            f"|{self.width}x{self.height}|{self.radius}|{self.blur_filter}"',
+        '            f"|{self.width}x{self.height}|{self.radius}"',
+    ),
+    (
+        "timeout-blind: a wedged child holds the slide forever",
+        AMBIENT,
+        "            if time.monotonic() - self._started_at <= self._timeout_s:",
+        "            if True:",
     ),
     (
         "keep-aspect: letterbox gaps return",
-        CANVAS,
-        "        stretched = image.scaled(\n            target_w,\n            target_h,\n            Qt.AspectRatioMode.IgnoreAspectRatio,\n            Qt.TransformationMode.SmoothTransformation,\n        )",
-        "        stretched = image.scaled(\n            target_w,\n            target_h,\n            Qt.AspectRatioMode.KeepAspectRatio,\n            Qt.TransformationMode.SmoothTransformation,\n        )",
+        AMBIENT,
+        "        stretched = artwork.resize((max(1, int(width)), max(1, int(height))))",
+        "        stretched = artwork.copy()",
     ),
     (
         "downscale-blur: the blocking artefacts return",
-        CANVAS,
-        "        blurred = _blur_qimage(stretched, radius)",
-        "        blurred = stretched.scaled(\n"
-        "            max(1, int(target_w / radius)),\n"
-        "            max(1, int(target_h / radius)),\n"
-        "            Qt.AspectRatioMode.IgnoreAspectRatio,\n"
-        "            Qt.TransformationMode.SmoothTransformation,\n"
-        "        )",
+        AMBIENT,
+        "            blurred = stretched.filter(ImageFilter.BoxBlur(pixels))",
+        "            blurred = stretched.resize("
+        "(max(1, int(stretched.width / 40)), max(1, int(stretched.height / 40))))",
     ),
     (
-        "expensive-blur: Gaussian instead of the measured-cheaper Box",
-        CANVAS,
-        "            blurred = source.filter(ImageFilter.BoxBlur(radius))",
-        "            blurred = source.filter(ImageFilter.GaussianBlur(radius))",
+        "filter-ignored: the user's blur kernel is dropped",
+        AMBIENT,
+        '        if resolve_filter(blur_filter) == "gaussian":',
+        "        if False:",
     ),
     (
         "inverted-radius: larger radius becomes LESS blur",
-        CANVAS,
-        "            blurred = source.filter(ImageFilter.BoxBlur(radius))",
-        "            blurred = source.filter(ImageFilter.BoxBlur(max(1.0, 100.0 - radius)))",
+        AMBIENT,
+        "            blurred = stretched.filter(ImageFilter.BoxBlur(pixels))",
+        "            blurred = stretched.filter(ImageFilter.BoxBlur(100.0 - pixels))",
     ),
     (
-        "leak: never release the backdrop",
+        "unclamped-radius: a hand-edited config reaches the filter",
+        AMBIENT,
+        "    return max(MIN_RADIUS, min(MAX_RADIUS, float(radius)))",
+        "    return float(radius)",
+    ),
+    (
+        "blanks: a missing backdrop no longer falls back to the flat fill",
         CANVAS,
-        "        if image is not self._blur_image:",
+        "        if pixmap is None or pixmap.isNull():",
         "        if False:",
+    ),
+    (
+        "holds-forever: a failed backdrop is waited on anyway",
+        CANVAS,
+        "        if request is None or request.job_id in self._backdrop_failed:",
+        "        if request is None:",
+    ),
+    (
+        "supersede-leak: the superseded child keeps running",
+        AMBIENT,
+        "        if self._job_id == request.job_id and self._running():\n            return\n        self.cancel()",
+        "        if self._job_id == request.job_id and self._running():\n            return",
+    ),
+    (
+        "release-leak: finished backdrops are never deleted from tmpfs",
+        AMBIENT,
+        "        self.output_path(job_id).unlink(missing_ok=True)",
+        "        pass",
+    ),
+    (
+        "no-transition-guard: blur work runs during a crossfade",
+        PRESENTER,
+        "        if collect is None or warm is None or self._in_transition():",
+        "        if collect is None or warm is None:",
+    ),
+    (
+        "boot-gate-open: a second blur starts while the boot screen waits",
+        PRESENTER,
+        "        if not self._boot_complete:",
+        "        if False:",
+    ),
+    (
+        "hold-removed: the transition no longer waits for the backdrop",
+        PRESENTER,
+        '        ready = getattr(self._backend, "backdrop_ready", None)',
+        "        ready = None",
+    ),
+    (
+        "boot-ignores-backdrop: the fade no longer waits for the first blur",
+        RENDERER,
+        "                and self._presentation.ambient_ready\n",
+        "",
     ),
     (
         "band-over-blur: flat ambient fill painted over the blur band",
@@ -93,46 +165,35 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str]] = [
         "",
     ),
     (
-        "z-order: incoming backdrop painted above the incoming artwork",
+        "z-order: the incoming backdrop is never painted",
         CANVAS,
-        "                    if plan.ambient_strategy == \"blur\":\n"
-        "                        self._draw_backdrop_layer(painter, plan, self._image, self._image_alpha)\n"
-        "                    painter.setOpacity(self._image_alpha)",
-        "                    painter.setOpacity(self._image_alpha)",
+        '                    if plan.ambient_strategy == "blur":\n'
+        "                        self._draw_backdrop_layer(\n"
+        "                            painter,\n"
+        "                            plan,\n"
+        "                            self._backdrop_for(self._image),\n"
+        "                            self._image_alpha,\n"
+        "                        )",
+        "                    pass",
     ),
     (
-        "z-order: incoming backdrop painted before the outgoing artwork",
+        "outgoing-backdrop: the incoming artwork's blur is used for the outgoing layer",
         CANVAS,
-        "                if self._prev_plan is not None and self._prev_alpha > 0.01:\n"
-        "                    if self._prev_plan.ambient_strategy == \"blur\":",
-        "                if self._image is not None and self._image_alpha > 0.01:\n"
-        "                    if plan.ambient_strategy == \"blur\":\n"
-        "                        self._draw_backdrop_layer(painter, plan, self._image, self._image_alpha)\n"
-        "                if self._prev_plan is not None and self._prev_alpha > 0.01:\n"
-        "                    if self._prev_plan.ambient_strategy == \"blur\":",
-    ),
-    (
-        "outgoing-backdrop: use the incoming image for the outgoing layer",
-        CANVAS,
-        "self._draw_backdrop_layer(\n"
-        "                            painter, self._prev_plan, self._prev_image, self._prev_alpha\n"
-        "                        )",
-        "self._draw_backdrop_layer(\n"
-        "                            painter, self._prev_plan, self._image, self._prev_alpha\n"
-        "                        )",
+        "                            self._backdrop_for(self._prev_image),",
+        "                            self._backdrop_for(self._image),",
     ),
     (
         "no-band-clip: the backdrop covers its own photo",
         CANVAS,
-        "            painter.setClipRegion(region)\n",
-        "",
+        "        region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))\n        if region.isEmpty():\n            return\n\n        painter.save()\n        try:\n            painter.setClipRegion(region)\n            painter.setOpacity",
+        "        region = QRegion(self.rect())\n        if region.isEmpty():\n            return\n\n        painter.save()\n        try:\n            painter.setClipRegion(region)\n            painter.setOpacity",
     ),
 ]
 
 
 def run_tests() -> tuple[int, str]:
     proc = subprocess.run(
-        [sys.executable, "-m", "pytest", TESTS, "-q", "--no-cov", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", *TESTS, "-q", "--no-cov", "-p", "no:cacheprovider"],
         capture_output=True,
         text=True,
     )

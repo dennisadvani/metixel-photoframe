@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +89,13 @@ class ImageCache:
     def put(self, key: str, handle: Any) -> None:
         """Store *handle*, evicting the least-recently-used entry if needed.
 
+        A key that is ALREADY cached keeps the handle it has.  That is not a
+        micro-optimisation: the canvas identifies a layer's ambient backdrop by
+        the IDENTITY of the artwork handle it was built for, so silently swapping
+        in a second decoded copy of the same picture orphans that backdrop and
+        the slide paints the flat ambient fill instead.  Both payloads are the
+        same image, so there is nothing to gain by preferring the newer one.
+
         Eviction returns nothing to the caller: the old handle is simply dropped,
         and since every backend reference-counts (Qt implicitly, PIL by refcount)
         it is freed as soon as the canvas is finished with it.
@@ -96,6 +103,10 @@ class ImageCache:
         if handle is None:
             return
         with self._lock:
+            if key in self._images:
+                # Refresh its place in the LRU order, then leave it in place.
+                self._images.move_to_end(key)
+                return
             self._images[key] = handle
             self._images.move_to_end(key)
             while len(self._images) > self._max_entries:
@@ -173,7 +184,12 @@ class ImageCache:
                 logger.debug("Discarding superseded preload for %s", key)
                 return
             self._pending = None
-            self._ready = payload
+            # Re-key to the CACHE key the caller asked for (the media id), NOT the
+            # source path that ``_decode`` puts on the payload.  Everything
+            # downstream looks an image up by id — ``ImageCache.get`` in the
+            # presenter, the ambient backdrop's handle lookup — so a payload keyed
+            # by path is unretrievable and the whole decode-ahead is wasted.
+            self._ready = replace(payload, key=key)
 
     @staticmethod
     def _decode(path: Path, max_w: int, max_h: int) -> DecodedImage | None:

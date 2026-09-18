@@ -104,6 +104,11 @@ class RenderPlan:
     ambient_blur_radius: float = 24.0
     ambient_darken: float = 0.35
 
+    #: Kernel used to build that backdrop (``box``/``gaussian``).  It is part of
+    #: the backdrop's identity, because the pixels are baked into the cached
+    #: image: changing the kernel has to rebuild it rather than re-use the old.
+    ambient_blur_filter: str = "box"
+
     @property
     def image_rect(self) -> PxRect:
         """Legacy alias for :attr:`artwork_dst`.
@@ -230,6 +235,7 @@ class LayoutEngine:
         ambient_colour: str | None = None,
         ambient_blur_radius: float | None = None,
         ambient_darken: float | None = None,
+        ambient_blur_filter: str | None = None,
         edge_margin: float | None = None,
         moulding_width: float | None = None,
     ) -> None:
@@ -242,6 +248,7 @@ class LayoutEngine:
         self._ambient_colour = ambient_colour
         self._ambient_blur_radius = ambient_blur_radius
         self._ambient_darken = ambient_darken
+        self._ambient_blur_filter = ambient_blur_filter
         self._edge_margin = edge_margin
         self._moulding_width = moulding_width
 
@@ -318,6 +325,15 @@ class LayoutEngine:
         """How far to dim the blurred backdrop toward black (``0.0``–``1.0``)."""
         return self._ambient_darken
 
+    @property
+    def ambient_blur_filter(self) -> str | None:
+        """Kernel for ``strategy == "blur"``, or ``None`` for the default.
+
+        Surfaced so a config reload can detect a change and rebuild the engine,
+        for the same reason as :attr:`ambient_strategy`.
+        """
+        return self._ambient_blur_filter
+
     # -- Public -------------------------------------------------------------
 
     def compute(
@@ -370,6 +386,7 @@ class LayoutEngine:
             ambient_colour=self._ambient_colour,
             ambient_blur_radius=self._ambient_blur_radius,
             ambient_darken=self._ambient_darken,
+            ambient_blur_filter=self._ambient_blur_filter,
             edge_margin=self._edge_margin,
             moulding_width=self._moulding_width,
         )
@@ -428,6 +445,7 @@ class LayoutEngine:
             ambient_strategy=result.ambient_fill.strategy,
             ambient_blur_radius=result.ambient_fill.blur_radius,
             ambient_darken=result.ambient_fill.darken,
+            ambient_blur_filter=result.ambient_fill.blur_filter,
         )
 
     # -- Debug --------------------------------------------------------------

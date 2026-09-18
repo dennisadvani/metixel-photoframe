@@ -30,102 +30,39 @@ against the ``glBlitFramebuffer`` alternative, which segfaults on the Pi.
 
 from __future__ import annotations
 
-import io
 import logging
-import threading
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QBuffer, QIODevice, QPointF, QRect, QRectF, Qt
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QPainter, QPixmap, QRegion
 from PySide6.QtWidgets import QWidget
 
+from metixel.display.ambient_blur import BackdropRequest, BackdropRunner
 from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
 
 logger = logging.getLogger(__name__)
 
 
-def _blur_payload(image: QImage, target_w: int, target_h: int, radius: float) -> QImage | None:
-    """Stretch *image* to fill the target size, then blur it.
+@dataclass(frozen=True, eq=False)
+class _BackdropSlot:
+    """One adopted blurred backdrop, and what it was built for.
 
-    Returns a plain ``QImage``, which — unlike ``QPixmap`` — is safe to create and
-    hold on a worker thread.  That is what lets the warm worker do the expensive
-    part off the GUI thread; the caller converts to a pixmap when it adopts the
-    result.
+    ``request`` is the backdrop's identity (source file, its fingerprint, the
+    target size and the radius), so readiness can be answered without the
+    artwork handle.  ``handle`` is the decoded artwork this backdrop belongs to,
+    which is how ``paintEvent`` finds the pixmap for the layer it is drawing.
 
-    Stretching IGNORES the aspect ratio on purpose, so the backdrop covers every
-    pixel and leaves no gaps for the letterbox effect to fail on.
+    ``eq=False`` on purpose: the slots are compared by the fields the caller
+    means — ``request`` for readiness, ``handle`` by identity for painting — and
+    never as whole values.
     """
-    stretched = image.scaled(
-        max(1, target_w),
-        max(1, target_h),
-        Qt.AspectRatioMode.IgnoreAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
-    if stretched.isNull():
-        return None
-    return _blur_qimage(stretched, radius)
 
-
-def _blur_qimage(image: QImage, radius: float) -> QImage | None:
-    """Return *image* blurred by *radius* pixels, or ``None`` on failure.
-
-    Uses Pillow's ``BoxBlur``: a separable running-sum box filter.  That choice
-    is measured, not assumed.
-
-    The previous implementation downscaled to ``1/radius`` and scaled back up.
-    At display size that is a bilinear round trip through an ~80x50 image, and it
-    produces unmistakable **rectangular blocking** — the "JPEG-like artefacts"
-    this replaces.  A 4x-magnified side-by-side on the target hardware made it
-    obvious, where three different numeric proxies had all failed to distinguish
-    the two.
-
-    Why ``BoxBlur`` and not ``GaussianBlur``, measured at 1920x1200 on a Pi 5:
-
-        downscale/upscale   25.1 ms   (blocky)
-        BoxBlur(24)         55.9 ms   (smooth)
-        GaussianBlur(24)   133.9 ms   (smooth)
-
-    ``GaussianBlur`` is marginally smoother still, but 2.4x the cost for a
-    difference invisible behind a dimmed backdrop.  This runs on the render
-    thread once per slide, so the cheaper of two good options wins.
-
-    Pillow is a hard runtime dependency (the optimisation pipeline uses it), so
-    this adds nothing.  Any failure returns ``None`` and the caller falls back to
-    the flat ambient look rather than blanking the frame.
-    """
-    try:
-        from PIL import Image, ImageFilter
-    except ImportError:  # pragma: no cover - Pillow is a runtime dependency
-        logger.warning("Pillow unavailable — cannot blur the ambient backdrop")
-        return None
-
-    try:
-        # QImage -> PNG bytes -> PIL.  Going through an encoded buffer is the
-        # supported round trip; there is no direct QImage/PIL bridge.
-        buffer = QBuffer()
-        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        image.save(buffer, "PNG")
-        payload = bytes(buffer.data())
-        buffer.close()
-        if not payload:
-            return None
-
-        with Image.open(io.BytesIO(payload)) as opened:
-            source = opened.convert("RGB")
-            blurred = source.filter(ImageFilter.BoxBlur(radius))
-
-            out = QBuffer()
-            out.open(QIODevice.OpenModeFlag.WriteOnly)
-            blurred.save(out, format="PNG")
-            data = bytes(out.data())
-            out.close()
-
-        result = QImage.fromData(data)
-        return None if result.isNull() else result
-    except Exception:
-        logger.debug("Ambient blur failed — falling back to the flat fill", exc_info=True)
-        return None
+    request: BackdropRequest
+    handle: Any
+    pixmap: QPixmap
 
 
 def _qcolor(spec: str) -> QColor:
@@ -217,55 +154,36 @@ class FrameCanvas(QWidget):
         self._prev_scaled_pixmap: QPixmap | None = None
         self._prev_scaled_key: tuple[Any, Any, Any] | None = None
         self._prev_scaled_image: QImage | None = None
-        # Full-bleed blurred backdrop, for ``ambient_strategy == "blur"``.
+        # Full-bleed blurred backdrops, for ``ambient_strategy == "blur"``.
         #
-        # One entry, not two: the backdrop is a single full-screen layer painted
-        # UNDER whichever artwork is on top, so it does not need a per-layer copy
-        # the way the pre-scaled artwork does.  During a crossfade it is the
-        # incoming item's, which is what the outgoing item's residue fades into.
+        # Two slots at most, because a crossfade has two layers in flight and
+        # each layer needs ITS OWN backdrop: the incoming photo must be
+        # surrounded by its own blur, never the outgoing one's.  Memory is
+        # therefore bounded at two full-screen pixmaps (~9 MB each at 1920x1200)
+        # with no release bookkeeping — a slot is simply reused when a third
+        # backdrop arrives, which cannot happen before the transition holding
+        # the second one has ended.
         #
-        # Built by stretching the artwork to the whole screen (aspect IGNORED, so
-        # there are no gaps) and then blurring it with a downscale/upscale — the
-        # TV letterbox effect.  That is a per-SLIDE cost, not per-frame: the key
-        # below changes only when the image or one of the blur parameters does.
-        #
-        # Darkening is NOT baked in.  It is applied at paint time as a translucent
-        # black overlay, so moving the brightness slider costs one fillRect rather
-        # than a full rebuild.
-        self._blur_pixmap: QPixmap | None = None
-        self._blur_key: tuple[Any, ...] | None = None
-        #: The image the cached backdrop was built from, so a changed image can
-        #: drop its pixmap without comparing pixels (as with the pre-scaled one).
-        self._blur_image: QImage | None = None
-        #: The outgoing item's backdrop, so a crossfade has both in flight.  The
-        #: outgoing one is what shows first and the incoming one fades over it,
-        #: exactly like the two artworks — that is what stops the outgoing photo
-        #: popping out from behind an already-opaque incoming backdrop.
-        self._prev_blur_pixmap: QPixmap | None = None
-        self._prev_blur_key: tuple[Any, ...] | None = None
-        self._prev_blur_image: QImage | None = None
-        # Background backdrop warming.  The blur is the one operation here
-        # expensive enough to blow a frame budget (~56 ms at 1920x1200), so it is
-        # computed ahead of time on a worker thread and adopted on the GUI
-        # thread.  See ``warm_backdrop`` / ``collect_warm_backdrop``.
-        self._warm_thread: threading.Thread | None = None
-        self._warm_key: tuple[Any, ...] | None = None
-        self._warm_image: QImage | None = None
-        #: ``(key, blurred QImage)`` published by the worker, consumed on the GUI
-        #: thread.  Guarded because it crosses a thread boundary.
-        self._warm_result: tuple[tuple[Any, ...], QImage | None] | None = None
-        self._warm_lock = threading.Lock()
-        # Background backdrop warming.  The blur is the one operation here
-        # expensive enough to blow a frame budget, so it is computed ahead of
-        # time on a worker thread and adopted on the GUI thread.  See
-        # ``warm_backdrop`` / ``collect_warm_backdrop``.
-        self._warm_thread: threading.Thread | None = None
-        self._warm_key: tuple[Any, ...] | None = None
-        self._warm_image: QImage | None = None
-        #: (key, blurred QImage) published by the worker, consumed on the GUI
-        #: thread.  Guarded because it crosses a thread boundary.
-        self._warm_result: tuple[tuple[Any, ...], QImage | None] | None = None
-        self._warm_lock = threading.Lock()
+        # Darkening is NOT baked in.  It is applied at paint time as a
+        # translucent black overlay, so moving the brightness slider costs one
+        # fillRect rather than a full rebuild.
+        self._backdrop: _BackdropSlot | None = None
+        self._prev_backdrop: _BackdropSlot | None = None
+        # Backdrops are built in a throttled SUBPROCESS, never on a thread here:
+        # ``nice`` and ``cpulimit`` are process-level, and the Pillow round trip
+        # is exactly what used to blow the frame budget mid-crossfade.  The
+        # runner is created on first use so a canvas that never shows a blur
+        # never spawns anything.
+        self._backdrop_runner: BackdropRunner | None = None
+        #: The backdrop being built, and the artwork handle it belongs to.  The
+        #: handle is required because the finished pixmap is adopted into the
+        #: slot that will be painted for that artwork.
+        self._backdrop_pending: BackdropRequest | None = None
+        self._backdrop_pending_handle: Any = None
+        #: Job ids that failed or timed out.  They are not retried, so a
+        #: backdrop that cannot be built degrades to the flat fill instead of
+        #: holding every slide that shows it.
+        self._backdrop_failed: set[str] = set()
         # When True, the layer inside the Mat Window is left UNPAINTED so a
         # sibling widget underneath (the mpv surface) shows through.  That is the
         # whole "virtual mat over live video" mechanism: this canvas paints the
@@ -464,20 +382,12 @@ class FrameCanvas(QWidget):
             self._prev_scaled_key = None
             self._prev_scaled_image = prev_image
 
-        # The blurred backdrops belong to their images, so each is released when
-        # its image goes.  A full-screen pixmap is ~9 MB at 1920x1200, and two of
-        # them pinned for the rest of the run is not something to leave on a 1 GB
-        # Pi.  Both slots are pruned independently: the outgoing one only becomes
-        # free once the crossfade has actually ended (``prev_image`` is None).
-        if image is not self._blur_image:
-            self._blur_pixmap = None
-            self._blur_key = None
-            self._blur_image = None
-        if prev_image is not self._prev_blur_image:
-            self._prev_blur_pixmap = None
-            self._prev_blur_key = None
-            self._prev_blur_image = None
-
+        # Blurred backdrops need no release pass here: there are at most two
+        # slots, and ``_store_backdrop`` reuses the one that is not on screen.
+        # Pruning by image identity, as an earlier version did, is what made two
+        # full-screen pixmaps look like they could be pinned for the run — they
+        # cannot, because a backdrop is only ever held for a layer that is
+        # showing or about to.
         self.update()
 
     def set_background(self, color: tuple[float, float, float, float]) -> None:
@@ -513,138 +423,177 @@ class FrameCanvas(QWidget):
         if self._overlay:
             self.update_overlay([])
 
-    def backdrop_ready(self, plan: RenderPlan, image: QImage | None) -> bool:
-        """Whether *plan*'s blurred backdrop is already cached and usable.
+    def backdrop_request(self, plan: RenderPlan, source: Path | None) -> BackdropRequest | None:
+        """The identity of *plan*'s backdrop, or ``None`` when there is none.
 
-        The presenter asks this BEFORE starting a transition, so a slide is held
-        until its backdrop exists rather than a transition beginning against a
-        backdrop that is not there yet.  See ``PresentationEngine.render``.
+        The ONE place a request is derived, so the readiness check, the warm
+        request and the adoption can never disagree about what a backdrop is — a
+        disagreement there would hold every slide forever.
+        """
+        rect = _int_rect(plan.screen)
+        return BackdropRequest.build(
+            source,
+            rect.width(),
+            rect.height(),
+            float(plan.ambient_blur_radius),
+            str(plan.ambient_blur_filter),
+        )
 
-        Cheap by design — a key comparison, no pixel work — because it is called
-        every frame while a slide is being held.
+    def backdrop_ready(self, plan: RenderPlan, source: Path | None) -> bool:
+        """Whether *plan*'s backdrop is in the buffer and usable.
 
-        A non-blur plan is always ready: there is no backdrop to wait for.
+        The presenter asks this before starting a transition, so a slide is held
+        until its backdrop is LOADED rather than a crossfade beginning against a
+        backdrop that is not there yet.
+
+        Cheap by design — an equality test, no pixel work and no disk — because
+        it is called every frame while a slide is being held.
+
+        A non-blur plan is always ready, and so is one whose backdrop cannot be
+        built at all: there is nothing to wait for, and holding would be a
+        permanent stall rather than a short delay.
         """
         if plan.ambient_strategy != "blur":
             return True
-        if image is None:
-            return False
-        return (
-            self._blur_key == self._backdrop_key(plan, image) and self._blur_pixmap is not None
-        ) or (
-            self._prev_blur_key == self._backdrop_key(plan, image)
-            and self._prev_blur_pixmap is not None
-        )
+        request = self.backdrop_request(plan, source)
+        if request is None or request.job_id in self._backdrop_failed:
+            return True
+        return self._loaded_backdrop(request) is not None
 
-    def _backdrop_key(self, plan: RenderPlan, image: QImage) -> tuple[Any, ...]:
-        """The cache key a backdrop for (*plan*, *image*) is stored under.
+    def _loaded_backdrop(self, request: BackdropRequest) -> QPixmap | None:
+        """The adopted pixmap for *request*, or ``None`` if it is not loaded."""
+        for slot in (self._backdrop, self._prev_backdrop):
+            if slot is not None and slot.request == request:
+                return slot.pixmap
+        return None
 
-        Shared by :meth:`warm_backdrop`, :meth:`backdrop_ready` and
-        :meth:`_blurred_backdrop` so the three cannot disagree about identity —
-        a mismatch here would make the readiness check permanently False and hold
-        every slide forever.
+    def _backdrop_for(self, handle: Any) -> QPixmap | None:
+        """The adopted pixmap belonging to artwork *handle*.
+
+        Looked up by handle IDENTITY, never by ``==``: ``QImage`` equality
+        compares every pixel, and a paint path that did that would be slower than
+        the blur it is trying to avoid.
         """
-        rect = _int_rect(plan.screen)
-        radius = max(1.0, min(100.0, float(plan.ambient_blur_radius)))
-        return (
-            id(image),
-            max(1, rect.width()),
-            max(1, rect.height()),
-            round(radius, 2),
-        )
+        if handle is None:
+            return None
+        if self._backdrop is not None and self._backdrop.handle is handle:
+            return self._backdrop.pixmap
+        if self._prev_backdrop is not None and self._prev_backdrop.handle is handle:
+            return self._prev_backdrop.pixmap
+        return None
 
-    def warm_backdrop(self, plan: RenderPlan, image: QImage | None) -> None:
-        """Build *plan*'s blurred backdrop off the GUI thread, if not cached.
+    def warm_backdrop(self, plan: RenderPlan, source: Path | None, handle: Any = None) -> None:
+        """Start building *plan*'s backdrop in a throttled subprocess.
 
-        Called for the NEXT item while the current slide is on screen, so the
-        expensive part of a transition is already done by the time it starts.
-        Until this existed the blur was built lazily inside ``paintEvent``, which
-        cost ~56 ms on the first frame of every transition — visible as the whole
-        crossfade juddering.
+        Called one slide AHEAD of the item that needs it, so the work happens in
+        the idle time the current slide provides.  It is never started inside the
+        render loop's critical path, and the presenter refuses to start one while
+        a transition is on screen — the child is CPU-hungry even when capped, and
+        a crossfade is the one moment where a stolen cycle is visible.
 
-        Non-blocking: the work happens on a worker thread and the result is
-        collected by :meth:`collect_warm_backdrop` on the GUI thread, mirroring
-        ``ImageCache``.  Qt objects must not be created off the GUI thread, so the
-        worker hands back only the blurred ``QImage`` payload.
+        Non-blocking and idempotent: a request that is already loaded or already
+        in flight is ignored, and a newer request supersedes an older one, exactly
+        as :class:`ImageCache` does.
+
+        *handle* is the decoded artwork this backdrop belongs to, and is only
+        used to place the result in the slot that will be painted for it.
         """
-        if plan.ambient_strategy != "blur" or image is None:
+        if plan.ambient_strategy != "blur":
             return
-        key = self._backdrop_key(plan, image)
-        if self._blur_key == key or self._prev_blur_key == key:
+        request = self.backdrop_request(plan, source)
+        if request is None or request.job_id in self._backdrop_failed:
             return
-        if self._warm_key == key and self._warm_thread is not None:
+        if self._loaded_backdrop(request) is not None:
+            return
+        if self._backdrop_pending is not None and self._backdrop_pending == request:
             return  # already in flight
-        if self._warm_thread is not None and self._warm_thread.is_alive():
-            # One job at a time, like the image cache: a newer request
-            # supersedes the old one and the stale result is discarded because
-            # its key no longer matches.
-            self._warm_thread.join(timeout=0)
-        if self._warm_thread is not None and self._warm_thread.is_alive():
-            return
 
-        self._warm_key = key
-        self._warm_image = image
-        self._warm_thread = threading.Thread(
-            target=self._warm_worker,
-            args=(key, image, plan),
-            name="backdrop-warm",
-            daemon=True,
-        )
-        self._warm_thread.start()
-
-    def _warm_worker(self, key: tuple[Any, ...], image: QImage, plan: RenderPlan) -> None:
-        """Blur *image* off the GUI thread and publish the finished payload.
-
-        Never raises: a failed warm means the backdrop stays uncached and the
-        presenter keeps holding the slide, which the stall timeout then breaks out
-        of.  Crashing the warm thread would be worse.
-        """
-        try:
-            rect = _int_rect(plan.screen)
-            target_w, target_h = max(1, rect.width()), max(1, rect.height())
-            radius = max(1.0, min(100.0, float(plan.ambient_blur_radius)))
-            payload = _blur_payload(image, target_w, target_h, radius)
-        except Exception:
-            logger.debug("Backdrop warm failed", exc_info=True)
-            payload = None
-        with self._warm_lock:
-            self._warm_result = (key, payload)
+        if self._backdrop_runner is None:
+            self._backdrop_runner = BackdropRunner()
+        self._backdrop_pending = request
+        self._backdrop_pending_handle = handle
+        self._backdrop_runner.start(request)
 
     def collect_warm_backdrop(self) -> bool:
-        """Adopt a finished warmed backdrop on the GUI thread.
+        """Adopt a finished backdrop on the GUI thread.
 
-        Returns ``True`` when one was applied (so the caller can repaint).  Qt
-        objects are created HERE, never in the worker — ``QPixmap`` in particular
-        is a GUI-thread resource.
+        Returns ``True`` when the buffer changed and a repaint is worthwhile.
+
+        Qt objects are created HERE, never in the child: ``QPixmap`` is a
+        GUI-thread resource.  Reading the finished file back is a decode of one
+        JPEG, which is why the caller must not run this mid-crossfade — the
+        presenter's "not during a transition" gate covers this call too, not just
+        the spawn.
+
+        A job that failed or timed out is recorded so the slide it belongs to is
+        never held for it: it falls back to the flat ambient fill.
         """
-        with self._warm_lock:
-            result = self._warm_result
-            self._warm_result = None
-        if result is None:
+        runner = self._backdrop_runner
+        if runner is None:
             return False
-        key, payload = result
-        self._warm_key = None
-        if payload is None or payload.isNull():
-            return False
-        pixmap = QPixmap.fromImage(payload)
-        if pixmap.isNull():
+        finished = runner.take_finished()
+        if finished is None:
             return False
 
-        image = self._warm_image
-        if image is self._blur_image:
-            self._blur_pixmap, self._blur_key = pixmap, key
-        elif image is self._prev_blur_image:
-            self._prev_blur_pixmap, self._prev_blur_key = pixmap, key
-        elif self._blur_image is None:
-            self._blur_pixmap, self._blur_key, self._blur_image = pixmap, key, image
-        else:
-            self._prev_blur_pixmap, self._prev_blur_key, self._prev_blur_image = (
-                pixmap,
-                key,
-                image,
-            )
+        job_id, path = finished
+        request = self._backdrop_pending
+        handle = self._backdrop_pending_handle
+        self._backdrop_pending = None
+        self._backdrop_pending_handle = None
+
+        if path is None or request is None or request.job_id != job_id:
+            runner.release(job_id)
+            self._backdrop_failed.add(job_id)
+            return False
+
+        pixmap = QPixmap(str(path))
+        runner.release(job_id)
+        if pixmap.isNull():
+            logger.debug("Ambient backdrop %s was unreadable", path)
+            self._backdrop_failed.add(job_id)
+            return False
+
+        self._store_backdrop(request, handle, pixmap)
         self.update()
         return True
+
+    def _store_backdrop(self, request: BackdropRequest, handle: Any, pixmap: QPixmap) -> None:
+        """Adopt a finished backdrop into one of the two slots.
+
+        The slot is chosen by what is on screen, never by searching for a key: a
+        slot already belonging to this handle, else a free one, else the one that
+        is NOT currently painted.  That keeps two full-screen pixmaps as the hard
+        bound without any release bookkeeping, because the only way to need a
+        third backdrop is after the transition holding the second has ended.
+
+        Note that a backdrop prepared for the NEXT item is adopted while that item
+        is not yet on screen — which is why the caller supplies the handle rather
+        than the canvas inferring it from ``self._image``.
+        """
+        slot = _BackdropSlot(request, handle, pixmap)
+        if self._backdrop is not None and self._backdrop.handle is handle:
+            self._backdrop = slot
+        elif self._prev_backdrop is not None and self._prev_backdrop.handle is handle:
+            self._prev_backdrop = slot
+        elif self._backdrop is None or not self._is_live(self._backdrop.handle):
+            self._backdrop = slot
+        else:
+            self._prev_backdrop = slot
+        if len(self._backdrop_failed) > 64:
+            # Bounded: failures are rare, and clearing only means a retry.
+            self._backdrop_failed.clear()
+
+    def _is_live(self, handle: Any) -> bool:
+        """Whether *handle* is painted by a layer that is still on screen."""
+        return handle is not None and (handle is self._image or handle is self._prev_image)
+
+    def close_backdrops(self) -> None:
+        """Stop any backdrop in flight.  Called when the frontend shuts down."""
+        if self._backdrop_runner is not None:
+            self._backdrop_runner.close()
+            self._backdrop_runner = None
+        self._backdrop_pending = None
+        self._backdrop_pending_handle = None
 
     def _paint_transition_curtain(self, painter: QPainter, plan: RenderPlan, alpha: float) -> None:
         """Wipe the outgoing item's exposed residue at the incoming item's alpha.
@@ -699,14 +648,18 @@ class FrameCanvas(QWidget):
     # -- Blurred backdrop ----------------------------------------------------
 
     def _paint_flat_backdrop(self, painter: QPainter, plan: RenderPlan, alpha: float) -> None:
-        """Paint the flat ambient colour in place of an unready backdrop.
+        """Paint BLACK in place of a blur backdrop that is not available.
 
-        Only reached when a backdrop genuinely does not exist — a cold start, or
-        the first slide after the blur parameters changed.  Mid-slideshow the
-        presenter HOLDS the slide until its backdrop is ready (see
-        ``PresentationEngine.render``), so this is not the normal path for a
-        transition; it exists so the very first frame after a change, and the
-        blank-screen case, still paint something sensible instead of nothing.
+        Only reached when a backdrop genuinely does not exist — a cold start, the
+        first slide after the blur settings changed, or a build that failed.
+        Mid-slideshow the presenter HOLDS the slide until its backdrop is ready
+        (see ``PresentationEngine.render``), so this is not the normal path for a
+        transition.
+
+        Black, and not ``plan.ambient_colour``: the configured colour belongs to
+        the ``solid``/``bars`` looks.  Under a blur the only honest stand-in is
+        the neutral one — a coloured band appearing for a frame or two reads as a
+        flash of the wrong look, which is precisely what a glitch looks like.
         """
         region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))
         if region.isEmpty():
@@ -715,7 +668,7 @@ class FrameCanvas(QWidget):
         try:
             painter.setClipRegion(region)
             painter.setOpacity(max(0.0, min(1.0, alpha)))
-            painter.fillRect(self.rect(), _qcolor(plan.ambient_colour))
+            painter.fillRect(self.rect(), QColor(0, 0, 0))
         finally:
             painter.setOpacity(1.0)
             painter.restore()
@@ -724,7 +677,7 @@ class FrameCanvas(QWidget):
         self,
         painter: QPainter,
         plan: RenderPlan,
-        image: QImage | None,
+        pixmap: QPixmap | None,
         alpha: float,
     ) -> None:
         """Draw one backdrop layer (blurred pixmap + its dimming) at *alpha*.
@@ -733,35 +686,36 @@ class FrameCanvas(QWidget):
         the incoming item's, in that order, so both sit under both artworks.  See
         the z-order note in :meth:`paintEvent`.
 
+        ``pixmap`` is looked up by the caller from the layer's own artwork, so
+        each photo is surrounded by ITS OWN blur and never the neighbouring
+        item's.
+
         Keeping the dimming inside the same opacity scope means the dim fades
         with its backdrop rather than sitting at full strength over a partially
         faded image.
         """
-        pixmap = self._blurred_backdrop(plan, image)
-        if pixmap is None:
-            # Not ready (or failed).  Paint the FLAT ambient colour for this
-            # frame instead of building the blur here.
+        if pixmap is None or pixmap.isNull():
+            # Not loaded, or failed to build.  Paint the FLAT ambient colour for
+            # this frame — nothing is ever blurred here.
             #
-            # This is the load-bearing half of the "no stall" guarantee.  The
-            # blur costs tens of milliseconds, so building it inside a paint is a
-            # guaranteed dropped frame — and on a transition's FIRST frame that
-            # reads as the whole animation juddering.  A flat band for a frame or
-            # two is imperceptible; a 56 ms hitch is not.
+            # This is the load-bearing half of the "no stall" guarantee: a blur
+            # inside a paint is a guaranteed dropped frame, and on a transition's
+            # first frame that reads as the whole animation juddering.  A flat
+            # band for a frame or two is imperceptible; a 56 ms hitch is not.
             #
-            # The backdrop is warmed ahead of time (see ``warm_backdrop``), so in
-            # practice this branch is only reached for the very first item after
-            # a config change or a cold start.
+            # The backdrop is built a slide ahead by the presenter, so in
+            # practice this is only reached for the very first item after a cold
+            # start, or after a backdrop failed to build.
             self._paint_flat_backdrop(painter, plan, alpha)
             return
 
         # Clipped to the complement of this item's own artwork, so the backdrop
         # shows only in the band around it and never intrudes into the photo.
         #
-        # The blur itself is built screen-sized from the whole image (see
-        # :meth:`_blurred_backdrop`), so clipping here — rather than building a
-        # band-shaped pixmap — is what keeps the backdrop geometrically
-        # consistent with the item it belongs to: it reads as the same photo
-        # continuing behind the artwork, not a separately-scaled smear.
+        # The backdrop is stored screen-sized (see ``ambient_blur``), so clipping
+        # here — rather than building a band-shaped image — is what keeps it
+        # geometrically consistent with the item it belongs to: it reads as the
+        # same photo continuing behind the artwork, not a separately-scaled smear.
         region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))
         if region.isEmpty():
             return
@@ -778,81 +732,6 @@ class FrameCanvas(QWidget):
         finally:
             painter.setOpacity(1.0)
             painter.restore()
-
-    def _blurred_backdrop(  # noqa: PLR0911 - each bail-out is a distinct failure
-        self, plan: RenderPlan, image: QImage | None = None
-    ) -> QPixmap | None:
-        """Return a blurred, screen-sized copy of *image*, caching it.
-
-        ``radius`` is the blur's pixel radius, so **larger means blurrier** — the
-        intuitive direction.  (An earlier version used it as a downscale divisor,
-        which made larger mean *less* blur and produced the blocky artefacts see
-        :func:`_blur_qimage`.)
-
-        The aspect ratio is deliberately IGNORED when stretching to the screen, so
-        the backdrop always covers every pixel; using ``KeepAspectRatio`` would
-        reintroduce exactly the letterbox gaps this effect exists to remove.
-
-        ``image`` defaults to the primary layer's artwork; the crossfade's
-        outgoing layer passes its own, so each backdrop is built from the item it
-        belongs to rather than the incoming one.
-
-        Rebuilt only when the image, the screen size, or a blur parameter changes.
-        That is the "once per showing of the slide" requirement: a crossfade
-        repaints ~75 times and calls this on every frame, and all but the first
-        return the cached pixmap.  ``None`` means the caller must skip the
-        backdrop — a failed build must degrade to the flat ambient look, never
-        blank the frame.
-        """
-        image = self._image if image is None else image
-        if image is None:
-            return None
-
-        key = self._backdrop_key(plan, image)
-        # Two slots, because a crossfade has two backdrops in flight.  The key
-        # carries the image identity, so a slot can be matched by key alone and
-        # the two never need swapping: whichever slot holds this key wins.
-        if self._blur_key == key and self._blur_pixmap is not None:
-            return self._blur_pixmap
-        if self._prev_blur_key == key and self._prev_blur_pixmap is not None:
-            return self._prev_blur_pixmap
-
-        rect = _int_rect(plan.screen)
-        radius = max(1.0, min(100.0, float(plan.ambient_blur_radius)))
-        blurred = _blur_payload(image, rect.width(), rect.height(), radius)
-        if blurred is None or blurred.isNull():
-            return None
-
-        pixmap = QPixmap.fromImage(blurred)
-        if pixmap.isNull():
-            return None
-
-        # Store into the slot that already belongs to this image if there is one,
-        # otherwise take the free slot.  Matching on the image keeps the primary
-        # and outgoing roles stable across a transition, so the LayerRole pass
-        # below cannot thrash between slots each frame.
-        # Store into the slot already owned by this image, else an empty slot,
-        # else the outgoing one.  Matching on the image first is what keeps each
-        # backdrop's role stable across the frames of a transition, so the two do
-        # not thrash between slots.
-        #
-        # At most two are ever held (one per crossfade layer), so overwriting
-        # ``prev`` when both are taken cannot lose a pixmap still on screen: the
-        # third distinct image can only appear after the previous transition has
-        # ended and released its slot.
-        if image is self._blur_image:
-            self._blur_pixmap, self._blur_key = pixmap, key
-        elif image is self._prev_blur_image:
-            self._prev_blur_pixmap, self._prev_blur_key = pixmap, key
-        elif self._blur_image is None:
-            self._blur_pixmap, self._blur_key, self._blur_image = pixmap, key, image
-        else:
-            self._prev_blur_pixmap, self._prev_blur_key, self._prev_blur_image = (
-                pixmap,
-                key,
-                image,
-            )
-        return pixmap
 
     # -- Painting ------------------------------------------------------------
 
@@ -911,7 +790,10 @@ class FrameCanvas(QWidget):
                 if self._prev_plan is not None and self._prev_alpha > 0.01:
                     if self._prev_plan.ambient_strategy == "blur":
                         self._draw_backdrop_layer(
-                            painter, self._prev_plan, self._prev_image, self._prev_alpha
+                            painter,
+                            self._prev_plan,
+                            self._backdrop_for(self._prev_image),
+                            self._prev_alpha,
                         )
                     painter.setOpacity(self._prev_alpha)
                     try:
@@ -945,7 +827,12 @@ class FrameCanvas(QWidget):
                         self._paint_transition_curtain(painter, plan, self._image_alpha)
 
                     if plan.ambient_strategy == "blur":
-                        self._draw_backdrop_layer(painter, plan, self._image, self._image_alpha)
+                        self._draw_backdrop_layer(
+                            painter,
+                            plan,
+                            self._backdrop_for(self._image),
+                            self._image_alpha,
+                        )
                     painter.setOpacity(self._image_alpha)
                     try:
                         self._draw_artwork(painter, plan)

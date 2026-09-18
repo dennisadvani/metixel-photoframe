@@ -46,8 +46,10 @@ import contextlib
 import logging
 import random
 import time
+from pathlib import Path
 from typing import Any, Literal
 
+from metixel.display.ambient_blur import resolve_filter
 from metixel.display.backend import DisplayBackend
 from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import LayoutEngine, RenderPlan
@@ -164,10 +166,10 @@ DEFAULT_FIT_MODE = "cover"
 _DEFAULT_AMBIENT_BLUR_RADIUS = 24.0
 _DEFAULT_AMBIENT_DARKEN = 0.35
 
-#: Bounds for the blur controls.  The value is a pixel radius passed to
-#: ``PIL.ImageFilter.BoxBlur``, so larger is blurrier.  1 is the point below
-#: which there is no visible blur; 100 is the point past which the cost stops
-#: being worth it on a Pi 3, where the filter runs on the render thread.
+#: Bounds for the blur controls.  The value is a pixel radius passed to the
+#: selected Pillow filter, so larger is blurrier.  1 is the point below which
+#: there is no visible blur; 100 is the point past which the cost stops being
+#: worth it on a Pi 3, where the filter runs in a throttled subprocess.
 MIN_AMBIENT_BLUR_RADIUS = 1.0
 MAX_AMBIENT_BLUR_RADIUS = 100.0
 
@@ -218,6 +220,17 @@ def _ambient_darken(config: Config) -> float:
     return darken
 
 
+def _ambient_blur_filter(config: Config) -> str:
+    """Return the configured blur kernel, defaulting on anything unusable.
+
+    The validation lives in :mod:`metixel.display.ambient_blur` on purpose: the
+    worker applies the same rule, and a value that survived here but not there
+    would build the backdrop with a kernel the plan does not describe — and the
+    plan is what the backdrop's identity is derived from.
+    """
+    return resolve_filter(config.slideshow.get("ambient_blur_filter"))
+
+
 class Presenter:
     """Owns the slideshow clock, layout and playback for one display.
 
@@ -257,6 +270,7 @@ class Presenter:
             ambient_colour=_ambient_colour(config),
             ambient_blur_radius=_ambient_blur_radius(config),
             ambient_darken=_ambient_darken(config),
+            ambient_blur_filter=_ambient_blur_filter(config),
             edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
         )
 
@@ -269,6 +283,12 @@ class Presenter:
         # -- Slide clock --
         self._item_start_time: float = 0.0
         self._transition_stall_logged: bool = False
+
+        # -- Boot gate --
+        # False until the boot screen has finished fading out.  Until then only
+        # the backdrop for the item being shown is built, because the boot screen
+        # is waiting on it and a second job would delay the fade it blocks.
+        self._boot_complete: bool = False
 
         # -- The frame currently on screen, kept so a stalled transition can
         #    redraw it without re-deriving the plan every frame.
@@ -355,7 +375,8 @@ class Presenter:
         tail rather than appended, so a batch that arrives from an Immich sync
         is not played back-to-back in download order.  Positions at or before
         the playhead are never disturbed: re-ordering behind the cursor would
-        point it at a different photo than the one on screen.
+        point it at a different photo than the one on screen.  Neither is the
+        item immediately ahead of the playhead — see :meth:`_scatter_tail`.
         """
         existing = {item.id for item in self._queue}
         added = [item for item in items if item.id not in existing]
@@ -376,11 +397,16 @@ class Presenter:
         del self._queue[start:]
 
         # The tail begins after the playhead, so the item on screen and the
-        # history behind it keep their places.
-        lowest = max(self._current_idx + 1, 0)
-        # Invariant: ``_current_idx`` is a valid index of the queue as it was
-        # before the additions, so after removing them ``lowest`` never exceeds
-        # the length and ``randint`` stays in range.
+        # history behind it keep their places — AND one item further on, because
+        # the item immediately after the playhead is the one the transition is
+        # already heading for.  Its ambient backdrop is built during the current
+        # slide and is keyed to that photo, so displacing it means the transition
+        # starts against the wrong backdrop and the slide stalls waiting for a
+        # new one.  Arrivals are still scattered through the unplayed tail, just
+        # never into that slot.
+        lowest = min(len(self._queue), max(self._current_idx + 2, 0))
+        # Invariant: ``lowest`` is bounded by the current length, so ``randint``
+        # stays in range.
         for item in fresh:
             self._queue.insert(random.randint(lowest, len(self._queue)), item)
 
@@ -509,6 +535,7 @@ class Presenter:
             self._layout.ambient_colour,
             self._layout.ambient_blur_radius,
             self._layout.ambient_darken,
+            self._layout.ambient_blur_filter,
         )
 
         self._config = config
@@ -530,6 +557,7 @@ class Presenter:
             _ambient_colour(config),
             _ambient_blur_radius(config),
             _ambient_darken(config),
+            _ambient_blur_filter(config),
         )
 
         if geometry_changed or ambient_changed:
@@ -545,16 +573,18 @@ class Presenter:
                 ambient_colour=_ambient_colour(config),
                 ambient_blur_radius=_ambient_blur_radius(config),
                 ambient_darken=_ambient_darken(config),
+                ambient_blur_filter=_ambient_blur_filter(config),
                 edge_margin=SLIDESHOW_EDGE_MARGIN_MM,
             )
             logger.info(
                 "Presenter layout reloaded: rotation=%d style=%s "
-                "(ambient=%s/%s blur=%.1f darken=%.2f)",
+                "(ambient=%s/%s blur=%.1f %s darken=%.2f)",
                 rotation,
                 SLIDESHOW_FRAMING_STYLE,
                 config.slideshow.get("ambient_strategy", "solid"),
                 _ambient_colour(config),
                 _ambient_blur_radius(config),
+                _ambient_blur_filter(config),
                 _ambient_darken(config),
             )
 
@@ -592,6 +622,20 @@ class Presenter:
         if current is None:
             return
 
+        # ── Adopt a finished decode-ahead payload ─────────────────────────
+        # Deliberately driven from the frame loop rather than from
+        # ``_preload_next``, because BOTH halves of the timing matter:
+        #
+        # * it must land during the slide it was requested in.  The next item's
+        #   ambient backdrop is built from the next item's decoded handle while
+        #   the current slide is still on screen, so a payload adopted a slide
+        #   late leaves the backdrop with nothing to be built from and the
+        #   transition with nothing to start against;
+        # * it is a real texture upload on the GUI thread, so it must not land on
+        #   a transition frame.
+        if not self._in_transition():
+            self._drain_cache()
+
         if self._paused:
             self._present_current()
             return
@@ -600,31 +644,12 @@ class Presenter:
         duration = self._item_duration(current)
         transition_s = self._transition_seconds()
 
-        # ── Pre-warm the next item's backdrop ─────────────────────────────
-        # The blur is the expensive part of a transition (~56 ms at 1920x1200),
-        # so it is started as early as possible — while the current slide is
-        # still on screen — instead of on the transition's first frame, which is
-        # what made crossfades judder.  The canvas does the work on a worker
-        # thread; the finished result is adopted below, on this thread.
-        collect = getattr(self._backend, "collect_warm_backdrop", None)
-        if collect is not None:
-            collect()
-
-        if transition_s > 0 and not self._paused:
-            next_plan = self._next_plan()
-            if next_plan is not None:
-                warm = getattr(self._backend, "warm_backdrop", None)
-                if warm is not None:
-                    # ``_cache.get`` — NOT ``_image_for``.  The latter falls back
-                    # to a BLOCKING load on a miss, and this runs on every tick,
-                    # so using it here would reintroduce the very stall the warm
-                    # exists to remove.  The decode-ahead worker
-                    # (``_preload_next``) populates the cache during the current
-                    # slide, so a miss simply means "warm it next tick".
-                    nxt = self._queue[(self._current_idx + 1) % len(self._queue)]
-                    handle = self._cache.get(nxt.id)
-                    if handle is not None:
-                        warm(next_plan, handle)
+        # ── Ambient backdrop for the upcoming slide ───────────────────────
+        # The blur runs in a throttled subprocess (see ``display.ambient_blur``),
+        # started during the current slide's idle time and never during a
+        # transition.  This is what keeps a crossfade from competing with the
+        # very blur it is about to show.
+        self._service_backdrops()
 
         # ── Stall recovery ────────────────────────────────────────────────
         # A previous frame held the slide because the next item was not ready.
@@ -678,13 +703,13 @@ class Presenter:
         Two conditions, both required:
 
         * the next item is laid out (its dimensions have been probed), and
-        * if the ambient look is ``blur``, that item's blurred backdrop already
-          exists.
+        * if the ambient look is ``blur``, that item's blurred backdrop is
+          already LOADED.
 
         The backdrop test is what implements "do not start a transition until the
-        blur has finished": the expensive work is pre-warmed while the current
-        slide is showing, and if it has not completed the slide is simply held.
-        A non-blur strategy is always ready — there is nothing to wait for.
+        blur is ready": the expensive work happens in a throttled subprocess
+        during the current slide, and if it has not finished the slide is simply
+        held.  A non-blur strategy is always ready — there is nothing to wait for.
         """
         next_plan = self._next_plan()
         if next_plan is None:
@@ -694,14 +719,156 @@ class Presenter:
         ready = getattr(self._backend, "backdrop_ready", None)
         if ready is None:
             return True  # a backend without backdrops cannot be waiting on one
-        nxt = self._queue[(self._current_idx + 1) % len(self._queue)]
-        # Non-blocking lookup: this runs every frame while a slide is held, so a
-        # synchronous load here would stall exactly the frame we are trying to
-        # protect.  A miss means "not ready", which holds the slide — correct.
-        handle = self._cache.get(nxt.id)
-        if handle is None:
+        nxt = self._next_item()
+        if nxt is None:
             return False
-        return bool(ready(next_plan, handle))
+        return bool(ready(next_plan, self._backdrop_source(nxt)))
+
+    # -- Ambient backdrops ---------------------------------------------------
+
+    @property
+    def ambient_ready(self) -> bool:
+        """Whether the backdrop for the item about to be shown is loaded.
+
+        The boot screen waits on this, so the first slide appears with its blur
+        already in the buffer rather than on a flat band that repaints a moment
+        later.
+
+        True for a non-blur look, and true for a backend that has no backdrops at
+        all (the desktop dev renderer): the boot screen must never wait on
+        something that is not coming.
+        """
+        if self._layout.ambient_strategy != "blur":
+            return True
+        item = self.current_item
+        if item is None:
+            return False
+        plan = self._current_plan()
+        if plan is None:
+            return False
+        if plan.ambient_strategy != "blur":
+            return True
+        ready = getattr(self._backend, "backdrop_ready", None)
+        if ready is None:
+            return True
+        return bool(ready(plan, self._backdrop_source(item)))
+
+    def mark_presentation_started(self) -> None:
+        """Note that the boot screen has finished fading out.
+
+        Until then, only the backdrop for the item being shown may be built: the
+        boot screen is waiting on it, and starting a second job would split the
+        same throttled CPU budget between two blurs and delay the fade it is
+        blocking.  Every LATER backdrop is prepared during the slide before the
+        one it belongs to.
+        """
+        self._boot_complete = True
+
+    def mark_boot_started(self) -> None:
+        """Note that the boot screen is up again (a pipeline rebuild)."""
+        self._boot_complete = False
+
+    def _service_backdrops(self) -> None:
+        """Adopt a finished backdrop, and start the next one when it is safe to.
+
+        The ordering here IS the requirement, so it is worth stating plainly:
+
+        1. never during a transition — the render loop needs the CPU, and the
+           adapter that loads the finished JPEG needs the GUI thread;
+        2. the boot screen waits on the FIRST item's backdrop, so that one is
+           built while the boot screen is up;
+        3. the boot screen must have finished fading before a SECOND backdrop is
+           started, so the fade is never delayed by its own successor;
+        4. after that, each backdrop is built during the slide before the one it
+           belongs to, which is the idle time a crossfade would otherwise waste.
+        """
+        # A non-blur look has no backdrops at all, and asking the layout engine
+        # first keeps this method free on the common path — no per-frame plan
+        # computation for a slideshow that never blurs anything.
+        if self._layout.ambient_strategy != "blur":
+            return
+
+        collect = getattr(self._backend, "collect_warm_backdrop", None)
+        warm = getattr(self._backend, "warm_backdrop", None)
+        if collect is None or warm is None or self._in_transition():
+            return
+        collect()
+
+        item = self.current_item
+        plan = self._current_plan()
+        if item is not None and plan is not None and not self._backdrop_ready(plan, item):
+            self._request_backdrop(warm, plan, item)
+            return
+
+        if not self._boot_complete:
+            return
+        nxt_item = self._next_item()
+        nxt_plan = self._next_plan()
+        if (
+            nxt_item is not None
+            and nxt_plan is not None
+            and not self._backdrop_ready(nxt_plan, nxt_item)
+        ):
+            self._request_backdrop(warm, nxt_plan, nxt_item)
+
+    def _request_backdrop(self, warm: Any, plan: RenderPlan, item: MediaItem) -> None:
+        """Ask the backend to build *item*'s backdrop, if its pixels are decoded.
+
+        The handle is required because the finished backdrop is adopted into the
+        slot that will be painted for that artwork.  A miss is not a failure: the
+        decode-ahead worker is filling the cache, and the next tick retries.
+        """
+        source = self._backdrop_source(item)
+        if source is None:
+            return
+        handle = self._cache.get(item.id)
+        if handle is None:
+            return
+        warm(plan, source, handle)
+
+    def _backdrop_ready(self, plan: RenderPlan, item: MediaItem) -> bool:
+        """Whether *plan*'s backdrop is loaded, for a backend that has them."""
+        ready = getattr(self._backend, "backdrop_ready", None)
+        if ready is None:
+            return True
+        return bool(ready(plan, self._backdrop_source(item)))
+
+    @staticmethod
+    def _backdrop_source(item: MediaItem | None) -> Any:
+        """The file an item's ambient backdrop is built from.
+
+        A video is shown as its pre-generated first-frame JPEG, so that is what
+        its backdrop must be built from — using the video file itself would need
+        ffmpeg, which the frontend never runs.
+        """
+        if item is None:
+            return None
+        if item.media_type == MediaType.VIDEO:
+            return item.first_frame_path
+        return item.cached_path
+
+    def _next_item(self) -> MediaItem | None:
+        """The item after the one on screen, or ``None`` when there is none."""
+        if len(self._queue) < 2:
+            return None
+        return self._queue[(self._current_idx + 1) % len(self._queue)]
+
+    def _in_transition(self) -> bool:
+        """Whether a crossfade is on screen right now.
+
+        Used to keep backdrop work out of the transition window entirely: the
+        child is CPU-hungry even when capped, and loading the finished JPEG is
+        GUI-thread work that would land on exactly the frames being blended.
+        """
+        item = self.current_item
+        if self._paused or item is None:
+            return False
+        transition_s = self._transition_seconds()
+        if transition_s <= 0:
+            return False
+        elapsed = time.monotonic() - self._item_start_time
+        duration = self._item_duration(item)
+        return duration <= elapsed < duration + transition_s
 
     def represent(self) -> None:
         """Repaint the frame already on screen, immediately.
@@ -924,20 +1091,29 @@ class Presenter:
         self._write_current_media()
 
     def _preload_next(self) -> None:
-        """Begin decoding the item after the current one, if there is one."""
+        """Begin decoding the item after the current one, if there is one.
+
+        A video is shown as its pre-generated first-frame JPEG (``.1.frame``), so
+        that poster is what gets decoded here — not the video itself, which the
+        frontend never opens.  Without this the poster was loaded synchronously on
+        the frame the slide changed, and its ambient backdrop had no pixels to be
+        built from until then, so a video always began with a flat band.
+
+        The finished payload is adopted by ``render`` (see the note there), not
+        here: draining at the point of *starting* a decode can only ever collect
+        the previous one.
+        """
         if len(self._queue) < 2:
             return
         nxt = self._queue[(self._current_idx + 1) % len(self._queue)]
-        if nxt.media_type == MediaType.VIDEO:
-            # A video is shown as its pre-generated first-frame JPEG, which the
-            # backend produced during OPTIMISE — there is nothing to decode here.
+        path = self._backdrop_source(nxt)
+        if path is None:
             return
         if self._cache.get(nxt.id) is not None:
             return
         max_w = int(self._backend.width * 1.2)
         max_h = int(self._backend.height * 1.2)
-        self._cache.start_preload(nxt.id, nxt.cached_path, max_w, max_h)
-        self._drain_cache()
+        self._cache.start_preload(nxt.id, Path(path), max_w, max_h)
 
     def _drain_cache(self) -> None:
         """Upload any finished decode to the backend on this (GUI) thread."""

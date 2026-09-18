@@ -67,8 +67,8 @@ function ambientColourToHex(value, fallback) {
      *
      * Only "Solid colour" uses the colour picker, so the row is hidden for the
      * other two: "Black bars" fixes the colour to black, and "Blurred photo"
-     * uses the blur amount and brightness instead. A visible control that does
-     * nothing is worse than a hidden one.
+     * uses the blur amount, blur style and brightness instead. A visible control
+     * that does nothing is worse than a hidden one.
      *
      * @param {string} strategy - `solid`, `bars` or `blur`.
      */
@@ -78,6 +78,8 @@ function ambientColourToHex(value, fallback) {
         var isBlur = strategy === "blur";
         var blurRow = document.getElementById("ambient-blur-row");
         if (blurRow) blurRow.style.display = isBlur ? "" : "none";
+        var filterRow = document.getElementById("ambient-blur-filter-row");
+        if (filterRow) filterRow.style.display = isBlur ? "" : "none";
         var darkenRow = document.getElementById("ambient-darken-row");
         if (darkenRow) darkenRow.style.display = isBlur ? "" : "none";
     }
@@ -94,6 +96,20 @@ function ambientColourToHex(value, fallback) {
      */
     function _ambientStrategy(value) {
         return value === "bars" || value === "blur" ? value : "solid";
+    }
+
+    /**
+     * Normalise an ambient blur kernel to a value this release understands.
+     *
+     * A config written before the control existed has no such key, and the
+     * backend rejects an unknown kernel, so an unrecognised value must fall back
+     * rather than leaving the select blank and writing an empty string back.
+     *
+     * @param {*} value
+     * @returns {string} `box` or `gaussian`.
+     */
+    function _ambientBlurFilter(value) {
+        return value === "gaussian" ? "gaussian" : "box";
     }
 
     /**
@@ -395,6 +411,7 @@ function ambientColourToHex(value, fallback) {
         }
         var darkenLabel = document.getElementById("cfg-ambient-darken-label");
         if (darkenLabel) darkenLabel.textContent = (darkenEl ? darkenEl.value : "35") + "%";
+        setValue("cfg-ambient-blur-filter", _ambientBlurFilter(s.ambient_blur_filter));
         _toggleAmbientColour(ambientStrategy);
 
         // Matte color — parse RGB array to hex
@@ -611,6 +628,7 @@ function ambientColourToHex(value, fallback) {
                     ambient_strategy: _ambientStrategy(document.getElementById("cfg-ambient-strategy").value),
                     ambient_color: document.getElementById("cfg-ambient-color").value,
                     ambient_blur_radius: sanitizeInt(document.getElementById("cfg-ambient-blur").value, 24),
+                    ambient_blur_filter: _ambientBlurFilter(document.getElementById("cfg-ambient-blur-filter").value),
                     // The slider is whole percent; config stores 0.0-1.0.
                     ambient_darken: sanitizeInt(document.getElementById("cfg-ambient-darken").value, 35) / 100,
                     matte_color: [r, g, b],

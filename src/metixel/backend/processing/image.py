@@ -19,6 +19,7 @@ from PIL import Image
 from metixel.backend.processing.utils import ensure_heif_support
 from metixel.shared.media import content_hash
 from metixel.shared.models import MediaItem, MediaType
+from metixel.shared.throttle import throttle_cmd
 
 # Register the optional HEIF decoder so HEIC originals (often mislabelled
 # .jpg via Immich sync) can be processed by the image worker subprocess.
@@ -26,58 +27,27 @@ ensure_heif_support()
 
 logger = logging.getLogger(__name__)
 
-# ── CPU limit detection (cached at import time) ──────────────────────────
+# ── Worker isolation ─────────────────────────────────────────────────────
 
-_CPULIMIT_PATH: str | None = None
-
-
-def _detect_cpulimit() -> str | None:
-    """Locate the ``cpulimit`` binary.  Returns the path or None."""
-    global _CPULIMIT_PATH
-    if _CPULIMIT_PATH is None:
-        import shutil
-
-        _CPULIMIT_PATH = shutil.which("cpulimit")
-        if _CPULIMIT_PATH:
-            logger.debug("cpulimit found at %s — workers will be CPU-capped", _CPULIMIT_PATH)
-        else:
-            logger.debug("cpulimit not installed — workers use nice-only (no CPU cap)")
-    return _CPULIMIT_PATH
+#: Hard CPU ceiling for the image worker, as a percentage of ONE core.  On a
+#: Pi 3 with four cores this leaves 3.5 cores for the render loop and the web
+#: server, which is the point of throttling the worker at all.
+WORKER_CPU_LIMIT = 50
 
 
 def _wrap_worker_cmd(worker_cmd: list[str]) -> list[str]:
-    """Wrap the worker command with cpulimit and/or nice.
+    """Wrap the worker command with ``cpulimit`` and/or ``nice``.
 
-    Priority order:
-    1. ``cpulimit -l 50`` (hard 50 % CPU cap) if installed
-    2. ``nice -n 19`` (lowest scheduling priority) always
-
-    On a Pi 3 with 4 cores, ``cpulimit -l 50`` means the worker uses
-    at most half of one core — the other 3.5 cores stay free for the
-    frontend renderer and Flask web server.
+    A hard 50 % CPU cap plus the lowest scheduling priority.  Both layers are
+    built by :func:`metixel.shared.throttle.throttle_cmd`, so the pipeline's
+    workers and the frontend's ambient-blur worker cannot drift apart.
 
     ``nice``/``cpulimit`` are Unix-only.  On Windows (desktop dev via
-    TkBackend) neither exists, so the worker command is returned
-    unchanged.
+    TkBackend) neither exists, so the worker command is returned unchanged.
     """
     if os.name != "posix":
         return worker_cmd
-    cpulimit = _detect_cpulimit()
-    if cpulimit:
-        # cpulimit -l 50 -f -- nice -n 19 python3 ...
-        # -f = foreground (wait for child to exit) — required on v3.1
-        return [
-            cpulimit,
-            "-l",
-            "50",
-            "-f",
-            "--",
-            "nice",
-            "-n",
-            "19",
-        ] + worker_cmd
-    # cpulimit not available — nice only (scheduling hint, no hard cap)
-    return ["nice", "-n", "19"] + worker_cmd
+    return throttle_cmd(worker_cmd, WORKER_CPU_LIMIT)
 
 
 # ── ImageProcessor ───────────────────────────────────────────────────────

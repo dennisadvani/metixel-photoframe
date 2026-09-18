@@ -68,6 +68,10 @@ FitMode = Literal["contain", "cover"]
 FocalPosition = Literal["auto", "center", "manual"]
 Overflow = Literal["crop", "fill"]
 AmbientStrategy = Literal["solid", "blur", "bars"]
+
+#: Kernel used to build the blurred backdrop.  Both are offered to the user:
+#: ``box`` is the cheap default, ``gaussian`` the smoother but slower one.
+AmbientBlurFilter = Literal["box", "gaussian"]
 Unit = Literal["mm", "cm", "in", "px"]
 
 
@@ -521,11 +525,19 @@ class AmbientFillSpec:
     colour: str = "#101014"
     blur_radius: float = 24.0
     darken: float = 0.35
+    #: Appended AFTER ``darken`` on purpose.  Every caller constructs this with
+    #: keywords, but appending costs nothing and keeps any positional
+    #: construction working.
+    blur_filter: AmbientBlurFilter = "box"
 
     def __post_init__(self) -> None:
         _require(
             self.strategy in ("solid", "blur", "bars"),
             f"ambient strategy must be 'solid', 'blur' or 'bars', got {self.strategy!r}",
+        )
+        _require(
+            self.blur_filter in ("box", "gaussian"),
+            f"ambient blur filter must be 'box' or 'gaussian', got {self.blur_filter!r}",
         )
         _require(float(self.darken) >= 0, "darken must be >= 0")
         _require(float(self.blur_radius) >= 0, "blur_radius must be >= 0")
@@ -700,6 +712,7 @@ class AmbientFillResult:
     colour: str
     blur_radius: float
     darken: float
+    blur_filter: AmbientBlurFilter = "box"
 
 
 @dataclass
@@ -1197,6 +1210,7 @@ def calculate_framing(request: FramingRequest) -> FramingResult:
         colour=ambient_colour,
         blur_radius=float(request.ambient.blur_radius),
         darken=float(request.ambient.darken),
+        blur_filter=request.ambient.blur_filter,
     )
     artwork_result = ArtworkResult(
         bounds=artwork_rect,

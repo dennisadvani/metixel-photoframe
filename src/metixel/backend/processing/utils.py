@@ -7,12 +7,18 @@ invocation — whether from the folder watcher, thumbnail generator, or
 video processor — runs at the lowest scheduling priority.  This keeps
 the frontend slideshow responsive even when the backend is scanning
 or optimising media.
+
+The wrapping itself lives in :mod:`metixel.shared.throttle`, because the
+frontend's ambient-blur worker needs the same rules and must not import from
+``backend``.  This module keeps the import path the pipeline already uses.
 """
 
 from __future__ import annotations
 
 import shutil
 from typing import TYPE_CHECKING
+
+from metixel.shared.throttle import apply_nice
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -53,6 +59,4 @@ def nice_cmd(cmd: Sequence[str]) -> list[str]:
         A new list with ``["nice", "-n", "19"]`` prepended if ``nice``
         is available; otherwise the original command unchanged.
     """
-    if _NICE_BINARY is not None:
-        return ["nice", "-n", "19", *cmd]
-    return list(cmd)
+    return apply_nice(cmd, _NICE_BINARY)

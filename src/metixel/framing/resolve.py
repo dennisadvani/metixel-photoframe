@@ -26,6 +26,7 @@ from typing import cast
 
 from metixel.framing import framing_templates as templates
 from metixel.framing.framing_engine import (
+    AmbientBlurFilter,
     AmbientStrategy,
     FramingRequest,
     MediaDescriptor,
@@ -134,6 +135,7 @@ def resolve(
     ambient_colour: str | None = None,
     ambient_blur_radius: float | None = None,
     ambient_darken: float | None = None,
+    ambient_blur_filter: str | None = None,
     edge_margin: float | None = None,
     moulding_width: float | None = None,
 ) -> FramingRequest:
@@ -202,6 +204,9 @@ def resolve(
         ambient_darken=(
             _DEFAULT_AMBIENT_DARKEN if ambient_darken is None else float(ambient_darken)
         ),
+        ambient_blur_filter=(
+            None if ambient_blur_filter is None else _as_ambient_blur_filter(ambient_blur_filter)
+        ),
         edge_margin=edge_margin if edge_margin is not None else _UNSET_EDGE_MARGIN,
         moulding_width=moulding_width if moulding_width is not None else _UNSET_MOULDING_WIDTH,
     )
@@ -252,3 +257,10 @@ def _as_ambient_strategy(value: str) -> AmbientStrategy:
     if value not in ("solid", "blur", "bars"):
         raise ValueError(f"ambient_strategy must be 'solid', 'blur' or 'bars', got {value!r}")
     return cast(AmbientStrategy, value)
+
+
+def _as_ambient_blur_filter(value: str) -> AmbientBlurFilter:
+    """Validate a blur-kernel name."""
+    if value not in ("box", "gaussian"):
+        raise ValueError(f"ambient_blur_filter must be 'box' or 'gaussian', got {value!r}")
+    return cast(AmbientBlurFilter, value)

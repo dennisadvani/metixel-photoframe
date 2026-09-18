@@ -18,6 +18,7 @@ The backend is a fake, so these run on a machine with no display, no Qt and no m
 
 from __future__ import annotations
 
+import ast
 import json
 import random
 import time
@@ -26,9 +27,30 @@ from pathlib import Path
 import pytest
 
 from metixel.framing.layout import RenderPlan
+from metixel.frontend.presentation.image_cache import DecodedImage
 from metixel.frontend.presentation.presenter import STALL_TIMEOUT_S, Presenter
 from metixel.shared.config import Config
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
+
+_ROOT = Path(__file__).resolve().parents[3]
+_PRESENTER = _ROOT / "src" / "metixel" / "frontend" / "presentation" / "presenter.py"
+
+
+def _code(path: Path, name: str) -> str:
+    """A function's executable statements, docstring and comments stripped."""
+    source = path.read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body = body[1:]
+            return "\n".join(ast.unparse(stmt) for stmt in body)
+    raise AssertionError(f"{name} not found in {path.name}")
 
 
 class FakeBackend:
@@ -459,6 +481,99 @@ class TestReadiness:
         presenter.set_queue([_image_item("a", tmp_path / "a.jpg")])
         assert presenter.has_visible_frame
 
+
+class TestTheDecodeAheadPipeline:
+    """Where a finished decode-ahead payload is adopted, and what it may not do.
+
+    The defect behind the blur-ambient regressions on hardware: with
+    ``ambient_strategy == "blur"``, every OTHER slide painted the flat ambient
+    colour instead of its blurred backdrop, and every transition stalled.
+
+    Two mistakes compounded:
+
+    * the payload was collected from ``_preload_next``, so it landed a full slide
+      after it was requested.  The next item's backdrop is built from the next
+      item's decoded handle while the CURRENT slide is on screen, so a payload
+      that arrives a slide late leaves the backdrop with nothing to build from
+      and the transition with nothing to start against;
+    * ``ImageCache.put`` replaced the handle for a key that was already cached.
+      The canvas identifies a layer's backdrop by the IDENTITY of the artwork
+      handle it was built for, so swapping the handle orphaned a backdrop that
+      was already in memory — the photo drew, its blur existed, and the lookup
+      could not match them.
+    """
+
+    def test_a_finished_decode_is_adopted_within_the_slide(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        presenter.set_queue([_image_item("a", tmp_path / "a.jpg")])
+        presenter._cache._ready = DecodedImage(key="next", data=b"jpeg", width=2, height=2)
+
+        presenter.render()
+
+        assert presenter._cache.get("next") is not None, (
+            "the frame loop must adopt a finished decode, not wait for the next advance"
+        )
+
+    def test_a_drain_does_not_swap_the_handle_of_the_item_on_screen(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """The exact swap that orphaned the backdrop and painted the flat fill."""
+        presenter.set_queue([_image_item("a", tmp_path / "a.jpg")])
+        on_screen = presenter._cache.get("a")
+        assert on_screen is not None
+
+        # A late decode of the SAME item, which is what the worker produces when
+        # it is asked for the item that is already being shown.
+        presenter._cache._ready = DecodedImage(key="a", data=b"jpeg", width=2, height=2)
+        presenter.render()
+
+        assert presenter._cache.get("a") is on_screen, (
+            "a second decode of the same key must not orphan the backdrop keyed to it"
+        )
+
+    def test_starting_a_preload_does_not_collect_the_previous_one(self) -> None:
+        """Collecting at the point of *starting* a decode can only be a slide late."""
+        code = _code(_PRESENTER, "_preload_next")
+        assert "_drain_cache" not in code
+
+    def test_the_preload_payload_carries_the_media_id(self, tmp_path: Path) -> None:
+        """The payload must be retrievable under the key the presenter looks up.
+
+        Regression: the worker published the SOURCE PATH as the payload key, so
+        the drain stored it under a key nothing ever asks for.  The decode was
+        performed and thrown away, the next item was never cached ahead, and its
+        ambient backdrop had nothing to be built from during the slide — which is
+        what left the transition with nothing to start against.
+        """
+        from PIL import Image
+
+        from metixel.frontend.presentation.image_cache import ImageCache
+
+        source = tmp_path / "photo.jpg"
+        Image.new("RGB", (40, 30), (10, 20, 30)).save(source)
+
+        cache = ImageCache()
+        cache.start_preload("media-id", source, 100, 100)
+
+        payload = None
+        deadline = time.monotonic() + 5.0
+        while payload is None and time.monotonic() < deadline:
+            payload = cache.take_ready()
+            if payload is None:
+                time.sleep(0.01)
+
+        assert payload is not None, "the preload never produced a payload"
+        assert payload.key == "media-id", (
+            "the payload must carry the key the caller will look it up with"
+        )
+
+    def test_the_drain_never_lands_on_a_transition_frame(self) -> None:
+        """It is a texture upload on the GUI thread; a crossfade must not absorb it."""
+        code = _code(_PRESENTER, "render")
+        assert "_drain_cache()" in code
+        assert code.index("_in_transition()") < code.index("_drain_cache()")
+
     def test_unprobed_first_item_is_not_ready(self, presenter: Presenter, tmp_path: Path) -> None:
         """The boot screen must not fade out onto an un-layoutable item."""
         presenter.set_queue([self._unready("a", tmp_path / "a.jpg")])
@@ -589,6 +704,26 @@ class TestShuffle:
 
         assert [item.id for item in presenter.queue[:2]] == played
         assert len(presenter.queue) == 10
+
+    def test_new_items_never_displace_the_item_the_transition_is_heading_for(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """The immediate next item's backdrop is already built and keyed to it.
+
+        Displacing that item with a new arrival means the transition starts
+        against the wrong backdrop and the slide stalls waiting for a new one —
+        which is what made arrivals (a scan finishing, an Immich sync, an upload)
+        show up as a glitch at the next slide boundary.
+        """
+        presenter._config.update("slideshow", {"shuffle": True})
+        random.seed(7)
+        presenter.set_queue([_image_item(f"a{n}", tmp_path / f"a{n}.jpg") for n in range(6)])
+        presenter.next_item()
+
+        upcoming = presenter.queue[presenter.current_index + 1].id
+        presenter.add_items([_image_item(f"n{n}", tmp_path / f"n{n}.jpg") for n in range(8)])
+
+        assert presenter.queue[presenter.current_index + 1].id == upcoming
 
 
 class TestSettingsHotReload:

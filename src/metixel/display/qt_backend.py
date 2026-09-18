@@ -481,6 +481,10 @@ class PySide6Backend(DisplayBackend):
     def destroy(self) -> None:
         self._running = False
         try:
+            if self._canvas is not None:
+                # Stop any ambient-blur child still running: it is its own
+                # session, so it would otherwise outlive the frontend.
+                self._canvas.close_backdrops()
             if self._mpv_widget is not None:
                 self._mpv_widget.destroy_mpv()
             if self._window is not None:
@@ -591,31 +595,32 @@ class PySide6Backend(DisplayBackend):
             prev_alpha,
         )
 
-    # -- Backdrop warming ----------------------------------------------------
+    # -- Ambient backdrops ---------------------------------------------------
 
-    def backdrop_ready(self, plan: RenderPlan, image: Any) -> bool:
-        """Whether *plan*'s blurred backdrop is cached and usable.
+    def backdrop_ready(self, plan: RenderPlan, source: Any) -> bool:
+        """Whether *plan*'s blurred backdrop is loaded and usable.
 
         The presenter polls this to decide whether it may start a transition —
-        see ``PresentationEngine._transition_ready``.  Cheap: a key comparison.
+        see ``PresentationEngine._transition_ready``.  Cheap: an equality test,
+        with no pixel work and no disk.
         """
         if self._canvas is None:
             return True
-        return bool(self._canvas.backdrop_ready(plan, image))
+        return bool(self._canvas.backdrop_ready(plan, source))
 
-    def warm_backdrop(self, plan: RenderPlan, image: Any) -> None:
-        """Start building *plan*'s backdrop on a worker thread, if not cached.
+    def warm_backdrop(self, plan: RenderPlan, source: Any, handle: Any = None) -> None:
+        """Start building *plan*'s backdrop in a throttled subprocess.
 
-        Non-blocking and idempotent: repeated calls for the same backdrop are
-        free.  The finished blur is adopted by :meth:`collect_warm_backdrop` on
-        the GUI thread, because ``QPixmap`` must not be created off it.
+        Non-blocking and idempotent: a backdrop already loaded or in flight is
+        ignored.  The finished file is adopted by :meth:`collect_warm_backdrop`
+        on the GUI thread, because ``QPixmap`` must not be created off it.
         """
         if self._canvas is None:
             return
-        self._canvas.warm_backdrop(plan, image)
+        self._canvas.warm_backdrop(plan, source, handle)
 
     def collect_warm_backdrop(self) -> bool:
-        """Adopt a finished warmed backdrop.  Returns ``True`` if one landed."""
+        """Adopt a finished backdrop.  Returns ``True`` if one landed."""
         if self._canvas is None:
             return False
         return bool(self._canvas.collect_warm_backdrop())

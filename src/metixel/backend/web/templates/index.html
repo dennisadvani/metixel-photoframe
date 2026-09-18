@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=51">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=52">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -735,6 +735,20 @@
                         <div class="setting-control">
                             <input type="range" id="cfg-ambient-blur" class="range-premium" min="1" max="100" step="1" value="24">
                             <span id="cfg-ambient-blur-label" class="text-[0.75rem] text-text-muted ml-2">24</span>
+                        </div>
+                    </div>
+
+                    <!-- Ambient Blur Style (blur mode only) -->
+                    <div class="setting-row" id="ambient-blur-filter-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Blur Style</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Box uses less CPU; gaussian is smoother</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-ambient-blur-filter" class="select-premium input-premium w-44">
+                                <option value="box">Box</option>
+                                <option value="gaussian">Gaussian</option>
+                            </select>
                         </div>
                     </div>
 
@@ -1738,6 +1752,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=77"></script>
+    <script type="module" src="/static/js/main.js?v=78"></script>
 </body>
 </html>

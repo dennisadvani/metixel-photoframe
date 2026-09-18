@@ -596,10 +596,17 @@ class FrontendRenderer:
             # was still decoding would run the fade over empty frames and end on a
             # black screen.  The presenter owns that judgement rather than the
             # renderer reaching into its internals.
+            #
+            # It also requires the first item's AMBIENT BACKDROP to be loaded when
+            # the look is ``blur``: that backdrop is built in a throttled
+            # subprocess, and fading out before it lands would show a flat band
+            # that repaints a moment later — the flicker the boot screen exists to
+            # hide.
             slideshow_ready = (
                 self._presentation.queue_loaded
                 and len(self._presentation.queue) > 0
                 and self._presentation.has_visible_frame
+                and self._presentation.ambient_ready
             )
             queue_size = len(self._presentation.queue) if self._presentation else 0
             self._overlay.update(
@@ -613,7 +620,11 @@ class FrontendRenderer:
 
         # ── Boot → slideshow transition ───────────────────────────────
         # When the boot layer finishes fading, reset the first slide's
-        # display timer so it gets its full configured duration.
+        # display timer so it gets its full configured duration, and release the
+        # presenter to prepare the FOLLOWING item's ambient backdrop.  Until the
+        # boot screen has gone, only the item being shown may have its backdrop
+        # built: the boot screen is waiting on that one, and a second throttled
+        # job would only delay the fade it is blocking.
         if (
             getattr(self, "_boot_layer", None) is not None
             and self._boot_layer.is_done
@@ -622,6 +633,7 @@ class FrontendRenderer:
             self._boot_was_active = False
             if self._presentation:
                 self._presentation.reset_slide_timer()
+                self._presentation.mark_presentation_started()
                 logger.info("First slide timer reset — boot screen finished")
 
     # -- Hot reload ----------------------------------------------------------
@@ -754,6 +766,10 @@ class FrontendRenderer:
             if getattr(self, "_boot_layer", None) is not None:
                 self._boot_layer.reactivate()
                 self._boot_was_active = True
+                # The boot screen is up again, so it will wait on the first
+                # item's ambient backdrop once more — and nothing else may be
+                # built until it has gone.
+                self._presentation.mark_boot_started()
             return
 
         if not self._presentation._queue:

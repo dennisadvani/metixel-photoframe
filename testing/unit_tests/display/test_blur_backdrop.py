@@ -7,17 +7,21 @@ ratio IGNORED, blurred, and painted as the base layer, so a contained photo sits
 on top of a soft, screen-filling copy of itself.  The user also controls how
 heavy the blur is and how far the backdrop is dimmed.
 
-Two properties carry the cost, and both are easy to lose:
+Three properties carry the cost, and all three are easy to lose:
 
-1. **Once per slide, not once per frame.**  A crossfade repaints ~75 times and
-   calls the backdrop builder on every one of those frames.  Rebuilding the blur
-   each time would be far more expensive than the resample the pre-scaled
-   artwork already exists to avoid — it is a full-screen scale, twice, plus a
-   downscale.  The cache key is what makes it once-per-slide.
-2. **Brightness must not invalidate the blur.**  Dimming is a translucent black
+1. **The blur runs in a throttled subprocess.**  It is ``nice``'d and, where
+   ``cpulimit`` exists, hard-capped — see
+   :mod:`metixel.display.ambient_blur`.  Building it in the render loop is what
+   made crossfades judder.
+2. **It is built once per showing, not once per frame.**  The result is held in
+   one of two slots in the canvas for the whole time the slide is on screen.
+3. **Brightness must not invalidate the blur.**  Dimming is a translucent black
    rect at paint time, so the brightness slider is free to drag.  Baking the
-   darkening into the pixmap would make every pixel of the slider rebuild a
+   darkening into the image would make every step of the slider rebuild a
    full-screen blur.
+
+The lifecycle guards (identity, the subprocess wrapper, the presenter's
+sequencing) live in ``test_backdrop_warm.py``.
 
 As with the other display guards, these are structural assertions over the
 source because CI has no Qt.  Qt-specific behaviour uses ``pytest.importorskip``.
@@ -26,15 +30,21 @@ source because CI has no Qt.  Qt-specific behaviour uses ``pytest.importorskip``
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[3]
 _CANVAS = _ROOT / "src" / "metixel" / "display" / "qt_canvas.py"
+_AMBIENT = _ROOT / "src" / "metixel" / "display" / "ambient_blur.py"
 _PRESENTER = _ROOT / "src" / "metixel" / "frontend" / "presentation" / "presenter.py"
 _TEMPLATES = _ROOT / "src" / "metixel" / "framing" / "framing_templates.py"
 _LAYOUT = _ROOT / "src" / "metixel" / "framing" / "layout.py"
+
+#: Stands in for an adopted pixmap in the slot tests.  A real ``QPixmap`` would
+#: prove nothing extra about the slot logic and needs a GUI thread.
+_SENTINEL = object()
 
 
 def _source(path: Path) -> str:
@@ -134,30 +144,6 @@ def _requires_blur(test: str) -> bool:
     return "'blur'" in normalised and "==" in normalised and "!=" not in normalised
 
 
-def _cache_key_elements(path: Path, name: str) -> list[str]:
-    """Source fragments of each element of the cache-key tuple in *name*.
-
-    Handles both shapes the key has taken: an assignment (``key = (...)``) and a
-    direct ``return (...)``.  Parsed with AST rather than string-split, because
-    the tuple contains a call (``round(radius, 2)``) and splitting on the first
-    ``)`` truncates inside the nested brackets.
-    """
-    node = _function(path, name)
-    for inner in ast.walk(node):
-        tuple_node: ast.Tuple | None = None
-        is_key_assign = (
-            isinstance(inner, ast.Assign)
-            and isinstance(inner.value, ast.Tuple)
-            and any(isinstance(t, ast.Name) and t.id == "key" for t in inner.targets)
-        )
-        is_return = isinstance(inner, ast.Return) and isinstance(inner.value, ast.Tuple)
-        if is_key_assign or is_return:
-            tuple_node = inner.value  # type: ignore[assignment]
-        if tuple_node is not None:
-            return [ast.unparse(element) for element in tuple_node.elts]
-    raise AssertionError(f"no cache-key tuple found in {name}")
-
-
 def _dataclass_field_defaults(path: Path, class_name: str) -> dict[str, object]:
     """Field name -> literal default for an annotated dataclass attribute.
 
@@ -177,118 +163,38 @@ def _dataclass_field_defaults(path: Path, class_name: str) -> dict[str, object]:
     raise AssertionError(f"class {class_name} not found in {path.name}")
 
 
-class TestTheBlurIsBuiltOncePerSlide:
-    """The explicit efficiency requirement."""
+class TestTheBlurRunsOutsideTheRenderLoop:
+    """The cost fix: no blur, and no Pillow, anywhere on the paint path."""
 
-    def test_the_builder_consults_its_cache_before_doing_work(self) -> None:
-        """The cache hit must be a GUARDED return, not dead code.
+    def test_the_canvas_has_no_blur_helper_left(self) -> None:
+        """The blur moved to :mod:`metixel.display.ambient_blur`.
 
-        Checking only that a ``return self._blur_pixmap`` line exists somewhere
-        before the first ``scaled()`` is not enough: deleting the ``if`` leaves
-        the return in place as unreachable code and that check still passes, so
-        the blur would be rebuilt on every frame of every crossfade with the
-        suite green.  (That mutation was found by the mutation harness — it
-        survived the first version of this test.)
+        A leftover copy is not harmless.  Deleting the call but keeping the
+        helper is exactly how this regresses: the next edit reaches for the
+        function that is still sitting there, and the blur is back in the paint.
         """
-        node = _function(_CANVAS, "_blurred_backdrop")
-        guarded = False
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.If):
-                continue
-            test_src = ast.unparse(inner.test)
-            body_src = "\n".join(ast.unparse(s) for s in inner.body)
-            if "_blur_pixmap" in test_src and "return self._blur_pixmap" in body_src:
-                guarded = True
-                break
-        assert guarded, (
-            "the cached pixmap must be returned from inside an `if` that tests "
-            "the cache — an unguarded return is dead code and the blur rebuilds "
-            "every frame"
-        )
+        source = _source(_CANVAS)
+        for gone in ("_blur_payload", "_blur_qimage", "_blurred_backdrop"):
+            assert gone not in source, f"{gone} must be gone from the canvas"
 
-    def test_the_cache_test_checks_both_the_pixmap_and_the_key(self) -> None:
-        """A stale pixmap must not be served for a different image or radius."""
-        node = _function(_CANVAS, "_blurred_backdrop")
-        for inner in ast.walk(node):
-            if not isinstance(inner, ast.If):
-                continue
-            test_src = ast.unparse(inner.test)
-            if "_blur_pixmap" in test_src:
-                assert "_blur_key" in test_src, (
-                    "the cache hit must compare the key, or a changed image or "
-                    "blur radius would reuse the previous backdrop"
-                )
-                return
-        raise AssertionError("no guarded cache-hit return found")
+    def test_the_canvas_does_not_import_pillow(self) -> None:
+        """Pillow belongs to the blur subprocess, not to the renderer."""
+        assert "from PIL" not in _source(_CANVAS)
 
-    def test_a_repeat_call_does_no_scaling_at_all(self) -> None:
-        """The efficiency requirement, proved by counting real scale calls.
+    def test_the_paint_path_never_blurs(self) -> None:
+        code = _code(_CANVAS, "_draw_backdrop_layer")
+        assert "BoxBlur" not in code
+        assert "filter(" not in code
 
-        Runs only where Qt exists (the Pi), because CI has no PySide6.  The
-        structural guards above are what CI enforces.
+    def test_warming_uses_a_subprocess_runner_not_a_thread(self) -> None:
+        """``nice``/``cpulimit`` are process-level.
+
+        A thread cannot be throttled by either, so warming on a thread would be
+        the original stall with nothing capping it.
         """
-        pytest.importorskip("PySide6", reason="PySide6 not installed (CI/desktop dev)")
-        from PySide6.QtGui import QColor, QImage
-
-        from metixel.display.qt_canvas import FrameCanvas
-
-        calls = {"n": 0}
-        original_scaled = QImage.scaled
-
-        def counting_scaled(self, *args, **kwargs):
-            calls["n"] += 1
-            return original_scaled(self, *args, **kwargs)
-
-        QImage.scaled = counting_scaled  # type: ignore[method-assign]
-        try:
-            canvas = FrameCanvas()
-            image = QImage(1600, 1200, QImage.Format.Format_RGB888)
-            image.fill(QColor(200, 40, 40))
-            canvas._image = image
-            plan = self._plan()
-
-            canvas._blurred_backdrop(plan)  # cold: three scales
-            first_cost = calls["n"]
-            assert first_cost >= 3, "the first build must stretch, downscale, upscale"
-
-            for _ in range(10):
-                canvas._blurred_backdrop(plan)  # warm: must be free
-            assert calls["n"] == first_cost, (
-                f"10 cached calls did {calls['n'] - first_cost} extra scales; "
-                "the blur is being rebuilt per frame"
-            )
-        finally:
-            QImage.scaled = original_scaled  # type: ignore[method-assign]
-
-    def test_the_key_includes_the_image(self) -> None:
-        """A new slide must not reuse the previous slide's backdrop."""
-        code = _code(_CANVAS, "_backdrop_key")
-        assert "id(image)" in code
-
-    def test_the_key_includes_the_screen_size(self) -> None:
-        """A resize or rotation must rebuild, since the backdrop is screen-sized."""
-        code = _code(_CANVAS, "_backdrop_key")
-        assert "rect.width()" in code and "rect.height()" in code
-
-    def test_the_key_includes_the_blur_radius(self) -> None:
-        """Changing the blur must rebuild; it is baked into the pixels.
-
-        Parsed with AST: the tuple contains a call (``round(radius, 2)``), so
-        splitting the source on the first ``)`` truncates at the wrong bracket
-        and reports a false failure.
-        """
-        rendered = " | ".join(_cache_key_elements(_CANVAS, "_backdrop_key"))
-        assert "radius" in rendered, f"the blur radius must be in the cache key: {rendered}"
-
-    def test_the_key_excludes_the_darken_amount(self) -> None:
-        """Brightness is applied at paint time, so it must NOT invalidate the blur.
-
-        Including it would make dragging the brightness slider rebuild a
-        full-screen blur per step — the expensive half of the effect — for a
-        change that is a translucent rect.
-        """
-        rendered = " | ".join(_cache_key_elements(_CANVAS, "_backdrop_key"))
-        assert "darken" not in rendered, f"darken must not be in the blur key: {rendered}"
+        code = _code(_CANVAS, "warm_backdrop")
+        assert "BackdropRunner" in code, "the blur must run in the child process"
+        assert "threading.Thread" not in code
 
     def test_darkening_is_a_fill_rect_at_paint_time(self) -> None:
         code = _code(_CANVAS, "_draw_backdrop_layer")
@@ -296,74 +202,187 @@ class TestTheBlurIsBuiltOncePerSlide:
         assert "darken" in code
 
 
-class TestTheBackdropGeometry:
-    """Stretch-ignore-aspect, full screen — the user's explicit instruction."""
+class TestTheBlurGeometry:
+    """Stretch-ignore-aspect, full screen — the user's explicit instruction.
 
-    def test_the_stretch_ignores_the_aspect_ratio(self) -> None:
+    Behavioural rather than structural, and it can be: ``ambient_blur`` imports
+    no Qt, which is a property of the design worth relying on.
+    """
+
+    @staticmethod
+    def _edge_image(path: Path) -> Path:
+        """A hard black/white vertical edge, to prove a filter really ran."""
+        from PIL import Image, ImageDraw
+
+        image = Image.new("RGB", (200, 200), (0, 0, 0))
+        ImageDraw.Draw(image).rectangle([100, 0, 199, 199], fill=(255, 255, 255))
+        image.save(path)
+        return path
+
+    @staticmethod
+    def _solid_image(path: Path, size: tuple[int, int], colour: tuple[int, int, int]) -> Path:
+        from PIL import Image
+
+        Image.new("RGB", size, colour).save(path)
+        return path
+
+    def test_the_stretch_ignores_the_aspect_ratio(self, tmp_path: Path) -> None:
         """``KeepAspectRatio`` would reintroduce the very letterbox gaps this fixes."""
-        code = _code(_CANVAS, "_blur_payload")
-        assert "IgnoreAspectRatio" in code
-        assert "KeepAspectRatio" not in code, "keeping the aspect ratio leaves gaps at the edges"
+        from PIL import Image
 
-    def test_the_blur_target_is_the_whole_screen(self) -> None:
-        code = _code(_CANVAS, "_backdrop_key") + _code(_CANVAS, "_blur_payload")
-        assert "plan.screen" in code, "the backdrop is screen-sized, not band-sized"
+        from metixel.display.ambient_blur import blur_to_file
 
-    def test_the_blur_is_a_real_filter_not_a_downscale(self) -> None:
+        source = self._solid_image(tmp_path / "wide.jpg", (800, 200), (200, 40, 40))
+        dest = tmp_path / "out.jpg"
+        assert blur_to_file(source, dest, 400, 400, 8.0) is True
+
+        with Image.open(dest) as result:
+            assert result.size == (400, 400), "the backdrop must fill the target exactly"
+
+    def test_the_blur_is_a_real_filter_not_a_downscale(self, tmp_path: Path) -> None:
         """A downscale round trip produces rectangular blocking.
 
         Regression: the backdrop was built by shrinking to ``1/radius`` and
         scaling back up.  That is a bilinear round trip through an ~80x50 image
         at display size, and a 4x-magnified side-by-side showed unmistakable
-        blocky patches — the "JPEG-like artefacts" this replaced.
+        blocky patches — the "JPEG-like artefacts" this replaced.  A hard edge is
+        the cheapest way to tell the two apart: a filter spreads it, a resample
+        leaves it nearly binary.
         """
-        payload = _code(_CANVAS, "_blur_payload")
-        assert "_blur_qimage(stretched, radius)" in payload, (
-            "the blur must be a real filter, not a downscale/upscale pair"
-        )
-        assert "int(target_w / radius)" not in payload, (
-            "the downscale divisor is what produced the blocking"
+        from PIL import Image
+
+        from metixel.display.ambient_blur import blur_to_file
+
+        source = self._edge_image(tmp_path / "edge.jpg")
+        dest = tmp_path / "out.jpg"
+        assert blur_to_file(source, dest, 200, 200, 20.0) is True
+
+        # Read the band straddling the edge as a histogram: it gives the spread
+        # of tones directly, with no per-pixel typing to argue with.
+        with Image.open(dest) as result:
+            histogram = result.convert("L").crop((70, 0, 130, 200)).histogram()
+
+        tones = [tone for tone, count in enumerate(histogram) if count]
+        assert tones[0] < 90, "the dark side must survive"
+        assert tones[-1] > 170, "the light side must survive"
+        assert len(tones) > 5, (
+            "a resample leaves an edge nearly binary; a real filter produces a gradient"
         )
 
-    def test_the_filter_is_box_blur(self) -> None:
-        """Measured: GaussianBlur is 2.4x the cost for no visible gain.
+    def test_both_kernels_are_offered_and_box_is_the_default(self) -> None:
+        """Measured: GaussianBlur is ~2.4x the cost for no visible gain.
 
-        Both are smooth; this runs on the render thread once per slide, so the
-        cheaper of two good options wins.  Latency-bounded by that measurement —
-        if the blur ever moves off the render thread, re-measure before changing.
+        Both are smooth, so the cheap one is the default — but which one is used
+        is the user's choice, because a photo with soft gradients can make the box
+        kernel's square shoulders visible.
         """
-        code = _code(_CANVAS, "_blur_qimage")
-        assert "BoxBlur" in code
-        assert "GaussianBlur" not in code, "2.4x the cost for no visible gain"
+        from metixel.display.ambient_blur import DEFAULT_FILTER, FILTERS
+
+        assert FILTERS == ("box", "gaussian")
+        assert DEFAULT_FILTER == "box", "the measured-cheaper kernel is the default"
+        code = _code(_AMBIENT, "blur_to_file")
+        assert "ImageFilter.BoxBlur" in code
+        assert "ImageFilter.GaussianBlur" in code
+
+    def test_an_unknown_kernel_falls_back_instead_of_failing(self) -> None:
+        """A hand-edited config — or one from a release before this key — has none."""
+        from metixel.display.ambient_blur import resolve_filter
+
+        assert resolve_filter(None) == "box"
+        assert resolve_filter("") == "box"
+        assert resolve_filter("swirl") == "box"
+        assert resolve_filter(7) == "box"
+        assert resolve_filter("Gaussian") == "gaussian", "case must not matter"
+
+    def test_the_kernel_choice_reaches_the_filter(self, tmp_path: Path) -> None:
+        """Every other parameter is identical, so identical output means the
+        kernel was ignored — which is exactly what a broken setting looks like."""
+        from metixel.display.ambient_blur import blur_to_file
+
+        source = self._edge_image(tmp_path / "edge.jpg")
+        box = tmp_path / "box.jpg"
+        gaussian = tmp_path / "gaussian.jpg"
+
+        assert blur_to_file(source, box, 200, 200, 20.0, "box") is True
+        assert blur_to_file(source, gaussian, 200, 200, 20.0, "gaussian") is True
+
+        assert box.read_bytes() != gaussian.read_bytes(), (
+            "the selected kernel must actually build the backdrop"
+        )
 
     def test_the_radius_is_a_pixel_radius(self) -> None:
         """Larger must mean blurrier — the intuitive direction.
 
         The old code used the radius as a *divisor*, so larger meant LESS blur.
-        That inverted control is part of why the quality problem was hard to
-        reason about.
         """
-        code = _code(_CANVAS, "_blur_qimage")
-        assert "BoxBlur(radius)" in code, "the radius is passed straight to the filter"
+        code = _code(_AMBIENT, "blur_to_file")
+        assert "pixels = clamp_radius(radius)" in code, (
+            "the radius is clamped before it reaches either filter"
+        )
+        assert "BoxBlur(pixels)" in code
 
     def test_the_radius_is_clamped(self) -> None:
         """A hand-edited config must not reach the filter unclamped."""
-        code = _code(_CANVAS, "_backdrop_key")
-        assert "min(100.0" in code or "min(100," in code
-        assert "max(1.0" in code or "max(1," in code
+        from metixel.display.ambient_blur import clamp_radius
 
-    def test_a_filter_failure_reports_none(self) -> None:
+        assert clamp_radius(0.0) == 1.0
+        assert clamp_radius(-5.0) == 1.0
+        assert clamp_radius(1e9) == 100.0
+        assert clamp_radius(24.0) == 24.0
+
+    def test_a_filter_failure_reports_false(self, tmp_path: Path) -> None:
         """Degrade to the flat fill rather than blanking the frame."""
-        code = _code(_CANVAS, "_blur_qimage")
-        assert "return None" in code
-        assert "except Exception" in code, "a Pillow failure must not escape"
+        from metixel.display.ambient_blur import blur_to_file
 
-    def test_the_qimage_round_trip_is_encoded(self) -> None:
-        """There is no direct QImage/PIL bridge; the buffer must be real bytes."""
-        code = _code(_CANVAS, "_blur_qimage")
-        assert "QBuffer" in code
-        assert "Image.open" in code
-        assert "QImage.fromData" in code
+        assert blur_to_file(tmp_path / "missing.jpg", tmp_path / "out.jpg", 10, 10, 4.0) is False
+
+    def test_a_failure_never_raises(self, tmp_path: Path) -> None:
+        """The caller is a subprocess boundary; an exception would be a crash."""
+        code = _code(_AMBIENT, "blur_to_file")
+        assert "return False" in code
+        assert "except Exception" in code
+
+    def test_the_stored_backdrop_is_a_jpeg(self, tmp_path: Path) -> None:
+        """A lossless full-screen image per item would be megabytes of SD write."""
+        from metixel.display.ambient_blur import blur_to_file
+
+        source = self._solid_image(tmp_path / "in.jpg", (600, 400), (10, 120, 200))
+        dest = tmp_path / "out.jpg"
+        assert blur_to_file(source, dest, 640, 480, 6.0) is True
+
+        assert dest.read_bytes()[:2] == b"\xff\xd8", "the backdrop is stored as JPEG"
+
+    def test_the_cli_reports_the_result_through_the_exit_code(self, tmp_path: Path) -> None:
+        """The exit code is the ONLY result channel — ``cpulimit`` owns stdout."""
+        from metixel.display.ambient_blur import main
+
+        source = self._solid_image(tmp_path / "in.jpg", (300, 300), (30, 30, 30))
+        argv = [
+            "--source",
+            str(source),
+            "--dest",
+            str(tmp_path / "out.jpg"),
+            "--width",
+            "120",
+            "--height",
+            "120",
+            "--radius",
+            "5",
+        ]
+        assert main(argv) == 0
+
+        bad = list(argv)
+        bad[bad.index("--source") + 1] = str(tmp_path / "nope.jpg")
+        assert main(bad) == 1
+
+    def test_the_worker_never_prints(self) -> None:
+        """``cpulimit`` writes its own lines to stdout.
+
+        A worker that reported its result there had that result corrupted once
+        already, so the blur worker prints nothing at all.
+        """
+        code = _code(_AMBIENT, "main")
+        assert "print(" not in code
 
 
 class TestTheBackdropZOrder:
@@ -390,7 +409,8 @@ class TestTheBackdropZOrder:
         outgoing_backdrop = paint.index("self._draw_backdrop_layer")
         outgoing_art = paint.index("self._draw_artwork(painter, self._prev_plan, self._prev_image)")
         incoming_backdrop = paint.index(
-            "self._draw_backdrop_layer(painter, plan, self._image, self._image_alpha)"
+            "self._draw_backdrop_layer(painter, plan, "
+            "self._backdrop_for(self._image), self._image_alpha)"
         )
         incoming_art = paint.index("self._draw_artwork(painter, plan)")
 
@@ -401,11 +421,21 @@ class TestTheBackdropZOrder:
         )
         assert incoming_backdrop < incoming_art, "the incoming backdrop is behind ITS artwork"
 
-    def test_each_backdrop_uses_its_own_item_s_image(self) -> None:
-        """A letterboxed photo must be surrounded by ITS OWN blur, not the next one's."""
+    def test_each_backdrop_uses_its_own_item_s_artwork(self) -> None:
+        """A letterboxed photo must be surrounded by ITS OWN blur, not the next one's.
+
+        The lookup is by the layer's own handle, so the two backdrops can never
+        be swapped for each other.
+        """
         paint = _code(_CANVAS, "paintEvent")
-        assert "self._draw_backdrop_layer(painter, self._prev_plan, self._prev_image" in paint
-        assert "self._draw_backdrop_layer(painter, plan, self._image" in paint
+        assert (
+            "self._draw_backdrop_layer(painter, self._prev_plan, "
+            "self._backdrop_for(self._prev_image), self._prev_alpha)" in paint
+        )
+        assert (
+            "self._draw_backdrop_layer(painter, plan, "
+            "self._backdrop_for(self._image), self._image_alpha)" in paint
+        )
 
     def test_backdrops_fade_with_their_own_artwork(self) -> None:
         """Pair and photo resolve together, so nothing pops."""
@@ -479,56 +509,74 @@ class TestTheBackdropZOrder:
         """In blur mode the backdrop owns the band; a flat wipe would defeat it."""
         paint = _code(_CANVAS, "paintEvent")
         curtain = paint.index("_paint_transition_curtain")
-        incoming_backdrop = paint.index(
-            "self._draw_backdrop_layer(painter, plan, self._image, self._image_alpha)"
-        )
+        incoming_backdrop = paint.index("self._draw_backdrop_layer(painter, plan,")
         assert curtain < incoming_backdrop
 
 
 class TestFailureDegradesRatherThanBlanks:
-    def test_a_failed_build_reports_none(self) -> None:
-        code = _code(_CANVAS, "_blurred_backdrop")
-        assert "return None" in code, "a failed blur must be reported, not raised"
-
-    def test_the_painter_skips_a_missing_backdrop(self) -> None:
+    def test_a_missing_backdrop_falls_back_to_the_flat_fill(self) -> None:
+        """``_draw_backdrop_layer`` must never blur, and never blank the frame."""
         code = _code(_CANVAS, "_draw_backdrop_layer")
-        assert "if pixmap is None" in code, (
-            "a missing backdrop must fall through to the flat ambient look"
-        )
+        assert "if pixmap is None" in code
+        assert "_paint_flat_backdrop" in code
 
+    def test_the_fallback_is_black_not_the_ambient_colour(self) -> None:
+        """Under a blur, the configured colour belongs to the OTHER looks.
 
-class TestTheBlurCacheCannotOutliveItsImage:
-    """A full-screen pixmap is ~9 MB; pinning it would be a slow leak."""
-
-    def test_the_backdrop_is_released_when_the_image_changes(self) -> None:
-        code = _code(_CANVAS, "_store_layers")
-        assert "self._blur_pixmap = None" in code
-        assert "self._blur_key = None" in code
-
-    def test_the_release_test_uses_identity(self) -> None:
-        code = _code(_CANVAS, "_store_layers")
-        assert "is not self._blur_image" in code
-
-    def test_exactly_two_backdrops_are_held(self) -> None:
-        """One per crossfade layer — no more.
-
-        The fix for the z-order bug needs the outgoing item's backdrop as well as
-        the incoming one, so two slots are correct.  A *collection* would not be:
-        it could grow, and a full-screen pixmap is ~9 MB.
+        A band of ``ambient_color`` appearing for a frame or two is a flash of a
+        look the user did not choose, which reads as a glitch.  Black is the only
+        honest neutral stand-in.
         """
-        source = _source(_CANVAS)
-        assert "self._prev_blur_pixmap" in source, "the outgoing layer needs its own"
-        assert "self._blur_pixmaps" not in source, (
-            "a collection here could grow unboundedly; two named slots cannot"
+        code = _code(_CANVAS, "_paint_flat_backdrop")
+        assert "QColor(0, 0, 0)" in code
+        assert "ambient_colour" not in code, (
+            "the blur fallback must not borrow the solid/bars colour"
         )
-        assert "self._blur_cache" not in source
 
-    def test_both_slots_are_released(self) -> None:
-        code = _code(_CANVAS, "_store_layers")
-        assert "self._blur_pixmap = None" in code
-        assert "self._prev_blur_pixmap = None" in code, (
-            "the outgoing backdrop must be released when its layer ends"
-        )
+    def test_a_failed_backdrop_is_not_waited_on_forever(self) -> None:
+        """A backdrop that cannot be built must not hold every slide that shows it."""
+        code = _code(_CANVAS, "backdrop_ready")
+        assert "_backdrop_failed" in code
+        assert "return True" in code
+
+    def test_a_failure_is_recorded_by_the_runner(self) -> None:
+        code = _code(_CANVAS, "collect_warm_backdrop")
+        assert "_backdrop_failed.add" in code
+
+
+class TestOnlyTwoBackdropsAreHeld:
+    """A full-screen pixmap is ~9 MB; the bound must be structural."""
+
+    def test_the_canvas_keeps_exactly_two_slots(self) -> None:
+        source = _source(_CANVAS)
+        assert "self._backdrop: _BackdropSlot | None = None" in source
+        assert "self._prev_backdrop: _BackdropSlot | None = None" in source
+
+    def test_the_slots_are_not_a_growing_collection(self) -> None:
+        """A cache here could grow without bound, one full-screen pixmap per key."""
+        source = _source(_CANVAS)
+        assert "self._backdrops:" not in source
+        assert "self._backdrop_cache" not in source
+
+    def test_storing_reuses_the_slot_that_is_not_on_screen(self) -> None:
+        """That reuse is what makes the two slots sufficient.
+
+        Choosing by liveness rather than by searching for a key is also what
+        removes the release pass an earlier version needed.
+        """
+        code = _code(_CANVAS, "_store_backdrop")
+        assert "_is_live" in code
+        assert "self._prev_backdrop = slot" in code
+
+    def test_liveness_is_identity_not_equality(self) -> None:
+        """``QImage`` equality compares every pixel."""
+        code = _code(_CANVAS, "_is_live")
+        assert "is self._image" in code
+        assert "is self._prev_image" in code
+
+    def test_the_outgoing_backdrop_has_its_own_slot(self) -> None:
+        source = _source(_CANVAS)
+        assert "self._prev_backdrop" in source, "the outgoing layer needs its own"
 
 
 class TestTheParametersReachTheEngine:
@@ -609,8 +657,38 @@ class TestConfigValuesAreSanitised:
         assert defaults.get("darken") == 0.35
 
 
-class TestQtBehaviourWhenAvailable:
-    """The real thing, where PySide6 exists (the Pi, not CI)."""
+@pytest.fixture
+def canvas():
+    """A real ``FrameCanvas`` on an offscreen platform, so no display is needed."""
+    pytest.importorskip("PySide6", reason="PySide6 not installed (CI/desktop dev)")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from metixel.display.qt_canvas import FrameCanvas
+
+    app = QApplication.instance() or QApplication([])
+    widget = FrameCanvas()
+    try:
+        yield widget
+    finally:
+        widget.deleteLater()
+        del app
+
+
+class TestTheBackdropSlotsWhenQtIsAvailable:
+    """The real slot container, where PySide6 exists (the Pi, not CI).
+
+    ``QPixmap`` is deliberately avoided: a sentinel proves the slot logic just as
+    well, and creating a GUI-thread resource here would only add a way for the
+    test to fail for reasons that are not the behaviour under test.
+    """
+
+    @staticmethod
+    def _touch(tmp_path: Path, name: str) -> Path:
+        """A backdrop's identity includes the source's size and mtime."""
+        path = tmp_path / name
+        path.write_bytes(b"not a real image")
+        return path
 
     def _plan(self, **overrides):
         from metixel.framing.layout import RenderPlan
@@ -636,66 +714,75 @@ class TestQtBehaviourWhenAvailable:
         base.update(overrides)
         return RenderPlan(**base)
 
-    def test_the_backdrop_is_screen_sized(self) -> None:
-        pytest.importorskip("PySide6", reason="PySide6 not installed (CI/desktop dev)")
-        from PySide6.QtGui import QColor, QImage
-
-        from metixel.display.qt_canvas import FrameCanvas
-
-        canvas = FrameCanvas()
-        image = QImage(1600, 1200, QImage.Format.Format_RGB888)
-        image.fill(QColor(200, 40, 40))
-        canvas._image = image
-
-        pixmap = canvas._blurred_backdrop(self._plan())
-        assert pixmap is not None
-        assert (pixmap.width(), pixmap.height()) == (1920, 1200), (
-            "the backdrop must fill the screen, not the artwork rect"
+    def test_the_request_is_screen_sized(self, canvas, tmp_path: Path) -> None:
+        source = self._touch(tmp_path, "a.jpg")
+        request = canvas.backdrop_request(self._plan(), source)
+        assert request is not None
+        assert (request.width, request.height) == (1920, 1200), (
+            "the backdrop fills the screen, not the artwork rect"
         )
 
-    def test_a_repeat_call_reuses_the_pixmap(self) -> None:
-        pytest.importorskip("PySide6", reason="PySide6 not installed (CI/desktop dev)")
-        from PySide6.QtGui import QColor, QImage
+    def test_a_stored_backdrop_is_found_by_its_own_artwork(self, canvas, tmp_path: Path) -> None:
+        source = self._touch(tmp_path, "a.jpg")
+        request = canvas.backdrop_request(self._plan(), source)
+        assert request is not None
+        handle = object()
+        canvas._store_backdrop(request, handle, _SENTINEL)
 
-        from metixel.display.qt_canvas import FrameCanvas
+        assert canvas._backdrop_for(handle) is _SENTINEL
+        assert canvas._backdrop_for(object()) is None, "another layer must not borrow it"
 
-        canvas = FrameCanvas()
-        image = QImage(1600, 1200, QImage.Format.Format_RGB888)
-        image.fill(QColor(200, 40, 40))
-        canvas._image = image
+    def test_readiness_follows_the_stored_request(self, canvas, tmp_path: Path) -> None:
+        source = self._touch(tmp_path, "a.jpg")
         plan = self._plan()
+        assert canvas.backdrop_ready(plan, source) is False
 
-        first = canvas._blurred_backdrop(plan)
-        second = canvas._blurred_backdrop(plan)
-        assert first is second, "the per-frame call must reuse the cached blur"
+        request = canvas.backdrop_request(plan, source)
+        assert request is not None
+        canvas._store_backdrop(request, object(), _SENTINEL)
+        assert canvas.backdrop_ready(plan, source) is True
 
-    def test_darken_does_not_invalidate_the_blur(self) -> None:
-        """Twiddling brightness must not rebuild the pixmap."""
-        pytest.importorskip("PySide6", reason="PySide6 not installed (CI/desktop dev)")
-        from PySide6.QtGui import QColor, QImage
+    def test_a_different_radius_is_not_ready(self, canvas, tmp_path: Path) -> None:
+        """The blur is baked into the pixels, so the radius is part of identity."""
+        source = self._touch(tmp_path, "a.jpg")
+        request = canvas.backdrop_request(self._plan(ambient_blur_radius=8.0), source)
+        assert request is not None
+        canvas._store_backdrop(request, object(), _SENTINEL)
 
-        from metixel.display.qt_canvas import FrameCanvas
+        assert canvas.backdrop_ready(self._plan(ambient_blur_radius=60.0), source) is False
+        assert canvas.backdrop_ready(self._plan(ambient_blur_radius=8.0), source) is True
 
-        canvas = FrameCanvas()
-        image = QImage(1600, 1200, QImage.Format.Format_RGB888)
-        image.fill(QColor(200, 40, 40))
-        canvas._image = image
+    def test_a_new_screen_size_is_not_ready(self, canvas, tmp_path: Path) -> None:
+        """A resize or rotation changes the target, so the old one is stale."""
+        source = self._touch(tmp_path, "a.jpg")
+        request = canvas.backdrop_request(self._plan(), source)
+        assert request is not None
+        canvas._store_backdrop(request, object(), _SENTINEL)
 
-        first = canvas._blurred_backdrop(self._plan(ambient_darken=0.0))
-        second = canvas._blurred_backdrop(self._plan(ambient_darken=0.9))
-        assert first is second
+        smaller = self._plan(screen=(0.0, 0.0, 1280.0, 720.0))
+        assert canvas.backdrop_ready(smaller, source) is False
 
-    def test_a_new_radius_rebuilds(self) -> None:
-        pytest.importorskip("PySide6", reason="PySide6 not installed (CI/desktop dev)")
-        from PySide6.QtGui import QColor, QImage
+    def test_a_failed_backdrop_is_treated_as_ready(self, canvas, tmp_path: Path) -> None:
+        """Holding a slide for a backdrop that will never arrive is a stall."""
+        source = self._touch(tmp_path, "a.jpg")
+        plan = self._plan()
+        request = canvas.backdrop_request(plan, source)
+        assert request is not None
 
-        from metixel.display.qt_canvas import FrameCanvas
+        canvas._backdrop_failed.add(request.job_id)
+        assert canvas.backdrop_ready(plan, source) is True
 
-        canvas = FrameCanvas()
-        image = QImage(1600, 1200, QImage.Format.Format_RGB888)
-        image.fill(QColor(200, 40, 40))
-        canvas._image = image
+    def test_a_third_backdrop_reuses_a_slot_rather_than_growing(
+        self, canvas, tmp_path: Path
+    ) -> None:
+        """The bound is two full-screen pixmaps, by construction."""
+        handles = [object() for _ in range(3)]
+        for index, handle in enumerate(handles):
+            path = self._touch(tmp_path, f"{index}.jpg")
+            request = canvas.backdrop_request(self._plan(), path)
+            assert request is not None
+            canvas._store_backdrop(request, handle, _SENTINEL)
 
-        first = canvas._blurred_backdrop(self._plan(ambient_blur_radius=8.0))
-        second = canvas._blurred_backdrop(self._plan(ambient_blur_radius=60.0))
-        assert first is not second, "the blur is baked in, so it must rebuild"
+        held = [handle for handle in handles if canvas._backdrop_for(handle) is not None]
+        assert len(held) <= 2, "at most two full-screen pixmaps may be held"
+        assert canvas._backdrop_for(handles[-1]) is _SENTINEL, "the newest is kept"

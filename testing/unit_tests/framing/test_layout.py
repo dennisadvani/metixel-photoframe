@@ -113,8 +113,7 @@ class TestRebateIsNotDrawn:
         rect_fields = {
             name
             for name, value in RenderPlan.__dataclass_fields__.items()
-            if value.type in ("tuple[float, float, float, float]",)
-            or "tuple" in str(value.type)
+            if value.type in ("tuple[float, float, float, float]",) or "tuple" in str(value.type)
         }
         unexpected = rect_fields - drawable - {"artwork_src"}
         assert not unexpected, (
