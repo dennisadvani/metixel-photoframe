@@ -967,13 +967,23 @@ class FrameCanvas(QWidget):
         # Drawn into the SAME rounded rect as the cached path, so a fallback
         # frame has no seam either.
         drawn = _int_rect(plan.artwork_dst)
+        # The same source mapping the cached path uses: the image being drawn is
+        # not always the media the plan was laid out for.  Qt CLIPS a source
+        # rectangle that runs past the image and rescales whatever it did find,
+        # so a stale window is not harmless here either — just wrong differently.
+        window = _int_rect(plan.source_window(source_image.width(), source_image.height()))
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.drawImage(
             QRectF(
                 float(drawn.left()), float(drawn.top()), float(drawn.width()), float(drawn.height())
             ),
             source_image,
-            QRectF(float(int(sx)), float(int(sy)), float(int(sw)), float(int(sh))),
+            QRectF(
+                float(window.left()),
+                float(window.top()),
+                float(window.width()),
+                float(window.height()),
+            ),
         )
 
     def _scaled_artwork(self, plan: RenderPlan, image: QImage) -> QPixmap | None:
@@ -1004,7 +1014,6 @@ class FrameCanvas(QWidget):
             if self._prev_scaled_pixmap is not None and self._prev_scaled_key == key:
                 return self._prev_scaled_pixmap
 
-        sx, sy, sw, sh = plan.artwork_src
         # The destination is the curtain's own rect, so the artwork and the
         # region the curtain fills are complements BY CONSTRUCTION.  Deriving
         # the size any other way (e.g. ``int(dw)``) reintroduces the seam: the
@@ -1017,7 +1026,15 @@ class FrameCanvas(QWidget):
         # exactly the pixels the plan wants — ``artwork_src`` is a sub-rectangle
         # for ``overflow="crop"``, and scaling before cropping would sample
         # pixels the plan discards.
-        cropped = image.copy(QRect(int(sx), int(sy), max(1, int(sw)), max(1, int(sh))))
+        #
+        # ``source_window`` maps the plan's media space onto THIS image, and the
+        # two are not always the same thing: a video is drawn as its pre-generated
+        # poster, which ffmpeg has already shrunk to fit the screen.  Cropping in
+        # video pixels then reaches past the poster's edge, and ``QImage.copy``
+        # pads that overhang black instead of clipping it — the poster ended up in
+        # the corner of the panel with the rest of the screen black.
+        window = _int_rect(plan.source_window(image.width(), image.height()))
+        cropped = image.copy(window)
         if cropped.isNull():
             return None
         scaled = cropped.scaled(

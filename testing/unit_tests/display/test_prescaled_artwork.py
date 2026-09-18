@@ -29,12 +29,14 @@ installed.  Anything needing Qt uses ``pytest.importorskip``.
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
 
 _DISPLAY_DIR = Path(__file__).resolve().parents[3] / "src" / "metixel" / "display"
 _CANVAS = _DISPLAY_DIR / "qt_canvas.py"
+_TK_BACKEND = _DISPLAY_DIR / "tk_backend.py"
 
 
 def _source(path: Path) -> str:
@@ -349,3 +351,96 @@ class TestQtBehaviourWhenAvailable:
         assert first is not None and second is not None
         assert first is not second, "different geometry must not reuse the pixmap"
         assert second.width() == 400, "the new destination is honoured"
+
+
+class TestTheCropIsMappedIntoTheImageThatIsDrawn:
+    """``artwork_src`` is in the plan's media pixels, which need not be the image's.
+
+    Regression: a video is laid out against the **video's** dimensions
+    (``video.py::_build_item`` records the probe's width/height) but drawn as its
+    pre-generated first-frame poster, which ffmpeg has already scaled to fit the
+    screen.  For the 1080x1920 sample on a 1920x1200 panel the plan's crop window
+    is ``(0, 623.8, 1080, 672.4)`` in video pixels while the poster is 676x1200,
+    so the window ran 404 px past the poster's right edge.  ``QImage.copy`` does
+    NOT clip an out-of-range rectangle — it returns one of the requested size and
+    pads the overhang black — and that crop was then scaled up to the whole
+    screen: the poster in the top-left corner, black everywhere else.
+
+    Invisible whenever the source video is no larger than the panel, because the
+    fit-inside scale filter is then a no-op and the poster matches the media
+    exactly.  The 1920x1080 landscape sample is exactly that case.
+    """
+
+    def test_the_cached_path_maps_before_it_crops(self) -> None:
+        code = _code_without_docstring(_CANVAS, "_scaled_artwork")
+        assert "plan.source_window(image.width(), image.height())" in code
+        assert "image.copy(window)" in code
+        assert "image.copy(QRect(" not in code, (
+            "cropping with the raw plan rect is the bug: it overruns the image and "
+            "QImage.copy pads the overhang black instead of clipping it"
+        )
+
+    def test_the_fallback_draw_maps_too(self) -> None:
+        code = _code_without_docstring(_CANVAS, "_draw_artwork")
+        assert "plan.source_window(source_image.width(), source_image.height())" in code
+        assert "float(int(sx))" not in code, (
+            "Qt CLIPS an over-long source rect and rescales what it found, "
+            "so a wrong window is merely wrong differently"
+        )
+
+    def test_the_tk_backend_maps_too(self) -> None:
+        """Desktop dev must not disagree with the panel it stands in for."""
+        body = _method_body(_TK_BACKEND, "_artwork")
+        assert "plan.source_window(pil_img.width, pil_img.height)" in body
+
+
+@pytest.fixture
+def canvas():
+    """A real ``FrameCanvas`` on an offscreen platform, so no display is needed."""
+    pytest.importorskip("PySide6", reason="PySide6 not installed (CI/desktop dev)")
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from metixel.display.qt_canvas import FrameCanvas
+
+    app = QApplication.instance() or QApplication([])
+    widget = FrameCanvas()
+    try:
+        yield widget
+    finally:
+        widget.deleteLater()
+        del app
+
+
+class TestThePosterOverhangIsNeverPainted:
+    """The real pixels, where PySide6 exists (the Pi, not CI)."""
+
+    def test_a_portrait_video_poster_fills_the_frame(self, canvas) -> None:
+        """A white poster must stay white to every corner of the frame."""
+        from PySide6.QtGui import QColor, QImage
+
+        from metixel.framing.layout import LayoutEngine
+        from metixel.framing.resolve import MediaSize
+
+        # Laid out against the VIDEO (1080x1920); drawn from the POSTER (676x1200).
+        plan = LayoutEngine(1920, 1200, style="borderless", overflow="crop").compute(
+            MediaSize(1080, 1920, "video")
+        )
+        poster = QImage(676, 1200, QImage.Format.Format_RGB888)
+        poster.fill(QColor(255, 255, 255))
+
+        pixmap = canvas._scaled_artwork(plan, poster)
+        assert pixmap is not None, "the crop still found something to draw"
+
+        painted = pixmap.toImage()
+        corners = (
+            (0, 0),
+            (painted.width() - 1, 0),
+            (0, painted.height() - 1),
+            (painted.width() - 1, painted.height() - 1),
+        )
+        for x, y in corners:
+            colour = painted.pixelColor(x, y)
+            assert colour.red() > 200, (
+                f"({x}, {y}) is {colour.name()} — the poster's overhang was padded black"
+            )

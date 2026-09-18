@@ -252,20 +252,27 @@ class TkBackend(DisplayBackend):
         is how ``overflow="crop"`` discards the parts of a photo that fall
         outside the Mat Window.  Honouring it here keeps cover-cropping identical
         to the Qt backend instead of re-deriving it per backend.
+
+        ``source_window`` crosses from the plan's media space into this image's
+        pixels.  That is the identity for a photo, but a video is drawn as its
+        pre-generated poster, which ffmpeg has already shrunk to fit the screen —
+        cropping in video pixels samples past the poster's edge, and PIL pads the
+        overhang black exactly as ``QImage.copy`` does.
         """
         pil_img = self._images.get(handle) if isinstance(handle, int) else handle
         if pil_img is None or self._canvas is None:
             return
 
-        sx, sy, sw, sh = plan.artwork_src
         dx, dy, dw, dh = plan.artwork_dst
+        sx, sy, sw, sh = plan.artwork_src
         if sw <= 0 or sh <= 0 or dw <= 0 or dh <= 0:
             return
+        sx, sy, sw, sh = plan.source_window(pil_img.width, pil_img.height)
 
         try:
             frame = pil_img
             if (sx, sy, sw, sh) != (0.0, 0.0, float(pil_img.width), float(pil_img.height)):
-                frame = pil_img.crop((int(sx), int(sy), int(sx + sw), int(sy + sh)))
+                frame = pil_img.crop((round(sx), round(sy), round(sx + sw), round(sy + sh)))
             resized = frame.resize((max(1, int(dw)), max(1, int(dh))), Image.Resampling.LANCZOS)
         except Exception:
             logger.debug("Failed to render artwork for handle %s", handle, exc_info=True)

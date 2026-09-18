@@ -247,12 +247,26 @@ class TestFfmpegCmds:
         assert cmd[cmd.index("-sseof") + 1] == "-1"
         assert "-update" in cmd and "1" in cmd
 
-    def test_scale_filter_even_pad(self):
+    def test_scale_filter_is_even_without_padding(self):
+        """Even dimensions are an encoder requirement; black edges are not.
+
+        ``pad`` was used to round the fitted size up to an even one, and it fills
+        the columns it adds with **black**.  The portrait sample's poster came
+        back 676 px wide with two black columns, which scales up to a ~6 px black
+        line down the edge of the artwork on the panel.  ``force_divisible_by=2``
+        rounds the fitted size instead, so the same even 676x1200 comes back with
+        every pixel real.
+        """
         from metixel.backend.processing.ffmpeg_cmds import _scale_filter
 
         f = _scale_filter(1920, 1080)
         assert "scale='min(1920,iw)':'min(1080,ih)'" in f
-        assert "pad='ceil(iw/2)*2:ceil(ih/2)*2" in f
+        assert "force_original_aspect_ratio=decrease" in f
+        assert "force_divisible_by=2" in f, "the fitted size must come back even"
+        assert "pad=" not in f, (
+            "pad fills the columns it adds with black — that is the black line "
+            "down the edge of the still"
+        )
 
     def test_transcode_cmd_libx264_profile(self):
         profile = {

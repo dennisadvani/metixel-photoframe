@@ -23,11 +23,18 @@ logger = logging.getLogger(__name__)
 
 
 def _scale_filter(screen_w: int, screen_h: int) -> str:
-    """Aspect-preserving scale + even-dimension pad filter (screen-sized)."""
+    """Aspect-preserving scale to fit inside the screen, at even dimensions.
+
+    ``force_divisible_by=2`` and not a following ``pad``: the JPEG encoder
+    subsamples chroma, so the fitted size has to be even, but ``pad`` fills the
+    column it adds with **black**.  The portrait sample's poster came back 676 px
+    wide of which the last two columns were black, and at full panel width that
+    is a ~6 px black line down the edge of the artwork.  Rounding the fitted size
+    keeps the dimension even with every pixel real.
+    """
     return (
         f"scale='min({screen_w},iw)':'min({screen_h},ih)'"
-        f":force_original_aspect_ratio=decrease,"
-        f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
+        f":force_original_aspect_ratio=decrease:force_divisible_by=2"
     )
 
 

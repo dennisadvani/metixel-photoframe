@@ -22,6 +22,9 @@ RENDERER = pathlib.Path("src/metixel/frontend/renderer.py")
 TESTS = [
     "testing/unit_tests/display/test_blur_backdrop.py",
     "testing/unit_tests/display/test_backdrop_warm.py",
+    # The artwork guards share ``qt_canvas.py`` with the backdrop ones, and the
+    # crop they pin is on the same draw path — a canvas mutation can break either.
+    "testing/unit_tests/display/test_prescaled_artwork.py",
 ]
 
 MUTATIONS: list[tuple[str, pathlib.Path, str, str]] = [
@@ -187,6 +190,16 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str]] = [
         CANVAS,
         "        region = QRegion(self.rect()).subtracted(QRegion(_int_rect(plan.artwork_dst)))\n        if region.isEmpty():\n            return\n\n        painter.save()\n        try:\n            painter.setClipRegion(region)\n            painter.setOpacity",
         "        region = QRegion(self.rect())\n        if region.isEmpty():\n            return\n\n        painter.save()\n        try:\n            painter.setClipRegion(region)\n            painter.setOpacity",
+    ),
+    (
+        # A video is laid out against the VIDEO's dimensions but drawn as the
+        # poster ffmpeg already shrank to fit the screen, so a window in media
+        # pixels runs past the image — and ``QImage.copy`` pads the overhang black
+        # rather than clipping it.
+        "crop-in-media-space: the crop ignores the image's pixel space",
+        CANVAS,
+        "        window = _int_rect(plan.source_window(image.width(), image.height()))\n        cropped = image.copy(window)",
+        "        window = _int_rect(plan.artwork_src)\n        cropped = image.copy(window)",
     ),
 ]
 

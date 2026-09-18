@@ -107,15 +107,18 @@ class TestRebateIsNotDrawn:
     def test_render_plan_fields_are_all_drawable_layers(self) -> None:
         """Every rect in the plan is something the canvas actually paints."""
         plan = _landscape(style="gallery").compute(MediaSize(3000, 2000))
-        # The five drawn things, plus the source window (a sampling instruction,
-        # not a screen rect) and metadata.
+        # The five drawn things, plus metadata and the two *source-space* entries:
+        # ``artwork_src`` is a sampling instruction and ``source_size`` is the
+        # media size that instruction is expressed in.  Neither is a screen rect,
+        # which is the distinction this guard exists to keep — a new field here
+        # must be one or the other, never an undrawn screen rectangle.
         drawable = {"screen", "ambient", "artwork_dst", "whitespace", "matte", "moulding"}
         rect_fields = {
             name
             for name, value in RenderPlan.__dataclass_fields__.items()
             if value.type in ("tuple[float, float, float, float]",) or "tuple" in str(value.type)
         }
-        unexpected = rect_fields - drawable - {"artwork_src"}
+        unexpected = rect_fields - drawable - {"artwork_src", "source_size"}
         assert not unexpected, (
             f"RenderPlan gained rect fields that are not drawn layers: {sorted(unexpected)}"
         )
@@ -367,6 +370,110 @@ class TestOverflow:
         """With a ring the Mat Window is cut to the artwork: no residue."""
         plan = _landscape(style="gallery").compute(MediaSize(4000, 1500))
         assert plan.ambient is None
+
+
+def _naked_plan(
+    *,
+    artwork_src: tuple[float, float, float, float] = (10.0, 20.0, 30.0, 40.0),
+    source_size: tuple[float, float] = (0.0, 0.0),
+) -> RenderPlan:
+    """A hand-built plan — the shape tests and the preview endpoint produce."""
+    return RenderPlan(
+        screen=(0.0, 0.0, 1920.0, 1200.0),
+        ambient=None,
+        artwork_dst=(0.0, 0.0, 1920.0, 1200.0),
+        artwork_src=artwork_src,
+        source_size=source_size,
+        whitespace=(),
+        matte=(),
+        moulding=(),
+        matte_colour="#000000",
+        whitespace_colour="#ffffff",
+        ambient_colour="#101014",
+        style="borderless",
+        branch="virtual",
+        overflow="fill",
+    )
+
+
+# ---------------------------------------------------------------------------
+# The plan's source space vs the image actually drawn
+# ---------------------------------------------------------------------------
+
+
+class TestSourceWindowMapsIntoTheDrawnImage:
+    """``artwork_src`` is in the plan's MEDIA pixels; the image may be smaller.
+
+    Regression: a video is laid out against the video's own dimensions but drawn
+    as its pre-generated first-frame poster, which ffmpeg has already scaled to
+    fit the screen (``scale=min(screen,source):force_original_aspect_ratio=
+    decrease``).  The crop window is a window in *video* pixels, so applying it to
+    the poster sampled past its edge — and neither ``QImage.copy`` nor PIL's
+    ``crop`` clips a source rectangle; both pad the overhang black.  On the panel
+    that read as the poster in the top-left corner with the rest of the screen
+    black.
+    """
+
+    #: The portrait sample, and the poster ffmpeg derives from it on a 1920x1200
+    #: panel: 1080x1920 fitted inside min(1920,1080) x min(1200,1920) = 675x1200,
+    #: padded to even dimensions.
+    VIDEO = MediaSize(1080, 1920, "video")
+    POSTER = (676, 1200)
+
+    def _portrait(self) -> RenderPlan:
+        return _landscape(style="borderless", overflow="crop").compute(self.VIDEO)
+
+    def test_the_plan_states_the_media_it_was_laid_out_for(self) -> None:
+        assert self._portrait().source_size == (1080.0, 1920.0)
+
+    def test_an_unusable_size_still_states_a_usable_source(self) -> None:
+        """A zero-sized item is drawn full-bleed from a 1x1 source, not a 0x0 one."""
+        plan = _landscape(style="borderless").compute(MediaSize(0, 0))
+        assert plan.source_size == (1.0, 1.0)
+
+    def test_the_unmapped_window_really_does_overrun_the_poster(self) -> None:
+        """Otherwise the sizing test below could pass without mapping anything."""
+        sx, _, sw, _ = self._portrait().artwork_src
+        assert sx + sw > self.POSTER[0], "the crop window is wider than the poster"
+
+    def test_the_window_is_scaled_into_the_image(self) -> None:
+        sx, sy, sw, sh = self._portrait().source_window(*self.POSTER)
+        assert (sx, sw) == pytest.approx((0.0, 676.0), abs=0.5)
+        assert sy == pytest.approx(389.9, abs=0.5)
+        assert sh == pytest.approx(420.2, abs=0.5)
+
+    def test_the_mapped_window_is_inside_the_image(self) -> None:
+        sx, sy, sw, sh = self._portrait().source_window(*self.POSTER)
+        assert sx >= 0.0 and sy >= 0.0
+        assert sx + sw <= self.POSTER[0]
+        assert sy + sh <= self.POSTER[1]
+
+    def test_the_mapped_window_keeps_the_destination_aspect(self) -> None:
+        """Still the centred cover crop — only the units changed."""
+        plan = self._portrait()
+        _, _, sw, sh = plan.source_window(*self.POSTER)
+        _, _, aw, ah = plan.artwork_dst
+        assert (sw / sh) == pytest.approx(aw / ah, rel=0.01)
+
+    def test_an_image_matching_the_media_is_returned_unchanged(self) -> None:
+        plan = _landscape(style="borderless", overflow="fill").compute(MediaSize(4000, 1500))
+        assert plan.source_window(4000, 1500) == plan.artwork_src == (0.0, 0.0, 4000.0, 1500.0)
+
+    def test_a_plan_that_does_not_state_its_media_is_left_alone(self) -> None:
+        """Hand-built plans (tests, previews) predate the field."""
+        plan = _naked_plan()
+        assert plan.source_size == (0.0, 0.0)
+        assert plan.source_window(100, 100) == plan.artwork_src
+
+    def test_a_degenerate_window_degrades_to_the_whole_image(self) -> None:
+        """An empty crop is a blank frame, and a display must never show one."""
+        plan = _naked_plan(artwork_src=(0.0, 0.0, 0.0, 0.0), source_size=(1080.0, 1920.0))
+        assert plan.source_window(676, 1200) == (0.0, 0.0, 676.0, 1200.0)
+
+    def test_the_media_size_is_reported_for_debugging(self) -> None:
+        """``describe`` answers a geometry question without a screenshot."""
+        engine = _landscape(style="borderless", overflow="crop")
+        assert engine.describe(self._portrait())["source_size"] == (1080.0, 1920.0)
 
 
 # ---------------------------------------------------------------------------

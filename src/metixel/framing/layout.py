@@ -89,6 +89,18 @@ class RenderPlan:
     branch: str
     overflow: str
 
+    #: Pixel size of the media this plan was laid out for, as ``(width,
+    #: height)``.  :attr:`artwork_src` is expressed in THIS space, but the image
+    #: a backend is handed is not always the media: a video is presented as its
+    #: pre-generated first-frame poster, which ffmpeg has already shrunk to fit
+    #: the screen.  Use :meth:`source_window` to cross between the two — a crop
+    #: window applied in the wrong space reaches past the image, and both Qt and
+    #: PIL pad that overhang **black**.
+    #:
+    #: ``(0, 0)`` means "not stated": the window is then taken to be in image
+    #: pixels, which is what every caller assumed before this existed.
+    source_size: tuple[float, float] = (0.0, 0.0)
+
     #: Ambient strategy (``solid``/``blur``/``bars``).  The canvas needs it
     #: because ``blur`` paints a full-bleed blurred backdrop rather than a flat
     #: colour, and both are decided at the same place.
@@ -123,6 +135,47 @@ class RenderPlan:
     def matte_rects(self) -> tuple[PxRect, ...]:
         """Legacy alias for :attr:`matte`."""
         return self.matte
+
+    def source_window(self, image_width: int, image_height: int) -> PxRect:
+        """Return :attr:`artwork_src` in the pixels of the image being drawn.
+
+        For an image the two spaces are the same and this returns
+        :attr:`artwork_src` unchanged.  For a video they are not: the plan is
+        laid out against the **video's** dimensions, while what gets drawn is the
+        pre-generated first-frame poster that ffmpeg shrank to fit the screen.  A
+        1080x1920 video on a 1920x1200 panel has a 676x1200 poster, so the plan's
+        centred crop window — ``(0, 623.8, 1080, 672.4)``, in video pixels — runs
+        404 px past the poster's right edge.  Neither ``QImage.copy`` nor PIL's
+        ``crop`` clips a source rectangle: both pad the overhang **black**, which
+        is what put a portrait video's poster in the top-left corner of the
+        screen with the rest of the panel black.
+
+        Scaling the window by the image-to-media ratio samples the same part of
+        the picture, and the result is clamped into the image, so a mismatch can
+        never paint black.  Degrading to the whole image is deliberate: an
+        unframed photo beats a blank one, and rule 7 is that a display never
+        shows a broken frame.
+
+        ``(0, 0)`` in :attr:`source_size` means the caller did not say, so the
+        window is returned unchanged — the behaviour every caller had before.
+        """
+        sx, sy, sw, sh = self.artwork_src
+        media_w, media_h = self.source_size
+        if media_w <= 0 or media_h <= 0 or image_width <= 0 or image_height <= 0:
+            return self.artwork_src
+
+        scale_x = image_width / media_w
+        scale_y = image_height / media_h
+        if scale_x == 1.0 and scale_y == 1.0:
+            return self.artwork_src
+
+        left = min(max(sx * scale_x, 0.0), float(image_width))
+        top = min(max(sy * scale_y, 0.0), float(image_height))
+        right = min(max((sx + sw) * scale_x, left), float(image_width))
+        bottom = min(max((sy + sh) * scale_y, top), float(image_height))
+        if right - left < 1.0 or bottom - top < 1.0:
+            return (0.0, 0.0, float(image_width), float(image_height))
+        return (left, top, right - left, bottom - top)
 
 
 def _to_px(rect: Rect, sx: float, sy: float) -> PxRect:
@@ -363,6 +416,7 @@ class LayoutEngine:
                 ambient=None,
                 artwork_dst=full,
                 artwork_src=(0.0, 0.0, float(max(media.width, 1)), float(max(media.height, 1))),
+                source_size=(float(max(media.width, 1)), float(max(media.height, 1))),
                 whitespace=(),
                 matte=(),
                 moulding=(),
@@ -433,6 +487,7 @@ class LayoutEngine:
             ambient=ambient,
             artwork_dst=artwork_dst,
             artwork_src=_crop_source(result, media),
+            source_size=(float(media.width), float(media.height)),
             whitespace=whitespace_bands,
             matte=_annulus(frame_opening, mat_window) if mat_window != frame_opening else (),
             moulding=_annulus(frame_outer, frame_opening),
@@ -464,6 +519,7 @@ class LayoutEngine:
             "ambient": plan.ambient,
             "artwork_dst": plan.artwork_dst,
             "artwork_src": plan.artwork_src,
+            "source_size": plan.source_size,
             "whitespace": plan.whitespace,
             "matte": plan.matte,
             "moulding": plan.moulding,
