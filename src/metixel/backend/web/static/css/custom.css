@@ -966,20 +966,26 @@ button:focus-visible {
 
 /* Upload is only allowed into a specific folder — greyed out until one is
    picked in the folder filter. */
-.media-toolbar #btn-upload-media:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-    box-shadow: none;
-    background: var(--primary);
-    transform: none;
-}
-
 .media-toolbar .media-toolbar-hint {
     /* The hint lives on its own line under the upload controls. */
     flex-basis: 100%;
     font-size: 0.78rem;
     color: var(--text-muted);
     margin-top: -0.35rem;
+}
+
+/* "Save to <folder>" — the upload destination picker in the media toolbar. */
+#btn-upload-destination {
+    margin-top: 0;
+    margin-right: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#btn-upload-destination .material-symbols-outlined {
+    flex-shrink: 0;
 }
 
 /* "Open the SMB share" accordion under the Upload Media button */

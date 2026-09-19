@@ -362,11 +362,14 @@ def upload_media():
     """Upload media files into the user-media watch folder.
 
     Accepts ``multipart/form-data`` with multiple files under the ``files``
-    field name.  The optional ``folder`` field names the *enabled watch
-    folder* to save into (the ``folder`` value shown by ``/api/media/list``
-    and the Media Library folder filter); an unknown or disabled folder is
-    rejected.  Without ``folder`` the legacy destination is used (the
-    ``system.upload_dir`` config value, else ``media/my_media/``).
+    field name.  Files land in the destination chosen with the toolbar's
+    "Save to" control (the ``system.upload_dir`` config value, else
+    ``media/my_media/``).
+
+    A ``folder`` field naming an enabled watch folder is still honoured when
+    present, because the Media Library sends it — but nothing requires it,
+    and an unrecognised value falls back to the configured destination
+    rather than failing the upload.
 
     Files are auto-renamed on name collision and must satisfy the extension
     whitelist.  HEIC/HEIF images are converted to JPEG on arrival because
@@ -387,24 +390,10 @@ def upload_media():
     state = current_app.config["METIXEL_STATE"]
     folder = (request.form.get("folder") or "").strip()
     try:
-        if folder:
-            upload_dir = _resolve_watch_folder_by_name(state, folder)
-            if upload_dir is None:
-                return (
-                    jsonify(
-                        {
-                            "status": "error",
-                            "error": f"Unknown folder: {folder}",
-                            "message": f"'{folder}' is not an enabled watch folder",
-                            "saved": [],
-                            "errors": [{"name": None, "error": f"Unknown folder: {folder}"}],
-                        }
-                    ),
-                    400,
-                )
-            upload_dir.mkdir(parents=True, exist_ok=True)
-        else:
+        upload_dir = _resolve_watch_folder_by_name(state, folder) if folder else None
+        if upload_dir is None:
             upload_dir = _resolve_upload_dir(state)
+        upload_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         logger.error("Cannot create upload directory: %s", exc)
         return (

@@ -215,33 +215,46 @@ def test_upload_into_named_watch_folder(app, client, mock_state, tmp_path):
     assert not (tmp_path / "media" / "my_media").exists()
 
 
-def test_upload_unknown_folder_rejected(app, client, mock_state, tmp_path):
+def test_upload_unknown_folder_falls_back_to_configured_destination(
+    app, client, mock_state, tmp_path
+):
+    """An unrecognised ``folder`` is ignored — the upload still succeeds.
+
+    The Media Library sends the folder-filter value, but the toolbar's
+    "Save to" destination is the authority.  Falling back (rather than
+    rejecting) keeps uploads working when the filter names a folder the
+    backend does not know about — e.g. a watch path removed since the page
+    was rendered.
+    """
     mock_state.update_config(
         "sync",
         {"local": {"watch_paths": [{"path": str(tmp_path / "holiday"), "enabled": True}]}},
     )
+    mock_state.update_config("system", {"media_dir": str(tmp_path / "media")})
 
     resp = _upload_to(client, "nope", [("photo.jpg", b"\xff\xd8\xff\xe0x")])
 
-    assert resp.status_code == 400
-    body = resp.get_json()
-    assert body["saved"] == []
-    assert "nope" in body["error"]
-    assert not list(tmp_path.rglob("photo.jpg"))
+    assert resp.status_code == 201
+    # Landed in the configured destination, not the unknown folder.
+    assert (tmp_path / "media" / "my_media" / "photo.jpg").exists()
+    assert not (tmp_path / "holiday" / "photo.jpg").exists()
 
 
-def test_upload_into_disabled_watch_folder_rejected(app, client, mock_state, tmp_path):
-    """A disabled watch folder is never scanned, so uploads there are refused."""
+def test_upload_into_disabled_watch_folder_falls_back(app, client, mock_state, tmp_path):
+    """A disabled watch folder is not a valid target, so the configured
+    destination is used instead of refusing the upload."""
     off = tmp_path / "off"
     mock_state.update_config(
         "sync",
         {"local": {"watch_paths": [{"path": str(off), "enabled": False}]}},
     )
+    mock_state.update_config("system", {"media_dir": str(tmp_path / "media")})
 
     resp = _upload_to(client, "off", [("photo.jpg", b"\xff\xd8\xff\xe0x")])
 
-    assert resp.status_code == 400
+    assert resp.status_code == 201
     assert not (off / "photo.jpg").exists()
+    assert (tmp_path / "media" / "my_media" / "photo.jpg").exists()
 
 
 def test_upload_without_folder_keeps_legacy_destination(app, client, mock_state, tmp_path):

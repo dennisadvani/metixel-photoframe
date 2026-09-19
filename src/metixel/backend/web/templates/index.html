@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=44">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=45">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -299,11 +299,14 @@
                 <div id="card-media-library" class="card">
                     <h2>Media Library</h2>
                     <div class="media-toolbar">
-                        <button id="btn-upload-media" type="button" disabled>
+                        <button id="btn-upload-media" type="button">
                             <span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">upload</span> Upload Media
                         </button>
+                        <button id="btn-upload-destination" type="button" class="btn--secondary btn--sm" aria-label="Choose where uploaded media is saved" title="Choose where uploaded media is saved">
+                            <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span> Save to&nbsp;<span id="media-upload-destination">media/my_media/</span>
+                        </button>
                         <input type="file" id="file-upload" accept="image/*,video/*" multiple style="display:none">
-                        <span class="media-toolbar-hint" id="media-toolbar-hint">Select a folder to enable Upload Media</span>
+                        <span class="media-toolbar-hint">Tap to pick photos/videos, or drag &amp; drop onto the grid</span>
                     </div>
                     <details class="media-smb" id="media-smb">
                         <summary>

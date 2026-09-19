@@ -22,6 +22,8 @@ import {
     var _mediaLoading = false;
     /** Guard so upload/drop bindings are attached once */
     var _mediaUploadBound = false;
+    /** Guard so the upload-destination browse button is bound once. */
+    var _mediaDestBound = false;
     /** Guard so the per-item "⋮" menu delegation is attached once. */
     var _mediaMenuBound = false;
 
@@ -34,6 +36,8 @@ import {
         el.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
 
         var config = await apiGet("/config");
+
+        _setupUploadDestination(config);
 
         // Populate folder filter dropdown from enabled watch paths only.
         // The media API only scans enabled paths, so a disabled folder
@@ -63,7 +67,6 @@ import {
                 if (previous) sel.value = previous;
             }
         }
-        _updateUploadState();
 
         await _fetchMediaPage(0);
 
@@ -110,7 +113,6 @@ import {
         if (nameInput) nameInput.value = "";
         if (folderSel) folderSel.value = "";
         if (typeSel) typeSel.value = "";
-        _updateUploadState();
         _applyMediaFilters();
     }
 
@@ -200,9 +202,7 @@ import {
         _mediaFiltersBound = true;
 
         // Folder & type apply immediately on change (single discrete events).
-        // The folder choice also gates + targets uploads.
         document.getElementById("media-filter-folder")?.addEventListener("change", function () {
-            _updateUploadState();
             _applyMediaFilters();
         });
         document.getElementById("media-filter-type")?.addEventListener("change", function () {
@@ -470,43 +470,80 @@ function _adjustMediaSummary(mediaType) {
 
 // -- Upload target ------------------------------------------------------
 
-var _UPLOAD_HINT_READY = "Tap to pick photos/videos, or drag & drop onto the grid";
-var _UPLOAD_HINT_NEED_FOLDER = "Select a folder to enable Upload Media";
+/**
+ * Initialise the "where uploads are copied" control in the media toolbar.
+ *
+ * Reads the persisted ``system.upload_dir`` config value (relative paths are
+ * resolved under the persistent data dir) and lets the user browse for a new
+ * destination via the shared folder browser.  The chosen folder is saved to
+ * config immediately on Select.
+ */
+async function _setupUploadDestination(config) {
+    var btn = document.getElementById("btn-upload-destination");
+    var label = document.getElementById("media-upload-destination");
 
-/** The watch-folder name chosen in the folder filter, or "" for All folders. */
-function _selectedUploadFolder() {
-    var sel = document.getElementById("media-filter-folder");
-    return sel ? (sel.value || "") : "";
+    // Nothing to wire up if the toolbar control isn't present.
+    if (!btn && !label) return;
+
+    var configured = (config && config.system && config.system.upload_dir) || "";
+    var value = String(configured || "").trim();
+
+    if (label) {
+        // Fall back to the legacy default when nothing is persisted yet.
+        label.textContent = value || "media/my_media/";
+        label.title = value || "Default destination (media/my_media/) \u2014 uploads must land in an enabled folder to reach the slideshow";
+    }
+
+    if (!_mediaDestBound) {
+        _mediaDestBound = true;
+        if (btn) {
+            btn.addEventListener("click", function () {
+                // Start at the currently shown destination (fresh each click —
+                // the label is updated on every loadMedia and after each save).
+                var curLabel = document.getElementById("media-upload-destination");
+                openFolderBrowser(null, {
+                    initialPath: curLabel ? curLabel.textContent.trim() : "",
+                    onSelect: function (absPath, browseData) {
+                        var relPath = relativeForConfig(absPath, browseData && browseData.base_path);
+                        _saveUploadDestination(relPath);
+                    }
+                });
+            });
+        }
+    }
 }
 
-/** Human-readable path of the selected folder (the option's label). */
-function _selectedUploadFolderLabel() {
-    var sel = document.getElementById("media-filter-folder");
-    if (!sel || !sel.value) return "";
-    var opt = sel.options[sel.selectedIndex];
-    return opt ? opt.textContent : sel.value;
+/** Persist the chosen upload destination (data-dir-relative) to config. */
+async function _saveUploadDestination(relPath) {
+    var result = await apiPut("/config/system", { upload_dir: relPath });
+    if (result) {
+        var label = document.getElementById("media-upload-destination");
+        if (label) {
+            label.textContent = relPath;
+            label.title = relPath + " \u2014 uploads must land in an enabled folder to reach the slideshow";
+        }
+        showToast("Upload destination set to " + relPath, "success");
+    } else {
+        showToast("Failed to save the upload destination", "error");
+    }
 }
 
 /**
- * Uploads always go into the folder picked in the folder filter, so the
- * Upload button (and drag & drop) is disabled while "All folders" is
- * selected.  Called on load and whenever the folder filter changes.
+ * Convert an absolute data-dir path to the relative form config stores
+ * (relative paths resolve under the persistent data dir on the backend).
+ * Separators are normalised to forward slashes so values stay portable
+ * across OSes (Windows dev runs produce backslash paths otherwise).
+ * Falls back to the absolute path when the folder isn't under the data dir.
  */
-function _updateUploadState() {
-    var btn = document.getElementById("btn-upload-media");
-    var hint = document.getElementById("media-toolbar-hint");
-    var folder = _selectedUploadFolder();
-    if (btn) {
-        btn.disabled = !folder;
-        btn.title = folder
-            ? "Upload into " + _selectedUploadFolderLabel()
-            : _UPLOAD_HINT_NEED_FOLDER;
+function relativeForConfig(absPath, basePath) {
+    var base = String(basePath || "/opt/metixel/data").replace(/\\/g, "/");
+    var p = String(absPath || "").replace(/\\/g, "/");
+    if (p.indexOf(base) === 0) {
+        var rel = p.substring(base.length).replace(/^\/+/, "");
+        if (rel && rel[rel.length - 1] !== "/") rel += "/";
+        return rel;
     }
-    if (hint) {
-        hint.textContent = folder
-            ? "Uploads go to " + _selectedUploadFolderLabel() + " \u2014 " + _UPLOAD_HINT_READY
-            : _UPLOAD_HINT_NEED_FOLDER;
-    }
+    return p;
 }
 
 // -- Upload -------------------------------------------------------------
@@ -521,10 +558,6 @@ function _bindUpload() {
 
     if (btn && input) {
         btn.addEventListener("click", function () {
-            if (!_selectedUploadFolder()) {
-                showToast(_UPLOAD_HINT_NEED_FOLDER, "info");
-                return;
-            }
             input.click();
         });
         input.addEventListener("change", function () {
@@ -541,8 +574,7 @@ function _bindUpload() {
         list.addEventListener("dragenter", function (e) {
             e.preventDefault();
             depth++;
-            // No drop target highlight while uploads are disabled.
-            if (_selectedUploadFolder()) list.classList.add("drop-active");
+            list.classList.add("drop-active");
         });
         list.addEventListener("dragover", function (e) {
             e.preventDefault();
@@ -556,10 +588,6 @@ function _bindUpload() {
             e.preventDefault();
             depth = 0;
             list.classList.remove("drop-active");
-            if (!_selectedUploadFolder()) {
-                showToast(_UPLOAD_HINT_NEED_FOLDER, "info");
-                return;
-            }
             if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
                 _uploadFiles(e.dataTransfer.files);
             }
@@ -571,14 +599,7 @@ function _uploadFiles(files) {
     var list = Array.prototype.slice.call(files);
     if (!list.length) return;
 
-    var folder = _selectedUploadFolder();
-    if (!folder) {
-        showToast(_UPLOAD_HINT_NEED_FOLDER, "info");
-        return;
-    }
-
     var form = new FormData();
-    form.append("folder", folder);
     list.forEach(function (f) {
         form.append("files", f, f.name);
     });
