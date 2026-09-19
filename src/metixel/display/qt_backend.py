@@ -14,7 +14,8 @@ The backend owns exactly two surfaces:
   paints a :class:`~metixel.framing.layout.RenderPlan` (ambient fill, artwork,
   whitespace, mat, moulding) in one pass.
 * :class:`~metixel.display.qt_mpv.MpvRenderWidget` — a ``QOpenGLWidget`` that
-  renders mpv's output, used only while a video plays.
+  renders mpv's output through the **software** render API, used only while a
+  video plays.
 
 Frame composition is therefore **retained mode**: nothing re-derives geometry per
 frame, and the matte is painted *over* the video by the same canvas that paints
@@ -23,27 +24,24 @@ per-frame ``draw_*`` calls, and the GL depth ordering the pi3d backend needed.
 
 Layering note — the one thing that must not be "simplified"
 ----------------------------------------------------------
-mpv renders into the widget's own framebuffer, and the ring layers are painted
-over it by the canvas ABOVE, which leaves exactly the plan's artwork rectangle
-unpainted so the video shows through that hole.  A second framebuffer plus
-``glBlitFramebuffer`` is the obvious-looking alternative and it **segfaults on
-the Pi** (blitting between a depth-attached FBO and the default FBO).  Do not
-reintroduce it.
+The ring layers are painted over the video by the canvas ABOVE, which leaves
+exactly the plan's artwork rectangle unpainted so the video shows through that
+hole.  A second framebuffer plus ``glBlitFramebuffer`` is the obvious-looking
+alternative and it **segfaults on the Pi** (blitting between a depth-attached FBO
+and the default FBO).  Do not reintroduce it.
 
 The hole rests on one Qt detail: while the canvas leaves a region unpainted it
 must NOT claim ``WA_OpaquePaintEvent``, or that region shows undefined
 framebuffer content — black.  ``FrameCanvas.set_video_surface`` owns that.
 
-Startup ordering — all three are load-bearing
----------------------------------------------
+Startup ordering — both are load-bearing
+----------------------------------------
 1. ``QApplication`` is constructed **first**, then ``LC_NUMERIC`` is reset to
    ``"C"``.  Qt's constructor resets the locale to the system value, and libmpv's
    ``mpv_create()`` returns NULL under a non-C numeric locale.
-2. ``ensure_gl_init()`` runs **before** ``play()``.  Without it mpv deselects the
-   video track ("Video: no video") because no render context exists yet.
-3. ``opengl_fbo`` uses ``defaultFramebufferObject()``, **not** ``0``.  A
-   ``QOpenGLWidget`` renders into a texture-backed FBO; passing 0 draws to a
-   framebuffer nobody presents, i.e. a black screen.
+2. ``ensure_render_context()`` runs **before** ``play()``.  Without it mpv
+   deselects the video track ("Video: no video") because no render context
+   exists yet.
 """
 
 from __future__ import annotations
@@ -59,7 +57,11 @@ from metixel.display.geometry import int_rect
 from metixel.display.hardware import DisplayPower, WlrOutput
 from metixel.display.overlay_element import OverlayElement
 from metixel.framing.layout import RenderPlan
-from metixel.shared.platform import detect_pi_model, hwdec_for_model
+from metixel.shared.platform import (
+    detect_pi_model,
+    hwdec_for_model,
+    sw_render_max_pixels_for_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -255,9 +257,15 @@ class PySide6Backend(DisplayBackend):
         # Measured on hardware: `auto` never reaches the working decoder on a
         # Pi 3 (it exhausts CUDA/Vulkan/drm first and lands on software at 170%
         # CPU, worse than requesting none). See shared/platform.hwdec_for_model.
-        hwdec = hwdec_for_model(detect_pi_model())
-        logger.info("mpv hardware decoding: %s", hwdec)
-        self._mpv_widget = MpvRenderWidget(hwdec=hwdec)
+        model = detect_pi_model()
+        hwdec = hwdec_for_model(model)
+        # The software render API's price is CPU spent in mpv's scale-and-convert
+        # step, and the buffer cap is the only lever that bounds it — so it is a
+        # board decision, taken here alongside the decoder rather than left to
+        # the widget to guess.  See platform.SWRenderPixelsByModel.
+        sw_max_pixels = sw_render_max_pixels_for_model(model)
+        logger.info("mpv video path: hwdec=%s, software render cap=%s px", hwdec, sw_max_pixels)
+        self._mpv_widget = MpvRenderWidget(hwdec=hwdec, sw_max_pixels=sw_max_pixels)
 
         from PySide6.QtWidgets import QWidget
 
@@ -296,8 +304,8 @@ class PySide6Backend(DisplayBackend):
         if hide_cursor:
             QGuiApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
 
-        # 3. The mpv widget's GL context must exist before any play() call.
-        self._mpv_widget.ensure_gl_init()
+        # 3. The mpv widget's render context must exist before any play() call.
+        self._mpv_widget.ensure_render_context()
 
         if fullscreen:
             container.showFullScreen()
@@ -770,7 +778,7 @@ class PySide6Backend(DisplayBackend):
             # The canvas raises itself above the mpv widget and releases the
             # artwork hole, so the rings and the overlay paint OVER the frame.
             self._canvas.set_video_surface(True)
-            self._mpv_widget.ensure_gl_init()
+            self._mpv_widget.ensure_render_context()
             self._mpv_widget.play(str(path))
             return True
         except Exception:

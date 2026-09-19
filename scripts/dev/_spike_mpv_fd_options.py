@@ -17,10 +17,15 @@ probe keeps everything else fixed and varies ONE mpv option, to find which part 
 mpv's pipeline is responsible.
 
 It deliberately subclasses the REAL :class:`metixel.display.qt_mpv.MpvRenderWidget`
-and only overrides ``_create_mpv`` to inject extra options, so ``_init_gl``,
-``paintGL``, the ``opengl_fbo``/``flip_y`` arguments, the update callback and the
+and only overrides ``_create_mpv`` to inject extra options, so
+``_init_render_context``, ``paintGL``, the update callback and the
 ``report_swap`` deferral are all production code.  A copy would be a different
 program; this is the same one with one option poked.
+
+SUPERSEDED for the finding, kept for the method: this probe was written against
+the ``opengl`` render API, which is the path that leaks.  Production now uses
+``api_type="sw"``, so the widget it subclasses no longer builds GL render
+arguments and this sweep no longer reproduces the leak it was built to explain.
 
 The variants are chosen to *discriminate between explanations*, not to guess:
 
@@ -225,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"variant={args.variant} options={options or '{}'} hwdec={hwdec}", flush=True)
     print(f"platform={app.platformName()} size={widget.width()}x{widget.height()}", flush=True)
 
-    widget.ensure_gl_init()
+    widget.ensure_render_context()
     if widget.rejected:
         for entry in widget.rejected:
             print(f"  OPTION REJECTED: {entry}", flush=True)
@@ -254,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
             widget.destroy_mpv()
             total, sync = _fd_counts()
             print(f"  post-destroy  fd={total} sync_file={sync}", flush=True)
-            widget.ensure_gl_init()
+            widget.ensure_render_context()
             widget.play(args.video)
             total, sync = _fd_counts()
             print(f"  post-restart  fd={total} sync_file={sync}", flush=True)

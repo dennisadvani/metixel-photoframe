@@ -121,6 +121,64 @@ def hwdec_for_model(model: str | None) -> str:
     return HWDecByModel.get(model, "no")
 
 
+#: Maximum pixels for the libmpv SOFTWARE render buffer, per Pi model.
+#:
+#: The software render API is what removes the ``sync_file`` descriptor leak in
+#: the GL render path (see :mod:`metixel.display.sw_render`), and its price is CPU
+#: spent in mpv's scale-and-convert step.  That price is set almost entirely by
+#: the buffer size, so this cap is the frame-rate / quality knob.
+#:
+#: Measured on a **Pi 5** (services stopped, 30 fps, ``hwdec=drm-copy``, HEVC):
+#:
+#: ============ ========= ==========
+#: buffer       of a core ms/frame
+#: ============ ========= ==========
+#: 476x296       62%       20.7
+#: 952x592       80%       26.7
+#: 1280x800      82%       27.4
+#: 1904x1184    110%       37.0
+#: ============ ========= ==========
+#:
+#: There is a ~30%-of-a-core floor that no render mode can remove (decode, demux
+#: and audio at realtime), and a ~10 ms fixed cost per ``render()`` call, so
+#: capping below ~0.5 Mpx buys almost nothing.  1.0 Mpx is the Pi 5 sweet spot:
+#: ~80% of one core, which sustains 30 fps with headroom and is about a fifth of
+#: the board's four cores.
+#:
+#: **Only the Pi 5 figure is measured.**  The others are conservative estimates
+#: scaled by per-core CPU throughput, because the cost is CPU-bound and the
+#: boards differ by roughly 3-4x per core.  They must be confirmed on hardware
+#: before being trusted — and a Pi 3 that cannot hold 30 fps at this cap should
+#: drop the *frame rate* before it drops the resolution further, since the fixed
+#: per-call cost means resolution reduction stops paying below ~0.5 Mpx anyway.
+#:
+#: Unknown boards get the most conservative value rather than the Pi 5 one: the
+#: failure mode of guessing high is a stuttering frame, which reads as a hardware
+#: fault, whereas guessing low only softens the picture.
+SWRenderPixelsByModel: dict[str, int] = {
+    "pi5": 1_000_000,
+    "pi4": 1_000_000,
+    "pi3": 350_000,
+    "pi2": 250_000,
+}
+
+#: Cap used when the board cannot be identified (see :data:`SWRenderPixelsByModel`).
+DEFAULT_SW_RENDER_PIXELS = 350_000
+
+
+def sw_render_max_pixels_for_model(model: str | None) -> int:
+    """Return the software-render buffer pixel cap for *model*.
+
+    See :data:`SWRenderPixelsByModel` for the measurements behind the values.  An
+    unidentified board gets :data:`DEFAULT_SW_RENDER_PIXELS`, the conservative
+    choice: too small a buffer is a softer picture, too large a one is a stutter
+    that looks like a hardware fault.
+    """
+    if model is None:
+        return DEFAULT_SW_RENDER_PIXELS
+    return SWRenderPixelsByModel.get(model, DEFAULT_SW_RENDER_PIXELS)
+
+
 def resolve_unique_id() -> str:
     """Return a stable, hardware-unique identifier for this device.
 

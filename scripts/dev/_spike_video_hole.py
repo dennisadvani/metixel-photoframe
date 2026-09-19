@@ -395,7 +395,7 @@ def _run(case: str, outdir: Path, video: str) -> int:
         if case != "mpv_play":
             return
         try:
-            underlay.ensure_gl_init()
+            underlay.ensure_render_context()
             playback = underlay._mpv  # spike: reaching in is the point
             if playback is not None:
                 # Fill (cover) the widget so the hole shows video, not mpv's own
