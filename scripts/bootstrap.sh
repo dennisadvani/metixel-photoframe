@@ -44,6 +44,10 @@
 #                               cloning (development; nothing is downloaded)
 #   --dry-run                   Print the plan and exit without changing anything
 #   --skip-boot-config          Do not run configure_boot.sh (no reboot needed)
+#   --no-reboot                 Do not reboot even when the boot config changed.
+#                               Only for scripted testing: without the reboot
+#                               the new config.txt is inert and the frontend
+#                               cannot start.
 #   -h, --help                  Show this help
 #
 # NOTE: the device is left with NO git checkout at the install root.  The code
@@ -62,6 +66,7 @@ REPO_URL="${METIXEL_REPO_URL:-${DEFAULT_REPO}}"
 LOCAL_DIR=""
 DRY_RUN="no"
 SKIP_BOOT_CONFIG="no"
+ASSUME_NO_REBOOT="no"
 
 usage() {
     # Print the whole header comment block (everything after the shebang up
@@ -85,6 +90,7 @@ while [ $# -gt 0 ]; do
         --local=*)       LOCAL_DIR="${1#*=}" ;;
         --dry-run)       DRY_RUN="yes" ;;
         --skip-boot-config) SKIP_BOOT_CONFIG="yes" ;;
+        --no-reboot)     ASSUME_NO_REBOOT="yes" ;;
         -h|--help)       usage; exit 0 ;;
         *) echo "ERROR: unknown option: $1" >&2; echo "" >&2; usage >&2; exit 1 ;;
     esac
@@ -288,10 +294,24 @@ bash "${STAGE_DIR}/scripts/update.sh" "${REF}" "${REPO_URL}" --staged-dir "${STA
 # Boot config is NOT part of reconciliation (config.txt is the device's own file
 # and a change only takes effect on reboot), so it is applied explicitly here.
 # configure_boot.sh reports REBOOT_REQUIRED when it changes something.
+#
+# That signal MUST be captured: without a reboot the new config.txt is inert,
+# metixel-cage cannot open a DRM device, the frontend never writes its
+# heartbeat, and update.sh's health gate fails the install.  The device is left
+# on a release that looks broken even though everything installed correctly.
+REBOOT_REQUIRED="no"
 if [ "${SKIP_BOOT_CONFIG}" = "no" ] && [ -d /boot/firmware ]; then
     echo ""
     echo "[3/3] Applying boot configuration…"
-    bash "${INSTALL_ROOT}/live/scripts/configure_boot.sh"
+    boot_output="$(bash "${INSTALL_ROOT}/live/scripts/configure_boot.sh" 2>&1)" || {
+        printf '%s\n' "${boot_output}" >&2
+        echo "ERROR: configure_boot.sh failed" >&2
+        exit 1
+    }
+    printf '%s\n' "${boot_output}"
+    if printf '%s' "${boot_output}" | grep -q '^REBOOT_REQUIRED'; then
+        REBOOT_REQUIRED="yes"
+    fi
 else
     echo ""
     echo "[3/3] Skipping boot configuration."
@@ -306,12 +326,23 @@ echo "After a reboot Metixel will start automatically."
 echo "Dashboard: http://<pi-ip-address>"
 echo ""
 
-if [ -t 0 ]; then
-    read -r -p "Reboot now? [Y/n]: " REPLY
-    case "${REPLY:-Y}" in
-        [Nn]*) echo "Reboot skipped — reboot later to finish setup." ;;
-        *) echo "Rebooting…"; reboot ;;
-    esac
+# Reboot when the boot config changed — that is not a preference, it is the only
+# way the install can finish.  Ask first only when a human is there to answer;
+# an unattended (piped / automated) install reboots unconditionally so it can
+# never be left half-applied.  --no-reboot opts out for scripted testing.
+if [ "${REBOOT_REQUIRED}" = "yes" ]; then
+    if [ "${ASSUME_NO_REBOOT:-no}" = "yes" ]; then
+        echo "Boot config changed — REBOOT REQUIRED to finish setup (skipped)."
+    elif [ -t 0 ]; then
+        read -r -p "Boot config changed. Reboot now? [Y/n]: " REPLY
+        case "${REPLY:-Y}" in
+            [Nn]*) echo "Reboot skipped — reboot later to finish setup." ;;
+            *) echo "Rebooting…"; reboot ;;
+        esac
+    else
+        echo "Boot config changed — rebooting to finish setup…"
+        reboot
+    fi
 else
-    echo "Reboot the device to finish setup."
+    echo "No boot config change — no reboot needed."
 fi

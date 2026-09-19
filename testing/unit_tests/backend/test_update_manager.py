@@ -31,6 +31,7 @@ from metixel.backend.update_manager import UpdateManager
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INSTALL_SCRIPT = _REPO_ROOT / "scripts" / "ota_install.sh"
 _UPDATE_SCRIPT = _REPO_ROOT / "scripts" / "update.sh"
+_BOOTSTRAP_SCRIPT = _REPO_ROOT / "scripts" / "bootstrap.sh"
 
 
 class TestBuildUpdateScript:
@@ -1355,3 +1356,54 @@ class TestPiUserPreflight:
         content = (_REPO_ROOT / "scripts" / script).read_text(encoding="utf-8")
         assert "id -u pi" in content
         assert "Raspberry Pi Imager" in content
+
+
+class TestBootstrapReboot:
+    """Bootstrap must reboot when configure_boot.sh changed the boot config.
+
+    A fresh install writes ``dtoverlay=vc4-kms-v3d*`` and ``gpu_mem`` into
+    config.txt, and neither takes effect until a reboot.  Without it,
+    metixel-cage cannot open a DRM device, the frontend never writes its
+    heartbeat, and update.sh's health gate fails the install — leaving the
+    device on a release that looks broken although everything installed.
+    """
+
+    def test_configure_boot_output_is_captured(self) -> None:
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        # The REBOOT_REQUIRED line is written to stdout, so bootstrap has to
+        # capture the output rather than letting it stream past unwatched.
+        assert 'boot_output="$(bash' in content
+
+    def test_reboot_required_is_detected(self) -> None:
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "REBOOT_REQUIRED" in content
+        assert "grep -q '^REBOOT_REQUIRED'" in content
+
+    def test_configure_boot_script_still_emits_the_signal(self) -> None:
+        """The signal bootstrap greps for must exist on the producing side."""
+        content = (_REPO_ROOT / "scripts" / "configure_boot.sh").read_text(encoding="utf-8")
+        assert "REBOOT_REQUIRED: boot config changed" in content
+
+    def test_unattended_install_reboots_instead_of_stalling(self) -> None:
+        """A non-TTY install (no human to answer the prompt) must still reboot.
+
+        The old code fell through to a bare echo in that case, so an automated
+        install silently finished without applying the new boot config.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        block = content[content.index('if [ "${REBOOT_REQUIRED}" = "yes" ]') :]
+        # The non-interactive branch must actually call reboot.
+        else_branch = block[block.index("else") :]
+        assert "reboot" in else_branch
+
+    def test_reboot_only_when_required(self) -> None:
+        """An install that changed nothing must not reboot the device."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert 'REBOOT_REQUIRED="no"' in content
+        assert "No boot config change — no reboot needed." in content
+
+    def test_no_reboot_escape_hatch_exists(self) -> None:
+        """--no-reboot makes the behaviour testable without a real reboot."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "--no-reboot" in content
+        assert "ASSUME_NO_REBOOT" in content
