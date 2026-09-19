@@ -563,8 +563,10 @@ class TestUpdateScript:
         content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
 
         assert "sample_media" in content, "sample media is never seeded"
-        # Gated on a fresh install.
-        seed_block = content.split("seed the sample media")[1].split("[8/8]")[0]
+        # Bounded by the NEXT section header, not a fixed step number — the
+        # block moved once already and a `[8/8]` marker silently lost the
+        # bounds.
+        seed_block = content.split("seed the sample media")[1].split("# ── 5)")[0]
         assert 'if [ "${FRESH_INSTALL}" = "yes" ]; then' in seed_block, (
             "sample media must only be seeded on a fresh install"
         )
@@ -575,6 +577,33 @@ class TestUpdateScript:
         assert 'cp -rn "${SAMPLE_SRC}/." "${SAMPLE_DST}/"' in content
         # Must not be fatal to an otherwise healthy install.
         assert "|| true" in seed_block
+
+    def test_sample_media_seeded_before_the_health_gate(self) -> None:
+        """Seeding must happen BEFORE the swap/health-check, not after.
+
+        Regression guard: the block used to sit after the health gate, and both
+        failure branches of that gate `exit 1`.  A fresh install whose
+        health-check failed therefore never reached the seeding code — leaving
+        the one install that most needed something on screen with an empty
+        library.  The gallery must be in place even when the release does not
+        come up healthy.
+        """
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        seed = content.index("Seeding sample media")
+        swap = content.index("[6/8] Swapping live symlink")
+        health = content.index("Waiting up to ${HEALTH_TIMEOUT}s for health endpoint")
+
+        assert seed < swap, "sample media must be seeded before the live swap"
+        assert seed < health, "sample media must be seeded before the health gate"
+
+        # And the gate really can skip everything after it, which is why the
+        # order above matters rather than being cosmetic.
+        gate_failure = content[health:]
+        assert "exit 1" in gate_failure, (
+            "health gate is expected to exit on failure; if that changes, "
+            "re-check whether the seed ordering still matters"
+        )
 
     def test_bootstrap_is_thin_and_delegates(self) -> None:
         """bootstrap.sh is the only downloadable file and must stay small and
