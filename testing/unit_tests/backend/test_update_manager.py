@@ -628,7 +628,14 @@ class TestUpdateScript:
 
         # A loose sanity bound: the value is that it almost never changes, so a
         # grossly bloated bootstrap is the thing worth catching.
-        assert len(code_lines) < 220, (
+        #
+        # Raised 220 → 300 when bootstrap took ownership of the fresh-install
+        # reboot (warn_reboot_required + countdown_then_reboot, ~46 lines).  That
+        # is bootstrap's own concern, not update.sh's: it is the caller that owns
+        # the boot-config step and therefore the reboot that step requires.  The
+        # structural guard above is the one that actually matters — it still
+        # passes, so nothing install-related has leaked in.
+        assert len(code_lines) < 300, (
             f"bootstrap.sh is {len(code_lines)} code lines — it should stay thin"
         )
 
@@ -1388,51 +1395,125 @@ class TestPiUserPreflight:
 
 
 class TestBootstrapReboot:
-    """Bootstrap must reboot when configure_boot.sh changed the boot config.
+    """Bootstrap must ALWAYS reboot on a fresh install.
 
     A fresh install writes ``dtoverlay=vc4-kms-v3d*`` and ``gpu_mem`` into
     config.txt, and neither takes effect until a reboot.  Without it,
     metixel-cage cannot open a DRM device, the frontend never writes its
-    heartbeat, and update.sh's health gate fails the install — leaving the
-    device on a release that looks broken although everything installed.
+    heartbeat, and the install looks broken although everything installed.
+
+    The reboot is unconditional by design.  Two earlier attempts to make it
+    conditional both failed:
+
+    * inferring it from configure_boot.sh's ``REBOOT_REQUIRED`` line only says
+      "this run edited the file" — a retried install saw ``already present``,
+      signalled nothing, and skipped the reboot the running kernel still
+      needed; and
+    * a health gate before the boot config could only fail on a stock image
+      (no KMS overlay ⇒ no DRM ⇒ no frontend), and ``set -e`` propagated that
+      failure, killing bootstrap before it reached the boot-config step at all.
+
+    Hence: bootstrap passes ``--skip-health-check`` to update.sh, applies boot
+    config itself, and always reboots.
     """
 
-    def test_configure_boot_output_is_captured(self) -> None:
+    def test_skips_the_health_gate_on_a_fresh_install(self) -> None:
+        """The gate is unanswerable before the reboot, so it must not run."""
         content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
-        # The REBOOT_REQUIRED line is written to stdout, so bootstrap has to
-        # capture the output rather than letting it stream past unwatched.
-        assert 'boot_output="$(bash' in content
+        assert "--skip-health-check" in content
 
-    def test_reboot_required_is_detected(self) -> None:
+    def test_update_script_skips_when_asked(self) -> None:
+        content = (_REPO_ROOT / "scripts" / "update.sh").read_text(encoding="utf-8")
+        assert "--skip-health-check)" in content
+        assert 'if [ "${SKIP_HEALTH_CHECK}" = "yes" ]; then' in content
+        # The gate must still be the default path for OTAs — skipping is opt-in.
+        assert 'SKIP_HEALTH_CHECK="no"' in content
+
+    def test_package_install_stays_strict(self) -> None:
+        """Skipping the readiness probe must NOT soften dependency failure.
+
+        The strict apt/pip install is what protects an existing device from a
+        half-applied upgrade; only the *probe* is skipped.
+        """
+        content = (_REPO_ROOT / "scripts" / "update.sh").read_text(encoding="utf-8")
+        assert "--skip-health-check" in content
+        # The installer still fails closed without a live symlink.
+        assert "ota_install.sh" in content
+
+    def test_boot_config_is_applied_before_the_reboot(self) -> None:
+        """Ordering is the whole point: config, then reboot, then verification."""
         content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
-        assert "REBOOT_REQUIRED" in content
-        assert "grep -q '^REBOOT_REQUIRED'" in content
+        cfg_at = content.index("configure_boot.sh")
+        reboot_at = content.index("sync\nreboot")
+        assert cfg_at < reboot_at, "boot config must be applied before rebooting"
 
-    def test_configure_boot_script_still_emits_the_signal(self) -> None:
-        """The signal bootstrap greps for must exist on the producing side."""
-        content = (_REPO_ROOT / "scripts" / "configure_boot.sh").read_text(encoding="utf-8")
-        assert "REBOOT_REQUIRED: boot config changed" in content
+    def test_reboot_is_not_conditional_on_a_detected_change(self) -> None:
+        """No REBOOT_REQUIRED sniffing — it produced false negatives.
 
-    def test_unattended_install_reboots_instead_of_stalling(self) -> None:
-        """A non-TTY install (no human to answer the prompt) must still reboot.
-
-        The old code fell through to a bare echo in that case, so an automated
-        install silently finished without applying the new boot config.
+        Checks CODE only: the rationale above deliberately *mentions*
+        REBOOT_REQUIRED to explain why it is not used.
         """
         content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
-        block = content[content.index('if [ "${REBOOT_REQUIRED}" = "yes" ]') :]
-        # The non-interactive branch must actually call reboot.
-        else_branch = block[block.index("else") :]
-        assert "reboot" in else_branch
+        code = "\n".join(ln for ln in content.splitlines() if not ln.lstrip().startswith("#"))
+        assert "REBOOT_REQUIRED" not in code
+        assert "grep -q '^REBOOT_REQUIRED'" not in code
+        # The unconditional form is what replaced it.
+        assert "countdown_then_reboot" in code
 
-    def test_reboot_only_when_required(self) -> None:
-        """An install that changed nothing must not reboot the device."""
+    def test_counts_down_before_rebooting(self) -> None:
+        """Warn, then give the operator 10s — a silent drop-off looks like a crash."""
         content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
-        assert 'REBOOT_REQUIRED="no"' in content
-        assert "No boot config change — no reboot needed." in content
+        assert "REBOOT REQUIRED TO FINISH SETUP" in content
+        assert "Rebooting in 10 seconds" in content
+        assert "for i in 10 9 8 7 6 5 4 3 2 1; do" in content
 
-    def test_no_reboot_escape_hatch_exists(self) -> None:
-        """--no-reboot makes the behaviour testable without a real reboot."""
+    def test_countdown_reads_the_controlling_terminal(self) -> None:
+        """`read` must target /dev/tty, not stdin.
+
+        With stdin at EOF (``bash bootstrap.sh < /dev/null``, a pipe, or a
+        closed fd) ``read`` returns immediately, which is indistinguishable from
+        a keypress by exit status — the countdown would abort in milliseconds
+        and the reboot would be silently skipped.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "read -r -t 1 -n 1 _ < /dev/tty" in content
+
+    def test_unattended_install_still_reboots(self) -> None:
+        """No terminal (piped/automated install) must not stall or skip.
+
+        The helper has two branches: with a terminal it counts down (and may
+        cancel), without one it reboots straight away.  An automated install
+        has nobody to answer a prompt, so it must not wait.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        body = content[content.index("countdown_then_reboot() {") :]
+        body = body[: body.index("\n}\n")]
+        assert "else" in body, "must have an unattended branch"
+        assert "rebooting to finish setup" in body
+        # And the unattended branch must actually reboot.
+        unattended = body[body.index("else") :]
+        assert "reboot" in unattended
+
+    def test_cancelling_the_countdown_does_not_reboot(self) -> None:
+        """A cancelled countdown must return BEFORE reaching reboot."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        body = content[content.index("countdown_then_reboot() {") :]
+        body = body[: body.index("\n}\n")]
+        cancel_at = body.index("Reboot cancelled")
+        # The reboot call is the LAST statement, after the cancel early-return.
+        assert "return 0" in body[cancel_at:]
+        assert body.rindex("reboot") > cancel_at
+
+    def test_cancel_path_tells_the_user_what_to_do(self) -> None:
+        """Cancelling must not leave them guessing that the frame stays blank."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "Reboot cancelled" in content
+        assert "sudo reboot" in content
+
+    def test_no_reboot_escape_hatch_still_exists(self) -> None:
+        """--no-reboot keeps the behaviour testable without a real reboot."""
         content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
         assert "--no-reboot" in content
         assert "ASSUME_NO_REBOOT" in content
+        # And it must be loud about the consequence, not silent.
+        assert "REBOOT REQUIRED TO FINISH SETUP" in content

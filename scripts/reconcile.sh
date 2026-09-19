@@ -767,19 +767,50 @@ else
     fi
 fi
 
-# /etc/default/hostapd is owned by the distro package.  Only *uncomment* the
-# DAEMON_CONF line when it is still the stock commented default, so a user's
-# own value is never overwritten.
+# /etc/default/hostapd is owned by the distro package.  Only fix it when it is
+# still effectively stock, so a user's own value is never overwritten.
+#
+# THREE forms must all be handled, and getting this wrong is what broke the AP:
+#
+#   1. `DAEMON_CONF=/some/path`        → a real value, leave alone.
+#   2. `#DAEMON_CONF=""`               → commented (older images).
+#   3. `DAEMON_CONF=""`                → UNCOMMENTED BUT EMPTY — what Trixie
+#                                        actually ships.  This is the dangerous
+#                                        one: it *looks* set to a naive
+#                                        `grep '^DAEMON_CONF='`, so a fix that
+#                                        only handles form 2 silently passes
+#                                        while hostapd is handed an empty
+#                                        config path.
+#
+# Why it matters: hostapd.service sets `Environment=DAEMON_CONF=/etc/hostapd/
+# hostapd.conf` and then `EnvironmentFile=-/etc/default/hostapd`.  An
+# EnvironmentFile ALWAYS wins over Environment, so an empty DAEMON_CONF here
+# overrides the unit's correct default with "".  hostapd then reports
+# `Could not open configuration file ''`, exits 1, and the AP never starts —
+# with systemd reporting only `Result=success ExecMainStatus=0` for the forking
+# parent, which is why this hid for so long.
+#
+# An empty value carries no user intent, so converging it is safe; anything
+# non-empty is left untouched.
 if [ -f /etc/default/hostapd ]; then
-    if grep -q '^DAEMON_CONF=' /etc/default/hostapd 2>/dev/null; then
+    # Is there a DAEMON_CONF line whose value is genuinely non-empty?
+    # `""` (the stock empty form) reads as a NON-empty string to a naive sed,
+    # so strip the surrounding quotes before deciding — otherwise the empty
+    # stock value looks like user intent and is left in place.
+    _hostapd_conf_value="$(
+        sed -n 's/^DAEMON_CONF=//p' /etc/default/hostapd | head -1 \
+            | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+    )"
+    if [ -n "${_hostapd_conf_value}" ]; then
         _same "/etc/default/hostapd DAEMON_CONF"
-    elif grep -q '^#DAEMON_CONF=""' /etc/default/hostapd 2>/dev/null; then
+    elif grep -qE '^#?DAEMON_CONF=("")?$' /etc/default/hostapd 2>/dev/null; then
         if [ "${DRY_RUN}" = "yes" ]; then
-            printf '      [dry-run] enable DAEMON_CONF in /etc/default/hostapd\n'
+            printf '      [dry-run] set DAEMON_CONF=/etc/hostapd/hostapd.conf in /etc/default/hostapd\n'
             CHANGES=$((CHANGES + 1))
         else
-            sed -i 's|^#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd \
-                && _plus "enabled DAEMON_CONF in /etc/default/hostapd"
+            # Match the commented, the quoted-empty and the bare-empty forms.
+            sed -i -E 's|^#?DAEMON_CONF=("")?$|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd \
+                && _plus "set DAEMON_CONF in /etc/default/hostapd"
         fi
     else
         _warn "/etc/default/hostapd has no DAEMON_CONF line — leaving untouched"

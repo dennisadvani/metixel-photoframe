@@ -224,12 +224,23 @@ def ap_status():
     ``ssid`` is the name this device actually broadcasts — the base name plus
     the last 6 hex digits of its wlan0 MAC — so the UI can tell the user which
     access point to join when several frames are in range.
+
+    ``active`` means "the captive portal is the way in right now": the AP is
+    broadcasting AND no connection is being used instead.  The connectivity
+    half deliberately goes through the CONTROLLER, not a bare ``is_connected()``,
+    because the controller is what honours ``METIXEL_NETWORK_TEST_MODE``.  Using
+    the raw helper made this endpoint report ``active: false`` while the AP was
+    genuinely up under test mode (Ethernet is still "connected" physically), so
+    every captive-portal test skipped on a working portal.
     """
     controller = _get_controller()
     ap_or_pin = is_ap_mode_active() or bool(controller and controller.pin)
+    # In test mode the controller ignores Ethernet for connectivity, which is
+    # exactly the question being asked here.
+    in_use = controller.is_connection_in_use() if controller is not None else is_connected()
     return jsonify(
         {
-            "active": ap_or_pin and not is_connected(),
+            "active": ap_or_pin and not in_use,
             "ssid": ap_ssid(),
         }
     )
@@ -324,8 +335,46 @@ def ap_start():
 
     Note: Manual AP start is discouraged — the NetworkController manages
     AP lifecycle automatically.  This endpoint exists for debugging.
+
+    Drives the CONTROLLER into ``AP_ACTIVE`` when one is available, because
+    that is the only path that both raises hostapd *and* generates the portal
+    PIN.  Calling the module-level ``start_ap_mode()`` directly raises the AP
+    with no PIN — which looks like success (hostapd runs, the SSID is
+    broadcast) but leaves the captive portal unable to validate anything,
+    since ``validate_pin`` rejects every candidate while ``controller.pin``
+    is empty.  Falls back to the bare start only if there is no controller.
     """
-    from metixel.backend.network_manager import ap_ssid, start_ap_mode
+    controller = _get_controller()
+    if controller is not None:
+        ok = controller.force_ap_active()
+        ssid = ap_ssid()
+        if ok:
+            return jsonify(
+                {
+                    "status": "ok",
+                    "message": f"AP mode started — SSID: {ssid}",
+                    "ssid": ssid,
+                }
+            )
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        "Failed to start AP mode — the controller will not hold the "
+                        "AP while an upstream connection is up, so the fallback AP "
+                        "was reverted immediately.  This is expected unless "
+                        "METIXEL_NETWORK_TEST_MODE=1 is set (which excludes Ethernet "
+                        "from the connectivity check so the AP can be exercised "
+                        "while the Pi stays reachable).  Check the backend log for "
+                        "the specific reason if the AP is targeted for real use."
+                    ),
+                }
+            ),
+            500,
+        )
+
+    from metixel.backend.network_manager import start_ap_mode
 
     ok = start_ap_mode()
     if ok:

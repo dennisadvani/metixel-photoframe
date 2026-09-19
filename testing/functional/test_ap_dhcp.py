@@ -43,6 +43,40 @@ import pytest
 
 from metixel.backend import network_manager as nm
 
+#: Directories that hold the tools this suite needs, in probe order.
+#:
+#: ``shutil.which`` alone is NOT enough here.  The functional suite runs over a
+#: non-login ssh shell whose PATH is ``/usr/local/bin:/usr/bin:/bin:/usr/games``
+#: — no ``/usr/sbin`` or ``/sbin``.  Both dnsmasq and dhcpcd live there, so a
+#: bare ``which`` reports them MISSING and this suite skipped its single most
+#: important test (``test_client_obtains_a_lease``) on a perfectly healthy
+#: device.  That is the same ``/usr/sbin``-not-on-PATH trap that caused the
+#: original dnsmasq AP bug, in its third appearance.
+_SBIN_DIRS = ("/usr/local/sbin", "/usr/sbin", "/sbin", "/usr/local/bin", "/usr/bin", "/bin")
+
+
+def _resolve(tool: str) -> str | None:
+    """Absolute path to *tool*, searching sbin dirs that PATH omits.
+
+    Returns the bare name if it is on PATH, else the first absolute hit, else
+    ``None``.  Preferring PATH keeps the usual semantics when PATH is complete.
+    """
+    found = shutil.which(tool)
+    if found:
+        return found
+    for d in _SBIN_DIRS:
+        candidate = f"{d}/{tool}"
+        try:
+            if (
+                subprocess.run(["test", "-x", candidate], capture_output=True, timeout=5).returncode
+                == 0
+            ):
+                return candidate
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return None
+
+
 pytestmark = pytest.mark.functional
 
 #: How long to wait for hostapd/dnsmasq to come up after start_ap_mode().
@@ -50,8 +84,13 @@ _AP_WAIT = 30
 
 #: Interface used for the test client.  A veth pair gives a real "client" on the
 #: AP subnet without needing a second Wi-Fi card or leaving the Pi.
-_CLIENT_IF = "metixel-dhcp-test0"
-_SERVER_IF = "metixel-dhcp-test1"
+# Interface names are capped at IFNAMSIZ (16 bytes INCLUDING the NUL), so 15
+# usable characters.  The previous names ("metixel-dhcp-test0", 18 chars) were
+# rejected by the kernel with `"name" not a valid ifname`, which made the veth
+# fixture fail at setup — this test could never have run, let alone passed.
+_CLIENT_IF = "mx-dhcp-cli"
+_SERVER_IF = "mx-dhcp-srv"
+assert max(len(_CLIENT_IF), len(_SERVER_IF)) <= 15, "ifname exceeds IFNAMSIZ"
 
 
 def _run(cmd: list[str], sudo: bool = False) -> subprocess.CompletedProcess[str]:
@@ -228,7 +267,7 @@ class TestApIdentity:
 
 
 @pytest.mark.skipif(
-    shutil.which("dnsmasq") is None or shutil.which("ip") is None,
+    _resolve("dnsmasq") is None or _resolve("ip") is None,
     reason="needs dnsmasq + ip to build a test client",
 )
 class TestAClientActuallyGetsALease:
@@ -280,18 +319,46 @@ class TestAClientActuallyGetsALease:
     def test_client_obtains_a_lease(self, ap_up: str, test_link: tuple[str, str]) -> None:
         client_if, _ = test_link
 
-        # udhcpc (busybox) is the lightest DHCP client and ships with the AP
-        # stack; fall back to dhcpcd, which is also present on Raspberry Pi OS.
-        if shutil.which("udhcpc"):
-            cmd = ["udhcpc", "-i", client_if, "-n", "-q", "-t", "5", "-T", "3"]
+        # udhcpc is the lightest DHCP client and ships with the AP stack as a
+        # BUSYBOX APPLET — there is no /usr/bin/udhcpc on Raspberry Pi OS, so it
+        # must be invoked as `busybox udhcpc`.  Falling back to dhcpcd (also
+        # outside PATH, in /sbin) keeps this runnable if busybox is absent.
+        #
+        # Resolved by absolute path because a bare `which` finds none of these
+        # here (see _resolve: PATH lacks /usr/sbin and /sbin).
+        busybox = _resolve("busybox")
+        dhcpcd = _resolve("dhcpcd")
+
+        if busybox is not None:
+            # `-n` fails instead of forking a background daemon, `-t 5 -T 3`
+            # bounds the attempt to ~15s.
+            #
+            # Deliberately NOT relying on the interface being configured:
+            # Raspberry Pi OS ships NO /etc/udhcpc/default.script, so udhcpc
+            # completes the DHCP exchange and then has no script to APPLY the
+            # lease.  Asserting on `ip addr` therefore failed even though the
+            # server answered correctly (`lease of 192.168.42.50 obtained`).
+            # The assertion below reads udhcpc's own output instead — that is
+            # the signal that dnsmasq actually served the client, which is what
+            # this test exists to prove.
+            cmd = [busybox, "udhcpc", "-i", client_if, "-n", "-t", "5", "-T", "3"]
+        elif dhcpcd is not None:
+            cmd = [dhcpcd, "-1", "-T", "15", client_if]
         else:
-            cmd = ["dhcpcd", "-1", "-T", "15", client_if]
+            pytest.fail(
+                "no DHCP client found (tried busybox udhcpc, dhcpcd in "
+                f"{', '.join(_SBIN_DIRS)}) — cannot test that a client gets a lease"
+            )
 
         result = _run(cmd, sudo=True)
         combined = f"{result.stdout}\n{result.stderr}"
 
+        # Two acceptable proofs that the SERVER answered, in preference order:
+        #   1. udhcpc obtained a lease (works without default.script).
+        #   2. the address is configured on the interface (what dhcpcd does).
         leased = _run(["ip", "-4", "addr", "show", client_if]).stdout
-        assert nm.AP_SUBNET_PREFIX in leased, (
+        lease_obtained = "lease of" in combined and nm.AP_SUBNET_PREFIX in combined
+        assert lease_obtained or nm.AP_SUBNET_PREFIX in leased, (
             "a client on the AP subnet could not obtain a lease — this is the "
             "exact symptom of the 1.2.4/1.2.5 DHCP bug.\n"
             f"lease attempt output:\n{combined}\n"

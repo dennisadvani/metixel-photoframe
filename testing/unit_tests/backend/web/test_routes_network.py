@@ -172,6 +172,53 @@ class TestApStart:
         assert "log" in message.lower()
         assert "IP address" in message
 
+    def test_uses_controller_so_a_pin_is_generated(self, client, monkeypatch):
+        """When a controller exists, go through its state machine.
+
+        The PIN is only created in ``_transition_to(AP_ACTIVE)``.  Calling the
+        module-level ``start_ap_mode()`` directly raised hostapd with no PIN,
+        so ``validate_pin`` rejected every candidate — a portal that looks up
+        but cannot be entered.  This pins the controller-first behaviour.
+        """
+        import metixel.backend.web.routes.network as net_mod
+
+        calls: list[str] = []
+
+        class FakeController:
+            def force_ap_active(self) -> bool:
+                calls.append("force")
+                return True
+
+        monkeypatch.setattr(net_mod, "_get_controller", lambda: FakeController())
+        monkeypatch.setattr(net_mod, "ap_ssid", lambda: "Metixel-Setup-12ABC3")
+
+        # The bare start must NOT be reached when a controller is available.
+        import metixel.backend.network_manager as nm
+
+        def _explode() -> bool:  # pragma: no cover - asserted not to run
+            raise AssertionError("start_ap_mode() must not be called with a controller")
+
+        monkeypatch.setattr(nm, "start_ap_mode", _explode)
+
+        resp = client.post("/api/network/ap-start")
+        assert resp.status_code == 200
+        assert calls == ["force"]
+        assert json.loads(resp.data)["ssid"] == "Metixel-Setup-12ABC3"
+
+    def test_controller_failure_reports_500(self, client, monkeypatch):
+        import metixel.backend.web.routes.network as net_mod
+
+        class FakeController:
+            def force_ap_active(self) -> bool:
+                return False
+
+        monkeypatch.setattr(net_mod, "_get_controller", lambda: FakeController())
+        monkeypatch.setattr(net_mod, "ap_ssid", lambda: "Metixel-Setup")
+
+        resp = client.post("/api/network/ap-start")
+        assert resp.status_code == 500
+        assert "log" in json.loads(resp.data)["message"].lower()
+
 
 class TestNetworkRadio:
     """POST /api/network/radio — the user-facing OS radio toggle.

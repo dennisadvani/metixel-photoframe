@@ -68,6 +68,49 @@ class TestEthernetIgnoredInTestMode:
         assert ctrl._is_any_connected() is True
 
 
+class TestForceApActive:
+    """``force_ap_active()`` — the debug/test entry point into the AP state.
+
+    This exists because raising hostapd behind the controller's back (the old
+    ``/api/network/ap-start`` behaviour) produced a live AP with NO PIN, since
+    the PIN is only generated in ``_transition_to(AP_ACTIVE)``.  A portal with
+    no PIN can never validate anything.
+    """
+
+    def test_generates_a_pin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctrl = NetworkController({})
+        monkeypatch.setattr(nc, "_start_ap", lambda: True)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+
+        assert ctrl.force_ap_active() is True
+        assert ctrl._state == NetworkState.AP_ACTIVE
+        assert len(ctrl.pin) == 4 and ctrl.pin.isdigit()
+
+    def test_idempotent_when_already_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctrl = NetworkController({})
+        monkeypatch.setattr(nc, "_start_ap", lambda: True)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+
+        assert ctrl.force_ap_active() is True
+        first_pin = ctrl.pin
+        # A second call must not re-raise the AP or rotate the PIN out from
+        # under a client that is mid-validation.
+        assert ctrl.force_ap_active() is True
+        assert ctrl.pin == first_pin
+
+    def test_reports_failure_when_ap_cannot_start(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctrl = NetworkController({})
+        monkeypatch.setattr(nc, "_start_ap", lambda: False)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+
+        assert ctrl.force_ap_active() is False
+        # A failed start must not leave a PIN claiming an AP that isn't there.
+        assert ctrl.pin == ""
+
+
 class TestStateMachineInTestMode:
     def test_disconnected_when_only_ethernet_in_test_mode(
         self, monkeypatch: pytest.MonkeyPatch

@@ -46,6 +46,16 @@
 #                       working tree without pushing.  DIR is moved into
 #                       ${RELEASES_DIR}/<name>, so it must be on the same
 #                       filesystem as the install root.
+#   --skip-health-check Skip the post-swap health gate.  Used ONLY by
+#                       scripts/bootstrap.sh on a FRESH install, where the gate
+#                       is unanswerable: a stock image may lack the KMS overlay
+#                       in config.txt, so there is no DRM device, so the
+#                       frontend cannot start, so the gate can only fail — and
+#                       the fix (write boot config, reboot) has not happened
+#                       yet.  Package installation stays STRICT either way; only
+#                       the readiness probe is skipped.  Never pass this for an
+#                       OTA: on an existing device the gate is meaningful and is
+#                       what triggers rollback.
 #
 # NOTE ON CLONE DEPTH: the clone is deliberately FULL, not shallow.  The
 # application relies on a real git repository on the device:
@@ -103,7 +113,7 @@ _run() {
 }
 
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <version|git-ref> [REPO_URL] [--dry-run] [--staged-dir DIR]" >&2
+    echo "Usage: $0 <version|git-ref> [REPO_URL] [--dry-run] [--staged-dir DIR] [--skip-health-check]" >&2
     exit 1
 fi
 VERSION="$1"
@@ -113,9 +123,11 @@ shift
 REPO_URL=""
 DRY_RUN="no"
 STAGED_DIR=""
+SKIP_HEALTH_CHECK="no"
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY_RUN="yes" ;;
+        --skip-health-check) SKIP_HEALTH_CHECK="yes" ;;
         --staged-dir)
             [ $# -ge 2 ] || _die "--staged-dir requires a directory"
             STAGED_DIR="$2"
@@ -502,22 +514,39 @@ systemctl restart metixel-backend 2>/dev/null || true
 systemctl restart metixel-cage 2>/dev/null || true
 systemctl restart metixel-cursor-hider 2>/dev/null || true
 
-# A deliberately headless setup has metixel-cage DISABLED (not merely
-# stopped).  Only then is the frontend not part of the gate: the probe drops
-# to the backend-only form.  When the unit is enabled the strict
-# ?require=render probe stays, so a crash-looping frontend still fails the
-# gate and triggers a rollback.  The string compare is deliberate — `static`,
-# `masked`, `disabled` and a missing unit are all "not enabled".
-CAGE_ENABLED="$(systemctl is-enabled metixel-cage.service 2>/dev/null || true)"
-if [ "${CAGE_ENABLED}" != "enabled" ]; then
-    echo "  metixel-cage.service is '${CAGE_ENABLED:-absent}' (headless) — gating on the backend only"
-    HEALTH_PROBE_URL="${HEALTH_URL}"
-fi
+if [ "${SKIP_HEALTH_CHECK}" = "yes" ]; then
+    # FRESH INSTALL ONLY (bootstrap.sh passes this).  The gate is skipped
+    # rather than relaxed, because on a stock Raspberry Pi OS image it is
+    # unanswerable: config.txt has no `dtoverlay=vc4-kms-v3d`, so there is no
+    # DRM device, so the frontend cannot start — and the fix (write the
+    # overlay, reboot) has not run yet.  Probing here could only fail, and
+    # failing here is what left a perfectly good install looking broken.
+    # Worse, `set -e` propagated the exit code and killed bootstrap BEFORE it
+    # reached the boot-config step that resolves it, so the reboot was never
+    # even attempted.
+    #
+    # bootstrap.sh owns verification now: it writes the boot config, warns,
+    # counts down, reboots, and the frame comes up on the release already
+    # swapped into place.  Package installation above stays STRICT, so a
+    # genuine dependency failure still aborts.
+    echo "  Fresh install — health gate skipped (boot config + reboot pending)"
+else
+    # A deliberately headless setup has metixel-cage DISABLED (not merely
+    # stopped).  Only then is the frontend not part of the gate: the probe drops
+    # to the backend-only form.  When the unit is enabled the strict
+    # ?require=render probe stays, so a crash-looping frontend still fails the
+    # gate and triggers a rollback.  The string compare is deliberate — `static`,
+    # `masked`, `disabled` and a missing unit are all "not enabled".
+    CAGE_ENABLED="$(systemctl is-enabled metixel-cage.service 2>/dev/null || true)"
+    if [ "${CAGE_ENABLED}" != "enabled" ]; then
+        echo "  metixel-cage.service is '${CAGE_ENABLED:-absent}' (headless) — gating on the backend only"
+        HEALTH_PROBE_URL="${HEALTH_URL}"
+    fi
 
-echo "  Waiting up to ${HEALTH_TIMEOUT}s for health endpoint…"
-elapsed=0
-healthy=""
-while [ "${elapsed}" -lt "${HEALTH_TIMEOUT}" ]; do
+    echo "  Waiting up to ${HEALTH_TIMEOUT}s for health endpoint…"
+    elapsed=0
+    healthy=""
+    while [ "${elapsed}" -lt "${HEALTH_TIMEOUT}" ]; do
     # systemd's verdict on the frontend is logged alongside the probe for
     # diagnosis; the gate itself asks the endpoint (see CAGE_ENABLED above).
     if ! systemctl is-active --quiet metixel-cage.service 2>/dev/null; then
@@ -576,6 +605,7 @@ else
         echo "  No previous release to roll back to — leaving as-is (may be broken)."
         exit 1
     fi
+    fi  # end health-check (else of SKIP_HEALTH_CHECK)
 fi
 
 # The hider parks the cursor off-screen.  It was enabled in step [4/8], but

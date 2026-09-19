@@ -301,6 +301,50 @@ class NetworkController:
             return is_connected()
         return False
 
+    def is_connection_in_use(self) -> bool:
+        """Whether a connection is actually being used instead of the AP.
+
+        Public, test-mode-aware counterpart to :meth:`_is_any_connected`, for
+        callers that need to know if the captive portal is the active path in
+        (e.g. the ``/api/network/ap-status`` endpoint).
+
+        Unlike a bare ``is_connected()`` this honours ``METIXEL_NETWORK_TEST_MODE``,
+        under which the Ethernet uplink is purposefully excluded from
+        connectivity so the AP can be exercised while the Pi stays reachable
+        over SSH.  Using the raw helper made ``ap-status`` report
+        ``active: false`` with the AP genuinely up, which silently skipped every
+        captive-portal test.
+
+        Thread-safe: reads ``_test_mode`` (set once in ``__init__``).
+        """
+        return self._is_any_connected()
+
+    def force_ap_active(self) -> bool:
+        """Drive the controller into ``AP_ACTIVE``, generating a PIN.
+
+        Intended for the debugging/test ``/api/network/ap-start`` endpoint.  The
+        AP must be entered through :meth:`_transition_to` because that is where
+        the portal PIN is generated; raising hostapd behind the controller's
+        back produces a live AP whose ``validate_pin`` rejects everything.
+
+        Returns ``True`` only if the controller is in ``AP_ACTIVE`` **with a
+        PIN** on return.  This distinction matters: the monitor thread reverts
+        ``AP_ACTIVE`` to ``CLIENT_CONNECTED`` as soon as it sees an upstream
+        connection — which is correct production behaviour, since a working
+        uplink means the fallback AP is no longer needed — and that transition
+        clears the PIN.  A bare "did the transition run?" check therefore
+        reported success for an AP that was already being torn down, which is
+        how ``ap-start`` came to answer ``status: ok`` while ``validate-pin``
+        answered "No PIN active".  Requiring a live PIN makes the return value
+        mean what callers assume it means.
+        """
+        with self._lock:
+            if self._state != NetworkState.AP_ACTIVE:
+                self._transition_to(NetworkState.AP_ACTIVE)
+            # Deliberately check the PIN, not just the state: AP_ACTIVE with an
+            # empty PIN is exactly the torn-down-in-progress case above.
+            return bool(self._state == NetworkState.AP_ACTIVE and self._pin)
+
     def _is_ethernet_connected(self) -> bool:
         """Check specifically for an active Ethernet connection.
 

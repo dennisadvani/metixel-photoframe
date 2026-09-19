@@ -44,10 +44,10 @@
 #                               cloning (development; nothing is downloaded)
 #   --dry-run                   Print the plan and exit without changing anything
 #   --skip-boot-config          Do not run configure_boot.sh (no reboot needed)
-#   --no-reboot                 Do not reboot even when the boot config changed.
-#                               Only for scripted testing: without the reboot
-#                               the new config.txt is inert and the frontend
-#                               cannot start.
+#   --no-reboot                 Do not reboot.  ONLY for scripted testing:
+#                               without the reboot the KMS overlay is inert and
+#                               the display stays blank, so this prints what to
+#                               run instead and exits 0.
 #   -h, --help                  Show this help
 #
 # NOTE: the device is left with NO git checkout at the install root.  The code
@@ -72,6 +72,83 @@ usage() {
     # Print the whole header comment block (everything after the shebang up
     # to the first non-comment line) so new options are never cut off.
     awk 'NR == 1 { next } !/^#/ { exit } { print }' "$0"
+}
+
+# Warn that the boot configuration just written is inert until a restart.
+#
+# The KMS overlay is read by the firmware at BOOT, so on a fresh install the
+# display path does not exist until the device restarts.  Saying so loudly
+# matters: a frame that installs "successfully" and then shows nothing looks
+# like a failed install, and was exactly the confusion this ordering fixes.
+warn_reboot_required() {
+    echo "==================================================================="
+    echo "  REBOOT REQUIRED TO FINISH SETUP"
+    echo ""
+    echo "  Boot configuration was applied. The display stays blank until the"
+    echo "  device restarts, because the KMS driver is loaded at boot."
+    echo ""
+    echo "      sudo reboot"
+    if [ -n "${1:-}" ]; then
+        echo ""
+        echo "  ${1}"
+    fi
+    echo "==================================================================="
+}
+
+# Count down from 10, then reboot.  A keypress cancels and explains what to do.
+#
+# Reads the keypress from the CONTROLLING TERMINAL (/dev/tty), never stdin.
+# With stdin at EOF — `bash bootstrap.sh < /dev/null`, a pipe, or a closed fd —
+# `read` returns IMMEDIATELY, and that is indistinguishable from a keypress by
+# exit status alone; the countdown would abort in milliseconds and silently
+# skip the reboot.  A non-zero `read -t 1` is the normal 1-second tick here.
+#
+# With no usable terminal (piped/automated install) there is nobody to read the
+# countdown, so reboot immediately — the install must still complete.
+countdown_then_reboot() {
+    # Decide ONCE whether a keypress can be read at all.  `[ -c /dev/tty ]` is
+    # NOT sufficient: the node exists (and is "readable") even when the process
+    # has no controlling terminal, where opening it fails with ENXIO ("No such
+    # device or address").  In that case the loop below would spin through all
+    # ten iterations instantly (each `read` erroring, not timing out) and skip
+    # the visible countdown entirely.  Test by actually OPENING it, with the
+    # whole subshell's stderr discarded — a redirection failure is reported by
+    # bash before `2>/dev/null` on the same command can take effect.
+    if { true < /dev/tty; } 2>/dev/null; then
+        echo ""
+        echo "  Rebooting in 10 seconds — press any key to cancel."
+        echo ""
+        cancelled="no"
+        for i in 10 9 8 7 6 5 4 3 2 1; do
+            if read -r -t 1 -n 1 _ < /dev/tty 2>/dev/null; then
+                cancelled="yes"
+                break
+            fi
+            printf '\r  Rebooting in %2d seconds… ' "${i}"
+        done
+        printf '\r%*s\r' 40 ''
+        if [ "${cancelled}" = "yes" ]; then
+            echo "Reboot cancelled. Run 'sudo reboot' when ready — the frame"
+            echo "will not display anything until then."
+            return 0
+        fi
+    else
+        echo "Boot configuration applied — rebooting to finish setup…"
+    fi
+    # Resolve reboot by absolute path: PATH is not guaranteed to include /sbin
+    # for a non-login/non-root shell, and a silently-missing `reboot` here would
+    # leave the frame blank with the install reporting success.
+    if command -v reboot >/dev/null 2>&1; then
+        sync
+        reboot
+    elif [ -x /sbin/reboot ]; then
+        sync
+        /sbin/reboot
+    else
+        echo "!!! Could not run reboot — the frame stays blank until you do." >&2
+        warn_reboot_required "Automatic reboot failed; run 'sudo reboot' manually."
+        return 1
+    fi
 }
 
 while [ $# -gt 0 ]; do
@@ -286,31 +363,42 @@ with open(path, "w", encoding="utf-8") as fh:
 print(f"  Wrote {path} (wifi_country={country}, channel={channel})")
 PY
 
-# Hand the staged checkout to update.sh, which performs the atomic swap +
-# health-check + rollback.  It moves STAGE_DIR into releases/<name>.
-bash "${STAGE_DIR}/scripts/update.sh" "${REF}" "${REPO_URL}" --staged-dir "${STAGE_DIR}"
+# Hand the staged checkout to update.sh, which performs the atomic swap and
+# installs packages.  It moves STAGE_DIR into releases/<name>.
+#
+# --skip-health-check: on a FRESH install the post-swap readiness gate is
+# unanswerable, so bootstrap skips it and owns the verification itself (boot
+# config → warn → countdown → reboot).  Package installation stays strict.
+bash "${STAGE_DIR}/scripts/update.sh" "${REF}" "${REPO_URL}" \
+    --staged-dir "${STAGE_DIR}" --skip-health-check
 
 # ── 3) Boot configuration ──────────────────────────────────────────────────
 # Boot config is NOT part of reconciliation (config.txt is the device's own file
 # and a change only takes effect on reboot), so it is applied explicitly here.
-# configure_boot.sh reports REBOOT_REQUIRED when it changes something.
 #
-# That signal MUST be captured: without a reboot the new config.txt is inert,
-# metixel-cage cannot open a DRM device, the frontend never writes its
-# heartbeat, and update.sh's health gate fails the install.  The device is left
-# on a release that looks broken even though everything installed correctly.
-REBOOT_REQUIRED="no"
+# Boot config is NOT optional on a fresh install: a stock Raspberry Pi OS image
+# ships without `dtoverlay=vc4-kms-v3d`, so there is no DRM device, cage cannot
+# create its backend, and the frontend never renders.  configure_boot.sh is
+# idempotent, so running it unconditionally is safe and means the reboot below
+# is always justified.
+#
+# Two earlier bugs made this fragile, both fixed by this ordering:
+#   1. The health gate ran BEFORE this step, inside update.sh.  On a stock image
+#      it could only fail, and `set -e` propagated the failure, so bootstrap
+#      died here and the reboot never happened — leaving a correctly-installed
+#      frame on a release that looked broken.
+#   2. Reboot was decided by grepping configure_boot.sh's output for
+#      REBOOT_REQUIRED, which only means "this run edited the file".  A second
+#      run reported "already present" and signalled nothing, even though the
+#      running kernel still had no vc4 driver.  We no longer try to infer it:
+#      a fresh install ALWAYS reboots.
+BOOT_CONFIG_OK="yes"
 if [ "${SKIP_BOOT_CONFIG}" = "no" ] && [ -d /boot/firmware ]; then
     echo ""
     echo "[3/3] Applying boot configuration…"
-    boot_output="$(bash "${INSTALL_ROOT}/live/scripts/configure_boot.sh" 2>&1)" || {
-        printf '%s\n' "${boot_output}" >&2
+    if ! bash "${INSTALL_ROOT}/live/scripts/configure_boot.sh"; then
         echo "ERROR: configure_boot.sh failed" >&2
-        exit 1
-    }
-    printf '%s\n' "${boot_output}"
-    if printf '%s' "${boot_output}" | grep -q '^REBOOT_REQUIRED'; then
-        REBOOT_REQUIRED="yes"
+        BOOT_CONFIG_OK="no"
     fi
 else
     echo ""
@@ -322,27 +410,29 @@ echo "╔═══════════════════════�
 echo "║     Installation Complete                                    ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "After a reboot Metixel will start automatically."
 echo "Dashboard: http://<pi-ip-address>"
 echo ""
 
-# Reboot when the boot config changed — that is not a preference, it is the only
-# way the install can finish.  Ask first only when a human is there to answer;
-# an unattended (piped / automated) install reboots unconditionally so it can
-# never be left half-applied.  --no-reboot opts out for scripted testing.
-if [ "${REBOOT_REQUIRED}" = "yes" ]; then
-    if [ "${ASSUME_NO_REBOOT:-no}" = "yes" ]; then
-        echo "Boot config changed — REBOOT REQUIRED to finish setup (skipped)."
-    elif [ -t 0 ]; then
-        read -r -p "Boot config changed. Reboot now? [Y/n]: " REPLY
-        case "${REPLY:-Y}" in
-            [Nn]*) echo "Reboot skipped — reboot later to finish setup." ;;
-            *) echo "Rebooting…"; reboot ;;
-        esac
-    else
-        echo "Boot config changed — rebooting to finish setup…"
-        reboot
-    fi
-else
-    echo "No boot config change — no reboot needed."
+# A fresh install ALWAYS reboots, for two independent reasons:
+#   * the KMS overlay just written to config.txt is read by the firmware at
+#     boot, so the display path does not exist until then; and
+#   * the release was swapped in and the services restarted, but their units
+#     were only reconciled moments ago.
+# There is deliberately NO "did it change?" detection here — see the note above.
+# --no-reboot exists for scripted testing and is the ONLY way to skip it.
+if [ "${BOOT_CONFIG_OK}" = "no" ]; then
+    echo "Boot configuration FAILED — not rebooting." >&2
+    echo "Fix the error above, then re-run: sudo bash ${INSTALL_ROOT}/live/scripts/configure_boot.sh" >&2
+    exit 1
 fi
+
+if [ "${ASSUME_NO_REBOOT:-no}" = "yes" ]; then
+    warn_reboot_required "(--no-reboot was passed, so this was not done for you.)"
+    exit 0
+fi
+
+warn_reboot_required ""
+countdown_then_reboot
+
+sync
+reboot
