@@ -245,9 +245,12 @@ some photos on it.
 ### Connect to Wi-Fi
 
 Metixel will show a PIN on screen and create a Wi-Fi hotspot called
-**"Metixel-Setup"**. Connect to it from your phone or laptop:
+**"Metixel-Setup"** — the name is followed by 6 digits from the frame's Wi-Fi
+MAC (e.g. `Metixel-Setup-A1B2C3`), so several frames each have their own.
+Connect to it from your phone or laptop:
 
-1. Join the `Metixel-Setup` Wi-Fi network (no password needed).
+1. Join the Metixel setup Wi-Fi network (no password needed). Use the exact
+   name shown on the frame's PIN screen.
 2. Open a browser and go to **http://192.168.42.1**.
 3. Enter the 4-digit PIN shown on the frame's display.
 4. Select your home Wi-Fi network and enter the password.

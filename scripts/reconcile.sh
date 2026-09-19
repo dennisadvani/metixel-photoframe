@@ -311,6 +311,43 @@ _ensure_file() {
     _plus "wrote ${path}"
 }
 
+# ── Wi-Fi interface identity ───────────────────────────────────────────────
+# The AP SSID carries the last 6 hex digits of the wlan0 MAC so two frames in
+# one house broadcast distinguishable names.  src/metixel/backend/
+# network_manager.py owns the format (`ap_ssid_for_mac`); this is the shell
+# twin of it, because hostapd reads a static file and cannot call Python.
+#
+# testing/unit_tests/backend/test_ap_identity.py runs this exact sed pipeline
+# and asserts it produces the same string as the Python function, so the two
+# cannot drift apart silently.
+#
+# Why `sed`/`tr` and not `ip`/`iw`: /sys/class/net/<dev>/address is a plain
+# file, so this needs no binary on PATH.  That matters because these scripts run
+# under systemd and via sudo, where /usr/sbin is absent — the very class of
+# failure that made `dnsmasq` look uninstalled (see §6).
+WLAN_MAC=""
+if [ -r /sys/class/net/wlan0/address ]; then
+    WLAN_MAC="$(tr -d ' \n' < /sys/class/net/wlan0/address)"
+fi
+
+# Render "Metixel-Setup" + the last 6 hex digits of $1, uppercase.
+_ap_ssid_from_mac() {
+    local digits
+    # Strip every separator (aa:bb:cc:dd:ee:ff and aabbccddeeff both work).
+    digits="$(printf '%s' "$1" | tr -d ':-' | tr '[:lower:]' '[:upper:]')"
+    digits="$(printf '%s' "${digits}" | sed 's/[^0-9A-F]//g')"
+    if [ "${#digits}" -lt 6 ]; then
+        printf '%s' "Metixel-Setup"
+        return 0
+    fi
+    printf 'Metixel-Setup-%s' "$(printf '%s' "${digits}" | sed 's/.*\(.\{6\}\)$/\1/')"
+}
+
+AP_SSID="$(_ap_ssid_from_mac "${WLAN_MAC}")"
+if [ -z "${WLAN_MAC}" ]; then
+    _warn "wlan0 MAC unreadable — AP SSID falls back to ${AP_SSID} (not unique per device)"
+fi
+
 # Chown root-owned ancestors of <dir> up to (but never including) DATA_DIR.
 #
 # _ensure_dir chowns only the LEAF it is asked about, but `mkdir -p` creates the
@@ -663,17 +700,51 @@ fi
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. Captive-portal AP (hostapd / dnsmasq)
 # ═══════════════════════════════════════════════════════════════════════════
-# hostapd.conf and dnsmasq.conf are written ONLY when absent.  An existing file
-# may have been customised (e.g. a changed AP channel), and clobbering it on
-# every update would silently break a working device.  Structural changes to
-# these files therefore require a deliberate migration, not this script.
+# These two files are what make the difference between an AP that a phone can
+# USE and one it merely SEES.  Both halves were wrong in 1.2.4/1.2.5:
+#
+#   * `hostapd.conf` got written (it was created before _ensure_file existed),
+#     so the SSID broadcast and the phone connected — while
+#   * `dnsmasq.conf` was never written at all, so nothing answered DHCP.  The
+#     phone sat at "Obtaining IP address…" forever.
+#
+# Two independent causes, both fixed here:
+#
+#  1. ABSENCE WAS TESTED WITH `-f`.  Debian ships /etc/dnsmasq.conf populated
+#     with ~27 KB of COMMENTS, so the file always exists and "write it only if
+#     missing" could never fire.  Comments are not configuration: the test must
+#     be FOR THE SETTINGS, not for the file.
+#  2. `dnsmasq` WAS ASSUMED INSTALLED.  NetworkManager pulls in `dnsmasq-base`,
+#     which provides the binary but NOT /etc/dnsmasq.conf.  Provisioning tools
+#     install `dnsmasq` only when it is not already present, so on those images
+#     the conffile never appeared.  `command -v dnsmasq` could not detect this
+#     either, because /usr/sbin is not on PATH here.
+#
+# The dnsmasq settings live in a sidecar (/etc/dnsmasq.d/) rather than in
+# /etc/dnsmasq.conf directly.  That file is dpkg-owned: rewriting it wholesale
+# would make dpkg prompt about "locally modified configuration" on the next
+# dist-upgrade, and a user's own edits would be lost.  The sidecar is only
+# useful if it is READ, which is why a `conf-dir=` line is asserted below.
+# (Ordering matters: Debian's stock file ends with its own `conf-dir`, read
+# AFTER the earlier defaults it sets — including `interface=`, which is why a
+# sidecar alone was silently ignored.  Our line is placed FIRST so the AP
+# values are read last and win.)
 echo "== Captive portal =="
+
+# ── hostapd ────────────────────────────────────────────────────────────────
+# The SSID is convergent: it is derived from this board's MAC, so a device
+# flashed with an older release (bare "Metixel-Setup") is corrected in place.
+# Every OTHER line is treated as user-owned and never rewritten — an existing
+# channel or hw_mode may have been chosen deliberately.  Migrating the SSID is
+# a one-way change, so it is applied by `sed` to the existing file only, and
+# the v1.2.6-fix-ap-dhcp fixup exists so the same repair happens on devices
+# that were already broken.
 if [ ! -f /etc/hostapd/hostapd.conf ]; then
     _run mkdir -p /etc/hostapd
-    _ensure_file /etc/hostapd/hostapd.conf 0600 <<'EOF'
+    _ensure_file /etc/hostapd/hostapd.conf 0600 <<EOF
 interface=wlan0
 driver=nl80211
-ssid=Metixel-Setup
+ssid=${AP_SSID}
 hw_mode=g
 channel=6
 wmm_enabled=0
@@ -683,7 +754,17 @@ ignore_broadcast_ssid=0
 wpa=0
 EOF
 else
-    _same "/etc/hostapd/hostapd.conf (preserved)"
+    current_ssid="$(sed -n 's/^ssid=//p' /etc/hostapd/hostapd.conf | head -1)"
+    if [ "${current_ssid}" = "${AP_SSID}" ]; then
+        _same "/etc/hostapd/hostapd.conf (preserved, ssid=${AP_SSID})"
+    elif [ "${DRY_RUN}" = "yes" ]; then
+        printf '      [dry-run] hostapd.conf: ssid %s -> %s\n' "${current_ssid}" "${AP_SSID}"
+        CHANGES=$((CHANGES + 1))
+    else
+        # Only the ssid= line is touched; the rest of the file is the user's.
+        sed -i "s|^ssid=.*|ssid=${AP_SSID}|" /etc/hostapd/hostapd.conf \
+            && _plus "hostapd.conf: ssid ${current_ssid} -> ${AP_SSID}"
+    fi
 fi
 
 # /etc/default/hostapd is owned by the distro package.  Only *uncomment* the
@@ -705,17 +786,145 @@ if [ -f /etc/default/hostapd ]; then
     fi
 fi
 
-if [ ! -f /etc/dnsmasq.conf ]; then
-    _ensure_file /etc/dnsmasq.conf 0644 <<'EOF'
-interface=wlan0
-dhcp-range=192.168.42.10,192.168.42.100,12h
+# ── dnsmasq (DHCP + captive-portal DNS) ────────────────────────────────────
+#
+# `dnsmasq` the PACKAGE is what ships /etc/dnsmasq.conf and the systemd unit;
+# `dnsmasq-base` (pulled in by NetworkManager) ships only the binary.  A
+# provisioning tool that installs `dnsmasq` conditionally will therefore skip it
+# on any image where NetworkManager got there first, and the AP then has hostapd
+# broadcasting with nothing to answer DHCP.
+#
+# Detect it by the FILE AND the UNIT rather than by `command -v` — /usr/sbin is
+# not on PATH in this environment, so `command -v dnsmasq` reports "not found"
+# on a perfectly healthy install and "install it" on a device that needs no
+# install.  What actually matters is whether the unit exists to be started.
+if [ ! -f /etc/dnsmasq.conf ] || [ ! -f /usr/lib/systemd/system/dnsmasq.service ]; then
+    if [ "${DRY_RUN}" = "yes" ]; then
+        printf '      [dry-run] apt-get install -y dnsmasq (conffile or unit missing)\n'
+        CHANGES=$((CHANGES + 1))
+    elif _online; then
+        # --no-install-recommends and DEBIAN_FRONTEND keep this from blocking on
+        # a prompt in a non-interactive install.  A failure is reported, not
+        # fatal: without it the AP is degraded, not the frame.
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends dnsmasq \
+                >/dev/null 2>&1; then
+            _plus "installed dnsmasq (conffile + unit)"
+        else
+            _fail "could not install dnsmasq — captive-portal DHCP will not work"
+        fi
+    else
+        # Offline (image build): the packages come from the build's own package
+        # step, and running apt here would mutate the BUILD host.  The sidecar
+        # below is still written, so the image converges once the package is
+        # present.
+        _skip_offline "apt-get install dnsmasq — package list is the image builder's job"
+    fi
+else
+    _same "dnsmasq package present (conffile + unit)"
+fi
+
+# The AP's dnsmasq settings.  Kept in a sidecar so /etc/dnsmasq.conf stays
+# dpkg-owned (see the note at the top of §6).
+#
+# `except-interface=lo` + `bind-dynamic` is deliberate.  The previous
+# `interface=wlan0` binds dnsmasq to an interface that DOES NOT EXIST when it
+# starts — hostapd creates the AP afterwards — which `dnsmasq --test` rejects
+# with "unknown interface wlan0" and which makes the daemon flaky at boot.
+# `except-interface` excludes everything BUT the interface that appears, and
+# `bind-dynamic` defers the bind until it does.  That is dnsmasq's documented
+# way to serve "one interface, whichever it turns out to be".
+#
+# `port=0` is NOT wanted here: it disables DNS, and the captive portal needs DNS
+# to answer for every name (address=/#/192.168.42.1).
+DNSMASQ_SIDECAR="/etc/dnsmasq.d/metixel-ap.conf"
+_run mkdir -p /etc/dnsmasq.d
+_ensure_file "${DNSMASQ_SIDECAR}" 0644 <<'EOF'
+# Metixel Photoframe — captive-portal DHCP/DNS.
+# Owned by scripts/reconcile.sh §6; edit there, not here.
+#
+# No interface= line: bind to whatever interface appears (the AP does not
+# exist yet when dnsmasq starts) rather than to a name that is not up.
+except-interface=lo
+bind-dynamic
+
+# Hand out addresses on the AP subnet.  The Pi itself is .1.
+dhcp-range=192.168.42.10,192.168.42.100,255.255.255.0,12h
 dhcp-option=3,192.168.42.1
 dhcp-option=6,192.168.42.1
 address=/#/192.168.42.1
 no-resolv
 EOF
+
+# /etc/dnsmasq.conf must actually READ the sidecar.
+#
+# Debian's stock file ends with `conf-dir=/etc/dnsmasq.d/,*.conf`, so the
+# sidecar is read — but read LAST, after the stock settings that precede it,
+# including an `interface=` line.  A sidecar that is read last cannot override
+# them, which is exactly how a "configured" frame still had no working DHCP.
+#
+# The line is therefore inserted at the TOP of the file (as the first
+# non-comment line), where it wins.  It is written only when absent, and only as
+# a single line — the rest of the file, stock or user-edited, is untouched.
+DNSMASQ_CONF_MARKER="conf-dir=/etc/dnsmasq.d/,*.conf"
+if grep -qE '^[[:space:]]*conf-dir=[[:space:]]*/etc/dnsmasq\.d/' /etc/dnsmasq.conf 2>/dev/null; then
+    if head -5 /etc/dnsmasq.conf | grep -qE '^[[:space:]]*conf-dir=[[:space:]]*/etc/dnsmasq\.d/'; then
+        _same "/etc/dnsmasq.conf reads /etc/dnsmasq.d first"
+    elif [ "${DRY_RUN}" = "yes" ]; then
+        printf '      [dry-run] /etc/dnsmasq.conf: move conf-dir=/etc/dnsmasq.d/ to the top\n'
+        CHANGES=$((CHANGES + 1))
+    else
+        # Present but after the stock defaults — hoist it so the AP values win.
+        # Headers/comments are preserved: only the matching line is moved.
+        tmp="$(mktemp)"
+        {
+            printf '%s\n' "${DNSMASQ_CONF_MARKER}"
+            grep -vE '^[[:space:]]*conf-dir=[[:space:]]*/etc/dnsmasq\.d/,?\*?\.?c?o?n?f?$' \
+                /etc/dnsmasq.conf
+        } > "${tmp}"
+        if install -m 0644 "${tmp}" /etc/dnsmasq.conf; then
+            _plus "/etc/dnsmasq.conf: conf-dir=/etc/dnsmasq.d/ hoisted to the top"
+        else
+            _fail "could not update /etc/dnsmasq.conf"
+        fi
+        rm -f "${tmp}"
+    fi
 else
-    _same "/etc/dnsmasq.conf (preserved)"
+    if [ ! -f /etc/dnsmasq.conf ]; then
+        # Package absent (offline image, or the install above failed).  Leave a
+        # minimal file so the sidecar is read as soon as dnsmasq arrives.
+        _ensure_file /etc/dnsmasq.conf 0644 <<EOF
+${DNSMASQ_CONF_MARKER}
+EOF
+    elif [ "${DRY_RUN}" = "yes" ]; then
+        printf '      [dry-run] /etc/dnsmasq.conf: prepend %s\n' "${DNSMASQ_CONF_MARKER}"
+        CHANGES=$((CHANGES + 1))
+    else
+        tmp="$(mktemp)"
+        {
+            printf '# Metixel Photoframe — read the captive-portal config first so\n'
+            printf '# its values win over the stock defaults below.\n'
+            printf '%s\n' "${DNSMASQ_CONF_MARKER}"
+            cat /etc/dnsmasq.conf
+        } > "${tmp}"
+        if install -m 0644 "${tmp}" /etc/dnsmasq.conf; then
+            _plus "/etc/dnsmasq.conf: prepended ${DNSMASQ_CONF_MARKER}"
+        else
+            _fail "could not update /etc/dnsmasq.conf"
+        fi
+        rm -f "${tmp}"
+    fi
+fi
+
+# Fail loudly rather than converge to a silently-broken AP.  A device that
+# reaches this point without a usable dhcp-range will broadcast a network no
+# client can join usefully, which is far harder to diagnose than a failed
+# install — the backend also refuses to start the AP in that state.
+if [ "${DRY_RUN}" = "no" ]; then
+    if grep -qE '^[[:space:]]*dhcp-range=' "${DNSMASQ_SIDECAR}" 2>/dev/null; then
+        _same "dnsmasq serves DHCP on 192.168.42.10-100"
+    else
+        _fail "${DNSMASQ_SIDECAR} has no dhcp-range — the AP cannot hand out addresses"
+    fi
 fi
 
 # The backend's NetworkMonitor starts/stops these explicitly, so they must not

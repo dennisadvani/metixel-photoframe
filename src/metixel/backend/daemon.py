@@ -624,8 +624,15 @@ class BackendDaemon:
         on top of the welcome message or other persistent overlays.
         """
         try:
+            # The SSID carries this device's MAC suffix, so it is read from the
+            # same helper the backend logs and the web UI uses — a frame whose
+            # AP is "Metixel-Setup-12ABC3" must not tell the user to join
+            # "Metixel-Setup", which on a multi-frame network is a different
+            # access point entirely.
+            from metixel.backend.network_manager import AP_IP, ap_ssid
             from metixel.shared.ipc import ControlMessage
 
+            ssid = ap_ssid()
             # Clear existing messages before showing PIN
             self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
             time.sleep(0.3)  # Brief pause so frontend processes dismiss
@@ -636,8 +643,8 @@ class BackendDaemon:
                         "title": "Welcome to Metixel!",
                         "body": (
                             f"No network connection detected. "
-                            f"To configure one, connect to 'Metixel-Setup' WiFi, "
-                            f"open http://192.168.42.1 or http://metixel.local "
+                            f"To configure one, connect to '{ssid}' WiFi, "
+                            f"open http://{AP_IP} or http://metixel.local "
                             f"and use PIN {pin} to login."
                         ),
                         "severity": "info",
@@ -645,7 +652,7 @@ class BackendDaemon:
                     },
                 )
             )
-            logger.info("PIN message sent to frontend")
+            logger.info("PIN message sent to frontend (SSID %s)", ssid)
         except Exception:
             logger.warning("Failed to send PIN message to frontend", exc_info=True)
 

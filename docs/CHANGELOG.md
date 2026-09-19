@@ -5,6 +5,78 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.6]
+
+### Fixed
+
+- **The setup hotspot could broadcast but not hand out addresses.**  A phone
+  joined `Metixel-Setup`, sat at "Obtaining IP address…", and gave up — while
+  `hostapd` and `dnsmasq` both reported `active`.  `/etc/dnsmasq.conf` carried
+  no `dhcp-range` at all.  Three separate defects had to line up:
+  - **`/etc/dnsmasq.conf` was tested for with `-f`.**  Debian ships that file
+    populated with ~27 KB of **comments**, so it always "exists" and a
+    write-only-if-missing rule could never fire.  The test is now for the
+    *settings*, not for the file.
+  - **`dnsmasq` was assumed installed.**  NetworkManager pulls in
+    `dnsmasq-base`, which ships the binary but **not** `/etc/dnsmasq.conf` and
+    not the systemd unit.  Provisioning installed `dnsmasq` only when absent, so
+    on those images the conffile never appeared.  It is now detected by the
+    conffile **and the unit** — deliberately not by `command -v`, which reports
+    "not found" on a perfectly healthy install because `/usr/sbin` is not on
+    `PATH` in that environment.  (That same `PATH` gap is why the package looked
+    installed to `dpkg` and missing to the script.)
+  - **The AP settings were read too late to matter.**  They live in a sidecar
+    under `/etc/dnsmasq.d/` (leaving the dpkg-owned `/etc/dnsmasq.conf`
+    untouched, so `apt` never prompts about a locally modified conffile).  But
+    Debian's stock file already ends with its **own** `conf-dir=` line, so the
+    sidecar was sourced *last* and its values lost to the defaults above it —
+    including an `interface=` line, which made the whole file inert.  The
+    `conf-dir=` line is now asserted at the **top** of the file, where the AP
+    values win.  A sidecar alone was never enough; the ordering is the fix.
+  - The sidecar no longer sets `interface=wlan0`.  hostapd creates that
+    interface *after* dnsmasq starts, so the bind named something that did not
+    yet exist (`dnsmasq --test` rejects it with "unknown interface wlan0").
+    `bind-dynamic` + `except-interface=lo` defers the bind to whatever appears.
+  - `start_ap_mode()` now **refuses to broadcast an AP it cannot serve DHCP on**,
+    and surfaces the systemctl/journal detail instead of logging a bare "dnsmasq
+    failed to start".  That silence is why this was hard to diagnose: every
+    other signal on the device looked healthy, and the endpoint answered only
+    "Failed to start AP mode".  The web API now points at the log and names the
+    symptom.
+  - Devices already in this state are repaired on upgrade by the
+    `v1.2.6-fix-ap-dhcp.sh` fixup, which also runs once per device because the
+    `conf-dir=` ordering and the SSID rename are both history-dependent.
+  - **Why no test caught this.**  Every existing check asked "is the AP up?" —
+    `test_ap.py` asserted hostapd was active, wlan0 was in AP mode and
+    192.168.42.1 was assigned, and **all three passed on a frame that handed out
+    no addresses**.  A running dnsmasq means nothing on its own: with no
+    effective `dhcp-range` it still starts as a plain DNS forwarder and still
+    exits 0.  Coverage now asks whether a client can *use* the AP:
+    - `testing/functional/test_ap_dhcp.py` (new) asserts the effective config
+      from dnsmasq's own journal (`DHCP, IP range …`), that something is bound
+      to UDP/67, that `dnsmasq --test` accepts the config (which catches the
+      `interface=wlan0` bind that referred to an interface not yet created), and
+      finally performs a **real DHCP exchange over a veth pair** and requires a
+      192.168.42.x lease.  The last one fails for *every* cause of this class of
+      bug, not just the ordering defect we happened to find.
+    - `testing/unit_tests/backend/test_ap_identity.py` (new) covers the ordering
+      rule and the refuse-to-start guard in CI, with no Pi required, and asserts
+      that `start_ap_mode()` actually *reaches* the guard before starting
+      hostapd — a correct helper that is never called is the same bug.
+- **Every frame in a house broadcast an identical hotspot name.**  The AP SSID
+  now carries the last 6 hex digits of that frame's Wi-Fi MAC, e.g.
+  **`Metixel-Setup-A1B2C3`**, so the one you want is distinguishable when
+  several frames are in range.  The PIN screen, the dashboard's Network page and
+  the manual AP start all report the exact name being broadcast, and an existing
+  frame is renamed automatically.
+  `scripts/reconcile.sh` renders the SSID with `sed` (hostapd reads a static
+  file, so it cannot call Python) while `network_manager.ap_ssid_for_mac()`
+  builds the name the application reports.  The two implementations are compared
+  against each other for every MAC format by
+  `testing/unit_tests/backend/test_ap_identity.py`: a change to one that is not
+  mirrored in the other fails a test that shows both values.  An unreadable MAC
+  degrades to the bare `Metixel-Setup` rather than a truncated suffix.
+
 ## [1.2.5]
 
 ### Features

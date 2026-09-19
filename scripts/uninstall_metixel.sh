@@ -195,12 +195,24 @@ DAEMON_CONF=""
 HOSTAPDDEF
     echo "  + Restored /etc/default/hostapd"
 fi
-# Remove the Metixel hostapd.conf (only if it matches the Metixel SSID)
-if [ -f "/etc/hostapd/hostapd.conf" ] && grep -q "ssid=Metixel-Setup" "/etc/hostapd/hostapd.conf" 2>/dev/null; then
+# Remove the Metixel hostapd.conf (only if it matches the Metixel SSID).
+# The SSID carries the last 6 hex digits of this device's MAC
+# ("Metixel-Setup-12ABC3"), so match the PREFIX, not the whole name.
+if [ -f "/etc/hostapd/hostapd.conf" ] && grep -q "^ssid=Metixel-Setup" "/etc/hostapd/hostapd.conf" 2>/dev/null; then
     rm -f /etc/hostapd/hostapd.conf
     echo "  + Removed /etc/hostapd/hostapd.conf (Metixel-Setup)"
 fi
-# Remove the Metixel dnsmasq.conf (only if it matches the Metixel config)
+# Remove the Metixel captive-portal dnsmasq config.  The AP settings live in a
+# sidecar under /etc/dnsmasq.d/ (a dpkg-owned /etc/dnsmasq.conf is never
+# rewritten wholesale); the `conf-dir=` line that reconcile.sh prepends is left
+# alone, because dnsmasq ships its own at the end of that file and removing
+# ours would delete a line the package considers stock.
+if [ -f "/etc/dnsmasq.d/metixel-ap.conf" ]; then
+    rm -f /etc/dnsmasq.d/metixel-ap.conf
+    echo "  + Removed /etc/dnsmasq.d/metixel-ap.conf (Metixel captive-portal config)"
+fi
+# Legacy: an older release wrote the AP settings directly into /etc/dnsmasq.conf
+# when that file was absent.  Only remove it when it still looks like ours.
 if [ -f "/etc/dnsmasq.conf" ] && grep -q "192.168.42.10" "/etc/dnsmasq.conf" 2>/dev/null; then
     rm -f /etc/dnsmasq.conf
     echo "  + Removed /etc/dnsmasq.conf (Metixel captive-portal config)"

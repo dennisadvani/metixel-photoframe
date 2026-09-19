@@ -116,12 +116,19 @@ power.
 
 ### The frame isn't connecting to my Wi-Fi / I changed my Wi-Fi and it can't join
 
-If the frame shows the **Metixel-Setup** network and a PIN, it has no Wi-Fi
+If the frame shows a **Metixel-Setup…** network and a PIN, it has no Wi-Fi
 connection — use the setup portal again to connect it (see the user guide,
 section 2). If it can't join after you changed your router password, easiest is
 to plug in Ethernet, open the dashboard, and update the Wi-Fi from **Network →
-Scan**. If the **Metixel-Setup** network doesn't appear on your phone, the Pi's
+Scan**. If the network doesn't appear on your phone, the Pi's
 Wi-Fi may still be initialising — it appears within 60–90 seconds of boot.
+
+### There are several "Metixel-Setup…" networks — which one is my frame?
+
+The name ends with 6 hex digits taken from that frame's Wi-Fi MAC, e.g.
+**`Metixel-Setup-A1B2C3`**. The PIN screen on the frame's display shows the
+exact name to join, so match it there. Only one of them belongs to the frame
+you're setting up.
 
 ### How do I find the frame's IP address again?
 

@@ -113,9 +113,12 @@ ssh "${PI_USER}@${PI_HOST}" \
 if [[ "${WIFI_ONLY}" -eq 1 ]]; then
     echo "==> Skipping AP tests (--wifi-only)"
 else
+    # test_ap.py asserts the AP is UP; test_ap_dhcp.py asserts a client can
+    # actually USE it.  Both are needed: the 1.2.4/1.2.5 bug passed every
+    # "is it up?" assertion while handing out no addresses at all.
     echo "==> Running AP functional tests (separate invocation)"
     ssh "${PI_USER}@${PI_HOST}" \
-        "cd ${REMOTE_FUNC} && PYTHONPATH=${METIXEL_SRC} python3 -m pytest test_ap.py -m functional -v --no-cov -p no:cacheprovider"
+        "cd ${REMOTE_FUNC} && PYTHONPATH=${METIXEL_SRC} python3 -m pytest test_ap.py test_ap_dhcp.py -m functional -v --no-cov -p no:cacheprovider"
 fi
 
 # Clean up the tmp dir on the Pi.

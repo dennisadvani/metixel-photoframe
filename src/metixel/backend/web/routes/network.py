@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 from flask import Blueprint, current_app, jsonify, session
 
 from metixel.backend.network_manager import (
+    ap_ssid,
     connect_to_network,
     forget_network,
     get_connection_status,
@@ -63,6 +64,9 @@ def network_status():
     controller = _get_controller()
     ap_active = is_ap_mode_active() or bool(controller and controller.pin)
     status["ap_mode_active"] = ap_active and not is_connected()
+    # The AP SSID carries this device's MAC suffix, so the UI must display the
+    # real name rather than a hardcoded one — see network_manager.ap_ssid().
+    status["ap_ssid"] = ap_ssid()
     return jsonify(status)
 
 
@@ -215,10 +219,20 @@ def network_forget():
 
 @network_bp.route("/network/ap-status", methods=["GET"])
 def ap_status():
-    """Check whether the access point (captive portal) is currently active."""
+    """Check whether the access point (captive portal) is currently active.
+
+    ``ssid`` is the name this device actually broadcasts — the base name plus
+    the last 6 hex digits of its wlan0 MAC — so the UI can tell the user which
+    access point to join when several frames are in range.
+    """
     controller = _get_controller()
     ap_or_pin = is_ap_mode_active() or bool(controller and controller.pin)
-    return jsonify({"active": ap_or_pin and not is_connected()})
+    return jsonify(
+        {
+            "active": ap_or_pin and not is_connected(),
+            "ssid": ap_ssid(),
+        }
+    )
 
 
 @network_bp.route("/network/radio", methods=["POST"])
@@ -311,13 +325,34 @@ def ap_start():
     Note: Manual AP start is discouraged — the NetworkController manages
     AP lifecycle automatically.  This endpoint exists for debugging.
     """
-    from metixel.backend.network_manager import start_ap_mode
+    from metixel.backend.network_manager import ap_ssid, start_ap_mode
 
     ok = start_ap_mode()
     if ok:
-        return jsonify({"status": "ok", "message": "AP mode started"})
-    else:
-        return jsonify({"status": "error", "message": "Failed to start AP mode"}), 500
+        return jsonify(
+            {
+                "status": "ok",
+                "message": f"AP mode started — SSID: {ap_ssid()}",
+                "ssid": ap_ssid(),
+            }
+        )
+    # A bare "failed to start AP mode" is useless to whoever has to fix it: the
+    # start path already logged the specific reason (missing dnsmasq config,
+    # hostapd config error, wlan0 absent), so point at the log rather than
+    # inventing a cause here.
+    return (
+        jsonify(
+            {
+                "status": "error",
+                "message": (
+                    "Failed to start AP mode — see the backend log for the reason "
+                    "(check hostapd/dnsmasq configuration if the SSID is "
+                    "broadcast but clients get no IP address)"
+                ),
+            }
+        ),
+        500,
+    )
 
 
 @network_bp.route("/network/ap-stop", methods=["POST"])

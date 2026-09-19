@@ -40,6 +40,24 @@ class TestNetworkStatus:
         data = json.loads(resp.data)
         assert data["ip"] == "10.0.0.5"
         assert data["ap_mode_active"] is False
+        # The AP SSID is exposed so the dashboard can describe the real
+        # (MAC-suffixed) hotspot name instead of a hardcoded one.
+        assert data["ap_ssid"].startswith("Metixel-Setup")
+
+    def test_status_reports_the_devices_own_ssid(self, client, monkeypatch):
+        import metixel.backend.web.routes.network as net_mod
+
+        monkeypatch.setattr(
+            net_mod,
+            "get_connection_status",
+            lambda: {"ip": "10.0.0.5", "interface_type": "wifi"},
+        )
+        monkeypatch.setattr(net_mod, "is_ap_mode_active", lambda: False)
+        monkeypatch.setattr(net_mod, "is_connected", lambda: True)
+        monkeypatch.setattr(net_mod, "ap_ssid", lambda: "Metixel-Setup-A1B2C3")
+
+        resp = client.get("/api/network/status")
+        assert json.loads(resp.data)["ap_ssid"] == "Metixel-Setup-A1B2C3"
 
 
 class TestNetworkScan:
@@ -97,7 +115,62 @@ class TestApStatus:
 
         resp = client.get("/api/network/ap-status")
         assert resp.status_code == 200
-        assert json.loads(resp.data) == {"active": True}
+        data = json.loads(resp.data)
+        assert data["active"] is True
+        # The SSID is reported so the UI never hardcodes a name: with several
+        # frames in one house each broadcasts a MAC-suffixed SSID, and naming
+        # the wrong one sends the user to a different access point.
+        assert data["ssid"].startswith("Metixel-Setup")
+
+    def test_ap_status_reports_this_devices_ssid(self, client, monkeypatch):
+        import metixel.backend.web.routes.network as net_mod
+
+        monkeypatch.setattr(net_mod, "is_ap_mode_active", lambda: False)
+        monkeypatch.setattr(net_mod, "ap_ssid", lambda: "Metixel-Setup-12ABC3")
+
+        resp = client.get("/api/network/ap-status")
+        assert json.loads(resp.data)["ssid"] == "Metixel-Setup-12ABC3"
+
+
+class TestApStart:
+    """POST /api/network/ap-start — manual AP start (debugging aid).
+
+    The failure path matters: this bug (the AP broadcasting with no DHCP) was
+    hard to diagnose precisely because the endpoint answered "Failed to start
+    AP mode" and the reason was discarded.  The response must point the caller
+    at the log rather than inventing a cause.
+    """
+
+    def test_success_reports_the_devices_ssid(self, client, monkeypatch):
+        import metixel.backend.network_manager as nm
+        import metixel.backend.web.routes.network as net_mod
+
+        monkeypatch.setattr(nm, "start_ap_mode", lambda: True)
+        monkeypatch.setattr(nm, "ap_ssid", lambda: "Metixel-Setup-12ABC3")
+        monkeypatch.setattr(net_mod, "ap_ssid", lambda: "Metixel-Setup-12ABC3")
+
+        resp = client.post("/api/network/ap-start")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["status"] == "ok"
+        assert data["ssid"] == "Metixel-Setup-12ABC3"
+        assert "Metixel-Setup-12ABC3" in data["message"]
+
+    def test_failure_message_directs_to_the_log(self, client, monkeypatch):
+        import metixel.backend.network_manager as nm
+        import metixel.backend.web.routes.network as net_mod
+
+        monkeypatch.setattr(nm, "start_ap_mode", lambda: False)
+        monkeypatch.setattr(net_mod, "ap_ssid", lambda: "Metixel-Setup")
+
+        resp = client.post("/api/network/ap-start")
+        assert resp.status_code == 500
+        message = json.loads(resp.data)["message"]
+        # Must not be a bare "failed" — the specific reason is in the log, and
+        # the commonest cause is worth naming because it is invisible from the
+        # client side (the SSID broadcasts fine; only DHCP is dead).
+        assert "log" in message.lower()
+        assert "IP address" in message
 
 
 class TestNetworkRadio:
