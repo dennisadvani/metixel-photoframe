@@ -157,6 +157,15 @@ class FrameCanvas(QWidget):
         self._prev_scaled_pixmap: QPixmap | None = None
         self._prev_scaled_key: tuple[Any, Any, Any] | None = None
         self._prev_scaled_image: QImage | None = None
+        # The media each layer's ambient backdrop was built from.  Held per layer
+        # because a layer's artwork HANDLE can change while its media does not —
+        # when a video ends the presenter draws the LAST frame instead of the
+        # poster, which is a different decoded image — and because a plan object
+        # is rebuilt on every layout call, so it cannot identify anything either.
+        # A miss paints flat BLACK (see _paint_flat_backdrop), which is the
+        # "ambient jumps to black as the next item fades in" defect.
+        self._backdrop_source: Path | None = None
+        self._prev_backdrop_source: Path | None = None
         # Full-bleed blurred backdrops, for ``ambient_strategy == "blur"``.
         #
         # Two slots at most, because a crossfade has two layers in flight and
@@ -260,11 +269,20 @@ class FrameCanvas(QWidget):
             # A callback failure must never break painting or the event loop.
             logger.debug("resize callback failed", exc_info=True)
 
-    def update_plan(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
+    def update_plan(
+        self,
+        plan: RenderPlan,
+        image: Any = None,
+        alpha: float = 1.0,
+        backdrop_source: Path | None = None,
+    ) -> None:
         """Store the plan (and optional artwork) for the next repaint.
 
         ``alpha`` applies to the artwork only — the frame rings always paint
         opaque, so a fading photo never reveals the matte behind it.
+
+        ``backdrop_source`` is the media this layer's ambient backdrop belongs to.
+        Only needed when it is not the artwork handle — see :meth:`_backdrop_for`.
 
         Any pending outgoing crossfade layer is dropped: this is the single-layer
         entry point, and leaving a stale outgoing image behind would make the
@@ -281,6 +299,7 @@ class FrameCanvas(QWidget):
             None,
             None,
             0.0,
+            backdrop_source=backdrop_source,
         )
 
     def update_transition(
@@ -291,6 +310,8 @@ class FrameCanvas(QWidget):
         prev_plan: RenderPlan | None,
         prev_image: Any,
         prev_alpha: float,
+        backdrop_source: Path | None = None,
+        prev_backdrop_source: Path | None = None,
     ) -> None:
         """Store BOTH crossfade layers so one repaint composites them together.
 
@@ -314,6 +335,8 @@ class FrameCanvas(QWidget):
             prev_plan,
             prev_image if isinstance(prev_image, QImage) else None,
             max(0.0, min(1.0, prev_alpha)),
+            backdrop_source=backdrop_source,
+            prev_backdrop_source=prev_backdrop_source,
         )
 
     def clear_plan(self) -> None:
@@ -328,6 +351,8 @@ class FrameCanvas(QWidget):
         prev_plan: RenderPlan | None,
         prev_image: QImage | None,
         prev_alpha: float,
+        backdrop_source: Path | None = None,
+        prev_backdrop_source: Path | None = None,
     ) -> None:
         """Store the layers to composite, repainting ONLY if that changed.
 
@@ -357,6 +382,8 @@ class FrameCanvas(QWidget):
             and prev_plan is self._prev_plan
             and prev_image is self._prev_image
             and prev_alpha == self._prev_alpha
+            and backdrop_source == self._backdrop_source
+            and prev_backdrop_source == self._prev_backdrop_source
         ):
             return
         self._plan = plan
@@ -365,6 +392,8 @@ class FrameCanvas(QWidget):
         self._prev_plan = prev_plan
         self._prev_image = prev_image
         self._prev_alpha = prev_alpha
+        self._backdrop_source = backdrop_source
+        self._prev_backdrop_source = prev_backdrop_source
 
         # Drop a cached pre-scale whose layer has gone, so the pixmaps cannot
         # outlive the images they were made from.  Bounded at two by
@@ -465,20 +494,45 @@ class FrameCanvas(QWidget):
                 return slot.pixmap
         return None
 
-    def _backdrop_for(self, handle: Any) -> QPixmap | None:
-        """The adopted pixmap belonging to artwork *handle*.
+    def _backdrop_for(
+        self,
+        handle: Any,
+        plan: RenderPlan | None = None,
+        source: Path | None = None,
+    ) -> QPixmap | None:
+        """The adopted pixmap for a layer, identified by artwork or by media.
 
-        Looked up by handle IDENTITY, never by ``==``: ``QImage`` equality
+        Looked up by handle IDENTITY first, never by ``==``: ``QImage`` equality
         compares every pixel, and a paint path that did that would be slower than
         the blur it is trying to avoid.
+
+        The handle is NOT always enough, because a layer's artwork can change while
+        its media does not.  When a video ends the presenter draws the LAST frame —
+        loaded uncached, so a fresh object every tick — instead of the poster the
+        backdrop was adopted for.  The old handle-only lookup MISSED and fell
+        through to :meth:`_paint_flat_backdrop`, which paints black **by design**:
+        the reported "ambient fill jumps to black when the next media transitions
+        in".
+
+        So the fallback identifies the backdrop the way it was BUILT — from the
+        media source and the plan's blur geometry, via the same
+        :meth:`backdrop_request` the readiness check and the warm request use.  A
+        plan object cannot serve here: ``_plan_for`` rebuilds one on every call.
+
+        This is only reached when the identity test fails, so the value comparison
+        of a small frozen dataclass stays off the common path.
         """
-        if handle is None:
+        if handle is not None:
+            if self._backdrop is not None and self._backdrop.handle is handle:
+                return self._backdrop.pixmap
+            if self._prev_backdrop is not None and self._prev_backdrop.handle is handle:
+                return self._prev_backdrop.pixmap
+        if source is None or plan is None:
             return None
-        if self._backdrop is not None and self._backdrop.handle is handle:
-            return self._backdrop.pixmap
-        if self._prev_backdrop is not None and self._prev_backdrop.handle is handle:
-            return self._prev_backdrop.pixmap
-        return None
+        request = self.backdrop_request(plan, source)
+        if request is None:
+            return None
+        return self._loaded_backdrop(request)
 
     def warm_backdrop(self, plan: RenderPlan, source: Path | None, handle: Any = None) -> None:
         """Start building *plan*'s backdrop in a throttled subprocess.
@@ -704,6 +758,16 @@ class FrameCanvas(QWidget):
             # The backdrop is built a slide ahead by the presenter, so in
             # practice this is only reached for the very first item after a cold
             # start, or after a backdrop failed to build.
+            #
+            # Logged because a black band is otherwise unexplained: it is a
+            # legitimate fallback, but if it fires during a transition the cause is
+            # a backdrop that could not be FOUND rather than one that could not be
+            # BUILT, and that distinction is invisible from the screen.
+            logger.debug(
+                "Ambient backdrop unavailable for artwork %s at alpha %.2f — painting black",
+                plan.artwork_dst,
+                alpha,
+            )
             self._paint_flat_backdrop(painter, plan, alpha)
             return
 
@@ -800,7 +864,11 @@ class FrameCanvas(QWidget):
                         self._draw_backdrop_layer(
                             painter,
                             self._prev_plan,
-                            self._backdrop_for(self._prev_image),
+                            self._backdrop_for(
+                                self._prev_image,
+                                self._prev_plan,
+                                self._prev_backdrop_source,
+                            ),
                             self._prev_alpha,
                         )
                     # The outgoing artwork is skipped while a video surface is
@@ -843,7 +911,7 @@ class FrameCanvas(QWidget):
                         self._draw_backdrop_layer(
                             painter,
                             plan,
-                            self._backdrop_for(self._image),
+                            self._backdrop_for(self._image, plan, self._backdrop_source),
                             self._image_alpha,
                         )
                     # Skipped for a video surface, where this layer is the video

@@ -76,7 +76,13 @@ class WaylandBackend(DisplayBackend):
     def swap_buffers(self):
         pass
 
-    def present(self, plan, image=None, alpha=1.0):
+    def present(
+        self,
+        plan,
+        image=None,
+        alpha=1.0,
+        backdrop_source=None,
+    ):
         raise NotImplementedError("WaylandBackend stub")
 
     def schedule(self, tick):

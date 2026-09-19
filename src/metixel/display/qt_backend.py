@@ -77,16 +77,27 @@ def _artwork_rect(plan: RenderPlan) -> tuple[int, int, int, int]:
     return int_rect(plan.artwork_dst)
 
 
-def _fills_frame(plan: RenderPlan) -> bool:
+def _fills_frame(plan: RenderPlan) -> bool:  # noqa: ARG001 - kept for the contract
     """Whether the video must be cropped to fill its rect rather than letterboxed.
 
-    This is the framing engine's ``cover`` (``overflow == "crop"``): the artwork
-    rectangle is the whole panel and the overflowing edges are sampled away, which
-    is a centred crop and therefore exactly mpv's ``panscan``.  ``contain`` needs
-    nothing — letterboxing inside the widget is already mpv's default, and the
-    backend sizes that widget to the contained rect.
+    Always ``True``.  The widget is placed at ``int_rect(plan.artwork_dst)``, and
+    that rectangle is ALREADY the fit the framing engine chose for this media, so
+    filling it is what "show this video in this rect" means — letterboxing is a
+    redundant second fit on top of the first.
+
+    Redundant, and actively harmful, because the two fits disagree by a pixel.
+    ``int_rect`` rounds the far edge OUTWARD, so a portrait video on a 1200px-tall
+    panel — whose exact fit is 675.0px wide — gets a 676px rect, and mpv then
+    letterboxes the 675px that fit inside it.  Measured on the Pi: a single pure
+    black column at x=1297 with the ambient blur resuming at x=1298, i.e. a
+    hairline seam down the right edge of every portrait video.  Landscape video
+    lands on integer dimensions and shows nothing, which is why the defect looked
+    orientation-specific.
+
+    Filling that rect instead costs a scale difference of at most one pixel in a
+    thousand and removes the seam entirely.
     """
-    return plan.overflow == "crop"
+    return True
 
 
 #: Frames per second when ``display.fps_limit`` is missing or non-positive.
@@ -185,6 +196,12 @@ class PySide6Backend(DisplayBackend):
         # The plan the geometry was last applied from, so re-applying it on every
         # present() is free.  See _apply_video_geometry.
         self._video_plan: RenderPlan | None = None
+        # Whether the artwork hole has been opened for the video that is playing.
+        # The hole is NOT opened by play_video(): doing that revealed the widget's
+        # unpainted buffer — a black rectangle — until mpv produced its first
+        # frame.  It opens on the first present() after mpv reports a frame, so
+        # the still poster covers the gap.  See _reveal_video_surface_when_ready.
+        self._video_revealed: bool = False
         self._timer: Any = None
 
     # -- Properties ----------------------------------------------------------
@@ -572,7 +589,13 @@ class PySide6Backend(DisplayBackend):
 
     # -- Frame presentation --------------------------------------------------
 
-    def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
+    def present(
+        self,
+        plan: RenderPlan,
+        image: Any = None,
+        alpha: float = 1.0,
+        backdrop_source: Any = None,
+    ) -> None:
         """Paint *plan* on the canvas.
 
         Two distinct cases:
@@ -602,16 +625,16 @@ class PySide6Backend(DisplayBackend):
             # Z-order note: no raise_() here.  set_video_surface() owns the order,
             # and asking for it every frame would be a restack request to the
             # compositor 31 times a second for an order already in place.
-            self._canvas.set_video_surface(True)
             self._apply_video_geometry(plan)
-            self._canvas.update_plan(plan, image, alpha)
+            self._reveal_video_surface_when_ready()
+            self._canvas.update_plan(plan, image, alpha, backdrop_source=backdrop_source)
             return
 
         # No raise_() and no update() here: the canvas raises itself when the
         # surface mode changes, and repaints only when the picture actually
         # changed.
         self._canvas.set_video_surface(False)
-        self._canvas.update_plan(plan, image, alpha)
+        self._canvas.update_plan(plan, image, alpha, backdrop_source=backdrop_source)
 
     def present_transition(
         self,
@@ -621,6 +644,8 @@ class PySide6Backend(DisplayBackend):
         prev_plan: RenderPlan | None,
         prev_image: Any,
         prev_alpha: float,
+        backdrop_source: Any = None,
+        prev_backdrop_source: Any = None,
     ) -> None:
         """Composite both crossfade layers in a SINGLE repaint.
 
@@ -650,6 +675,8 @@ class PySide6Backend(DisplayBackend):
             prev_plan,
             prev_image,
             prev_alpha,
+            backdrop_source=backdrop_source,
+            prev_backdrop_source=prev_backdrop_source,
         )
 
     # -- Ambient backdrops ---------------------------------------------------
@@ -774,10 +801,11 @@ class PySide6Backend(DisplayBackend):
             return False
         try:
             self._video_path = Path(path)
+            self._video_revealed = False
             self._apply_video_geometry(plan)
-            # The canvas raises itself above the mpv widget and releases the
-            # artwork hole, so the rings and the overlay paint OVER the frame.
-            self._canvas.set_video_surface(True)
+            # The hole is deliberately NOT opened here — see
+            # _reveal_video_surface_when_ready.  Until mpv has a frame, the canvas
+            # keeps painting the poster, so the slide never flashes black.
             self._mpv_widget.ensure_render_context()
             self._mpv_widget.play(str(path))
             return True
@@ -808,7 +836,41 @@ class PySide6Backend(DisplayBackend):
         rect = _artwork_rect(plan)
         self._video_geometry = rect
         self._mpv_widget.setGeometry(*rect)
-        self._mpv_widget.set_panscan(_fills_frame(plan))
+        # Always fill — see _fills_frame.  A letterboxed rect leaves a one-pixel
+        # black column wherever the rounding made the rect a shade wider than the
+        # media's exact fit.
+        self._mpv_widget.set_panscan(True)
+
+    def _reveal_video_surface_when_ready(self) -> None:
+        """Open the artwork hole only once mpv has a frame to fill it with.
+
+        ``play_video`` used to reveal the hole immediately, which showed the mpv
+        widget's uninitialised framebuffer — a black rectangle — for the moment
+        between starting playback and the first decoded frame.  The poster is
+        already painted underneath, so waiting costs nothing: the slide simply
+        keeps its still poster for a frame or two and the video then appears,
+        instead of flashing black in between.
+
+        Called on every ``present()`` while a video is active.  A player that
+        never becomes ready therefore leaves the poster up for the whole slide,
+        which is the same graceful degradation as a backend that cannot play
+        video at all.
+        """
+        if self._video_revealed:
+            return
+        widget = self._mpv_widget
+        if widget is None or self._canvas is None:
+            return
+        try:
+            ready = bool(widget.video_ready())
+        except Exception:
+            logger.debug("video_ready() failed", exc_info=True)
+            return
+        if not ready:
+            return
+        self._video_revealed = True
+        self._canvas.set_video_surface(True)
+        logger.debug("Video surface revealed (first frame is on screen)")
 
     def stop_video(self) -> None:
         """Stop playback, release the artwork hole, and restore the canvas.
@@ -825,6 +887,7 @@ class PySide6Backend(DisplayBackend):
             self._video_path = None
             self._video_geometry = None
             self._video_plan = None
+            self._video_revealed = False
             if self._canvas is not None:
                 # Leave video-surface mode: the canvas is the only surface again,
                 # so it must paint the artwork and stop claiming transparency.

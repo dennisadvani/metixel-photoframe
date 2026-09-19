@@ -978,7 +978,11 @@ class Presenter:
                 "No image for %s — awaiting the backend's cached copy",
                 item.original_path,
             )
-        self._backend.present(plan, handle if with_artwork else None)
+        self._backend.present(
+            plan,
+            handle if with_artwork else None,
+            backdrop_source=self._backdrop_source(item),
+        )
         self._shown_plan = plan
         self._shown_item = item
         # Started AFTER the first present, so the frame shows the still poster
@@ -1025,13 +1029,32 @@ class Presenter:
                 outgoing,
                 outgoing_image,
                 cur_alpha,
+                # The ambient backdrop belongs to the MEDIA, not to whichever
+                # image object currently represents the layer, so the source is
+                # supplied explicitly for both layers.  Without it the OUTGOING
+                # layer of a video that has ended cannot find its backdrop — its
+                # artwork is the last frame, not the poster the backdrop was built
+                # for — and the ambient band snaps to black as the next item
+                # fades in.
+                backdrop_source=self._backdrop_source(next_item),
+                prev_backdrop_source=self._backdrop_source(self._shown_item),
             )
             return
 
         if outgoing is not None and cur_alpha > 0.01:
-            self._backend.present(outgoing, outgoing_image, alpha=cur_alpha)
+            self._backend.present(
+                outgoing,
+                outgoing_image,
+                alpha=cur_alpha,
+                backdrop_source=self._backdrop_source(self._shown_item),
+            )
         if next_image is not None and next_alpha > 0.01:
-            self._backend.present(next_plan, next_image, alpha=next_alpha)
+            self._backend.present(
+                next_plan,
+                next_image,
+                alpha=next_alpha,
+                backdrop_source=self._backdrop_source(next_item),
+            )
 
     # -- Advancing -----------------------------------------------------------
 

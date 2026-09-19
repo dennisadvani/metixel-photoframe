@@ -144,15 +144,41 @@ class TestVideoSurfaceComposition:
         assert "set_video_surface(False)" in body
         assert "_video_geometry = None" in body, "the artwork-sized rect must be dropped"
 
-    def test_the_mpv_widget_covers_exactly_the_artwork_rect(self) -> None:
-        """The widget and the canvas's hole must be the same rectangle.
+    def test_the_hole_opens_only_once_the_video_has_a_frame(self) -> None:
+        """Opening it at play() time showed a black rectangle until the first frame.
 
-        They are siblings, so a disagreement is a black seam at the artwork edge.
+        ``video_ready()`` was written for exactly this and then never called by
+        anything, so the hole opened immediately and the mpv widget's uninitialised
+        framebuffer showed through — the black flash at the start of every video.
+        The poster is already painted, so holding the hole until mpv has a frame
+        costs nothing and removes the flash.
+        """
+        play = _method_body(_BACKEND, "play_video")
+        assert "set_video_surface(True)" not in play, "the hole must not open at play time"
+        assert "_video_revealed = False" in play
+
+        assert "_reveal_video_surface_when_ready()" in _method_body(_BACKEND, "present")
+
+        reveal = _method_body(_BACKEND, "_reveal_video_surface_when_ready")
+        assert "video_ready()" in reveal
+        assert "set_video_surface(True)" in reveal
+
+    def test_the_mpv_widget_covers_exactly_the_artwork_rect(self) -> None:
+        """The widget must FILL the canvas's hole, not letterbox inside it.
+
+        They are siblings, so any disagreement is a black seam at the artwork
+        edge.  ``panscan`` is not only "cover": the widget is placed at
+        ``int_rect(artwork_dst)``, which rounds the far edge OUTWARD, so the rect
+        can be a pixel wider than the media's exact fit.  For a portrait video on
+        a 1200px-tall panel the fit is 675.0px and the rect comes out 676px;
+        letterboxing that leaves one black column at the right edge (measured on
+        the Pi: x=1297 pure black, ambient blur resuming at x=1298).  Filling the
+        rect instead costs a 0.15% scale difference and removes the seam.
         """
         body = _method_body(_BACKEND, "_apply_video_geometry")
         assert "setGeometry(*rect)" in body, "the widget is placed at the artwork rect"
         assert "_artwork_rect(plan)" in body
-        assert "set_panscan(" in body, "cover must crop; contain must letterbox"
+        assert "set_panscan(True)" in body, "the video must FILL the hole, not letterbox in it"
         # And the rect is the shared conversion, not a second copy of the rule.
         assert "int_rect(plan.artwork_dst)" in _source(_BACKEND)
 
@@ -437,7 +463,13 @@ class TestVideoGeometry:
         # Not a copy of the rule: the very same conversion the canvas uses.
         assert _artwork_rect(plan) == int_rect(plan.artwork_dst)
 
-    def test_contain_letterboxes_and_cover_crops(self) -> None:
-        """``cover`` maps onto mpv's panscan; ``contain`` needs nothing."""
+    def test_the_video_always_fills_its_rect(self) -> None:
+        """Filling is unconditional; letterboxing is what caused the seam.
+
+        ``_fills_frame`` used to discriminate on ``overflow``, treating ``contain``
+        as "mpv letterboxes and that agrees with the rect".  It does not agree:
+        the rect is rounded outward, so the media fits at a fractionally smaller
+        size and mpv paints the difference as a black column.
+        """
         assert _fills_frame(self._plan((0.0, 0.0, 1920.0, 1200.0), "crop")) is True
-        assert _fills_frame(self._plan((560.0, 0.0, 800.0, 1200.0), "fill")) is False
+        assert _fills_frame(self._plan((560.0, 0.0, 800.0, 1200.0), "fill")) is True

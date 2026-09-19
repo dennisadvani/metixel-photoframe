@@ -410,7 +410,8 @@ class TestTheBackdropZOrder:
         outgoing_art = paint.index("self._draw_artwork(painter, self._prev_plan, self._prev_image)")
         incoming_backdrop = paint.index(
             "self._draw_backdrop_layer(painter, plan, "
-            "self._backdrop_for(self._image), self._image_alpha)"
+            "self._backdrop_for(self._image, plan, self._backdrop_source), "
+            "self._image_alpha)"
         )
         incoming_art = paint.index("self._draw_artwork(painter, plan)")
 
@@ -424,17 +425,48 @@ class TestTheBackdropZOrder:
     def test_each_backdrop_uses_its_own_item_s_artwork(self) -> None:
         """A letterboxed photo must be surrounded by ITS OWN blur, not the next one's.
 
-        The lookup is by the layer's own handle, so the two backdrops can never
-        be swapped for each other.
+        Each layer is looked up with its own handle AND its own media source, so
+        the two backdrops can never be swapped for each other.
         """
         paint = _code(_CANVAS, "paintEvent")
         assert (
             "self._draw_backdrop_layer(painter, self._prev_plan, "
-            "self._backdrop_for(self._prev_image), self._prev_alpha)" in paint
+            "self._backdrop_for(self._prev_image, self._prev_plan, "
+            "self._prev_backdrop_source), self._prev_alpha)" in paint
         )
         assert (
             "self._draw_backdrop_layer(painter, plan, "
-            "self._backdrop_for(self._image), self._image_alpha)" in paint
+            "self._backdrop_for(self._image, plan, self._backdrop_source), "
+            "self._image_alpha)" in paint
+        )
+
+    def test_a_backdrop_survives_its_artwork_handle_changing(self) -> None:
+        """The layer's MEDIA identifies its backdrop when the handle no longer does.
+
+        A layer's artwork can change while its item does not: when a video ends the
+        presenter draws the LAST frame (loaded uncached, so a fresh object every
+        tick) instead of the poster the backdrop was adopted for.  With a
+        handle-only lookup the backdrop was never found and
+        ``_paint_flat_backdrop`` painted black **by design** — reported as "the
+        ambient fill jumps to black when the next media transitions in".
+
+        The source is the right identity, and a plan object cannot serve: the
+        presenter rebuilds one on every layout call, so identity there means
+        nothing.
+        """
+        backdrop_for = _code(_CANVAS, "_backdrop_for")
+        assert "self._loaded_backdrop(request)" in backdrop_for, (
+            "the fallback must reuse the tested request lookup"
+        )
+        assert "source is None or plan is None" in backdrop_for
+        # Identity first (cheap), request only on a miss.
+        assert backdrop_for.index("is handle") < backdrop_for.index("backdrop_request")
+
+        paint = _code(_CANVAS, "paintEvent")
+        assert "self._backdrop_for(self._image, plan, self._backdrop_source)" in paint
+        assert (
+            "self._backdrop_for(self._prev_image, self._prev_plan, "
+            "self._prev_backdrop_source)" in paint
         )
 
     def test_backdrops_fade_with_their_own_artwork(self) -> None:

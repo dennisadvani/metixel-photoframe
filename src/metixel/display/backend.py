@@ -156,7 +156,13 @@ class DisplayBackend(ABC):
     # -- Frame presentation --------------------------------------------------
 
     @abstractmethod
-    def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
+    def present(
+        self,
+        plan: RenderPlan,
+        image: Any = None,
+        alpha: float = 1.0,
+        backdrop_source: Any = None,
+    ) -> None:
         """Paint one complete frame for *plan*.
 
         The single rendering entry point.  Implementations paint the plan's
@@ -184,6 +190,12 @@ class DisplayBackend(ABC):
                 so the panel dims through the middle and the visible change
                 collapses towards the middle of the duration.  Use
                 :meth:`present_transition` for that.
+            backdrop_source: The media this layer's ambient backdrop was built
+                from.  Optional, and only needed where the artwork handle cannot
+                identify the backdrop — a video that has ENDED is drawn as its
+                last frame, a different handle from the poster the backdrop was
+                adopted for.  Without it such a layer's backdrop is not found and
+                the ambient band falls back to black.
         """
         ...
 
@@ -224,6 +236,8 @@ class DisplayBackend(ABC):
         prev_plan: RenderPlan | None,
         prev_image: Any,
         prev_alpha: float,
+        backdrop_source: Any = None,
+        prev_backdrop_source: Any = None,
     ) -> None:  # noqa: B027
         """Composite an outgoing and an incoming frame in ONE repaint.
 

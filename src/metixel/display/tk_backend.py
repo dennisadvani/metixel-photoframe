@@ -191,7 +191,13 @@ class TkBackend(DisplayBackend):
 
     # -- Frame presentation --------------------------------------------------
 
-    def present(self, plan: RenderPlan, image: Any = None, alpha: float = 1.0) -> None:
+    def present(
+        self,
+        plan: RenderPlan,
+        image: Any = None,
+        alpha: float = 1.0,
+        backdrop_source: Any = None,
+    ) -> None:
         """Software-composite one frame from *plan*.
 
         Paints in the order the framing specification mandates — ambient fill,

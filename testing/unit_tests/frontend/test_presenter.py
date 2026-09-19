@@ -85,7 +85,13 @@ class FakeBackend:
 
     # -- Frame ---------------------------------------------------------------
 
-    def present(self, plan: RenderPlan, image: object = None, alpha: float = 1.0) -> None:
+    def present(
+        self,
+        plan: RenderPlan,
+        image: object = None,
+        alpha: float = 1.0,
+        backdrop_source: object = None,
+    ) -> None:
         self.presented.append((plan, image, alpha))
 
     def load_image(self, path: object) -> object:

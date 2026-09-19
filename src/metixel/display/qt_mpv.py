@@ -503,14 +503,19 @@ class MpvRenderWidget(QOpenGLWidget):
         return self._params_known and self._rendered
 
     def set_panscan(self, enabled: bool) -> None:
-        """Fill (crop) the widget with the video instead of letterboxing it.
+        """Fill the widget with the video instead of letterboxing inside it.
 
-        Maps mpv's ``panscan`` onto the framing engine's ``cover``: the artwork
-        rectangle is then the whole panel and the overflowing edges must be
-        sampled away, which for a centred crop is exactly what ``panscan = 1.0``
-        does.  ``contain`` needs nothing — mpv's default letterboxes inside the
-        widget, and the backend has already sized that widget to the contained
-        rect, so the two agree without further work.
+        The backend always enables this, and that is deliberate.  The widget is
+        placed at the artwork rectangle the framing engine chose for the media, so
+        the rectangle IS the fit — filling it is what "show this video in this
+        rect" means, and letterboxing applies a second fit on top of the first.
+
+        The two fits disagree by a pixel, because the rectangle is rounded
+        outward: a portrait video on a 1200px-tall panel fits at exactly 675.0px
+        and gets a 676px rect, so mpv letterboxes the 675px inside it.  Measured
+        on the Pi, that left one pure black column at x=1297 with the ambient blur
+        resuming at x=1298 — a hairline seam down the right edge of every portrait
+        video.  Filling costs at most a one-pixel-in-a-thousand scale difference.
         """
         if self._mpv is None:
             return
