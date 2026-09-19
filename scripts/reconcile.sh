@@ -1152,7 +1152,78 @@ if [ -f /etc/samba/smb.conf ] || command -v smbd >/dev/null 2>&1; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 9. Boot config — DELIBERATELY NOT HANDLED HERE
+# 9. Passwordless sudo for the `pi` user
+# ═══════════════════════════════════════════════════════════════════════════
+# The backend runs as `pi` under systemd with NO TTY, and performs every
+# privileged action through `sudo -n` (see src/metixel/shared/subprocess.py:
+# run_sudo / schedule_sudo).  Without a NOPASSWD entry, `sudo -n` fails with
+# "a password is required" and the affected feature breaks SILENTLY — the
+# AP/DHCP fallback, reboot/shutdown, timezone, DDC/CI and the OTA dependency
+# self-heal all depend on it.
+#
+# This was never provisioned, by any version.  It is not a regression: the
+# scripts merely assumed it, because Raspberry Pi OS *used* to ship
+# /etc/sudoers.d/010_pi-nopasswd.  The Pi Foundation removed that (it was a
+# security hole), so a fresh Imager image no longer has it and every
+# privileged feature is dead on arrival.  The docs (CONTRIBUTING.md) and the
+# functional suite (test_sudo.py) treated it as a precondition all along.
+#
+# Doing it here rather than in bootstrap.sh is deliberate: AGENTS.md rule 16
+# makes reconcile.sh the single owner of host configuration, and it runs on
+# BOTH fresh install and every upgrade — so a device already installed (like
+# the ones in the field) is repaired by its next OTA, which a bootstrap-only
+# change could never do.
+#
+# SCOPE: this grants `pi` unrestricted passwordless root.  That is what the
+# rest of the project already assumes, and it is unavoidable for `systemctl`
+# on arbitrary units plus pip into system dist-packages.  The intended
+# isolation boundary is therefore the DEVICE (physical access + the web UI
+# password), not the `pi` account.  Do not treat this as a sandbox.
+SUDOERS_FILE="/etc/sudoers.d/010_pi-nopasswd"
+
+# `pi` is assumed everywhere (units, chowns, this script).  Say so clearly
+# rather than writing a rule for a user that does not exist.
+if ! id -u pi >/dev/null 2>&1; then
+    _warn "user 'pi' does not exist — skipping the NOPASSWD sudo rule (privileged features will fail)"
+elif [ ! -d /etc/sudoers.d ]; then
+    _warn "/etc/sudoers.d is missing — skipping the NOPASSWD sudo rule (is sudo installed?)"
+else
+    # `visudo -c -f` is the authority on whether a sudoers file is valid, and
+    # it needs no running systemd — so this works under --offline too.
+    if [ -f "${SUDOERS_FILE}" ] && visudo -c -f "${SUDOERS_FILE}" >/dev/null 2>&1; then
+        _same "${SUDOERS_FILE} already present and valid"
+    elif [ "${DRY_RUN}" = "yes" ]; then
+        printf '      [dry-run] write %s (chmod 0440) — grant pi NOPASSWD sudo\n' "${SUDOERS_FILE}"
+        printf '      [dry-run] validate with: visudo -c -f %s\n' "${SUDOERS_FILE}"
+        CHANGES=$((CHANGES + 1))
+    else
+        # Build the candidate in a temp file, validate it BEFORE it lands, then
+        # install with the mode sudo insists on.  A malformed file in
+        # /etc/sudoers.d can lock the user out of sudo entirely, so it must
+        # never be installed unvalidated.
+        _tmp_sudoers="$(mktemp)"
+        printf 'pi ALL=(ALL) NOPASSWD: ALL\n' > "${_tmp_sudoers}"
+        if ! visudo -c -f "${_tmp_sudoers}" >/dev/null 2>&1; then
+            # Only reachable if /etc/sudoers itself is broken.
+            _fail "generated sudoers rule failed validation; not installing ${SUDOERS_FILE}"
+        elif install -m 0440 -o root -g root "${_tmp_sudoers}" "${SUDOERS_FILE}"; then
+            # Re-validate in place: /etc/sudoers may `#includedir` this
+            # directory, in which case a bad file breaks sudo for EVERYONE.
+            if visudo -c >/dev/null 2>&1; then
+                _plus "granted pi passwordless sudo (${SUDOERS_FILE})"
+            else
+                _fail "installed ${SUDOERS_FILE} but 'visudo -c' now fails — removing it"
+                rm -f "${SUDOERS_FILE}"
+            fi
+        else
+            _fail "could not write ${SUDOERS_FILE}"
+        fi
+        rm -f "${_tmp_sudoers}"
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 10. Boot config — DELIBERATELY NOT HANDLED HERE
 # ═══════════════════════════════════════════════════════════════════════════
 # /boot/firmware/config.txt is excluded from reconciliation on purpose:
 #   * it is the DEVICE's file — re-asserting gpu_mem on every update would
