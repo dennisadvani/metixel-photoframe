@@ -36,6 +36,16 @@ def test_detect_backend_returns_tk():
         assert isinstance(backend, PySide6Backend), (
             f"On a Pi, expected PySide6Backend, got {type(backend).__name__}"
         )
+    elif _in_wayland_session():
+        # Linux + Wayland is checked BEFORE the dev fallback, so it wins on a
+        # Wayland desktop — including a developer's.  Modelled explicitly
+        # rather than assumed away, or this test is a property of the machine it
+        # happens to run on (it failed on Hyprland and passed on CI).
+        from metixel.display.wayland_backend import WaylandBackend
+
+        assert isinstance(backend, WaylandBackend), (
+            f"On non-Pi Wayland, expected WaylandBackend, got {type(backend).__name__}"
+        )
     else:
         from metixel.display.tk_backend import TkBackend
 
@@ -130,3 +140,17 @@ def _on_raspberry_pi() -> bool:
     from metixel.shared.platform import is_raspberry_pi
 
     return bool(is_raspberry_pi())
+
+
+def _in_wayland_session() -> bool:
+    """Whether the detection in ``metixel.display`` would take its Wayland branch.
+
+    Mirrors the condition in :func:`metixel.display.detect_backend` so the test
+    tracks the real rule instead of a copy of it that can drift.
+    """
+    import os
+    import sys
+
+    return sys.platform == "linux" and bool(
+        os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland"
+    )

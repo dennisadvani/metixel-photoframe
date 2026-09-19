@@ -25,7 +25,7 @@ import ast
 from pathlib import Path
 
 from metixel.display.geometry import int_rect
-from metixel.display.qt_backend import _artwork_rect, _fills_frame
+from metixel.display.qt_backend import _artwork_rect
 from metixel.framing.layout import RenderPlan
 
 _DISPLAY_DIR = Path(__file__).resolve().parents[3] / "src" / "metixel" / "display"
@@ -462,14 +462,3 @@ class TestVideoGeometry:
         assert _artwork_rect(plan) == (7, 7, 1906, 1186)
         # Not a copy of the rule: the very same conversion the canvas uses.
         assert _artwork_rect(plan) == int_rect(plan.artwork_dst)
-
-    def test_the_video_always_fills_its_rect(self) -> None:
-        """Filling is unconditional; letterboxing is what caused the seam.
-
-        ``_fills_frame`` used to discriminate on ``overflow``, treating ``contain``
-        as "mpv letterboxes and that agrees with the rect".  It does not agree:
-        the rect is rounded outward, so the media fits at a fractionally smaller
-        size and mpv paints the difference as a black column.
-        """
-        assert _fills_frame(self._plan((0.0, 0.0, 1920.0, 1200.0), "crop")) is True
-        assert _fills_frame(self._plan((560.0, 0.0, 800.0, 1200.0), "fill")) is True

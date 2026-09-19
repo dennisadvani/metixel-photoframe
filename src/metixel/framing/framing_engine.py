@@ -934,14 +934,6 @@ def _resolve_focal_point(media: MediaDescriptor, request: FramingRequest) -> Foc
     return FocalPoint(0.5, 0.5)
 
 
-def _cover_crop_fraction(aspect: float, frame: Rect) -> float:
-    """Fraction of the scaled artwork that would be cropped to cover ``frame``."""
-    oa = frame.aspect
-    if aspect >= oa:
-        return 1.0 - oa / aspect
-    return 1.0 - aspect / oa
-
-
 # ---------------------------------------------------------------------------
 # Style resolution (the engine consumes mm; it never invents a style)
 # ---------------------------------------------------------------------------

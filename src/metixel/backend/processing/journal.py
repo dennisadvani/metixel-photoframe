@@ -18,18 +18,21 @@ interleave writes to the journal file.
 
 The journal lives inside the cache directory (``<cache_dir>/processing_state.json``)
 so that "Clear cache" wipes it along with the processed files, forcing a clean
-full rebuild.  Writes are debounced and atomic (temp file + ``os.replace()``).
+full rebuild.  Writes are debounced and atomic — they go through
+:func:`metixel.shared.io.atomic_write_json`, the single owner of the
+temp-file-and-rename pattern.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 from pathlib import Path
 from typing import Any
+
+from metixel.shared.io import atomic_write_json
 
 logger = logging.getLogger(__name__)
 
@@ -86,15 +89,17 @@ class ProcessingJournal:
             logger.warning("Could not load processing journal from %s", self._path)
 
     def _persist(self) -> None:
-        """Atomically write the journal (temp file + os.replace)."""
+        """Atomically write the journal, leaving it dirty if that fails.
+
+        Uses the shared helper so this file gets the same durability guarantees
+        as every other JSON writer (parent directory, flushed and fsynced before
+        the rename).  That matters more here than elsewhere: the journal is the
+        crash-recovery record for the media pipeline, so a torn write is worse
+        than a lost one.
+        """
         with self._lock:
             try:
-                self._path.parent.mkdir(parents=True, exist_ok=True)
-                payload = {"version": 1, "files": self._entries}
-                tmp = self._path.with_suffix(".json.tmp")
-                with open(tmp, "w", encoding="utf-8") as f:
-                    json.dump(payload, f, indent=2)
-                os.replace(tmp, self._path)
+                atomic_write_json(self._path, {"version": 1, "files": self._entries})
                 self._dirty = False
             except OSError:
                 logger.warning("Could not persist processing journal to %s", self._path)

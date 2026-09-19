@@ -39,7 +39,7 @@ def atomic_write_json(
     path: Path | str,
     data: Any,
     *,
-    indent: int = 2,
+    indent: int | None = 2,
     sort_keys: bool = False,
 ) -> None:
     """Atomically write ``data`` as JSON to *path*.
@@ -48,6 +48,10 @@ def atomic_write_json(
     and ``fsync``es it, then ``os.replace``s it over the destination so
     readers (e.g. the web dashboard or an inotify watcher) never observe a
     partially-written file.
+
+    ``indent=None`` writes compactly, for machine-only files that are rewritten
+    frequently (the Immich progress snapshot) where the extra whitespace is pure
+    cost.  Callers should keep the default for anything a human may read.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

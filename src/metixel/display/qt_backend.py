@@ -77,29 +77,6 @@ def _artwork_rect(plan: RenderPlan) -> tuple[int, int, int, int]:
     return int_rect(plan.artwork_dst)
 
 
-def _fills_frame(plan: RenderPlan) -> bool:  # noqa: ARG001 - kept for the contract
-    """Whether the video must be cropped to fill its rect rather than letterboxed.
-
-    Always ``True``.  The widget is placed at ``int_rect(plan.artwork_dst)``, and
-    that rectangle is ALREADY the fit the framing engine chose for this media, so
-    filling it is what "show this video in this rect" means — letterboxing is a
-    redundant second fit on top of the first.
-
-    Redundant, and actively harmful, because the two fits disagree by a pixel.
-    ``int_rect`` rounds the far edge OUTWARD, so a portrait video on a 1200px-tall
-    panel — whose exact fit is 675.0px wide — gets a 676px rect, and mpv then
-    letterboxes the 675px that fit inside it.  Measured on the Pi: a single pure
-    black column at x=1297 with the ambient blur resuming at x=1298, i.e. a
-    hairline seam down the right edge of every portrait video.  Landscape video
-    lands on integer dimensions and shows nothing, which is why the defect looked
-    orientation-specific.
-
-    Filling that rect instead costs a scale difference of at most one pixel in a
-    thousand and removes the seam entirely.
-    """
-    return True
-
-
 #: Frames per second when ``display.fps_limit`` is missing or non-positive.
 #: Matches the config default.
 DEFAULT_FPS_LIMIT = 30
@@ -836,9 +813,19 @@ class PySide6Backend(DisplayBackend):
         rect = _artwork_rect(plan)
         self._video_geometry = rect
         self._mpv_widget.setGeometry(*rect)
-        # Always fill — see _fills_frame.  A letterboxed rect leaves a one-pixel
-        # black column wherever the rounding made the rect a shade wider than the
-        # media's exact fit.
+        # The video must FILL this rect rather than letterbox inside it.  The rect
+        # is already the fit the framing engine chose for this media, so filling
+        # is what "show this video here" means; letterboxing adds a redundant
+        # second fit.
+        #
+        # Redundant and actively harmful, because the two fits disagree by a
+        # pixel: ``int_rect`` rounds the far edge OUTWARD, so a portrait video on
+        # a 1200px-tall panel — exact fit 675.0px wide — gets a 676px rect and mpv
+        # letterboxes the 675px inside it.  Measured on the Pi: one pure black
+        # column at x=1297, ambient blur resuming at x=1298 — a hairline seam down
+        # the right edge of every portrait video.  Landscape lands on integer
+        # dimensions, which is why the defect looked orientation-specific.  Filling
+        # costs at most one pixel in a thousand of scale.
         self._mpv_widget.set_panscan(True)
 
     def _reveal_video_surface_when_ready(self) -> None:

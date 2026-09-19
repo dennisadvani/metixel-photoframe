@@ -245,7 +245,10 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             setStat("info-os-release", info.os_release || "--");
             setStat("info-kernel", info.kernel || "--");
             setStat("info-python", info.python_version || "--");
-            setStat("info-pi3d", info.pi3d_version || "--");
+            // The retired pi3d probe was replaced server-side by these two
+            // (see routes/system.py) — they were being fetched and discarded.
+            setStat("info-playback", info.playback_lib || "--");
+            setStat("info-qt", info.qt_version || "--");
             setStat("info-gpu-mem", info.gpu_memory || "--");
             setStat("info-drm-driver", info.drm_driver || "--");
             setStat("info-hostname", info.hostname || "--");

@@ -28,6 +28,7 @@ import requests
 
 from metixel.backend.state import StateManager
 from metixel.shared.adapters import RequestsHttpGateway
+from metixel.shared.io import atomic_write_json
 from metixel.shared.paths import resolve_install_path
 from metixel.shared.ports import HttpGateway
 
@@ -876,13 +877,13 @@ class ImmichSyncer:
             # If statvfs fails, proceed anyway (e.g. network share)
 
     def _persist_result(self, result: SyncResult) -> None:
-        """Write the sync result to the status file for the web dashboard."""
+        """Write the sync result to the status file for the web dashboard.
+
+        Best-effort: the file lives in ``/run/metixel`` (tmpfs), so a failure here
+        means the run directory is unavailable, not that the sync failed.
+        """
         try:
-            Path(_SYNC_STATUS_FILE).parent.mkdir(parents=True, exist_ok=True)
-            tmp = _SYNC_STATUS_FILE + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(result.to_dict(), f, indent=2)
-            os.replace(tmp, _SYNC_STATUS_FILE)
+            atomic_write_json(_SYNC_STATUS_FILE, result.to_dict())
         except OSError:
             logger.debug("Could not write sync status file — /run/metixel unavailable?")
 
@@ -896,26 +897,27 @@ class ImmichSyncer:
         album_index: int = 0,
         album_total: int = 0,
     ) -> None:
-        """Write a live progress snapshot for the web dashboard to poll."""
-        try:
-            Path(_SYNC_PROGRESS_FILE).parent.mkdir(parents=True, exist_ok=True)
-            tmp = _SYNC_PROGRESS_FILE + ".tmp"
-            data = {
-                "phase": phase,
-                "total": total,
-                "processed": processed,
-                "current_file": current_file,
-                "syncing": self._syncing,
-                "album_name": album_name,
-                "album_index": album_index,
-                "album_total": album_total,
-                "timestamp": time.time(),
-            }
-            with open(tmp, "w") as f:
-                json.dump(data, f)
-            os.replace(tmp, _SYNC_PROGRESS_FILE)
-        except OSError:
-            pass
+        """Write a live progress snapshot for the web dashboard to poll.
+
+        Compact (``indent=None``) because it is machine-only and rewritten for
+        every file processed, and best-effort like :meth:`_persist_result`.
+        """
+        with contextlib.suppress(OSError):
+            atomic_write_json(
+                _SYNC_PROGRESS_FILE,
+                {
+                    "phase": phase,
+                    "total": total,
+                    "processed": processed,
+                    "current_file": current_file,
+                    "syncing": self._syncing,
+                    "album_name": album_name,
+                    "album_index": album_index,
+                    "album_total": album_total,
+                    "timestamp": time.time(),
+                },
+                indent=None,
+            )
 
     def _clear_progress(self) -> None:
         """Remove the live progress file."""

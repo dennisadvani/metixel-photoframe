@@ -321,7 +321,6 @@ def upload_media():
         JSON ``{saved: [...], errors: [...]}`` with per-file results.
     """
     state = current_app.config["METIXEL_STATE"]
-    upload_dir = _resolve_upload_dir(state)
 
     files = request.files.getlist("files")
     if not files:
@@ -329,6 +328,13 @@ def upload_media():
             jsonify({"saved": [], "errors": [{"name": None, "error": "No files supplied"}]}),
             400,
         )
+
+    # Resolved only once there is something to save.  ``resolve_upload_dir``
+    # CREATES the directory, so calling it first made a request that is about to
+    # be rejected still touch the filesystem — and on a machine where the
+    # install root is not writable that surfaced as a PermissionError (a 500)
+    # instead of the intended 400.
+    upload_dir = _resolve_upload_dir(state)
 
     saved: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []

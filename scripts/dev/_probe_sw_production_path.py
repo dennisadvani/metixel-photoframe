@@ -21,6 +21,7 @@ Run on the Pi:  PYTHONPATH=/opt/metixel/live/src python3 _probe_sw_production_pa
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import hashlib
 import sys
@@ -88,8 +89,7 @@ def main() -> int:
         raw = bytes(pixels)
         lit = len(raw) - raw.count(0)
         print(
-            f"frame {index}: md5={hashlib.md5(raw).hexdigest()[:12]} "
-            f"lit_bytes={lit} / {len(raw)}"
+            f"frame {index}: md5={hashlib.md5(raw).hexdigest()[:12]} lit_bytes={lit} / {len(raw)}"
         )
         time.sleep(0.2)
 
@@ -112,10 +112,8 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - diagnostics only
         print(f"QImage check failed: {type(exc).__name__}: {exc}")
 
-    try:
+    with contextlib.suppress(Exception):
         ctx.free()
-    except Exception:
-        pass
 
     print()
     if lit > len(raw) // 100:

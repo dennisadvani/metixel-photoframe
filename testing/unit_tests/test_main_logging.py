@@ -367,8 +367,19 @@ def metixel_logger_level():
     metixel.setLevel(before)
 
 
-def _configure(tmp_path, monkeypatch, level: str, *, terminal: int = logging.INFO) -> Path:
-    """Run ``_setup_logging`` with *level* persisted; return the log file path."""
+def _configure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    level: str,
+    *,
+    terminal: int = logging.INFO,
+) -> Path:
+    """Run ``_setup_logging`` with *level* persisted; return the log file path.
+
+    The fixture parameters are annotated because an untyped ``tmp_path`` makes the
+    ``Path`` built from it ``Any``, which leaks out of a function declared to
+    return ``Path`` (``no-any-return``).
+    """
     import json
 
     config = tmp_path / "config.json"

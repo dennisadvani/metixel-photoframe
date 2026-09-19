@@ -50,7 +50,6 @@ _SPINNER_RPM = 60  # Spinner rotation speed
 _LOGO_WIDTH_RATIO = 0.60  # Logo takes 60% of screen width
 _SPINNER_SIZE_RATIO = 0.05  # Spinner size relative to screen height
 _SPINNER_GAP_RATIO = 0.04  # Gap between logo bottom and spinner top
-_PROGRESS_GAP_RATIO = 0.02  # Gap between spinner bottom and progress bar
 _PROGRESS_HEIGHT_RATIO = 0.008  # Progress bar height relative to screen height
 _PROGRESS_WIDTH_RATIO = 0.30  # Progress bar is 30% screen width (half of logo)
 

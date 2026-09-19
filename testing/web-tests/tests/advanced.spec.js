@@ -8,13 +8,17 @@
 const { test, expect } = require("@playwright/test");
 const { goToPage, collectErrors, expectNoErrors, assertSaveRestores } = require("./helpers");
 
+// Every id in the System card's info table (see index.html).  The retired
+// `pi3d` row was replaced by the two rows the backend actually populates: the
+// playback library (mpv) and the Qt binding (PySide6).
 const INFO_IDS = [
     "info-app-version",
     "info-pi-model",
     "info-os-release",
     "info-kernel",
     "info-python",
-    "info-pi3d",
+    "info-playback",
+    "info-qt",
     "info-gpu-mem",
     "info-drm-driver",
     "info-hostname",
@@ -65,10 +69,14 @@ test.describe("playback", () => {
 
     test("display fps-limit save + restore", async ({ page }) => {
         await goToPage(page, "playback");
+        // btn-save-display always sends width/height/refresh_rate/rotation, and a
+        // display-mode key means the backend schedules a restart — so wait for it,
+        // otherwise it lands in the dashboard tests that run next.
         await assertSaveRestores(page, {
             field: "#cfg-fps-limit",
             saveBtn: "#btn-save-display",
             value: 45,
+            restartsBackend: true,
         });
     });
 });

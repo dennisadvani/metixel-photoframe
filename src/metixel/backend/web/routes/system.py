@@ -183,8 +183,9 @@ def get_system_info():
     """Return system and version information for the Updates card.
 
     Gathers app version, Pi hardware model, OS release, kernel version,
-    Python version, pi3d version, GPU memory, and DRM driver — all via
-    local /proc, /sys, and vcgencmd reads.  No external dependencies.
+    Python version, the playback stack (mpv + Qt), GPU memory, and DRM
+    driver — all via local /proc, /sys, and vcgencmd reads.  No external
+    dependencies.
     """
     import os as _os
     import platform as _platform

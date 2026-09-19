@@ -107,17 +107,6 @@ def _log_files() -> list[str]:
     return found
 
 
-def _find_log_file() -> str | None:
-    """Return the primary log file path (the backend's, when present).
-
-    Retained for callers that want a single file; prefer :func:`_log_files`.
-    """
-    files = _log_files()
-    if files:
-        return files[0]
-    return None
-
-
 def _tail_files(count: int) -> list[str]:
     """Return the most recent *count* lines merged across ALL process logs.
 

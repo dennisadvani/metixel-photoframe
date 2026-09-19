@@ -159,7 +159,6 @@ class MpvRenderWidget(QOpenGLWidget):
         self._backing: Any = None
         self._buffer_address = 0
         self._buffer_size: tuple[int, int] = (0, 0)
-        self._video_size: tuple[int, int] | None = None
         self._paused = False
         self._eof = False
         self._playing = False
@@ -360,8 +359,13 @@ class MpvRenderWidget(QOpenGLWidget):
         self._paused = bool(value)
 
     def _on_video_params(self, _name: str, value: Any) -> None:
+        """mpv has configured the video — half of the readiness signal.
+
+        The dimensions are deliberately NOT stored: the widget is sized from the
+        render plan and mpv scales/letterboxes into whatever it is given, so only
+        the FACT of configuration is load-bearing.  See :meth:`video_ready`.
+        """
         if isinstance(value, dict) and value.get("w") and value.get("h"):
-            self._video_size = (int(value["w"]), int(value["h"]))
             self._params_known = True
 
     def _on_mpv_frame(self) -> None:

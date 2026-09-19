@@ -7,7 +7,13 @@
 // "optimisation" route (image + transcode), while local-sync lives on the
 // "sources" route.
 const { test, expect } = require("@playwright/test");
-const { goToPage, collectErrors, expectNoErrors, assertSaveRestores } = require("./helpers");
+const {
+    goToPage,
+    collectErrors,
+    expectNoErrors,
+    assertSaveRestores,
+    waitForBackendRestart,
+} = require("./helpers");
 
 test.describe("settings", () => {
     test("playback page loads with slideshow/video/display/monitor-control save buttons", async ({ page }) => {
@@ -109,25 +115,28 @@ test.describe("settings", () => {
 
     test("local sync interval save + restore", async ({ page }) => {
         await goToPage(page, "sources");
+        // btn-save-local-sync posts sync.local, which includes watch_paths — a
+        // rebuild key — so the backend schedules a restart.  restartsBackend makes
+        // the helper wait for the service to come back after EACH of its two
+        // saves; the old blind sleep left the second restart to land in the next
+        // test, where it surfaced as a random connection error.
         await assertSaveRestores(page, {
             field: "#cfg-local-interval",
             saveBtn: "#btn-save-local-sync",
             value: 60,
+            restartsBackend: true,
         });
-        // btn-save-local-sync sends watch_paths → restarts the backend; let it
-        // settle so the next test doesn't hit a mid-restart frame.
-        await page.waitForTimeout(5000);
     });
 
     test("video max duration save + restore", async ({ page }) => {
         await goToPage(page, "playback");
+        // btn-save-video posts the `video` section, which always rebuilds.
         await assertSaveRestores(page, {
             field: "#cfg-video-max-duration",
             saveBtn: "#btn-save-video",
             value: 90,
+            restartsBackend: true,
         });
-        // btn-save-video restarts the backend; let it settle before the next test.
-        await page.waitForTimeout(5000);
     });
 
     test("image optimisation save button fires", async ({ page }) => {
@@ -136,8 +145,8 @@ test.describe("settings", () => {
         await page.locator("#btn-save-image-opt").click();
         await expect(page.locator(".toast").first()).toBeVisible();
         expectNoErrors(errors);
-        // btn-save-image-opt restarts the backend; let it settle before the next test.
-        await page.waitForTimeout(5000);
+        // btn-save-image-opt posts the `image` section, which always rebuilds.
+        await waitForBackendRestart();
     });
 
     test("transcode save button fires", async ({ page }) => {
@@ -146,7 +155,7 @@ test.describe("settings", () => {
         await page.locator("#btn-save-transcode").click();
         await expect(page.locator(".toast").first()).toBeVisible();
         expectNoErrors(errors);
-        // btn-save-transcode restarts the backend; let it settle before the next test.
-        await page.waitForTimeout(5000);
+        // btn-save-transcode posts the `video` section, which always rebuilds.
+        await waitForBackendRestart();
     });
 });

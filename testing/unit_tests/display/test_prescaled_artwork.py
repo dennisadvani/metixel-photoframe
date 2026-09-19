@@ -316,7 +316,11 @@ class TestQtBehaviourWhenAvailable:
         first = canvas._scaled_artwork(plan, image)
         second = canvas._scaled_artwork(plan, image)
 
-        assert first is not None
+        # The two `is not None` checks are combined on purpose: a separate one is
+        # undone by the identity assertion below, which widens `first` back to the
+        # union before `width()` is read.  (It is `Any | None` rather than a real
+        # `QPixmap | None` because PySide6's stubs are absent in CI.)
+        assert first is not None and second is not None
         assert first is second, "the second call must reuse the cached pixmap"
         assert first.width() == 800 and first.height() == 600, "scaled to the destination"
 

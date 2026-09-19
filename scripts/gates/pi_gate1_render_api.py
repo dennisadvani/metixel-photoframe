@@ -13,8 +13,6 @@ verdict comes from mpv rather than from us interpreting counters.
 Usage: python3 g1_render_api.py <video> [hwdec]
 """
 
-import ctypes
-import ctypes.util
 import locale
 import sys
 import time
@@ -34,7 +32,16 @@ def main() -> int:
         msg = message.strip()
         if any(
             k in msg.lower()
-            for k in ("hwdec", "hardware decod", "software decod", "v4l2", "drm", "dmabuf", "egl", "error")
+            for k in (
+                "hwdec",
+                "hardware decod",
+                "software decod",
+                "v4l2",
+                "drm",
+                "dmabuf",
+                "egl",
+                "error",
+            )
         ):
             lines.append(f"[{component}] {msg}")
 
