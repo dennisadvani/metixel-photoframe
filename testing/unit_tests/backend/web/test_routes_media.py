@@ -112,6 +112,157 @@ class TestListMedia:
         assert item["media_type"] == "image"
 
 
+class TestListMediaFileVanishesMidRequest:
+    """A file listed by the cached scan can be gone before it is serialised.
+
+    Regression guard for an HTTP 500 that took down the WHOLE listing.
+
+    ``list_media()`` caches the file list, then calls ``entry.stat()`` per
+    item.  If a file disappeared in between — the user deleted it, or
+    Immich/rsync moved it — ``stat()`` raised ``FileNotFoundError``.  That is
+    the case the ``except`` block below was written for, but the old handler
+    **re-called ``entry.stat()``** while building its fallback dict, so the
+    same exception escaped unhandled and Flask returned:
+
+        HTTP 500 /api/media/list
+        FileNotFoundError: [Errno 2] No such file or directory: .../photo.png
+
+    The window is wide because the cache lives for ``_CACHE_TTL`` (60 s), so a
+    delete is followed by up to a minute of calls that still have the dead
+    path in their list.  A user sees "Could not load the media library" purely
+    as a consequence of having deleted a photo.
+
+    These tests inject the race directly (delete between scan and serialise)
+    rather than trying to time it over HTTP, so the failure mode is
+    deterministic.
+    """
+
+    @staticmethod
+    def _library(tmp_path):
+        from PIL import Image
+
+        root = tmp_path / "my_media"
+        root.mkdir()
+        Image.new("RGB", (2, 3)).save(root / "keeper.png")
+        Image.new("RGB", (2, 3)).save(root / "vanishes.png")
+        return root
+
+    def test_missing_file_is_skipped_and_listing_still_succeeds(
+        self, client, tmp_path, monkeypatch
+    ):
+        """Deleting between scan and serialise must not 500 the listing."""
+        root = self._library(tmp_path)
+        monkeypatch.setattr("metixel.shared.config.resolve_watch_paths", lambda config: [root])
+
+        # Prime the cache with both files.
+        first = json.loads(client.get("/api/media/list").data)
+        assert first["total"] == 2
+        assert {i["name"] for i in first["items"]} == {"keeper.png", "vanishes.png"}
+
+        # The file disappears WITHOUT invalidating the cache — exactly the
+        # window the 500 lived in.
+        (root / "vanishes.png").unlink()
+
+        resp = client.get("/api/media/list")
+        assert resp.status_code == 200, (
+            "a file disappearing mid-request must not fail the whole listing "
+            f"(got HTTP {resp.status_code})"
+        )
+        data = json.loads(resp.data)
+        names = [i["name"] for i in data["items"]]
+        assert names == ["keeper.png"], "the vanished file must not be listed"
+        assert data["total"] == 1, "total must exclude the vanished file"
+
+    def test_total_matches_items_so_pagination_is_honest(self, client, tmp_path, monkeypatch):
+        """``total`` must not count files that were dropped.
+
+        ``has_more`` is ``(offset + limit) < total``, so a ``total`` that
+        includes vanished files would offer a "Load more" button that returns
+        nothing.
+        """
+        root = self._library(tmp_path)
+        monkeypatch.setattr("metixel.shared.config.resolve_watch_paths", lambda config: [root])
+
+        client.get("/api/media/list")  # prime the cache
+        (root / "vanishes.png").unlink()
+
+        data = json.loads(client.get("/api/media/list").data)
+        assert data["total"] == len(data["items"])
+        assert data["has_more"] is False
+
+    def test_unreadable_probe_still_lists_the_item(self, client, tmp_path, monkeypatch):
+        """A corrupt image must still be LISTED (so it can be deleted).
+
+        This is the case the ``except`` block legitimately exists for.  The
+        file is present and stat-able but cannot be probed, so it should come
+        back with zero dimensions rather than being dropped.
+        """
+        root = tmp_path / "my_media"
+        root.mkdir()
+        bad = root / "corrupt.png"
+        # Valid extension, stat-able, but not a decodable image.  Padded so the
+        # reported size is a non-zero number of KB.
+        bad.write_bytes(b"not really a png" + b"0" * 4096)
+        monkeypatch.setattr("metixel.shared.config.resolve_watch_paths", lambda config: [root])
+
+        resp = client.get("/api/media/list")
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert [i["name"] for i in data["items"]] == ["corrupt.png"]
+        item = data["items"][0]
+        assert item["width"] == 0
+        assert item["height"] == 0
+        # The size comes from the single stat() taken before probing — the
+        # handler must not need to touch the filesystem again.
+        assert item["size_kb"] == round(bad.stat().st_size / 1024, 1)
+
+    def test_fallback_handler_does_not_re_read_the_filesystem(self, client, tmp_path, monkeypatch):
+        """The ``except`` branch must not call ``stat()`` again.
+
+        This is the precise defect that caused the 500: the fallback dict was
+        built with ``round(entry.stat().st_size / 1024, 1)``, so when the
+        original failure WAS a missing file, the handler raised the identical
+        exception and Flask returned 500 for the whole listing.
+
+        Reproduced by making the probe raise *and* removing the file
+        afterwards — the window is real (the probe is the slow part: PIL open
+        for an image, ffprobe for a video), so a file deleted while its
+        thumbnail is being generated lands exactly here.  A re-stat in the
+        handler then kills the request.
+
+        Asserting on the SIZE is what makes this pin the implementation: the
+        value must come from the stat taken before the probe, never from a
+        second read.
+        """
+        import metixel.backend.web.routes.media as media_mod
+
+        root = tmp_path / "my_media"
+        root.mkdir()
+        victim = root / "vanishing.png"
+        victim.write_bytes(b"not really a png" + b"0" * 4096)
+        expected_size_kb = round(victim.stat().st_size / 1024, 1)
+
+        monkeypatch.setattr("metixel.shared.config.resolve_watch_paths", lambda config: [root])
+
+        # Make the probe fail, and delete the file as a side effect — i.e. the
+        # file is gone by the time the handler builds its fallback, while the
+        # stat taken before the probe is still valid.
+        def probe_then_vanish(entry):
+            victim.unlink(missing_ok=True)
+            raise OSError("thumbnail generation failed")
+
+        monkeypatch.setattr(media_mod, "_probe_image", probe_then_vanish)
+
+        resp = client.get("/api/media/list")
+        assert resp.status_code == 200, (
+            "a probe failure must not 500 the listing; the fallback handler "
+            "re-read the filesystem and re-raised"
+        )
+        data = json.loads(resp.data)
+        assert [i["name"] for i in data["items"]] == ["vanishing.png"]
+        assert data["items"][0]["size_kb"] == expected_size_kb
+
+
 class TestListMediaFilters:
     """Server-side filtering of the media list (name / folder / type)."""
 

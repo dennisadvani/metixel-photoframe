@@ -325,7 +325,7 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "[Local] Run Web UI Tests (Web UI Test)",
+			"label": "[Pi] Run Web UI Tests (Web UI Test)",
 			"detail": "Runs the dashboard Playwright suite from this workstation against the selected Pi.",
 			"type": "shell",
 			"command": "npx playwright test",
@@ -345,7 +345,7 @@
 			"problemMatcher": []
 		},
 		{
-			"label": "[Local] Run Functional Tests (All)",
+			"label": "[Pi] Run Functional Tests (All)",
 			"detail": "Copies the latest local functional tests to a tmp dir on the selected Pi and runs them there: Wi-Fi + sudo (test mode), then AP in a separate invocation.",
 			"type": "shell",
 			"command": "scripts/run_functional_tests.sh ${input:piHost}",

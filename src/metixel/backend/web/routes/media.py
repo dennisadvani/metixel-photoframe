@@ -275,9 +275,27 @@ def list_media():
     sync_dir = _immich_sync_dir(config)
 
     items = []
+    #: Page entries that vanished before they could be serialised — subtracted
+    #: from ``total`` at the end so pagination stays honest.
+    dropped_missing = 0
     for entry in page_paths:
         suffix = entry.suffix.lower()
         is_video = suffix in VIDEO_EXTENSIONS
+
+        # A file listed by the (cached) scan can be gone by the time we
+        # serialise it — the user deleted it, or Immich/rsync moved it.  Drop
+        # it rather than publishing a phantom tile: the alternative is a
+        # listing that offers a Delete button for something that no longer
+        # exists.  `stat()` also gives us the size, so it is done once here
+        # and never re-attempted below.
+        try:
+            size_bytes = entry.stat().st_size
+        except OSError:
+            # Gone (or unreadable) between scan and serialise.  Skip it — and
+            # note the count must shrink too, or `has_more` pagination lies.
+            dropped_missing += 1
+            continue
+
         try:
             if is_video:
                 w, h = _probe_video(entry)
@@ -299,7 +317,7 @@ def list_media():
                 "folder": folder,
                 "width": w,
                 "height": h,
-                "size_kb": round(entry.stat().st_size / 1024, 1),
+                "size_kb": round(size_bytes / 1024, 1),
                 "media_type": "video" if is_video else "image",
                 "thumbnail_url": thumbnail_url,
                 "synced": _is_synced(entry, sync_dir),
@@ -314,6 +332,14 @@ def list_media():
 
             items.append(item_data)
         except Exception:
+            # Probing failed (a corrupt image, a video ffprobe cannot read).
+            # Still list the item — the user needs to see the file in order to
+            # delete it — but with zero dimensions.
+            #
+            # This block MUST NOT re-read the filesystem: `size_bytes` was
+            # obtained above, outside this handler.  Re-calling `entry.stat()`
+            # here is what used to turn a deleted file into an unhandled
+            # FileNotFoundError and an HTTP 500 on the whole listing.
             folder = _watch_folder_name(entry, watch_paths)
             rel_path = _relative_to_any(entry, watch_paths)
             items.append(
@@ -323,12 +349,18 @@ def list_media():
                     "folder": folder,
                     "width": 0,
                     "height": 0,
-                    "size_kb": round(entry.stat().st_size / 1024, 1),
+                    "size_kb": round(size_bytes / 1024, 1),
                     "media_type": "video" if is_video else "image",
                     "thumbnail_url": None,
                     "synced": _is_synced(entry, sync_dir),
                 }
             )
+
+    # Files that vanished mid-serialise were counted in `total` (it comes from
+    # the scan) but are not in `items`.  Reconcile so the client's pagination
+    # arithmetic stays consistent: `offset + limit < total` decides whether to
+    # offer "Load more".
+    total -= dropped_missing
 
     return jsonify(
         {
