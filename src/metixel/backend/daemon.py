@@ -33,6 +33,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Total budget for waiting on background threads at shutdown.  Short on
+#: purpose: they are daemon threads, so anything still alive when this expires
+#: is abandoned and cannot delay interpreter exit.  The wait exists only to let
+#: a loop that is mid-iteration finish cleanly.
+_JOIN_TIMEOUT_S = 2.0
+
 
 class BackendDaemon:
     """Main backend daemon that coordinates all background services.
@@ -65,6 +71,15 @@ class BackendDaemon:
         # Set once shutdown() has run so a second SIGTERM/SIGINT (or an
         # explicit call after the signal) is a no-op.
         self._shutdown_done = threading.Event()
+        # Interruptible "please stop" signal for the polling loops.
+        #
+        # A loop that polls ``self._running`` with a plain ``time.sleep(30)``
+        # cannot wake when shutdown is requested — it sleeps out the remainder
+        # (up to 30 s) before noticing.  Because each such thread is joined
+        # with a 5 s cap, a few sleeping threads turned every
+        # ``systemctl restart`` into a 10-20 s outage.  Waiting on this event
+        # instead makes the sleep return the instant :meth:`shutdown` runs.
+        self._stop_event = threading.Event()
         self._config = self._state.config
         self._threads: list[threading.Thread] = []
         self._update_mgr: UpdateManager | None = None
@@ -133,6 +148,12 @@ class BackendDaemon:
             return
         self._shutdown_done.set()
         self._running = False
+        # Wake every loop that is waiting on a stop signal FIRST, so they can
+        # unwind while the rest of this teardown runs.  Without this the
+        # threads only notice once their fixed sleep expires (the display
+        # scheduler sleeps in 30 s chunks), which is what made a restart cost
+        # 10-20 s of downtime.
+        self._stop_event.set()
         # Ask the long-running workers to stop (best effort — they are daemon
         # threads, so a stuck one cannot block exit).
         for attr in ("_opt_queue", "_folder_watcher", "_keyboard_handler"):
@@ -147,6 +168,43 @@ class BackendDaemon:
         # where we left off (no re-probe of unchanged, already-processed files).
         with contextlib.suppress(Exception):
             self._state.flush_journal()
+
+    def _sleep(self, seconds: float) -> bool:
+        """Sleep up to *seconds*, waking early when shutdown is requested.
+
+        Returns ``False`` when the daemon is stopping, so polling loops can
+        ``return`` immediately rather than running another iteration.
+
+        This is the interruptible replacement for a bare ``time.sleep(N)`` in
+        any loop that polls ``self._running``.  Use it for every wait in a
+        long-running loop: a plain sleep holds the thread (and therefore the
+        process teardown) until it expires, which is exactly the shutdown
+        stall this method exists to prevent.
+        """
+        if self._stop_event.wait(timeout=seconds):
+            return False
+        return self._running
+
+    def _join_threads(self) -> None:
+        """Wait briefly for background threads to finish.
+
+        Joins **concurrently**, not one at a time.  The previous sequential
+        loop paid the per-thread timeout in full for every thread that did not
+        wake promptly, so three stalled threads cost 3 × 5 s = 15 s of dead
+        time on every restart.  Joining them against a single shared deadline
+        bounds the total wait to `_JOIN_TIMEOUT_S` regardless of how many
+        threads are still winding down.
+
+        They are daemon threads, so anything still running after the deadline
+        is abandoned rather than blocking interpreter exit.
+        """
+        deadline = time.monotonic() + _JOIN_TIMEOUT_S
+        for t in self._threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if t.is_alive():
+                t.join(timeout=remaining)
 
     def _install_signal_handlers(self) -> None:
         """Route SIGTERM/SIGINT through :meth:`shutdown`.
@@ -502,7 +560,8 @@ class BackendDaemon:
         # before showing any messages (welcome, PIN, etc.).  The fade
         # takes ~0.8s; 10s also leaves headroom for a slow first render
         # on a Pi 2/3 so the message is not drawn under the boot layer.
-        time.sleep(10.0)
+        if not self._sleep(10.0):
+            return
 
         # ── Initial boot: only wait if NOT already connected ──────
         # If Ethernet or saved WiFi is already up, show the welcome
@@ -516,7 +575,8 @@ class BackendDaemon:
             )
             waited = 0
             while self._running and waited < timeout:
-                time.sleep(5)
+                if not self._sleep(5):
+                    return
                 waited += 5
                 # Stop early if WiFi connects during the wait
                 state, pin, actions = controller.tick()
@@ -547,9 +607,8 @@ class BackendDaemon:
 
         # ── Main monitoring loop ───────────────────────────────────
         while self._running:
-            time.sleep(5)
-            if not self._running:
-                break
+            if not self._sleep(5):
+                return
 
             state, pin, actions = controller.tick()
             self._drain_actions(controller, actions)
@@ -868,7 +927,8 @@ class BackendDaemon:
             while self._running:
                 try:
                     if not self._state.config.display.get("schedule_enabled", False):
-                        time.sleep(30)
+                        if not self._sleep(30):
+                            return
                         continue
 
                     should_be_on = self._display_should_be_on()
@@ -887,7 +947,8 @@ class BackendDaemon:
                 except Exception:
                     logger.debug("Display scheduler error", exc_info=True)
 
-                time.sleep(30)
+                if not self._sleep(30):
+                    return
 
         t = threading.Thread(
             target=_scheduler_loop,
@@ -916,12 +977,6 @@ class BackendDaemon:
             debug=web_config.get("debug", False),
             threaded=True,
         )
-
-    def _join_threads(self) -> None:
-        """Wait for all background threads to finish."""
-        for t in self._threads:
-            if t.is_alive():
-                t.join(timeout=5.0)
 
 
 def build_backend(
