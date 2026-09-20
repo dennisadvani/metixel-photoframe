@@ -204,7 +204,7 @@
 		},
 		{
 			"label": "[Local] Release",
-			"detail": "Cuts a release from the dev branch (e.g. minor-beta, beta, rc, stable, minor, major).",
+			"detail": "Cuts a release from the dev branch: a release type (minor-beta, beta, rc, stable, minor, major) or an exact version (--version 1.2.7).",
 			"type": "shell",
 			"command": "./scripts/release.sh",
 			"args": [

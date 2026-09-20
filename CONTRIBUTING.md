@@ -157,7 +157,8 @@ The suite skips itself (rather than failing) if the host isn't a Pi, has no
 
 - **`dev`** is the integration branch — **all pull requests target `dev`**.
 - **`main`** is the release branch — it is only ever updated by the release
-  process (`scripts/release.ps1`), never directly.
+  process (`scripts/release.sh`, with `scripts/release.ps1` kept as a
+  Windows-parity alternative), never directly.
 
 When you open a pull request, set the base to **`dev`** (GitHub's default is
 the default branch, so make the switch explicitly). **GitHub Actions CI runs
