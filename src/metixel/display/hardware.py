@@ -475,27 +475,75 @@ class WlrOutput:
 
 
 class DisplayPower:
-    """Three-tier display-power control (wlr-randr → DRM DPMS → vcgencmd)."""
+    """Three-tier display-power control (DRM DPMS → wlr-randr → vcgencmd)."""
 
     def __init__(self, wlr: WlrOutput) -> None:
         self._wlr = wlr
+        #: Connector we successfully powered off, so we know which one to
+        #: wake again.  Powering off clears ``enabled``/``edid`` on every
+        #: connector, so the panel is indistinguishable from the phantom
+        #: ports until this is latched.  In-memory only, and legitimately so:
+        #: a restart re-reads live hardware state, and persisting it would
+        #: mean a flash write for a value that is only ever correct for the
+        #: current boot (rule 9).
+        self._powered_off_connector: str | None = None
 
     def set(self, on: bool) -> None:
-        """Set HDMI display power, trying each backend in order."""
+        """Set HDMI display power, trying each backend in order.
+
+        TIER ORDER IS LOAD-BEARING — and the obvious order is wrong on a
+        single-output cage kiosk.  Measured on a Pi 4 (Trixie, vc4-kms-v3d)
+        the tiers behave like this:
+
+        * ``wlr-randr --off`` exits 0 and does disable the output, but cage's
+          only job is displaying that one output, so it re-enables it
+          immediately.  ``/sys/class/drm/*/status`` stays ``connected``,
+          ``dpms`` stays ``On``, and the screen never goes dark.  Because the
+          call reports SUCCESS, putting it first short-circuits the tiers below
+          it and the display simply never turns off.
+        * DRM DPMS via the ``dpms`` node is also unusable: that attribute is
+          mode 0444, so even ``sudo tee`` gets EACCES.  Writing ``status``
+          (mode 0664, root-writable) DOES work — it drives ``status`` →
+          ``disconnected``, ``dpms`` → ``Off``, ``enabled`` → ``disabled``.
+        * ``vcgencmd display_power`` is a legacy firmware command and is INERT
+          under ``vc4-kms-v3d``: it prints ``display_power=1`` and returns 0
+          without changing anything.  Every Trixie install uses that overlay,
+          so this tier cannot work there.
+
+        So the working order is DPMS-then-fallbacks, with ``wlr-randr`` LAST
+        rather than first: it is the fallback for a non-cage Wayland session
+        (where disabling an output is meaningful and is not immediately undone
+        by the compositor that needs it).  ``vcgencmd`` is kept only for the
+        legacy Bullseye/firmware stack, where it is the real mechanism.
+        """
         state = "on" if on else "off"
-        on_off_flag = on
 
-        # 1. wlr-randr (Wayland/wlroots — primary for cage on Trixie)
-        if self._wlr.set_power(on_off_flag):
-            logger.info("Display power (wlr-randr): %s", state.upper())
-            return
+        # The connector to address.  While the panel is on, ``enabled``
+        # identifies it.  Once off, that marker is gone (every node reads
+        # disabled), so remember the one we switched off and use it to wake
+        # the same panel again — otherwise the write lands on a decoy port
+        # that reports success while the screen stays dark.
+        target = self._powered_off_connector if on else self._active_connector()
 
-        # 2. DRM DPMS sysfs (KMS fallback)
-        if self._drm_dpms(state):
+        # 1. DRM DPMS sysfs (the ONLY mechanism that works under KMS on a
+        #    single-output cage kiosk — see the note above).
+        if self._drm_dpms(state, connector_path=target):
+            if on:
+                self._powered_off_connector = None
+            else:
+                self._powered_off_connector = target
             logger.info("Display power (DRM DPMS): %s", state.upper())
             return
 
-        # 3. vcgencmd (legacy Broadcom firmware / Bullseye)
+        # 2. wlr-randr (Wayland/wlroots).  Deliberately AFTER DPMS: on a
+        #    single-output cage this reports success while changing nothing,
+        #    so it must not be able to mask the tier above it.
+        if self._wlr.set_power(on):
+            logger.info("Display power (wlr-randr): %s", state.upper())
+            return
+
+        # 3. vcgencmd (legacy Broadcom firmware / Bullseye).  Inert under
+        #    vc4-kms-v3d — kept for the legacy stack only.
         if not is_raspberry_pi():
             logger.warning("display_power: not on a Raspberry Pi — no-op")
             return
@@ -510,42 +558,135 @@ class DisplayPower:
             logger.warning("vcgencmd not found — display power control unavailable")
 
     @staticmethod
-    def _drm_dpms(state: str) -> bool:
-        """Set display DPMS state via KMS sysfs. Returns True on success.
-
-        Tries writing to ``/sys/class/drm/card*-*/dpms``.  On modern kernels
-        these nodes may be read-only; falls back to ``sudo tee`` to
-        ``.../status``.
-        """
-        # Try dpms node first (may be read-only on newer kernels)
+    def _read_node(path: str) -> str:
+        """Read a sysfs attribute, returning ``""`` on any failure."""
         try:
-            for card in glob.glob("/sys/class/drm/card*-*"):
-                dpms_path = os.path.join(card, "dpms")
-                if os.path.exists(dpms_path):
-                    with open(dpms_path, "w") as f:
-                        f.write(state)
-                    return True
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    @staticmethod
+    def _write_status(path: str, value: str) -> bool:
+        """Write a connector ``status`` node, direct then via ``sudo tee``."""
+        try:
+            with open(path, "w") as f:
+                f.write(value)
+            return True
         except OSError:
             pass
 
-        # Fallback: write to .../status via sudo tee
+        # The real path on the Pi: the service is hardened and runs as `pi`,
+        # which has passwordless sudo.  `tee` also needs the value on stdin.
         try:
-            for card in glob.glob("/sys/class/drm/card*-*"):
-                status_path = os.path.join(card, "status")
-                if os.path.exists(status_path):
-                    on_off = "on" if state == "on" else "off"
-                    result = subprocess.run(
-                        ["sudo", "tee", status_path],
-                        input=on_off,
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
-                    if result.returncode == 0:
-                        return True
-        except Exception:
-            pass
+            result = subprocess.run(
+                ["sudo", "tee", path],
+                input=value,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
 
+    @classmethod
+    def _active_connector(cls) -> str | None:
+        """Return the connector the kernel is driving, or None.
+
+        The reliable marker is ``enabled=enabled``.  Measured on a Pi 4 with
+        one panel attached and two decoy nodes in the tree:
+
+            node               panel ON            panel OFF
+            card1-HDMI-A-1     disabled, 0B edid   disabled, 0B edid
+            card1-Writeback-1  disabled, 0B edid   disabled, 0B edid
+            card1-HDMI-A-2     ENABLED, 256B edid  disabled, 0B edid
+
+        Only the real panel ever reads ``enabled``, because ``cage_launch.sh``
+        disables every no-EDID output before the frontend starts (logging e.g.
+        ``disabling phantom output (no monitor): HDMI-A-1``).  This check is
+        therefore the sysfs twin of ``WlrOutput.detect()``, which scores the
+        same way via wlr-randr's ``make``/``model``.
+
+        It works on both Pi 4 and Pi 5: the dual-HDMI problem is identical on
+        each, and neither the port count nor which port is populated is
+        assumed — the connector that is actually enabled wins.
+
+        Note this only works while the panel is ON — powering it off clears
+        the flag — which is why the connector is latched at power-off time
+        (see ``set()``).  wlr-randr cannot substitute here: once the panel is
+        off it reports NO outputs at all, and sysfs is all that is left.
+        """
+        for card in glob.glob("/sys/class/drm/card*-*"):
+            if cls._read_node(os.path.join(card, "enabled")) != "enabled":
+                continue
+            # Require a real EDID as well.  `enabled` is a side effect of the
+            # cage launcher's cleanup; the EDID is the underlying fact it keys
+            # off, so checking both keeps the two in agreement even if the
+            # launcher did not run (CLI start, desktop, hot-plug).
+            try:
+                if os.path.getsize(os.path.join(card, "edid")) > 0:
+                    return card
+            except OSError:
+                continue
+        return None
+
+    @classmethod
+    def _drm_dpms(cls, state: str, connector_path: str | None = None) -> bool:
+        """Set display DPMS state via KMS sysfs. Returns True on success.
+
+        Writes the target connector's ``status`` node — NOT ``dpms``.
+        ``dpms`` is mode 0444 on this kernel, so neither a direct write nor
+        ``sudo tee`` can ever succeed against it; that is why an earlier
+        version of this function was dead code on a Pi 4.
+
+        IMPORTANT — a zero exit code proves nothing here.  Measured on a
+        Pi 4 (Trixie, ``vc4-kms-v3d``) with one panel attached, the DRM tree
+        exposes THREE ``card*-*`` nodes and every one of them accepts the
+        write and reports success:
+
+            card1-HDMI-A-1     status/dpms never change   rc=0  ← phantom
+            card1-Writeback-1  status/dpms never change   rc=0  ← not a connector
+            card1-HDMI-A-2     status→disconnected, dpms→Off   rc=0  ← the panel
+
+        Only ``card1-HDMI-A-2`` does anything, and ``glob`` yields it LAST.
+        Trusting ``rc=0`` therefore means writing the phantom port, declaring
+        victory, and never reaching the panel.
+
+        Nor can the phantom be told apart by its ``dpms`` value: that
+        attribute holds a stale latent value which *does* flip when written,
+        and because the phantom sorts first it would win the race and leave
+        the real panel dark.  So the target is chosen by ``enabled`` (the one
+        marker the phantom never sets) while the panel is still on, and
+        ``connector`` lets the caller pin that choice once the panel is off.
+        """
+        target = connector_path or cls._active_connector()
+        if target is None:
+            logger.debug("DRM DPMS %s: no enabled connector found", state.upper())
+            return False
+
+        status_path = os.path.join(target, "status")
+        dpms_path = os.path.join(target, "dpms")
+        if not os.path.exists(status_path):
+            return False
+
+        if not cls._write_status(status_path, state):
+            return False
+
+        # The DPMS transition is asynchronous — measured at ~50 ms on a Pi 4,
+        # during which ``status`` has already flipped but ``dpms`` has not.
+        want_dpms = "On" if state == "on" else "Off"
+        for _ in range(10):  # up to ~0.5 s
+            if cls._read_node(dpms_path) == want_dpms:
+                logger.debug("DRM DPMS %s applied on %s", state.upper(), os.path.basename(target))
+                return True
+            time.sleep(0.05)
+
+        logger.warning(
+            "DRM DPMS %s: wrote %s but dpms never reflected it",
+            state.upper(),
+            os.path.basename(target),
+        )
         return False
 
 
