@@ -65,10 +65,14 @@ test.describe("playback", () => {
 
     test("display fps-limit save + restore", async ({ page }) => {
         await goToPage(page, "playback");
+        // btn-save-display always sends width/height/refresh_rate/rotation, and a
+        // display-mode key means the backend schedules a restart — so wait for it,
+        // otherwise it lands in the dashboard tests that run next.
         await assertSaveRestores(page, {
             field: "#cfg-fps-limit",
             saveBtn: "#btn-save-display",
             value: 45,
+            restartsBackend: true,
         });
     });
 });

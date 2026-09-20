@@ -18,6 +18,23 @@ function ssh(cmd) {
     );
 }
 
+// Is the backend answering /api/health with 200 right now?  Single shot with a
+// short timeout: during a restart the port is closed, so connect fails
+// immediately rather than hanging.
+function isHealthy(timeoutMs = 3000) {
+    return new Promise((resolve) => {
+        const req = http.get(new URL("/api/health", BASE), (res) => {
+            res.resume();
+            resolve(res.statusCode === 200);
+        });
+        req.on("error", () => resolve(false));
+        req.setTimeout(timeoutMs, () => {
+            req.destroy();
+            resolve(false);
+        });
+    });
+}
+
 // Poll GET /api/health until it returns 200 or the timeout elapses.
 function waitForHealth(timeoutMs) {
     return new Promise((resolve) => {
@@ -64,4 +81,4 @@ async function clearWebPasswordAndRestart() {
     return await waitForHealth(60000);
 }
 
-module.exports = { clearWebPasswordAndRestart, waitForHealth };
+module.exports = { clearWebPasswordAndRestart, waitForHealth, isHealthy };
