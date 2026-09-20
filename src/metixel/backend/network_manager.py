@@ -272,11 +272,20 @@ def _read_wifi_mac(device: str = "wlan0") -> str:
 
 
 def ap_ssid() -> str:
-    """The SSID the AP will actually broadcast on this device.
+    """The SSID the AP will broadcast on this device.
 
-    Reads the live wlan0 MAC, so it matches ``hostapd.conf`` as rendered by
-    reconcile.sh on this same board.  Used for the on-screen PIN message and
-    the web UI, so the name the user is told to look for is the real one.
+    Derived from the live wlan0 MAC, matching what ``reconcile.sh`` renders
+    into ``hostapd.conf`` on this same board.  Used for the on-screen PIN
+    message and the web UI.
+
+    CAVEAT: this is derived, not read back.  An SD card moved between boards
+    keeps the PREVIOUS board's ``hostapd.conf`` until reconcile.sh next runs on
+    an install/update, so the name broadcast can differ from the name shown
+    here.  Reading the file back was tried and rejected: it is ``0600 root:root``
+    (hostapd runs as root) and the backend runs as ``pi``, so loosening the mode
+    or shelling out to ``sudo`` were the only ways to make it work — both worse
+    than this known, self-correcting mismatch.  The UI therefore labels the
+    name as "typically" to avoid asserting an exact string it cannot verify.
     """
     return ap_ssid_for_mac(_read_wifi_mac())
 

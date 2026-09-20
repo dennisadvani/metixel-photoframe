@@ -683,16 +683,20 @@ class BackendDaemon:
         on top of the welcome message or other persistent overlays.
         """
         try:
-            # The SSID carries this device's MAC suffix, so it is read from the
-            # same helper the backend logs and the web UI uses — a frame whose
-            # AP is "Metixel-Setup-12ABC3" must not tell the user to join
-            # "Metixel-Setup", which on a multi-frame network is a different
-            # access point entirely.
-            from metixel.backend.network_manager import AP_IP, ap_ssid
+            from metixel.backend.network_manager import AP_IP
             from metixel.shared.ipc import ControlMessage
 
-            ssid = ap_ssid()
-            # Clear existing messages before showing PIN
+            # The SSID is shown as a PATTERN, not the derived name.
+            #
+            # ap_ssid() derives the name from the live wlan0 MAC, but hostapd
+            # broadcasts whatever its own hostapd.conf contains — and that file
+            # (0600 root:root) cannot be read by the backend to check.  An SD
+            # card moved between boards therefore keeps the previous board's
+            # name until reconcile.sh next runs, so printing a derived exact
+            # string here can tell the user to join a network that does not
+            # exist.  Naming the pattern is always true, and the device is
+            # sitting in the room with them, so they can simply join the
+            # "Metixel-Setup-…" network they can see.
             self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
             time.sleep(0.3)  # Brief pause so frontend processes dismiss
             self._ipc.send(
@@ -702,7 +706,8 @@ class BackendDaemon:
                         "title": "Welcome to Metixel!",
                         "body": (
                             f"No network connection detected. "
-                            f"To configure one, connect to '{ssid}' WiFi, "
+                            f"To configure one, connect to the "
+                            f"'Metixel-Setup-xxxxxx' WiFi, "
                             f"open http://{AP_IP} or http://metixel.local "
                             f"and use PIN {pin} to login."
                         ),
@@ -711,7 +716,7 @@ class BackendDaemon:
                     },
                 )
             )
-            logger.info("PIN message sent to frontend (SSID %s)", ssid)
+            logger.info("PIN message sent to frontend (SSID pattern)")
         except Exception:
             logger.warning("Failed to send PIN message to frontend", exc_info=True)
 

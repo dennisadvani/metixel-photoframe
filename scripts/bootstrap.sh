@@ -52,7 +52,7 @@
 #   --skip-boot-config          Do not run configure_boot.sh (no reboot needed)
 #   --no-reboot                 Do not reboot.  ONLY for scripted testing:
 #                               without the reboot the KMS overlay is inert and
-#                               the display stays blank, so this prints what to
+#                               the service may not start, so this prints what to
 #                               run instead and exits 0.
 #   -h, --help                  Show this help
 #
@@ -90,8 +90,8 @@ warn_reboot_required() {
     echo "==================================================================="
     echo "  REBOOT REQUIRED TO FINISH SETUP"
     echo ""
-    echo "  Boot configuration was applied. The display stays blank until the"
-    echo "  device restarts, because the KMS driver is loaded at boot."
+    echo "  Boot configuration was applied. The service may not start until"
+    echo "  the device restarts, because the KMS driver is loaded at boot."
     echo ""
     echo "      sudo reboot"
     if [ -n "${1:-}" ]; then

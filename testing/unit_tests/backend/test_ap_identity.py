@@ -141,6 +141,60 @@ class TestReconcileWritesTheSsid:
         assert 'sed -i "s|^ssid=.*|ssid=${AP_SSID}|" /etc/hostapd/hostapd.conf' in text
 
 
+class TestDisplayedSsidIsDerivedNotRead:
+    """The displayed name is DERIVED from the MAC, deliberately.
+
+    An SD card moved between boards keeps the previous board's ``hostapd.conf``
+    until reconcile.sh next runs, so the broadcast name and the derived name can
+    differ — the derived one can name a network that is not on air.
+
+    Reading ``hostapd.conf`` back was implemented and then REVERTED:
+
+    * it is ``0600 root:root`` (hostapd runs as root) and the backend runs as
+      ``pi``, so the read fails — the only fixes were loosening the mode or
+      shelling out to ``sudo``, both worse than this known mismatch;
+    * the read failure was swallowed by an ``except OSError`` that fell back to
+      the bare base name, so the API returned a plausible-looking value while
+      reading nothing — silent degradation, which is the failure mode this
+      project keeps having to remove.
+
+    The mismatch self-corrects on the next install/update, when reconcile.sh
+    rewrites the ssid line. The UI therefore presents the name as a strong hint
+    ("typically") rather than asserting an exact string it cannot verify.
+
+    These tests pin the CURRENT behaviour so a future change is a deliberate
+    decision rather than an accident.
+    """
+
+    def test_ap_ssid_derives_from_the_mac(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(nm, "_read_wifi_mac", lambda: "98:fe:54:48:f6:a1")
+        assert nm.ap_ssid() == "Metixel-Setup-48F6A1"
+
+    def test_no_hostapd_conf_read_is_attempted(self) -> None:
+        """The backend must not try to read the 0600 conf.
+
+        Guards the reversal: re-adding a conf read would either fail silently
+        (as it did) or require loosening the file's permissions.
+        """
+        assert not hasattr(nm, "ap_ssid_from_conf"), (
+            "ap_ssid_from_conf was removed deliberately — hostapd.conf is "
+            "0600 root:root and unreadable by the pi user the backend runs as"
+        )
+        assert not hasattr(nm, "ap_ssid_is_configured")
+
+    def test_start_ap_mode_does_not_gate_on_the_ssid(self) -> None:
+        """start_ap_mode must not refuse for an SSID it cannot read.
+
+        A guard on an unreadable file would block the AP on every device.
+        """
+        import inspect
+
+        source = inspect.getsource(nm.start_ap_mode)
+        assert "ap_ssid_is_configured" not in source, (
+            "start_ap_mode must not gate on a conf it cannot read"
+        )
+
+
 class TestReconcileFixesDnsmasqOrdering:
     """The DHCP bug's defining detail: conf-dir ordering, not mere presence."""
 
