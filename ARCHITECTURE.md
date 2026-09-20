@@ -302,7 +302,7 @@ metixel-photoframe/                           # Repository root
 │           └── retry.py                # Retry with exponential backoff
 │
 ├── scripts/                           # Build & deployment scripts
-│   ├── bootstrap.sh                  # Fresh-install entry point (curl | bash)
+│   ├── bootstrap.sh                  # Fresh-install entry point (download + run)
 │   ├── update.sh                     # Blue/Green OTA: stage, install, health-check, swap
 │   ├── ota_install.sh                # Install steps run against the staged release
 │   ├── reconcile.sh                  # Idempotent host-config convergence

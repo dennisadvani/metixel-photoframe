@@ -76,6 +76,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `testing/unit_tests/backend/test_ap_identity.py`: a change to one that is not
   mirrored in the other fails a test that shows both values.  An unreadable MAC
   degrades to the bare `Metixel-Setup` rather than a truncated suffix.
+- **The documented install command ran the *wrong* `bootstrap.sh`.**  The docs
+  said `wget <url>` then `sudo bash bootstrap.sh`.  Plain `wget` **never
+  overwrites** an existing file — it saves to `bootstrap.sh.1`, `.2`, `.3` … and
+  leaves the old file untouched.  On a device that already had a `bootstrap.sh`
+  in the home directory, all three downloads landed in numbered files and the
+  command silently re-ran the **stale** one.  The docs now use
+  `wget -O bootstrap.sh`, and `bootstrap.sh --help` (its own header) says why
+  the `-O` is required rather than cosmetic.
+  - **The reported failure looked convincingly like a branch skew.**  The stale
+    file was a `dev`-branch bootstrap, which passes `--skip-health-check` to
+    `update.sh`; the released `update.sh` rejects unknown flags, so the install
+    died with `ERROR: unknown flag: --skip-health-check`.  That reads exactly
+    like a `dev`-vs-`stable` interface mismatch, and the download appeared to
+    succeed — which is what made it expensive to diagnose.  The real fault was
+    *stale-on-disk vs fresh-on-remote*.
+  - `docs/INSTALLATION.md` now also shows how to check what was actually
+    downloaded before running it — more than one `bootstrap.sh*` file means
+    something is stale, and `grep -c skip-health-check bootstrap.sh` must print
+    `0` on the stable channel.
+  - `ARCHITECTURE.md` described `bootstrap.sh` as a "curl | bash" entry point,
+    which the docs elsewhere explicitly warn against (bash reading from a
+    non-seekable stdin loses its read-ahead position).  Corrected to
+    "download + run".
+- **`bootstrap.sh` passed a flag the release it had just cloned did not
+  implement.**  `bootstrap.sh` resolves the channel to a **tag** and then runs
+  *that tag's* `update.sh`, so the flag set it uses is an interface with code it
+  does not control.  `--skip-health-check` was added after `v1.2.5`, and an
+  older `update.sh` rejects unknown flags outright
+  (`--*) _die "unknown flag: $1"`).  The result: `bootstrap.sh` on **any**
+  channel other than the one it shipped with died at the end of the install
+  step — after cloning the repository and after writing `init.json`, which made
+  a predictable mismatch look like an environmental fault.
+  - Concretely, the `dev` bootstrap could not install `stable` or `beta` at all,
+    because both resolve to a tag that predates the flag.  That also made
+    promoting `dev`'s `bootstrap.sh` to `main` unsafe: it would have broken the
+    **default** (stable) install for new users.
+  - `bootstrap.sh` now **probes** the staged `update.sh` and passes the flag
+    only if that release implements it.  Omitting it for an older release is
+    correct rather than merely tolerated — such a release has no health gate to
+    skip, so its gate runs exactly as it always did.  The probe matches the
+    exact flag token (`--skip-health-check[)=]`) so a mention inside a comment
+    cannot cause the flag to be sent to a script that lacks it.
+  - An environment variable was considered and rejected: an unknown variable is
+    silently ignored, so a later rename would quietly stop the gate from being
+    skipped and fail the fresh install with nothing in the log to explain it.
+    Probing fails loudly instead.
+  - Guarded by `testing/unit_tests/backend/test_update_manager.py::
+    TestUpdateScript::test_skip_flag_is_probed_not_assumed`, which fails if the
+    flag is ever passed unconditionally again.  The ordering test
+    (`test_bootstrap_writes_init_json_before_update`) now matches the `$UPDATE_SH`
+    delegation so `init.json` is still asserted to be written first.
 
 ## [1.2.5]
 

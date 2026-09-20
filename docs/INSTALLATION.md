@@ -156,9 +156,27 @@ On a fresh Raspberry Pi OS Lite (Trixie) image, download the installer and run
 it:
 
 ```bash
-wget https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/bootstrap.sh
+wget -O bootstrap.sh https://raw.githubusercontent.com/dennisadvani/metixel-photoframe/main/scripts/bootstrap.sh
 sudo bash bootstrap.sh
 ```
+
+> **Always pass `-O bootstrap.sh`.** Plain `wget <url>` **never overwrites** an
+> existing file — if a `bootstrap.sh` is already in the directory it silently
+> saves to `bootstrap.sh.1`, `.2`, `.3` … and leaves the old file untouched. You
+> then run the **stale** script while believing you downloaded a fresh one.
+>
+> This is not hypothetical: a leftover `dev`-branch `bootstrap.sh` on a device
+> caused a confusing `ERROR: unknown flag: --skip-health-check`, because the old
+> script passed a flag the released `update.sh` does not implement. The failure
+> looks exactly like a version skew between branches, and the download appears
+> to succeed.
+>
+> If you are unsure what you just downloaded, check before running:
+>
+> ```bash
+> ls -la bootstrap.sh*              # more than one file? something is stale
+> grep -c skip-health-check bootstrap.sh   # must print 0 on the stable channel
+> ```
 
 > **Download first, then run the file.** Do not pipe the script into `sudo bash`
 > (`curl ... | sudo bash`). bash reading its program from a non-seekable stdin,
@@ -204,6 +222,16 @@ Other flags, if you need them:
 > and installing exercises staging, the health check and rollback too. Because
 > `bootstrap.sh` rarely changes, it rarely needs to be promoted to `main` — all
 > the logic that evolves lives inside the checkout.
+>
+> **But it defines an interface with that checkout.** `bootstrap.sh` resolves
+> the channel to a *tag* and then runs *that tag's* `update.sh`, so any flag it
+> passes must be understood by every release it can reach. An older `update.sh`
+> rejects an unknown flag outright (`--*) _die "unknown flag: $1"`), which
+> aborts the install after the clone has already happened. This is why the
+> `--skip-health-check` flag is **probed** before use rather than passed
+> unconditionally — see below. If you add a flag to this hand-off, gate it the
+> same way, and never promote a `bootstrap.sh` that assumes a capability of the
+> release it clones.
 
 > **No git checkout is left at the install root.** Code lives in
 > `/opt/metixel/releases/<version>` and the root holds only `data/`,

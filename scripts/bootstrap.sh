@@ -21,7 +21,7 @@
 #
 # USAGE (on a fresh Raspberry Pi OS Lite / Trixie image)
 #
-#   wget https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.sh
+#   wget -O bootstrap.sh https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/bootstrap.sh
 #   sudo bash bootstrap.sh
 #
 #   # or, with answers supplied up front (no prompts):
@@ -29,6 +29,12 @@
 #
 #   # or, from a local checkout (development / testing without pushing):
 #   sudo bash scripts/bootstrap.sh --local /path/to/checkout
+#
+# NOTE: the `-O bootstrap.sh` is REQUIRED, not cosmetic.  Plain `wget <url>`
+# never overwrites an existing file: it saves to bootstrap.sh.1, .2, .3 … and
+# leaves the old one in place, so `sudo bash bootstrap.sh` runs a STALE script —
+# which presents as a baffling version-skew error (e.g. a leftover dev-branch
+# bootstrap passing --skip-health-check to a released update.sh that rejects it).
 #
 # NOTE: download first, then run the file.  Do NOT pipe this into `sudo bash`
 # (e.g. `curl ... | sudo bash`): bash reading its program from a non-seekable
@@ -366,11 +372,39 @@ PY
 # Hand the staged checkout to update.sh, which performs the atomic swap and
 # installs packages.  It moves STAGE_DIR into releases/<name>.
 #
+# ── --skip-health-check is PROBED, never assumed ───────────────────────────
+# This script resolves the channel to a TAG and then runs THAT TAG'S update.sh
+# (see the $REF resolution above).  The flag set is therefore an interface with
+# code this script does not control, and the two can disagree: the flag was
+# added after v1.2.5, so a v1.2.5 checkout rejects it outright
+# (`--*) _die "unknown flag: $1"`), which aborts the install AFTER the clone
+# and after init.json was written.
+#
+# An older update.sh genuinely has no health gate to skip, so omitting the flag
+# is CORRECT for it, not merely tolerated.  We therefore ask the staged
+# update.sh whether it supports the flag instead of asserting it:
+#   * newer update.sh  → flagged, gate skipped, bootstrap owns verification
+#   * older update.sh  → unflagged, its gate runs as it always did
+# Matching the exact flag token (not a bare substring) keeps the probe honest:
+# a mention in a comment cannot make us pass it to a script that lacks it.
+#
+# WHY NOT AN ENV VAR: an unknown variable is silently ignored, so renaming it
+# later would quietly stop the gate from being skipped and fail the fresh
+# install with no explanation.  Probing fails loudly and visibly instead.
+UPDATE_SH="${STAGE_DIR}/scripts/update.sh"
+UPDATE_ARGS=("${REF}" "${REPO_URL}" --staged-dir "${STAGE_DIR}")
+
 # --skip-health-check: on a FRESH install the post-swap readiness gate is
 # unanswerable, so bootstrap skips it and owns the verification itself (boot
 # config → warn → countdown → reboot).  Package installation stays strict.
-bash "${STAGE_DIR}/scripts/update.sh" "${REF}" "${REPO_URL}" \
-    --staged-dir "${STAGE_DIR}" --skip-health-check
+if grep -q -- '--skip-health-check[)=]' "${UPDATE_SH}" 2>/dev/null; then
+    UPDATE_ARGS+=(--skip-health-check)
+else
+    echo "  note: this release's update.sh has no --skip-health-check;"
+    echo "        running its health gate as-is (nothing to skip)."
+fi
+
+bash "${UPDATE_SH}" "${UPDATE_ARGS[@]}"
 
 # ── 3) Boot configuration ──────────────────────────────────────────────────
 # Boot config is NOT part of reconciliation (config.txt is the device's own file

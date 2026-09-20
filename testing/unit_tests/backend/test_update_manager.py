@@ -656,6 +656,8 @@ class TestUpdateScript:
 
         # Ordering must be checked on the actual DELEGATION call: the header
         # comment and the --local validation both mention update.sh earlier.
+        # The delegation now goes through $UPDATE_SH (so the skip-health-check
+        # flag can be probed), so match the variable, not the literal path.
         code_lines = [
             ln for ln in content.splitlines() if ln.strip() and not ln.strip().startswith("#")
         ]
@@ -663,7 +665,7 @@ class TestUpdateScript:
         delegate_ln = next(
             i
             for i, ln in enumerate(code_lines)
-            if ln.strip().startswith("bash ") and "scripts/update.sh" in ln
+            if ln.strip().startswith("bash ") and "UPDATE_SH" in ln
         )
         assert init_ln < delegate_ln, (
             "init.json must be written BEFORE update.sh is invoked, so "
@@ -1421,6 +1423,33 @@ class TestBootstrapReboot:
         """The gate is unanswerable before the reboot, so it must not run."""
         content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
         assert "--skip-health-check" in content
+
+    def test_skip_flag_is_probed_not_assumed(self) -> None:
+        """The flag must be passed only if the staged update.sh supports it.
+
+        bootstrap.sh resolves the channel to a TAG and then runs that tag's
+        own update.sh, so the flag set is an interface with code it does not
+        control.  ``--skip-health-check`` was added after v1.2.5, and an older
+        update.sh rejects unknown flags outright:
+
+            --*) _die "unknown flag: $1" ;;
+
+        which aborted the install *after* the clone and after init.json was
+        written.  The flag must therefore be conditional on a probe, never
+        passed unconditionally.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+
+        # The probe must exist and gate the flag...
+        assert "grep -q -- '--skip-health-check" in content
+        assert "UPDATE_ARGS+=(--skip-health-check)" in content
+
+        # ...and the invocation must use the probed array, not a hardcoded flag.
+        assert 'bash "${UPDATE_SH}" "${UPDATE_ARGS[@]}"' in content
+        unconditional = 'bash "${STAGE_DIR}/scripts/update.sh" "${REF}" "${REPO_URL}" \\'
+        assert unconditional not in content, (
+            "the flag must not be passed unconditionally — an older update.sh rejects it"
+        )
 
     def test_update_script_skips_when_asked(self) -> None:
         content = (_REPO_ROOT / "scripts" / "update.sh").read_text(encoding="utf-8")
