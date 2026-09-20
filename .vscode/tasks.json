@@ -204,7 +204,25 @@
 		},
 		{
 			"label": "[Local] Release",
-			"detail": "Cuts a release from the dev branch: a release type (minor-beta, beta, rc, stable, minor, major) or an exact version (--version 1.2.7).",
+			"detail": "Cuts a release from the dev branch: a release type (minor-beta, beta, rc, stable, minor, major) or 'set-version' to enter an exact version.",
+			"type": "shell",
+			"command": "./scripts/release.sh",
+			"args": [
+				"--version",
+				"${input:releaseVersion}"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"presentation": {
+				"reveal": "always",
+				"clear": true
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "[Local] Release (bump type)",
+			"detail": "Cuts a release from the dev branch by bumping from the current version (minor-beta, beta, rc, stable, minor, major).",
 			"type": "shell",
 			"command": "./scripts/release.sh",
 			"args": [
@@ -225,7 +243,7 @@
 			"type": "shell",
 			"command": "./scripts/release.sh --finalize",
 			"args": [
-				"${input:releaseVersion}"
+				"${input:finalizeVersion}"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}"
@@ -477,6 +495,11 @@
 		},
 		{
 			"id": "releaseVersion",
+			"type": "promptString",
+			"description": "Exact version, e.g. 1.2.7 or 1.2.7-beta.1 (the [Local] Release task)"
+		},
+		{
+			"id": "finalizeVersion",
 			"type": "promptString",
 			"description": "Version to tag on main after the release PR is merged, e.g. 0.2.0-beta.2"
 		}
