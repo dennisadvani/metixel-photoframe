@@ -11,6 +11,7 @@ import {
     apiPut,
     openFolderBrowser,
     sanitizeInt,
+    setButtonBusy,
     setChecked,
     setValue,
     showToast,
@@ -242,44 +243,98 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
     /** @type {number|null} */
     var _clockTimer = null;
 
+    /** Format "+1000" → "UTC+10:00" for the clock's timezone label. */
+    function _formatUtcOffset(raw) {
+        var m = /^([+-])(\d{2})(\d{2})$/.exec(raw || "");
+        if (!m) return raw ? "UTC" + raw : "";
+        return "UTC" + m[1] + m[2] + ":" + m[3];
+    }
+
+    /** Paint the clock + timezone label from a /api/time payload. */
+    function _renderServerClock(data) {
+        var el = document.getElementById("server-clock");
+        if (!el || !data || !data.time) return;
+        el.textContent = data.time;
+        el.title = data.date + " " + (data.timezone_name || data.timezone) + " (" + _formatUtcOffset(data.utc_offset) + ")";
+        var tzEl = document.getElementById("server-clock-tz");
+        if (tzEl) {
+            var parts = [];
+            if (data.timezone_name) parts.push(data.timezone_name);
+            var off = _formatUtcOffset(data.utc_offset);
+            if (off) parts.push(off);
+            tzEl.textContent = parts.join(" \u00b7 ");
+        }
+    }
+
     async function _refreshServerClock() {
         var el = document.getElementById("server-clock");
         if (!el) return;
         try {
             var data = await apiGet("/time");
             if (data && data.time) {
-                el.textContent = data.time;
-                el.title = data.date + " " + data.timezone + " (UTC" + (data.utc_offset || "") + ")";
+                _renderServerClock(data);
+                // Keep the dropdown honest if the zone changed underneath us
+                // (e.g. set from another browser / the CLI).
+                _selectTimezone(data.timezone_name);
             }
         } catch (_) {
             // Clock is non-critical — silently ignore errors
         }
     }
 
+    /**
+     * Select ``tz`` in the timezone dropdown, adding it if it isn't listed
+     * (a zone.tab-less host or a legacy alias like ``US/Pacific``).
+     */
+    function _selectTimezone(tz) {
+        var sel = document.getElementById("cfg-timezone");
+        if (!sel || !tz) return;
+        var listed = Array.from(sel.options).some(function (o) { return o.value === tz; });
+        if (!listed) {
+            var opt = document.createElement("option");
+            opt.value = tz;
+            opt.textContent = tz;
+            // Keep alphabetical order when inserting the extra entry.
+            var before = Array.from(sel.options).find(function (o) { return o.value && o.value > tz; });
+            sel.insertBefore(opt, before || null);
+        }
+        // Drop the placeholder once a real zone is known.
+        Array.from(sel.options).forEach(function (o) { if (!o.value) o.remove(); });
+        sel.value = tz;
+    }
+
+    /**
+     * Fill the timezone dropdown (alphabetical) and select ``currentTz`` —
+     * the zone the system is actually set to, so the control always shows
+     * the real current choice rather than a generic placeholder.
+     */
     async function loadTimezoneList(currentTz) {
         var sel = document.getElementById("cfg-timezone");
         if (!sel) return;
-        sel.innerHTML = '<option value="">Auto-detect</option>';
+        var zones = [];
         try {
             var data = await apiGet("/time/timezones");
-            if (data && data.timezones) {
-                data.timezones.forEach(function (tz) {
-                    var opt = document.createElement("option");
-                    opt.value = tz;
-                    opt.textContent = tz;
-                    if (tz === currentTz) opt.selected = true;
-                    sel.appendChild(opt);
-                });
-            }
+            if (data && data.timezones) zones = data.timezones.slice();
         } catch (_) {}
-        // If currentTz is not in the list, add it
-        if (currentTz && !Array.from(sel.options).some(function (o) { return o.value === currentTz; })) {
-            var opt = document.createElement("option");
-            opt.value = currentTz;
-            opt.textContent = currentTz + " (current)";
-            opt.selected = true;
-            sel.appendChild(opt);
+        zones.sort(function (a, b) { return a < b ? -1 : a > b ? 1 : 0; });
+
+        sel.innerHTML = "";
+        if (!currentTz) {
+            // Only when the zone genuinely can't be determined.
+            var ph = document.createElement("option");
+            ph.value = "";
+            ph.textContent = "Select timezone\u2026";
+            ph.disabled = true;
+            ph.selected = true;
+            sel.appendChild(ph);
         }
+        zones.forEach(function (tz) {
+            var opt = document.createElement("option");
+            opt.value = tz;
+            opt.textContent = tz;
+            sel.appendChild(opt);
+        });
+        _selectTimezone(currentTz);
     }
 
     // -- Settings -----------------------------------------------------------
@@ -367,7 +422,14 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
         toggleNtpFields(sysCfg.ntp_enabled !== false);
 
         // Server clock + timezone dropdown (the Time card lives on Playback).
-        loadTimezoneList(sysCfg.timezone || "");
+        // The dropdown reflects the zone the *system* reports, not the value
+        // last saved in config — they drift apart if the zone is changed
+        // outside the dashboard, and config may simply be empty.
+        var timeNow = null;
+        try { timeNow = await apiGet("/time"); } catch (_) {}
+        var currentTz = (timeNow && timeNow.timezone_name) || sysCfg.timezone || "";
+        await loadTimezoneList(currentTz);
+        if (timeNow) _renderServerClock(timeNow);
         _refreshServerClock();
         if (_clockTimer) clearInterval(_clockTimer);
         _clockTimer = setInterval(_refreshServerClock, 10000);
@@ -672,10 +734,31 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
                 if (!tz) { showToast("Select a timezone first", "info"); return; }
                 var result = await apiPost("/time/timezone", { timezone: tz });
                 if (result && result.status === "ok") {
+                    // Remember the choice so it survives an OS reinstall / reflash.
+                    await apiPut("/config/system", { timezone: tz });
                     showToast("Timezone set to " + tz, "success");
                     _refreshServerClock();
                 } else {
                     showToast("Failed to set timezone: " + ((result && result.message) || "Unknown error"), "error");
+                }
+            });
+
+            // Sync Time Now — force an immediate NTP sync via timesyncd and
+            // repaint the clock from the response.
+            document.getElementById("btn-sync-time")?.addEventListener("click", async function () {
+                var btn = this;
+                var restore = setButtonBusy(btn, "Syncing\u2026");
+                var result = await apiPost("/time/sync", {});
+                restore();
+                if (result && result.status === "ok") {
+                    _renderServerClock(result);
+                    if (result.synchronized) {
+                        showToast("Clock synced with NTP \u2014 " + result.time, "success");
+                    } else {
+                        showToast("NTP servers did not respond yet \u2014 check the network connection and NTP server list", "info");
+                    }
+                } else {
+                    showToast("Time sync failed: " + ((result && result.message) || "Unknown error"), "error");
                 }
             });
 

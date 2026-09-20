@@ -192,7 +192,7 @@ class DisplayBackend(ABC):
         """
         ...
 
-    def update_texture(self, texture: Any, data: np.ndarray) -> None:
+    def update_texture(self, texture: Any, data: np.ndarray) -> Any:
         """Update an existing texture's pixel data in-place.
 
         Used by the video player to push new frames to the GPU without
@@ -205,10 +205,16 @@ class DisplayBackend(ABC):
         Args:
             texture: A texture handle previously returned by :meth:`load_texture`.
             data: New pixel data as a numpy array (H, W, 3) or (H, W, 4).
+
+        Returns:
+            The handle to use from now on.  In-place backends return
+            *texture* unchanged; the fallback returns the freshly loaded
+            handle, because the old one has been released.  Callers must
+            always keep the returned handle.
         """
         # Default: unload old, load new (works everywhere but is slow)
         self.unload_texture(texture)
-        self.load_texture(data)
+        return self.load_texture(data)
 
     def gpu_memory_info(self) -> dict[str, Any] | None:
         """Return GPU memory usage statistics, or ``None`` if unavailable.

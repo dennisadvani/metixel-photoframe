@@ -56,7 +56,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **Transcoding** | ffmpeg converts non-H.264 or oversized videos during OPTIMISE; CRF-based quality control |
 | **Pre-extracted frames** | First frame (`.1.frame`) and last frame (`.2.frame`) JPEGs cached during OPTIMISE — frontend never runs ffmpeg |
 | **Non-blocking state machine** | VLC plays on top of the slideshow; frame swaps underneath are invisible |
-| **Last-frame swap** | VLC's window is covered by a cached last-frame JPEG at 80% of video duration for a seamless transition |
+| **Last-frame swap** | VLC's window is covered by a cached last-frame JPEG at 50% of video duration for a seamless transition |
 | **Guardrails** | Max duration filter, transcoding enabled/disabled toggle, playback enabled/disabled master switch |
 
 ---
@@ -67,7 +67,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 |---|---|
 | **Web upload** | Media Library → **Upload Media** (or drag & drop) — any browser on the network; opens the phone gallery on iOS/Android; HEIC/HEIF photos auto-converted to JPEG |
 | **Local folder** | Watch paths configured in the Web UI — new files auto-detected by polling |
-| **Immich** | Configure server URL + API key — albums, favorites, and people auto-sync on configurable interval |
+| **Immich** | Configure server URL + API key — selected albums auto-sync on a configurable interval (default 60 min) |
 
 ---
 
@@ -91,7 +91,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 | Feature | Detail |
 |---|---|
-| **Process manager** | Two systemd services: `metixel-backend` (Flask + processing) and `metixel-cage` (display renderer under cage + XWayland) |
+| **Process manager** | Three systemd services: `metixel-backend` (Flask + processing), `metixel-cage` (display renderer under cage + XWayland) and `metixel-cursor-hider` (hides the Wayland cursor) |
 | **Atomic config** | Config never written directly — temp file + `os.replace()` prevents corruption on power loss |
 | **Config hot-reload** | mtime polling detects file changes; both backend and frontend reload without restart |
 | **Graceful degradation** | Never crash, never show a traceback — log errors and continue with available media |
@@ -104,7 +104,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 ## IPC & Control
 
 - **Unix domain socket** (SOCK_DGRAM) for backend → frontend real-time commands
-- **Commands**: next, prev, pause, resume, switch_album, power_on/off, show/dismiss message
+- **Commands**: next, prev, pause, resume, toggle_pause, switch_album, screen_on/off, show/dismiss message
 - **Frontend → backend** HTTP signal for slideshow-started (defers network checks until slideshow is running)
 - **MQTT client** — Home Assistant integration (publish state, receive next/prev/pause commands)
 - **HDMI-CEC** — respond to TV remote play/pause/stop events
@@ -138,9 +138,9 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 ## Display Protection
 
-- **Pixel shifting** — configurable ±2px cyclic offset every N minutes to prevent burn-in
+- **Pixel shifting** *(planned, not yet implemented)* — cyclic pixel offset to prevent burn-in
 - **Sleep hours** — screen automatically dims or turns off during configured sleep window
-- **Screensaver fallback** — black screen with dimmed logo when no media is queued
+- **Screensaver fallback** *(planned, not yet implemented)* — black screen with dimmed logo when no media is queued
 - **Deep sleep** — `vcgencmd display_power 0` (legacy) or DRM DPMS (KMS) for complete display shutdown
 
 ---

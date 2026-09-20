@@ -39,6 +39,7 @@ from metixel.backend.processing.probe import (
 from metixel.backend.processing.probe import (
     detect_pi_model as _detect_pi_model,
 )
+from metixel.backend.processing.utils import run_in_session
 from metixel.shared.media import content_hash
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 
@@ -91,6 +92,9 @@ class VideoProcessor:
     #: Known H.265 / HEVC codec names.
 
     HEVC_CODECS = {"hevc", "h265", "h.265", "hev1", "hvc1"}
+
+    #: The software H.264 encoder — always the last-resort fallback.
+    SOFTWARE_H264_ENCODER = "libx264"
 
     # -- Transcoding profiles -----------------------------------------
 
@@ -300,9 +304,35 @@ class VideoProcessor:
         self._transcode_max_h = self._cfg.get("transcode_max_height", 0) or self._screen_h
 
     @staticmethod
+    def codecs_for_encoder(encoder: str) -> set[str]:
+        """Codec names an ffmpeg encoder produces (HEVC for x265/hevc, else H.264)."""
+        name = encoder.lower()
+        if "265" in name or "hevc" in name:
+            return set(VideoProcessor.HEVC_CODECS)
+        return set(VideoProcessor.H264_CODECS)
+
+    @staticmethod
+    def fallback_encoders_for_profile(profile: dict[str, Any]) -> list[str]:
+        """Encoders a transcode for *profile* may legitimately end up using.
+
+        The profile's own encoder first, then the software H.264 fallback
+        that :meth:`_transcode` always appends (``libx265`` failing on a Pi
+        4 leaves a perfectly playable ``libx264`` cache).  Hardware H.264
+        encoders (``h264_v4l2m2m`` …) produce the same codec as libx264, so
+        they need no separate entry here.
+        """
+        target = str(profile.get("encoder") or VideoProcessor.SOFTWARE_H264_ENCODER)
+        encoders = [target]
+        if VideoProcessor.SOFTWARE_H264_ENCODER not in encoders:
+            encoders.append(VideoProcessor.SOFTWARE_H264_ENCODER)
+        return encoders
+
+    @staticmethod
     def needs_optimisation(
         probe_info: dict,
         profile: dict[str, Any] | None = None,
+        *,
+        accept_fallback_codecs: bool = False,
     ) -> bool:
         """Check whether a video needs transcoding against profile limits.
 
@@ -312,6 +342,16 @@ class VideoProcessor:
                         color_primaries, color_trc, colorspace, pix_fmt.
             profile: Resolved transcoding profile dict.  If None, falls back
                      to basic H.264 + resolution check.
+            accept_fallback_codecs: Also accept any codec produced by an
+                        encoder in :meth:`fallback_encoders_for_profile`.
+                        Use this when validating a CACHED transcode: on an
+                        H.265 profile a libx265 failure falls back to
+                        libx264, and that H.264 cache must not be judged
+                        "wrong codec" on the next boot (which deleted and
+                        re-encoded it every start).  Leave False for the
+                        SOURCE decision so H.264 sources on an H.265 profile
+                        are still transcoded.  Resolution / fps / bitrate /
+                        depth / level limits always apply.
 
         Returns:
             True if the video needs transcoding.
@@ -331,11 +371,20 @@ class VideoProcessor:
         source_codec = (probe_info.get("codec_name", "") or "").lower()
 
         # Codec check
-        if target_codec == "h264" and source_codec not in VideoProcessor.H264_CODECS:
-            logger.info("Needs transcode: codec %s not in H.264 set", source_codec)
-            return True
-        if target_codec == "h265" and source_codec not in VideoProcessor.HEVC_CODECS:
-            logger.info("Needs transcode: codec %s not in HEVC set", source_codec)
+        acceptable = (
+            set(VideoProcessor.HEVC_CODECS)
+            if target_codec == "h265"
+            else set(VideoProcessor.H264_CODECS)
+        )
+        if accept_fallback_codecs:
+            for encoder in VideoProcessor.fallback_encoders_for_profile(profile):
+                acceptable |= VideoProcessor.codecs_for_encoder(encoder)
+        if source_codec not in acceptable:
+            logger.info(
+                "Needs transcode: codec %s not in %s set",
+                source_codec,
+                "HEVC" if target_codec == "h265" else "H.264",
+            )
             return True
 
         # Resolution
@@ -381,8 +430,9 @@ class VideoProcessor:
                 logger.info("Needs transcode: HDR source on non-HDR Pi (trc=%s)", trc)
                 return True
 
-        # H.264 Profile/Level check (for H.264 sources on H.264 profiles)
-        if target_codec == "h264" and source_codec in VideoProcessor.H264_CODECS:
+        # H.264 level check for H.264 streams (the source on an H.264 profile,
+        # or a libx264-fallback cache on any profile with an H.264 level).
+        if source_codec in VideoProcessor.H264_CODECS:
             target_level = profile.get("h264_level", "")
             src_level = probe_info.get("h264_level", "") or ""
             if target_level != "" and src_level != "":
@@ -521,7 +571,9 @@ class VideoProcessor:
         if cached_path.exists():
             if self._validate_cached_video(cached_path):
                 cached_info = self._probe(cached_path)
-                if not VideoProcessor.needs_optimisation(cached_info, profile):
+                if not VideoProcessor.needs_optimisation(
+                    cached_info, profile, accept_fallback_codecs=True
+                ):
                     logger.debug("Cached video still valid for current profile: %s", file_hash)
                     return self._build_item(
                         source_path,
@@ -610,7 +662,7 @@ class VideoProcessor:
             return True
         cached_info = self._probe(cached_path)
         profile = self._resolve_profile()
-        return VideoProcessor.needs_optimisation(cached_info, profile)
+        return VideoProcessor.needs_optimisation(cached_info, profile, accept_fallback_codecs=True)
 
     @staticmethod
     def _hash_file(path: Path) -> str:
@@ -663,12 +715,7 @@ class VideoProcessor:
             )
 
         thread_limit = self._compute_thread_limit()
-        target_encoder = profile.get("encoder", "libx264")
-        encoders = [target_encoder]
-        if target_encoder not in ("libx264", "libx265"):
-            encoders.append("libx264")
-        if "libx264" not in encoders:
-            encoders.append("libx264")
+        encoders = self._encoders_for_profile(profile)
 
         timeout = max(60, self._transcode_timeout)
         for encoder in encoders:
@@ -686,7 +733,10 @@ class VideoProcessor:
             )
             final_cmd = self._wrap_with_throttle(cmd)
             try:
-                subprocess.run(
+                # Own session + process-group kill on timeout: with the
+                # cpulimit/nice wrapper, subprocess.run() would only kill
+                # the wrapper and orphan a (possibly SIGSTOPped) ffmpeg.
+                run_in_session(
                     final_cmd,
                     check=True,
                     stdout=subprocess.DEVNULL,
@@ -746,8 +796,31 @@ class VideoProcessor:
         return probe_video(path, self._timeout("ffprobe_probe", 120))
 
     def _select_encoders(self) -> list[str]:
-        """Return the H.264 encoder(s) to try, in priority order."""
+        """Return the H.264 encoder(s) to try, in priority order.
+
+        Honours ``video.transcode_use_software_encoder``: ``True`` (default)
+        → ``["libx264"]``; ``False`` → detected hardware encoders first,
+        libx264 last (see :func:`ffmpeg_cmds.select_encoders`).
+        """
         return select_encoders(self._force_software_encoder, self._timeout("hw_codec_detect", 30))
+
+    def _encoders_for_profile(self, profile: dict[str, Any]) -> list[str]:
+        """Encoders to try for *profile*, in order.
+
+        The profile's target encoder first, then the H.264 encoders from
+        :meth:`_select_encoders` — hardware ones (when the user opted out
+        of software-only encoding) and always libx264 as the final
+        fallback.  This is where ``transcode_use_software_encoder`` takes
+        effect.
+        """
+        target = str(profile.get("encoder") or VideoProcessor.SOFTWARE_H264_ENCODER)
+        encoders = [target]
+        for encoder in self._select_encoders():
+            if encoder not in encoders:
+                encoders.append(encoder)
+        if VideoProcessor.SOFTWARE_H264_ENCODER not in encoders:
+            encoders.append(VideoProcessor.SOFTWARE_H264_ENCODER)
+        return encoders
 
     def _validate_cached_video(self, path: Path) -> bool:
         """Check that a cached video file is valid (see probe.validate_cached_video)."""
@@ -770,9 +843,10 @@ class VideoProcessor:
 
     @staticmethod
     def _cleanup_cached_video(cached_path: Path, thumb_path: Path, file_hash: str) -> None:
-        """Delete a corrupt cached video and its frame cache files.
+        """Delete a corrupt / profile-mismatched cached video.
 
-        The thumbnail is NOT deleted — it's generated from the source
-        file and is independent of the transcode output.
+        The thumbnail and the first/last frame JPEGs are NOT deleted — they
+        are generated from the source file and independent of the transcode
+        output (see :func:`frames.cleanup_cached_video`).
         """
         cleanup_cached_video(cached_path, file_hash)

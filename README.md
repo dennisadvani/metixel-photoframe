@@ -75,7 +75,7 @@ Metixel goes from download to your first slideshow in about ten minutes:
 | | Step | What you'll do | Go |
 |---|---|---|---|
 | 1 | **Download** | Grab the pre-built image for your Pi | [Latest release](https://github.com/dennisadvani/metixel-photoframe/releases/latest) |
-| 2 | **Install** | See what hardware you need, then flash the image — or install manually | [Installation guide](docs/INSTALLATION.md) |
+| 2 | **Install** | See what hardware you need, then flash the image — or install manually (the OS username **must be `pi`**; the installer refuses anything else) | [Installation guide](docs/INSTALLATION.md) |
 | 3 | **Set up your frame** | Connect to Wi-Fi, open the dashboard, add your photos | [Set up your frame](docs/INSTALLATION.md#set-up-your-frame) |
 | 4 | **Questions?** | Troubleshooting and quick fixes | [FAQ](docs/FAQ.md) |
 

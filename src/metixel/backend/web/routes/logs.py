@@ -56,37 +56,23 @@ def _tail_file(path: str, lines: int = 200) -> list[str]:
             if size == 0:
                 return []
 
+            # Accumulate raw bytes backwards until the buffer holds MORE than
+            # *lines* newlines (so its first, possibly partial, segment can be
+            # discarded), then split once.  Splitting per chunk and stitching
+            # the seams fused two complete lines whenever a chunk boundary
+            # fell right after a newline.
             chunk_size = 4096
-            collected: list[str] = []
-            remaining = lines
-
-            while remaining > 0 and size > 0:
+            buf = b""
+            while size > 0:
                 read_size = min(chunk_size, size)
                 size -= read_size
                 f.seek(size)
-                chunk = f.read(read_size).decode("utf-8", errors="replace")
-                chunk_lines = chunk.splitlines()
+                buf = f.read(read_size) + buf
+                if buf.count(b"\n") > lines:
+                    break
 
-                if size == 0:
-                    # First chunk from start of file
-                    collected = chunk_lines + collected
-                else:
-                    # Merge partial first line from this chunk with last
-                    # partial from previous chunk
-                    if collected and chunk_lines:
-                        chunk_lines[-1] = chunk_lines[-1] + collected[0]
-                        collected = chunk_lines + collected[1:]
-                    else:
-                        collected = chunk_lines + collected
-
-                # Only keep what we need
-                if len(collected) > lines:
-                    collected = collected[-lines:]
-                    remaining = 0
-                else:
-                    remaining = lines - len(collected)
-
-            return collected
+            collected = buf.decode("utf-8", errors="replace").splitlines()
+            return collected[-lines:]
     except OSError:
         return []
 
@@ -193,6 +179,8 @@ def set_log_level():
     if "level" not in data:
         return jsonify_error("Missing 'level' in JSON body", 400)
 
+    if not isinstance(data["level"], str):
+        return jsonify_error("'level' must be a string", 400)
     level_name = data["level"].upper()
     valid_levels = {
         "DEBUG": logging.DEBUG,

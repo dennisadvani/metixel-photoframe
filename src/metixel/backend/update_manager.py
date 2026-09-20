@@ -30,7 +30,7 @@ from metixel.shared.adapters import RequestsHttpGateway
 from metixel.shared.paths import data_dir, install_root, live_dir, release_dir, releases_dir
 from metixel.shared.ports import HttpGateway
 from metixel.shared.runtime_state import read_runtime_state, write_runtime_state
-from metixel.shared.subprocess import run_sudo
+from metixel.shared.subprocess import run_sudo, schedule_sudo
 
 logger = logging.getLogger(__name__)
 
@@ -589,6 +589,19 @@ class UpdateManager:
             # would abort.  Unless the caller explicitly asked to keep it,
             # delete the stale local copy first so the fresh install proceeds.
             existing = self._release_dir_for_ref(target_ref)
+            if existing is not None and self._is_live_release(existing):
+                # Never delete (or re-stage over) the release the backend is
+                # running from: update.sh would refuse the target anyway, and
+                # rm -rf on the live tree would take this process down first.
+                with self._lock:
+                    self._update_in_progress = False
+                return {
+                    "status": "error",
+                    "message": (
+                        f"Release {existing.name} is already the active release — "
+                        "roll back to another release before reinstalling it"
+                    ),
+                }
             if existing is not None and not keep_existing:
                 logger.info(
                     "Release %s already present locally — deleting before reinstall",
@@ -667,6 +680,9 @@ CHANNEL={channel_q}
 LOG={log_q}
 
 exec > >(tee -a "$LOG") 2>&1
+# update.sh tees to the SAME log file; tell it stdout is already attached so
+# every line is not written twice.
+export METIXEL_UPDATE_LOG_ATTACHED=1
 echo "=== Metixel OTA Update ==="
 echo "Target: $REF  Channel: $CHANNEL"
 echo "Started: $(date)"
@@ -827,6 +843,12 @@ rm -f "$0"
         and restarts services.  The target must already exist locally (it was
         installed at some point).  No download or install is performed.
 
+        The service restart is DEFERRED (background thread, short delay): a
+        synchronous ``systemctl restart metixel-backend`` would kill this
+        process inside the HTTP request, so the JSON response would never be
+        sent.  *version* is the release folder name (e.g. ``v1.2.6`` or a dev
+        short SHA), exactly as ``local_releases`` reports it.
+
         Returns a ``{"status": "ok"}`` dict, or an error dict.
         """
         target = release_dir(version)
@@ -851,7 +873,7 @@ rm -f "$0"
         try:
             logger.info("Rolling back live symlink to release '%s'", version)
             self._flip_live_symlink(target)
-            self._restart_services()
+            self._restart_services_deferred()
 
             # The former `last_update`/`last_rollback` writes were removed:
             # `last_rollback` was never read by anything, and `last_update` was
@@ -1033,7 +1055,9 @@ rm -f "$0"
                     "prerelease": bool(rel.get("prerelease")),
                     "url": rel.get("html_url", ""),
                     "published_at": rel.get("published_at", ""),
-                    "installed": self._is_release_installed(version),
+                    # Release folders are named after the TAG (see
+                    # _ref_to_release_name), not the bare version.
+                    "installed": self._is_release_installed(tag),
                 }
             )
         out.sort(key=lambda r: _parse_semver(r["version"]) or (0, 0, 0, 0, 0, 0), reverse=True)
@@ -1064,15 +1088,34 @@ rm -f "$0"
             return live.resolve().name
         return None
 
-    def _is_release_installed(self, version: str) -> bool:
-        """Return True if a release folder for *version* exists locally."""
-        return release_dir(version).is_dir()
+    def _is_release_installed(self, name: str) -> bool:
+        """Return True if the release folder *name* exists locally.
+
+        *name* is the folder name as ``scripts/update.sh`` creates it — the
+        tag as-is (``v1.2.6``), a branch name, or a dev short SHA — NOT the
+        bare semver.  Pass the tag, not ``tag.lstrip("v")``.
+        """
+        return release_dir(name).is_dir()
+
+    def _is_live_release(self, release: Path) -> bool:
+        """Return True if *release* is the folder the ``live`` symlink targets."""
+        live = install_root() / "live"
+        if not (live.is_symlink() and live.exists()):
+            return False
+        try:
+            return release.resolve() == live.resolve()
+        except OSError:
+            return False
 
     def _release_dir_for_ref(self, target_ref: str) -> Path | None:
         """Map a git ref to an existing local release folder, if any.
 
         Handles ``refs/tags/v1.2.3`` → ``releases/v1.2.3`` and
-        ``origin/main`` → ``releases/main``.
+        ``origin/main`` → ``releases/main``.  ``origin/dev`` maps to
+        ``releases/dev``, which never exists: update.sh names a dev release
+        after its short commit SHA, which is unknowable before the clone.
+        update.sh itself removes a stale dev folder of the same SHA (and
+        refuses to touch the live one), so returning ``None`` here is correct.
         """
         name = self._ref_to_release_name(target_ref)
         p = release_dir(name)
@@ -1082,15 +1125,19 @@ rm -f "$0"
     def _ref_to_release_name(target_ref: str) -> str:
         """Map a git ref to a release folder name (pure, testable).
 
-        ``refs/tags/v1.2.3`` → ``1.2.3``, ``origin/main`` → ``main``,
-        ``v2.0.0`` → ``2.0.0``.
+        Mirrors the naming in ``scripts/update.sh`` — the single convention:
+        the tag name AS-IS (``refs/tags/v1.2.3`` → ``v1.2.3``, ``v2.0.0`` →
+        ``v2.0.0``), a branch name for branches (``origin/main`` → ``main``),
+        and a raw SHA passed through.  The leading ``v`` is deliberately kept:
+        stripping it made every local-release lookup miss the folders update.sh
+        actually creates.
         """
         name = target_ref
         if name.startswith("refs/tags/"):
             name = name[len("refs/tags/") :]
         elif name.startswith("origin/"):
             name = name[len("origin/") :]
-        return name.lstrip("v")
+        return name
 
     def _delete_local_release(self, release: Path) -> None:
         """Delete a local release folder (used before reinstalling a version
@@ -1116,18 +1163,23 @@ rm -f "$0"
             )
         run_sudo(["chown", "-h", "pi:pi", str(live)], timeout=30)
 
-    def _restart_services(self) -> None:
-        """Restart the metixel services via sudo systemctl."""
-        result = run_sudo(
+    @staticmethod
+    def _restart_services_deferred() -> None:
+        """Restart the metixel services via sudo systemctl after a short delay.
+
+        Runs in a background thread (see :func:`schedule_sudo`) so the HTTP
+        response that triggered it is flushed before ``metixel-backend`` —
+        this very process — is restarted.  Same pattern as ``apt_upgrade()``
+        and the reboot/shutdown routes.
+        """
+        schedule_sudo(
             ["systemctl", "restart", "metixel-backend", "metixel-cage"],
-            timeout=60,
+            ok_message="Services restarted after rollback",
+            fail_message="Service restart after rollback",
+            thread_name="rollback-restart",
+            delay=2.0,
+            timeout=60.0,
         )
-        if result.returncode != 0:
-            logger.warning(
-                "Service restart returned rc=%d: %s",
-                result.returncode,
-                (result.stderr or result.stdout or "").strip()[-300:],
-            )
 
     # -- Internal: Git Operations --------------------------------------------
 
@@ -1278,6 +1330,22 @@ rm -f "$0"
 
     # -- Internal: Target Resolution -----------------------------------------
 
+    def _is_known_release_tag(self, tag: str) -> bool:
+        """Return True if *tag* appears in the cached GitHub release data.
+
+        Consults the release list built by ``check_for_updates`` (the manual
+        selector's source) and the per-channel ``available`` tags.  Purely
+        cache-based: an empty cache simply returns False and the caller falls
+        back to the local git lookups.
+        """
+        with self._lock:
+            releases = list(self._cache.get("releases") or [])
+            available = dict(self._cache.get("available") or {})
+        for rel in releases:
+            if (rel.get("tag") or "").strip() == tag:
+                return True
+        return any((info or {}).get("tag") == tag for info in available.values())
+
     def _resolve_target_ref(self, channel: str, version: str | None) -> str | None:
         """Resolve a channel (+ optional version) to a git ref.
 
@@ -1291,6 +1359,13 @@ rm -f "$0"
         if version:
             # Explicit version: try as tag first
             tag = version if version.startswith("v") else f"v{version}"
+            # A tag published on GitHub is authoritative even when the local
+            # clone has not fetched it yet (nothing in the request path runs
+            # `git fetch`, so a tag newer than the running release is unknown
+            # locally).  Accept it from the cached release list — no network
+            # dependency here — and let update.sh clone it.
+            if self._is_known_release_tag(tag):
+                return f"refs/tags/{tag}"
             # Verify it exists
             result = subprocess.run(
                 ["git", "rev-parse", "--verify", f"refs/tags/{tag}"],

@@ -34,3 +34,14 @@ v1.2.1-gpu-mem.sh
 # be derived from the release — a device that never had it looks identical to
 # one already cleaned.  Runs exactly once per device.
 v1.3.0-retire-logging-conf.sh
+
+# Captive-portal AP: repairs devices that broadcast "Metixel-Setup" but cannot
+# serve DHCP, and gives the AP a per-device SSID.
+#
+# Reconciling this is not enough.  Debian's /etc/dnsmasq.conf is ~27 KB of
+# COMMENTS, so it always "exists" and only the ORDER of its conf-dir= line
+# decides whether the AP values take effect.  And the SSID rename is one-way: a
+# device already renamed is indistinguishable from one a user renamed by hand.
+# Both need to know what this device USED to be, which is the definition of a
+# fixup.  reconcile.sh §6 keeps it converged from here on.
+v1.2.6-fix-ap-dhcp.sh

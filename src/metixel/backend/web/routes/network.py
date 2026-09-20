@@ -10,10 +10,12 @@ mode control.  All Wi-Fi operations are delegated to
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, current_app, jsonify
+from flask import Blueprint, current_app, jsonify, session
 
 from metixel.backend.network_manager import (
+    ap_ssid,
     connect_to_network,
     forget_network,
     get_connection_status,
@@ -23,14 +25,31 @@ from metixel.backend.network_manager import (
 )
 from metixel.backend.web.helpers import get_body, get_daemon_component, jsonify_error
 
+if TYPE_CHECKING:
+    from metixel.backend.network_controller import NetworkController
+
 logger = logging.getLogger(__name__)
 
 network_bp = Blueprint("network", __name__)
 
+#: Session flag set by a successful ``POST /network/validate-pin``.  While
+#: the controller has an active PIN, ``POST /network/connect`` refuses any
+#: session without it — the PIN check must be enforced server-side, not
+#: just by the captive portal hiding the form.
+_SESSION_PORTAL_PIN_OK = "portal_pin_ok"
 
-def _get_controller() -> object | None:
+
+def _get_controller() -> NetworkController | None:
     """Return the NetworkController from the daemon, or None if unavailable."""
-    return get_daemon_component("_network_controller")  # type: ignore[no-any-return]
+    return cast("NetworkController | None", get_daemon_component("_network_controller"))
+
+
+def _get_str(data: dict, key: str) -> str | None:
+    """Return ``data[key]`` stripped, ``""`` if absent, ``None`` if not a str."""
+    value = data.get(key, "")
+    if not isinstance(value, str):
+        return None
+    return value.strip()
 
 
 @network_bp.route("/network/status", methods=["GET"])
@@ -45,6 +64,9 @@ def network_status():
     controller = _get_controller()
     ap_active = is_ap_mode_active() or bool(controller and controller.pin)
     status["ap_mode_active"] = ap_active and not is_connected()
+    # The AP SSID carries this device's MAC suffix, so the UI must display the
+    # real name rather than a hardcoded one — see network_manager.ap_ssid().
+    status["ap_ssid"] = ap_ssid()
     return jsonify(status)
 
 
@@ -73,17 +95,27 @@ def network_connect():
     but by then it has already received the HTTP response.
     """
     data = get_body()
-    ssid = data.get("ssid", "").strip()
+    ssid = _get_str(data, "ssid")
     password = data.get("password", "")
 
+    if ssid is None or not isinstance(password, str):
+        return jsonify_error("'ssid' and 'password' must be strings", 400)
     if not ssid:
         return jsonify_error("SSID is required", 400)
 
+    controller = _get_controller()
+
+    # Server-side PIN gate: while the captive portal PIN is active, only a
+    # session that has passed /network/validate-pin may connect.
+    if controller is not None and controller.pin and not session.get(_SESSION_PORTAL_PIN_OK):
+        return jsonify_error("PIN validation required", 403)
+
     # Tell the controller a connection is in progress so the monitor
     # thread doesn't panic when it sees the AP go down.
-    controller = _get_controller()
     if controller is not None:
         controller.begin_connection()
+    # The PIN grant is single-use: clear it once a connect has been kicked off.
+    session.pop(_SESSION_PORTAL_PIN_OK, None)
 
     # Capture references BEFORE the request context ends.  The
     # background thread runs after the response is sent — Flask
@@ -171,8 +203,10 @@ def network_forget():
     Accepts JSON: ``{"ssid": "MyWiFi"}``.
     """
     data = get_body()
-    ssid = data.get("ssid", "").strip()
+    ssid = _get_str(data, "ssid")
 
+    if ssid is None:
+        return jsonify_error("'ssid' must be a string", 400)
     if not ssid:
         return jsonify_error("SSID is required", 400)
 
@@ -185,10 +219,31 @@ def network_forget():
 
 @network_bp.route("/network/ap-status", methods=["GET"])
 def ap_status():
-    """Check whether the access point (captive portal) is currently active."""
+    """Check whether the access point (captive portal) is currently active.
+
+    ``ssid`` is the name this device actually broadcasts — the base name plus
+    the last 6 hex digits of its wlan0 MAC — so the UI can tell the user which
+    access point to join when several frames are in range.
+
+    ``active`` means "the captive portal is the way in right now": the AP is
+    broadcasting AND no connection is being used instead.  The connectivity
+    half deliberately goes through the CONTROLLER, not a bare ``is_connected()``,
+    because the controller is what honours ``METIXEL_NETWORK_TEST_MODE``.  Using
+    the raw helper made this endpoint report ``active: false`` while the AP was
+    genuinely up under test mode (Ethernet is still "connected" physically), so
+    every captive-portal test skipped on a working portal.
+    """
     controller = _get_controller()
     ap_or_pin = is_ap_mode_active() or bool(controller and controller.pin)
-    return jsonify({"active": ap_or_pin and not is_connected()})
+    # In test mode the controller ignores Ethernet for connectivity, which is
+    # exactly the question being asked here.
+    in_use = controller.is_connection_in_use() if controller is not None else is_connected()
+    return jsonify(
+        {
+            "active": ap_or_pin and not in_use,
+            "ssid": ap_ssid(),
+        }
+    )
 
 
 @network_bp.route("/network/radio", methods=["POST"])
@@ -280,14 +335,73 @@ def ap_start():
 
     Note: Manual AP start is discouraged — the NetworkController manages
     AP lifecycle automatically.  This endpoint exists for debugging.
+
+    Drives the CONTROLLER into ``AP_ACTIVE`` when one is available, because
+    that is the only path that both raises hostapd *and* generates the portal
+    PIN.  Calling the module-level ``start_ap_mode()`` directly raises the AP
+    with no PIN — which looks like success (hostapd runs, the SSID is
+    broadcast) but leaves the captive portal unable to validate anything,
+    since ``validate_pin`` rejects every candidate while ``controller.pin``
+    is empty.  Falls back to the bare start only if there is no controller.
     """
+    controller = _get_controller()
+    if controller is not None:
+        ok = controller.force_ap_active()
+        ssid = ap_ssid()
+        if ok:
+            return jsonify(
+                {
+                    "status": "ok",
+                    "message": f"AP mode started — SSID: {ssid}",
+                    "ssid": ssid,
+                }
+            )
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        "Failed to start AP mode — the controller will not hold the "
+                        "AP while an upstream connection is up, so the fallback AP "
+                        "was reverted immediately.  This is expected unless "
+                        "METIXEL_NETWORK_TEST_MODE=1 is set (which excludes Ethernet "
+                        "from the connectivity check so the AP can be exercised "
+                        "while the Pi stays reachable).  Check the backend log for "
+                        "the specific reason if the AP is targeted for real use."
+                    ),
+                }
+            ),
+            500,
+        )
+
     from metixel.backend.network_manager import start_ap_mode
 
     ok = start_ap_mode()
     if ok:
-        return jsonify({"status": "ok", "message": "AP mode started"})
-    else:
-        return jsonify({"status": "error", "message": "Failed to start AP mode"}), 500
+        return jsonify(
+            {
+                "status": "ok",
+                "message": f"AP mode started — SSID: {ap_ssid()}",
+                "ssid": ap_ssid(),
+            }
+        )
+    # A bare "failed to start AP mode" is useless to whoever has to fix it: the
+    # start path already logged the specific reason (missing dnsmasq config,
+    # hostapd config error, wlan0 absent), so point at the log rather than
+    # inventing a cause here.
+    return (
+        jsonify(
+            {
+                "status": "error",
+                "message": (
+                    "Failed to start AP mode — see the backend log for the reason "
+                    "(check hostapd/dnsmasq configuration if the SSID is "
+                    "broadcast but clients get no IP address)"
+                ),
+            }
+        ),
+        500,
+    )
 
 
 @network_bp.route("/network/ap-stop", methods=["POST"])
@@ -316,7 +430,7 @@ def validate_pin():
     is locked for 10 minutes.
     """
     data = get_body()
-    candidate = data.get("pin", "").strip()
+    candidate = _get_str(data, "pin")
 
     if not candidate or len(candidate) != 4 or not candidate.isdigit():
         return jsonify({"valid": False, "message": "Enter a 4-digit PIN"}), 400
@@ -328,6 +442,9 @@ def validate_pin():
     valid, message = controller.validate_pin(candidate)
 
     if valid:
+        # Grant this session the right to call /network/connect.
+        session[_SESSION_PORTAL_PIN_OK] = True
         return jsonify({"valid": True, "message": "PIN accepted"})
     else:
+        session.pop(_SESSION_PORTAL_PIN_OK, None)
         return jsonify({"valid": False, "message": message}), 403

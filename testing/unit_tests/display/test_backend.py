@@ -20,12 +20,17 @@ def test_tk_backend_imports():
     assert TkBackend is not None
 
 
-def test_detect_backend_returns_tk():
+def test_detect_backend_returns_tk(monkeypatch):
     """On a non-Pi machine, detect_backend should return TkBackend.
 
     When pi3d is importable (running on a Pi), it returns Pi3dBackend instead.
+    The Wayland / override env vars are cleared so the result does not depend
+    on the developer's session (WSL sets WAYLAND_DISPLAY, which would pick the
+    Wayland backend).
     """
     pytest.importorskip("tkinter", reason="tkinter not installed (headless Pi)")
+    for var in ("WAYLAND_DISPLAY", "XDG_SESSION_TYPE", "METIXEL_DISPLAY_BACKEND"):
+        monkeypatch.delenv(var, raising=False)
     from metixel.display import detect_backend
     from metixel.display.tk_backend import TkBackend
 
@@ -50,15 +55,12 @@ def test_detect_backend_returns_tk():
         )
 
 
-def test_detect_backend_env_override():
+def test_detect_backend_env_override(monkeypatch):
     """Setting METIXEL_DISPLAY_BACKEND=tk should force TkBackend."""
     pytest.importorskip("tkinter", reason="tkinter not installed (headless Pi)")
-    import os
-
-    os.environ["METIXEL_DISPLAY_BACKEND"] = "tk"
+    monkeypatch.setenv("METIXEL_DISPLAY_BACKEND", "tk")
     from metixel.display import detect_backend
     from metixel.display.tk_backend import TkBackend
 
     backend = detect_backend()
     assert isinstance(backend, TkBackend)
-    del os.environ["METIXEL_DISPLAY_BACKEND"]

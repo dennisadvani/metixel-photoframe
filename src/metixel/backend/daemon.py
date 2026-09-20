@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING
 from metixel.backend.dependencies import ensure_runtime_dependencies
 from metixel.backend.frontend_liveness import FrontendLiveness
 from metixel.backend.state import StateManager
+from metixel.shared.config import DEFAULT_CONFIG, parse_schedule_time
 from metixel.shared.ipc import IPCClient
 from metixel.shared.paths import frontend_heartbeat_path, live_dir
 from metixel.shared.paths import run_dir as default_run_dir
@@ -30,6 +32,12 @@ if TYPE_CHECKING:
     from metixel.backend.update_manager import UpdateManager
 
 logger = logging.getLogger(__name__)
+
+#: Total budget for waiting on background threads at shutdown.  Short on
+#: purpose: they are daemon threads, so anything still alive when this expires
+#: is abandoned and cannot delay interpreter exit.  The wait exists only to let
+#: a loop that is mid-iteration finish cleanly.
+_JOIN_TIMEOUT_S = 2.0
 
 
 class BackendDaemon:
@@ -60,6 +68,18 @@ class BackendDaemon:
         )
         self._ipc = IPCClient()
         self._running = False
+        # Set once shutdown() has run so a second SIGTERM/SIGINT (or an
+        # explicit call after the signal) is a no-op.
+        self._shutdown_done = threading.Event()
+        # Interruptible "please stop" signal for the polling loops.
+        #
+        # A loop that polls ``self._running`` with a plain ``time.sleep(30)``
+        # cannot wake when shutdown is requested — it sleeps out the remainder
+        # (up to 30 s) before noticing.  Because each such thread is joined
+        # with a 5 s cap, a few sleeping threads turned every
+        # ``systemctl restart`` into a 10-20 s outage.  Waiting on this event
+        # instead makes the sleep return the instant :meth:`shutdown` runs.
+        self._stop_event = threading.Event()
         self._config = self._state.config
         self._threads: list[threading.Thread] = []
         self._update_mgr: UpdateManager | None = None
@@ -73,7 +93,16 @@ class BackendDaemon:
         # Display power state — read by Web UI / MQTT.  Initialised from the
         # schedule so HA gets the correct state on boot (MQTT starts before
         # the scheduler thread).  Falls back to True when schedule disabled.
-        self._display_on: bool = self._display_should_be_on()
+        # Guarded: a malformed saved schedule must never prevent startup
+        # (a crash here would crash-loop the service on every boot).
+        try:
+            self._display_on: bool = self._display_should_be_on()
+        except Exception:
+            logger.warning(
+                "Could not evaluate the display schedule at startup — assuming display ON",
+                exc_info=True,
+            )
+            self._display_on = True
         # The MQTT client (set in _start_mqtt_client) — used by
         # set_display_power() to push screen-state changes to HA immediately.
         self._mqtt_client: MQTTClient | None = None
@@ -101,6 +130,7 @@ class BackendDaemon:
         self._start_network_monitor()
         self._start_update_manager()
         self._start_display_scheduler()
+        self._install_signal_handlers()
         self._start_web_server()
 
         logger.info(
@@ -113,8 +143,24 @@ class BackendDaemon:
         self._join_threads()
 
     def shutdown(self) -> None:
-        """Gracefully stop all services."""
+        """Gracefully stop all services.  Safe to call more than once."""
+        if self._shutdown_done.is_set():
+            return
+        self._shutdown_done.set()
         self._running = False
+        # Wake every loop that is waiting on a stop signal FIRST, so they can
+        # unwind while the rest of this teardown runs.  Without this the
+        # threads only notice once their fixed sleep expires (the display
+        # scheduler sleeps in 30 s chunks), which is what made a restart cost
+        # 10-20 s of downtime.
+        self._stop_event.set()
+        # Ask the long-running workers to stop (best effort — they are daemon
+        # threads, so a stuck one cannot block exit).
+        for attr in ("_opt_queue", "_folder_watcher", "_keyboard_handler"):
+            svc = getattr(self, attr, None)
+            if svc is not None:
+                with contextlib.suppress(Exception):
+                    svc.stop()
         if self._update_mgr is not None:
             with contextlib.suppress(Exception):
                 self._update_mgr.shutdown()
@@ -122,6 +168,73 @@ class BackendDaemon:
         # where we left off (no re-probe of unchanged, already-processed files).
         with contextlib.suppress(Exception):
             self._state.flush_journal()
+
+    def _sleep(self, seconds: float) -> bool:
+        """Sleep up to *seconds*, waking early when shutdown is requested.
+
+        Returns ``False`` when the daemon is stopping, so polling loops can
+        ``return`` immediately rather than running another iteration.
+
+        This is the interruptible replacement for a bare ``time.sleep(N)`` in
+        any loop that polls ``self._running``.  Use it for every wait in a
+        long-running loop: a plain sleep holds the thread (and therefore the
+        process teardown) until it expires, which is exactly the shutdown
+        stall this method exists to prevent.
+        """
+        if self._stop_event.wait(timeout=seconds):
+            return False
+        return self._running
+
+    def _join_threads(self) -> None:
+        """Wait briefly for background threads to finish.
+
+        Joins **concurrently**, not one at a time.  The previous sequential
+        loop paid the per-thread timeout in full for every thread that did not
+        wake promptly, so three stalled threads cost 3 × 5 s = 15 s of dead
+        time on every restart.  Joining them against a single shared deadline
+        bounds the total wait to `_JOIN_TIMEOUT_S` regardless of how many
+        threads are still winding down.
+
+        They are daemon threads, so anything still running after the deadline
+        is abandoned rather than blocking interpreter exit.
+        """
+        deadline = time.monotonic() + _JOIN_TIMEOUT_S
+        for t in self._threads:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if t.is_alive():
+                t.join(timeout=remaining)
+
+    def _install_signal_handlers(self) -> None:
+        """Route SIGTERM/SIGINT through :meth:`shutdown`.
+
+        systemd stops the service with SIGTERM; without a handler Python
+        dies immediately and the journal flush, UpdateManager shutdown, IPC
+        close and thread join in :meth:`run` never happen.  The handler runs
+        ``shutdown()`` and then raises ``KeyboardInterrupt``, which
+        werkzeug's ``serve_forever()`` swallows — so ``app.run()`` returns
+        normally and :meth:`run` completes its usual teardown.
+
+        Signal handlers can only be installed from the main thread; when
+        ``run()`` is driven from elsewhere (tests, embedding) this is a
+        logged no-op.
+        """
+
+        def _handle(signum: int, _frame: object) -> None:
+            try:
+                name = signal.Signals(signum).name
+            except ValueError:
+                name = str(signum)
+            logger.info("Received %s — shutting down backend", name)
+            self.shutdown()
+            raise KeyboardInterrupt
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, _handle)
+            except (ValueError, OSError):
+                logger.debug("Cannot install handler for %s (not the main thread)", sig)
 
     def _ensure_runtime_dependencies(self) -> None:
         """Install any missing runtime Python dependencies on startup.
@@ -279,6 +392,7 @@ class BackendDaemon:
                 self._ipc,
                 cec=self._ports.cec,
                 display_power=self.set_display_power,
+                display_is_on=lambda: self._display_on,
             )
             t = threading.Thread(target=cec.run, name="cec-handler", daemon=True)
             t.start()
@@ -444,8 +558,10 @@ class BackendDaemon:
 
         # Give the boot screen time to finish its fade-out animation
         # before showing any messages (welcome, PIN, etc.).  The fade
-        # takes ~0.8s — 2s is a safe buffer.
-        time.sleep(10.0)
+        # takes ~0.8s; 10s also leaves headroom for a slow first render
+        # on a Pi 2/3 so the message is not drawn under the boot layer.
+        if not self._sleep(10.0):
+            return
 
         # ── Initial boot: only wait if NOT already connected ──────
         # If Ethernet or saved WiFi is already up, show the welcome
@@ -459,7 +575,8 @@ class BackendDaemon:
             )
             waited = 0
             while self._running and waited < timeout:
-                time.sleep(5)
+                if not self._sleep(5):
+                    return
                 waited += 5
                 # Stop early if WiFi connects during the wait
                 state, pin, actions = controller.tick()
@@ -490,9 +607,8 @@ class BackendDaemon:
 
         # ── Main monitoring loop ───────────────────────────────────
         while self._running:
-            time.sleep(5)
-            if not self._running:
-                break
+            if not self._sleep(5):
+                return
 
             state, pin, actions = controller.tick()
             self._drain_actions(controller, actions)
@@ -567,9 +683,20 @@ class BackendDaemon:
         on top of the welcome message or other persistent overlays.
         """
         try:
+            from metixel.backend.network_manager import AP_IP
             from metixel.shared.ipc import ControlMessage
 
-            # Clear existing messages before showing PIN
+            # The SSID is shown as a PATTERN, not the derived name.
+            #
+            # ap_ssid() derives the name from the live wlan0 MAC, but hostapd
+            # broadcasts whatever its own hostapd.conf contains — and that file
+            # (0600 root:root) cannot be read by the backend to check.  An SD
+            # card moved between boards therefore keeps the previous board's
+            # name until reconcile.sh next runs, so printing a derived exact
+            # string here can tell the user to join a network that does not
+            # exist.  Naming the pattern is always true, and the device is
+            # sitting in the room with them, so they can simply join the
+            # "Metixel-Setup-…" network they can see.
             self._ipc.send(ControlMessage(cmd="dismiss_all_messages"))
             time.sleep(0.3)  # Brief pause so frontend processes dismiss
             self._ipc.send(
@@ -579,8 +706,9 @@ class BackendDaemon:
                         "title": "Welcome to Metixel!",
                         "body": (
                             f"No network connection detected. "
-                            f"To configure one, connect to 'Metixel-Setup' WiFi, "
-                            f"open http://192.168.42.1 or http://metixel.local "
+                            f"To configure one, connect to the "
+                            f"'Metixel-Setup-xxxxxx' WiFi, "
+                            f"open http://{AP_IP} or http://metixel.local "
                             f"and use PIN {pin} to login."
                         ),
                         "severity": "info",
@@ -588,7 +716,7 @@ class BackendDaemon:
                     },
                 )
             )
-            logger.info("PIN message sent to frontend")
+            logger.info("PIN message sent to frontend (SSID pattern)")
         except Exception:
             logger.warning("Failed to send PIN message to frontend", exc_info=True)
 
@@ -747,17 +875,16 @@ class BackendDaemon:
         config = self._state.config
         if not config.display.get("schedule_enabled", False):
             return True
-        on_str = config.display.get("schedule_on_time", "07:00")
-        off_str = config.display.get("schedule_off_time", "22:00")
-
-        def _parse_time(t: str) -> int:
-            parts = t.strip().split(":")
-            return int(parts[0]) * 60 + int(parts[1])
+        defaults = DEFAULT_CONFIG["display"]
+        on_min = self._parse_time(
+            config.display.get("schedule_on_time"), defaults["schedule_on_time"]
+        )
+        off_min = self._parse_time(
+            config.display.get("schedule_off_time"), defaults["schedule_off_time"]
+        )
 
         now = time.localtime()
         now_minutes = now.tm_hour * 60 + now.tm_min
-        on_min = _parse_time(on_str)
-        off_min = _parse_time(off_str)
 
         if on_min < off_min:
             # Same-day on-window.
@@ -765,6 +892,22 @@ class BackendDaemon:
         # Wrapped (overnight) on-window: on from on_min through midnight
         # until off_min.  (on_min == off_min → always on.)
         return now_minutes >= on_min or now_minutes < off_min
+
+    @staticmethod
+    def _parse_time(value: object, default: str) -> int:
+        """Parse an ``HH:MM`` schedule time to minutes since midnight.
+
+        A malformed or out-of-range value (the web UI can post ``""``) is
+        logged once per call and replaced by *default* — never raised, so a
+        bad saved schedule cannot crash the daemon.
+        """
+        minutes = parse_schedule_time(value)
+        if minutes is None:
+            logger.warning("Invalid display schedule time %r — falling back to %s", value, default)
+            minutes = parse_schedule_time(default)
+            if minutes is None:  # pragma: no cover — defaults are always valid
+                raise ValueError(f"Invalid default schedule time: {default!r}")
+        return minutes
 
     def _start_display_scheduler(self) -> None:
         """Start the display power scheduler in a background thread.
@@ -789,7 +932,8 @@ class BackendDaemon:
             while self._running:
                 try:
                     if not self._state.config.display.get("schedule_enabled", False):
-                        time.sleep(30)
+                        if not self._sleep(30):
+                            return
                         continue
 
                     should_be_on = self._display_should_be_on()
@@ -808,7 +952,8 @@ class BackendDaemon:
                 except Exception:
                     logger.debug("Display scheduler error", exc_info=True)
 
-                time.sleep(30)
+                if not self._sleep(30):
+                    return
 
         t = threading.Thread(
             target=_scheduler_loop,
@@ -837,12 +982,6 @@ class BackendDaemon:
             debug=web_config.get("debug", False),
             threaded=True,
         )
-
-    def _join_threads(self) -> None:
-        """Wait for all background threads to finish."""
-        for t in self._threads:
-            if t.is_alive():
-                t.join(timeout=5.0)
 
 
 def build_backend(

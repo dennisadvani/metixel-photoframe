@@ -494,7 +494,10 @@ class TestFrames:
         assert last is None
         assert not (tmp_path / "abc123.1.frame.jpg").exists()
 
-    def test_cleanup_cached_video(self, tmp_path):
+    def test_cleanup_cached_video_keeps_source_derived_frames(self, tmp_path):
+        """Only the .mp4 goes.  Frames (like the thumbnail) are extracted
+        from the SOURCE, and nothing re-extracts them after cleanup — deleting
+        them left the MediaItem pointing at missing files."""
         cached = tmp_path / "video.mp4"
         frame1 = tmp_path / "abc123.1.frame.jpg"
         frame2 = tmp_path / "abc123.2.frame.jpg"
@@ -503,9 +506,12 @@ class TestFrames:
             p.write_bytes(b"x")
         cleanup_cached_video(cached, "abc123")
         assert not cached.exists()
-        assert not frame1.exists()
-        assert not frame2.exists()
+        assert frame1.exists()
+        assert frame2.exists()
         assert thumb.exists()  # thumbnail is independent — kept
+
+    def test_cleanup_cached_video_missing_file_is_noop(self, tmp_path):
+        cleanup_cached_video(tmp_path / "gone.mp4", "abc123")  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -589,6 +595,65 @@ class TestNeedsOptimisation:
     def test_h264_level_at_or_below_false(self):
         info = dict(self.H264_OK, h264_level="4.0")
         assert VideoProcessor.needs_optimisation(info, self.PROFILE) is False
+
+    H265_PROFILE = {
+        "codec": "h265",
+        "encoder": "libx265",
+        "max_width": 3840,
+        "max_height": 2160,
+        "max_fps": 60,
+        "max_bitrate": 40,
+        "color_depth": 10,
+        "hdr_support": True,
+        "h264_level": "5.1",
+    }
+
+    def test_h264_source_on_h265_profile_still_needs_transcode(self):
+        """The SOURCE decision is unchanged: H.264 in → transcode to HEVC."""
+        assert VideoProcessor.needs_optimisation(self.H264_OK, self.H265_PROFILE) is True
+
+    def test_h264_cache_accepted_on_h265_profile_with_fallback(self):
+        """A libx264-fallback cache (libx265 failed) is a valid output for an
+        H.265 profile — it must not be deleted and re-encoded every boot."""
+        assert (
+            VideoProcessor.needs_optimisation(
+                self.H264_OK, self.H265_PROFILE, accept_fallback_codecs=True
+            )
+            is False
+        )
+
+    def test_fallback_acceptance_still_enforces_limits(self):
+        too_wide = dict(self.H264_OK, width=7680)
+        assert (
+            VideoProcessor.needs_optimisation(
+                too_wide, self.H265_PROFILE, accept_fallback_codecs=True
+            )
+            is True
+        )
+        too_high_level = dict(self.H264_OK, h264_level="6.2")
+        assert (
+            VideoProcessor.needs_optimisation(
+                too_high_level, self.H265_PROFILE, accept_fallback_codecs=True
+            )
+            is True
+        )
+
+    def test_fallback_acceptance_rejects_unrelated_codec(self):
+        vp9 = dict(self.H264_OK, codec_name="vp9")
+        assert (
+            VideoProcessor.needs_optimisation(vp9, self.H265_PROFILE, accept_fallback_codecs=True)
+            is True
+        )
+
+    def test_fallback_encoders_for_profile(self):
+        assert VideoProcessor.fallback_encoders_for_profile(self.H265_PROFILE) == [
+            "libx265",
+            "libx264",
+        ]
+        assert VideoProcessor.fallback_encoders_for_profile({"encoder": "libx264"}) == ["libx264"]
+        assert VideoProcessor.fallback_encoders_for_profile({}) == ["libx264"]
+        assert VideoProcessor.codecs_for_encoder("libx265") == VideoProcessor.HEVC_CODECS
+        assert VideoProcessor.codecs_for_encoder("h264_v4l2m2m") == VideoProcessor.H264_CODECS
 
     def test_hash_file_stable(self, tmp_path):
         f = tmp_path / "video.bin"
@@ -886,3 +951,374 @@ class TestVideoScanTranscode:
         p._validate_cached_video = mock.Mock(return_value=True)  # type: ignore[method-assign]
         p._probe = mock.Mock(side_effect=fake_probe)  # type: ignore[method-assign]
         assert p.requires_encode(scan) is False
+
+
+# ---------------------------------------------------------------------------
+# video.py — libx264-fallback cache on an H.265 profile is reused, not re-encoded
+# ---------------------------------------------------------------------------
+
+
+class TestFallbackCacheReuse:
+    """Pi 4/5 profiles encode with libx265 and fall back to libx264.  The
+    resulting H.264 cache must be accepted on the next scan instead of being
+    deleted and re-encoded on every boot."""
+
+    H264_SOURCE = {
+        "width": 3840,
+        "height": 2160,
+        "codec_name": "h264",
+        "fps": 30.0,
+        "bitrate": 50,
+        "color_depth": 8,
+        "duration": 10.0,
+    }
+    H264_CACHE = {
+        "width": 1920,
+        "height": 1080,
+        "codec_name": "h264",
+        "fps": 30.0,
+        "bitrate": 8,
+        "color_depth": 8,
+        "h264_level": "4.2",
+        "color_trc": "bt709",
+    }
+    H265_PROFILE = {
+        "codec": "h265",
+        "encoder": "libx265",
+        "max_width": 3840,
+        "max_height": 2160,
+        "max_fps": 60,
+        "max_bitrate": 40,
+        "color_depth": 10,
+        "hdr_support": True,
+        "h264_level": "5.1",
+    }
+
+    def _proc(self, tmp_path):
+        p = VideoProcessor(cache_dir=tmp_path / "cache", video_config={"transcoding_enabled": True})
+        p._hash_file = mock.Mock(return_value="cafe0000cafe0000")  # type: ignore[method-assign]
+        p._extract_thumbnail = mock.Mock()  # type: ignore[method-assign]
+        p._extract_video_frames = mock.Mock(  # type: ignore[method-assign]
+            return_value=(tmp_path / "f1.jpg", tmp_path / "f2.jpg")
+        )
+        p._resolve_profile = mock.Mock(return_value=dict(self.H265_PROFILE))  # type: ignore[method-assign]
+        p._validate_cached_video = mock.Mock(return_value=True)  # type: ignore[method-assign]
+        p._transcode = mock.Mock()  # type: ignore[method-assign]
+        cached = p._video_cache / "cafe0000cafe0000.mp4"
+        cached.write_bytes(b"x" * 4096)
+
+        def fake_probe(path):
+            return dict(self.H264_CACHE) if str(path) == str(cached) else dict(self.H264_SOURCE)
+
+        p._probe = mock.Mock(side_effect=fake_probe)  # type: ignore[method-assign]
+        return p, cached
+
+    def test_h264_fallback_cache_reused(self, tmp_path):
+        from metixel.shared.models import TranscodeStatus
+
+        p, cached = self._proc(tmp_path)
+        scan = p.scan(tmp_path / "clip.mp4")
+        assert scan is not None and scan.needs_transcode is True
+        assert p.requires_encode(scan) is False
+        item = p.transcode(scan)
+        assert item is not None
+        assert item.cached_path == cached
+        assert item.transcode_status == TranscodeStatus.TRANSCODED
+        assert cached.exists()
+        p._transcode.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# utils.run_in_session — process-group kill on timeout
+# ---------------------------------------------------------------------------
+
+
+class _FakePopen:
+    """Popen stand-in: first communicate() times out, the second reaps."""
+
+    instances: list = []
+
+    def __init__(self, args, **kwargs) -> None:
+        self.args = args
+        self.kwargs = kwargs
+        self.pid = 4242
+        self.returncode = None
+        self.calls = 0
+        self.killed = False
+        _FakePopen.instances.append(self)
+
+    def communicate(self, timeout=None):
+        import subprocess
+
+        self.calls += 1
+        if self.calls == 1 and self.kwargs.get("_timeout_first", True):
+            raise subprocess.TimeoutExpired(self.args, timeout)
+        self.returncode = -9
+        return (b"", b"")
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+class TestRunInSession:
+    def _patch(self, monkeypatch):
+        import metixel.backend.processing.utils as utils
+
+        _FakePopen.instances.clear()
+        signals: list[int] = []
+        monkeypatch.setattr(utils.subprocess, "Popen", _FakePopen)
+        monkeypatch.setattr(utils.os, "name", "posix")
+        monkeypatch.setattr(utils.os, "getpgid", lambda pid: 9000 + pid)
+        monkeypatch.setattr(utils.os, "killpg", lambda pgid, sig: signals.append((pgid, sig)))
+        return utils, signals
+
+    def test_timeout_kills_whole_group_cont_then_kill(self, monkeypatch):
+        import signal
+        import subprocess
+
+        utils, signals = self._patch(monkeypatch)
+        with pytest.raises(subprocess.TimeoutExpired):
+            utils.run_in_session(["cpulimit", "--", "ffmpeg"], timeout=1)
+
+        proc = _FakePopen.instances[0]
+        assert proc.kwargs["start_new_session"] is True
+        assert signals == [(9000 + 4242, signal.SIGCONT), (9000 + 4242, signal.SIGKILL)]
+        assert proc.calls == 2, "the killed group must be reaped"
+
+    def test_success_returns_completed_process(self, monkeypatch):
+        utils, signals = self._patch(monkeypatch)
+
+        class _OkPopen(_FakePopen):
+            def communicate(self, timeout=None):
+                self.returncode = 0
+                return ("out", "")
+
+        monkeypatch.setattr(utils.subprocess, "Popen", _OkPopen)
+        result = utils.run_in_session(["ffmpeg"], timeout=5, stdout=None)
+        assert result.returncode == 0 and result.stdout == "out"
+        assert signals == []
+
+    def test_check_raises_called_process_error(self, monkeypatch):
+        import subprocess
+
+        utils, _ = self._patch(monkeypatch)
+
+        class _FailPopen(_FakePopen):
+            def communicate(self, timeout=None):
+                self.returncode = 1
+                return (b"", b"")
+
+        monkeypatch.setattr(utils.subprocess, "Popen", _FailPopen)
+        with pytest.raises(subprocess.CalledProcessError):
+            utils.run_in_session(["ffmpeg"], timeout=5, check=True)
+
+
+class TestTranscodeUsesSessionRunner:
+    """``_transcode`` keeps its encoder fallback while going through
+    ``run_in_session`` and honours ``transcode_use_software_encoder``."""
+
+    PROFILE = {
+        "codec": "h265",
+        "encoder": "libx265",
+        "max_width": 3840,
+        "max_height": 2160,
+        "max_fps": 60,
+        "max_bitrate": 40,
+        "color_depth": 10,
+        "hdr_support": True,
+    }
+
+    def _proc(self, tmp_path, monkeypatch, sw=True):
+        p = VideoProcessor(
+            cache_dir=tmp_path / "cache",
+            video_config={"transcoding_enabled": True, "transcode_use_software_encoder": sw},
+        )
+        p._resolve_profile = mock.Mock(return_value=dict(self.PROFILE))  # type: ignore[method-assign]
+        monkeypatch.setattr("metixel.backend.processing.video.available_ram_bytes", lambda: None)
+        monkeypatch.setattr(
+            "metixel.backend.processing.video.wrap_with_throttle", lambda cmd, *a: list(cmd)
+        )
+        return p
+
+    def test_timeout_on_first_encoder_falls_back_to_libx264(self, tmp_path, monkeypatch):
+        import subprocess
+
+        p = self._proc(tmp_path, monkeypatch)
+        dest = p._video_cache / "out.mp4"
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, *, timeout, check=False, **kw):
+            calls.append(list(cmd))
+            encoder = cmd[cmd.index("-c:v") + 1]
+            if encoder == "libx265":
+                dest.write_bytes(b"partial")
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            dest.write_bytes(b"ok")
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr("metixel.backend.processing.video.run_in_session", fake_run)
+        p._transcode(tmp_path / "in.mp4", dest, {"width": 1920, "height": 1080})
+
+        encoders = [c[c.index("-c:v") + 1] for c in calls]
+        assert encoders == ["libx265", "libx264"]
+        assert dest.read_bytes() == b"ok"
+
+    def test_all_encoders_fail_raises_runtime_error(self, tmp_path, monkeypatch):
+        import subprocess
+
+        p = self._proc(tmp_path, monkeypatch)
+        dest = p._video_cache / "out.mp4"
+
+        def fake_run(cmd, *, timeout, check=False, **kw):
+            raise subprocess.CalledProcessError(1, cmd)
+
+        monkeypatch.setattr("metixel.backend.processing.video.run_in_session", fake_run)
+        with pytest.raises(RuntimeError, match="All encoders failed"):
+            p._transcode(tmp_path / "in.mp4", dest, {})
+
+    def test_hardware_encoders_used_when_software_not_forced(self, tmp_path, monkeypatch):
+        p = self._proc(tmp_path, monkeypatch, sw=False)
+        monkeypatch.setattr(
+            "metixel.backend.processing.video.select_encoders",
+            lambda force, timeout: ["libx264"] if force else ["h264_v4l2m2m", "libx264"],
+        )
+        assert p._encoders_for_profile(self.PROFILE) == ["libx265", "h264_v4l2m2m", "libx264"]
+        p_sw = self._proc(tmp_path, monkeypatch, sw=True)
+        assert p_sw._encoders_for_profile(self.PROFILE) == ["libx265", "libx264"]
+        assert p_sw._encoders_for_profile({"encoder": "libx264"}) == ["libx264"]
+
+
+# ---------------------------------------------------------------------------
+# probe.py — H.264 level 1b and 10-bit pixel-format detection
+# ---------------------------------------------------------------------------
+
+
+class TestProbeNormalisation:
+    def _run(self, monkeypatch, **overrides):
+        payload = TestProbe()._probe_json(**overrides)
+        fake = mock.MagicMock(return_value=SimpleNamespace(stdout=payload))
+        monkeypatch.setattr("metixel.backend.processing.probe.subprocess.run", fake)
+        return probe_video(Path("clip.mp4"), timeout=30)
+
+    def test_level_9_is_1b(self, monkeypatch):
+        assert self._run(monkeypatch, level=9)["h264_level"] == 1.0
+
+    def test_negative_level_is_unknown(self, monkeypatch):
+        assert self._run(monkeypatch, level=-99)["h264_level"] == ""
+
+    def test_level_string_1b(self, monkeypatch):
+        assert self._run(monkeypatch, level="1b")["h264_level"] == 1.0
+
+    @pytest.mark.parametrize(
+        "pix_fmt,depth",
+        [
+            ("yuv410p", 8),
+            ("yuv411p", 8),
+            ("yuv420p", 8),
+            ("yuv420p10le", 10),
+            ("yuv444p10be", 10),
+            ("p010le", 10),
+            ("yuv420p12le", 12),
+            ("p012le", 12),
+        ],
+    )
+    def test_color_depth_from_pix_fmt(self, monkeypatch, pix_fmt, depth):
+        assert self._run(monkeypatch, pix_fmt=pix_fmt)["color_depth"] == depth
+
+
+# ---------------------------------------------------------------------------
+# thumbnail.py / worker.py — palette+alpha images and video thumbnail scaling
+# ---------------------------------------------------------------------------
+
+
+class TestThumbnailFixes:
+    def test_video_thumbnail_is_downscaled(self, tmp_path, monkeypatch):
+        from metixel.backend.processing import thumbnail as th
+
+        src = tmp_path / "clip.mp4"
+        src.write_bytes(b"\x00" * 4096)
+        fake = mock.MagicMock()
+        monkeypatch.setattr("metixel.backend.processing.thumbnail.subprocess.run", fake)
+
+        th.generate_video_thumbnail(src, tmp_path / "cache")
+
+        cmd = fake.call_args[0][0]
+        assert "-vf" in cmd
+        vf = cmd[cmd.index("-vf") + 1]
+        assert f"min({th.THUMBNAIL_SIZE},iw)" in vf and "force_original_aspect_ratio=decrease" in vf
+        assert cmd.index("-vf") < cmd.index("-vframes")
+
+    @pytest.mark.parametrize("mode", ["PA", "RGBA", "LA"])
+    def test_image_thumbnail_handles_alpha_modes(self, tmp_path, monkeypatch, mode):
+        """``bg.paste(img, img)`` raised ValueError for "PA" images.
+
+        PIL cannot write PA to a file, so the source image is served from
+        memory for the source path only (everything else uses the real open).
+        """
+        from PIL import Image
+
+        from metixel.backend.processing import thumbnail as th
+
+        src = tmp_path / f"alpha_{mode}.png"
+        src.write_bytes(b"\x00" * 2048)  # content_hash needs a real file
+        img = Image.new("RGBA", (64, 48), (255, 0, 0, 0))
+        if mode == "PA":
+            img = img.convert("P").convert("PA")
+        elif mode == "LA":
+            img = img.convert("LA")
+        assert img.mode == mode
+        real_open = Image.open
+
+        def fake_open(fp, *a, **kw):
+            return img if Path(str(fp)) == src else real_open(fp, *a, **kw)
+
+        monkeypatch.setattr(th.Image, "open", fake_open)
+        thumb = th.generate_image_thumbnail(src, tmp_path / "cache")
+        assert thumb is not None and thumb.is_file()
+        with real_open(thumb) as t:
+            assert t.mode == "RGB"
+            # transparent → black (JPEG rounding allows ±4), not white
+            assert all(c <= 4 for c in t.getpixel((0, 0)))
+
+    def test_palette_with_transparency_composited_on_black(self, tmp_path):
+        from PIL import Image
+
+        from metixel.backend.processing import thumbnail as th
+
+        src = tmp_path / "pal.png"
+        img = Image.new("P", (16, 16), 0)
+        img.putpalette([255, 255, 255] * 256)
+        img.info["transparency"] = 0
+        img.save(src, "PNG", transparency=0)
+        thumb = th.generate_image_thumbnail(src, tmp_path / "cache")
+        assert thumb is not None
+        with Image.open(thumb) as t:
+            assert all(c <= 4 for c in t.getpixel((0, 0)))
+
+    def test_worker_handles_pa_image(self, tmp_path, monkeypatch):
+        import argparse
+
+        from PIL import Image
+
+        from metixel.backend.processing import worker
+
+        src = tmp_path / "pa.png"
+        src.write_bytes(b"\x00" * 2048)
+        img = Image.new("RGBA", (64, 48), (255, 0, 0, 0)).convert("P").convert("PA")
+        real_open = Image.open
+
+        def fake_open(fp, *a, **kw):
+            return img if Path(str(fp)) == src else real_open(fp, *a, **kw)
+
+        monkeypatch.setattr(Image, "open", fake_open)
+        args = argparse.Namespace(
+            source=str(src),
+            cache=str(tmp_path / "c" / "out.jpg"),
+            thumb=str(tmp_path / "t" / "out.jpg"),
+            screen=(1920, 1080),
+        )
+        result = worker._process(args)
+        assert result["status"] == "ok"
+        with real_open(args.cache) as cached:
+            assert cached.mode == "RGB"
+            assert all(c <= 4 for c in cached.getpixel((0, 0)))

@@ -106,20 +106,15 @@ def extract_video_frames(
 
 
 def cleanup_cached_video(cached_path: Path, file_hash: str) -> None:
-    """Delete a corrupt cached video and its frame cache files.
+    """Delete a corrupt / profile-mismatched cached video (the ``.mp4`` only).
 
-    The thumbnail is NOT deleted — it's generated from the source file
-    and is independent of the transcode output.
+    The thumbnail and the ``<hash>.1.frame.jpg`` / ``<hash>.2.frame.jpg``
+    first/last frames are NOT deleted: like the thumbnail they are extracted
+    from the SOURCE file (see :func:`extract_video_frames`), so they stay
+    valid whatever happens to the transcode output.  ``scan()`` has usually
+    just extracted them, and nothing re-extracts after this cleanup — deleting
+    them here left the resulting ``MediaItem`` pointing at missing files.
     """
-    # Delete the corrupt video
     with contextlib.suppress(OSError):
         cached_path.unlink()
-    # Delete frame files (named with the content hash, same as
-    # extract_video_frames uses).
-    frame_dir = cached_path.parent
-    for frame_num in (1, 2):
-        frame_file = frame_dir / f"{file_hash}.{frame_num}.frame.jpg"
-        if frame_file.exists():
-            with contextlib.suppress(OSError):
-                frame_file.unlink()
-                logger.debug("Cleaned up stale frame file: %s", frame_file.name)
+        logger.debug("Removed stale cached video: %s (hash %s)", cached_path.name, file_hash)

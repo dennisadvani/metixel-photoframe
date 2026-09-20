@@ -75,13 +75,25 @@ class FrameRendererMixin(BaseEngineState):
             # queue has already advanced to the next image.
             layout_source = self._tex_item[self._active] or item
             resolved = self._resolve_fit_mode(layout_source)
-            cache_key = (id(layout_source), resolved)
+            # Key on the values the layout depends on, not ``id(item)``:
+            # the renderer updates width/height in place on playlist
+            # hot-reload (which would leave a stale entry), and ``id()``
+            # is recycled after ``set_queue`` drops the old objects.
+            cache_key = (
+                str(layout_source.cached_path),
+                layout_source.width,
+                layout_source.height,
+                resolved,
+            )
             if cache_key in self._layout_cache:
                 layout = self._layout_cache[cache_key]
             else:
                 layout = self._layout.compute(layout_source, fit_mode=resolved)
-                if len(self._layout_cache) < 16:
-                    self._layout_cache[cache_key] = layout
+                if len(self._layout_cache) >= 16:
+                    # Bounded cache: evict the oldest entry instead of
+                    # freezing at capacity and never caching again.
+                    self._layout_cache.pop(next(iter(self._layout_cache)))
+                self._layout_cache[cache_key] = layout
 
         if with_matte:
             matte_color = self._config.slideshow.get("matte_color", [0, 0, 0])

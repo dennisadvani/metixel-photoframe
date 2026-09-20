@@ -4,12 +4,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import re
+import shutil
+import stat
 from pathlib import Path
+from typing import Any
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
+from metixel.backend.web.helpers import get_body, jsonify_error
+from metixel.shared.media import HEIC_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from metixel.shared.paths import data_dir
 
 logger = logging.getLogger(__name__)
@@ -35,11 +42,55 @@ def _resolve_browse_path(requested: str) -> Path | None:
         return None
 
 
+#: Owner applied to folders created via ``/api/browse/mkdir``.  The backend
+#: normally *runs* as this user (so new dirs are already pi:pi); the chown is
+#: only a correction for the case where it was launched as root.
+_CREATED_DIR_OWNER = ("pi", "pi")
+_CREATED_DIR_MODE = stat.S_IRWXU  # 0o700
+
+
+def _inside_data_tree(path: Path) -> bool:
+    """True if *path* (resolved) is inside (or is) the persistent data dir.
+
+    Watch folders may be created anywhere under ``/opt/metixel/data`` — but
+    never outside it, so a typo in the path box can't scatter directories
+    across the filesystem.
+    """
+    try:
+        path.resolve().relative_to(data_dir().resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _existing_ancestor(path: Path) -> Path:
+    """Deepest existing ancestor of *path* (or *path* itself if it exists)."""
+    current = path
+    while not current.exists() and current != current.parent:
+        current = current.parent
+    return current
+
+
+def _apply_created_dir_perms(path: Path) -> None:
+    """``chmod 700`` and (best effort) ``chown pi:pi`` a freshly created dir."""
+    try:
+        os.chmod(path, _CREATED_DIR_MODE)
+    except OSError as e:
+        logger.warning("Could not chmod %s: %s", path, e)
+    try:
+        shutil.chown(path, *_CREATED_DIR_OWNER)
+    except (OSError, LookupError, PermissionError) as e:
+        # Not root (the normal case — already owned by pi) or no such user
+        # on a dev box.  Either way the folder is usable; just note it.
+        logger.debug("Skipped chown of %s to %s: %s", path, ":".join(_CREATED_DIR_OWNER), e)
+
+
 def _can_create_under(path: Path) -> bool:
     """True if *path* is inside (or is) ``<data dir>/media``.
 
     Folder creation in the browser modal is restricted to the media tree so
     the UI can never create directories outside the frame's media area.
+    Deletion uses the same boundary (see :func:`delete_folder`).
     """
     media_root = (data_dir() / "media").resolve()
     try:
@@ -47,6 +98,28 @@ def _can_create_under(path: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _immich_sync_dir(config: Any) -> Path | None:
+    """Resolved Immich sync folder, or ``None`` when it can't be resolved.
+
+    Mirrors ``routes/media._immich_sync_dir`` so folder deletion refuses the
+    same tree that file deletion already protects.  The folder is resolved
+    against :func:`data_dir` — the *same* base the request path is resolved
+    against — rather than via ``resolve_install_path``, so the two are always
+    compared in one coordinate space.
+    """
+    immich_cfg = config.sync.get("immich") or {}
+    sync_dir = str(immich_cfg.get("sync_dir") or "media/sync/immich/").strip()
+    if not sync_dir:
+        return None
+    try:
+        candidate = Path(sync_dir)
+        if not candidate.is_absolute():
+            candidate = data_dir() / candidate
+        return candidate.resolve()
+    except (OSError, ValueError):
+        return None
 
 
 @browse_bp.route("", methods=["GET"])
@@ -174,6 +247,302 @@ def create_folder():
 
     logger.info("Folder created via web UI: %s", target)
     return jsonify({"status": "ok", "path": str(target), "name": name_raw})
+
+
+@browse_bp.route("/check", methods=["POST"])
+def check_paths():
+    """Report whether each given folder path exists and could be created.
+
+    Request body: ``{"paths": ["media/my_media/", "/abs/other", ...]}`` —
+    the values exactly as typed in the watch-path boxes (relative paths
+    resolve against the persistent data dir).
+
+    Returns ``{"results": [{path, resolved, exists, is_dir, creatable}, ...]}``
+    in the same order.  ``creatable`` is true only for a missing path inside
+    the data tree — the UI uses it to offer "Create this folder?" on save.
+    """
+    body = request.get_json(silent=True) or {}
+    raw_paths = body.get("paths")
+    if not isinstance(raw_paths, list):
+        return jsonify({"error": "'paths' must be a list"}), 400
+
+    results = []
+    for raw in raw_paths:
+        raw_str = str(raw or "").strip()
+        resolved = _resolve_browse_path(raw_str) if raw_str else None
+        if resolved is None:
+            results.append(
+                {
+                    "path": raw_str,
+                    "resolved": None,
+                    "exists": False,
+                    "is_dir": False,
+                    "creatable": False,
+                }
+            )
+            continue
+        exists = resolved.exists()
+        results.append(
+            {
+                "path": raw_str,
+                "resolved": str(resolved),
+                "exists": exists,
+                "is_dir": resolved.is_dir(),
+                "creatable": (not exists) and _inside_data_tree(resolved),
+            }
+        )
+    return jsonify({"results": results})
+
+
+@browse_bp.route("/mkdir", methods=["POST"])
+def make_folder():
+    """Create a (possibly nested) folder inside the persistent data tree.
+
+    Request body: ``{"path": "media/holiday/2026/"}`` — absolute, or
+    relative to the data dir.  Missing parents are created too.  Every
+    directory this call creates gets mode ``700`` and owner ``pi:pi``.
+
+    Creation is refused outside ``<data dir>`` (403).  An existing
+    directory is reported as ``created: false`` rather than an error, so
+    the UI can call this idempotently.
+
+    Returns ``{status: "ok", path: <abs path>, created: bool}``.
+    """
+    body = request.get_json(silent=True) or {}
+    raw = str(body.get("path") or "").strip()
+    if not raw:
+        return jsonify({"error": "'path' is required"}), 400
+
+    target = _resolve_browse_path(raw)
+    if target is None:
+        return jsonify({"error": "Invalid path"}), 400
+    if not _inside_data_tree(target):
+        return (
+            jsonify(
+                {
+                    "error": f"Folders can only be created inside {data_dir()}",
+                    "path": str(target),
+                }
+            ),
+            403,
+        )
+
+    if target.exists():
+        if not target.is_dir():
+            return jsonify({"error": f"Not a directory: {target}"}), 409
+        return jsonify({"status": "ok", "path": str(target), "created": False})
+
+    # Remember where the existing tree ends so only the *new* directories
+    # get their permissions rewritten — never an existing parent.
+    existing = _existing_ancestor(target)
+    try:
+        target.mkdir(parents=True, mode=_CREATED_DIR_MODE)
+    except OSError as e:
+        logger.warning("Failed to create folder %s: %s", target, e)
+        return jsonify({"error": f"Cannot create folder: {e}", "path": str(target)}), 500
+
+    current = target
+    while current != existing and current != current.parent:
+        _apply_created_dir_perms(current)
+        current = current.parent
+
+    logger.info("Folder created via web UI: %s", target)
+    return jsonify({"status": "ok", "path": str(target), "created": True})
+
+
+#: Media file types counted when reporting how much a folder holds.  Kept in
+#: sync with the extensions the media pipeline itself handles, so the warning
+#: the user sees matches what would actually disappear from the slideshow.
+_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | HEIC_EXTENSIONS
+
+
+def _summarise_folder(target: Path) -> tuple[int, int]:
+    """Count media files and bytes in ``target`` recursively.
+
+    Used to tell the user exactly what a delete would remove before they
+    confirm it.  Unreadable subdirectories are skipped rather than raising —
+    a permissions problem in one branch must not stop the whole count.
+    """
+    count = 0
+    total = 0
+    for root, _dirs, files in os.walk(target):
+        for name in files:
+            if Path(name).suffix.lower() not in _MEDIA_EXTENSIONS:
+                continue
+            # Count the file even if its size is unknown — "we couldn't
+            # measure it" must not read as "it isn't there".
+            with contextlib.suppress(OSError):
+                total += (Path(root) / name).stat().st_size
+            count += 1
+    return count, total
+
+
+def _watch_path_for(target: Path, config: Any) -> str | None:
+    """Return the configured ``sync.local.watch_paths`` entry for ``target``.
+
+    Matches the *raw* configured value (not a resolved :class:`Path`) because
+    the caller needs the exact string to remove from config.  Returns
+    ``None`` when the folder is not a watch-path root.
+    """
+    resolved = target.resolve()
+    for entry in config.sync.get("local", {}).get("watch_paths", []):
+        raw = entry.get("path") if isinstance(entry, dict) else entry
+        if not raw:
+            continue
+        candidate = Path(str(raw))
+        if not candidate.is_absolute():
+            candidate = data_dir() / candidate
+        try:
+            if candidate.resolve() == resolved:
+                return str(raw)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+@browse_bp.route("/delete", methods=["POST"])
+def delete_folder():
+    """Delete a folder tree under the media folder.
+
+    Request body: ``{"path": "<abs or data-dir-relative path>"}``.
+
+    Safety rails, in order:
+
+    - The path must resolve inside ``<data dir>/media``.  This is stricter
+      than creation, which only requires the data tree: deleting ``cache/``,
+      ``logs/`` or the Immich sync folder would break the device, whereas
+      creating there is merely useless.  Both the folder *and* the media root
+      must be real directories, never symlinks.
+    - A folder that IS a configured watch path has its entry removed from
+      ``sync.local.watch_paths`` — otherwise config would point at a folder
+      that no longer exists and the watcher would log an error every poll.
+    - The Immich sync folder (or anything inside it) is refused, matching the
+      ``/api/media/delete`` rule for individual files: the syncer owns it and
+      the next sync would restore it.
+
+    The delete is recursive.  ``force`` must be set when the folder holds
+    media, so a non-empty delete is always an explicit, confirmed choice
+    rather than a default.  Cached derivatives are left to the folder
+    watcher's next scan.
+
+    Returns ``{status, deleted, path, removed_watch_path, media_removed}``.
+    """
+    state = current_app.config["METIXEL_STATE"]
+    body = get_body()
+    raw = str(body.get("path") or "").strip()
+    if not raw:
+        return jsonify_error(
+            "'path' is required",
+            400,
+            hint='Send {"path": "media/my_media/subfolder/"}',
+        )
+
+    target = _resolve_browse_path(raw)
+    if target is None:
+        return jsonify_error("Invalid path", 400)
+
+    media_root = (data_dir() / "media").resolve()
+    resolved = target.resolve()
+
+    # Reject the media root itself — deleting it would remove the entire
+    # container the rules above are written to protect.
+    if resolved == media_root:
+        return jsonify_error(
+            "The media folder itself cannot be deleted",
+            403,
+            hint="Select a subfolder inside it instead",
+        )
+
+    if not _can_create_under(resolved):
+        return jsonify_error(
+            f"Folders can only be deleted inside {media_root}",
+            403,
+            hint="Only folders under the media folder can be deleted",
+        )
+
+    # Require real directories throughout, so a symlinked folder can't be
+    # used to make the delete resolve somewhere else entirely.
+    if media_root.is_symlink() or resolved.is_symlink():
+        return jsonify_error("Refusing to delete a symlinked folder", 403)
+
+    if not resolved.is_dir():
+        return jsonify_error(f"Not a directory: {resolved}", 404)
+
+    sync_dir = _immich_sync_dir(state.config)
+    if sync_dir is not None:
+        try:
+            resolved.relative_to(sync_dir)
+            return jsonify_error(
+                "This folder is managed by Immich sync and cannot be deleted here",
+                403,
+                hint="Remove the album from the Immich sync settings instead",
+            )
+        except ValueError:
+            pass
+
+    media_count, media_bytes = _summarise_folder(resolved)
+
+    # Dry run: report what a delete would remove without touching anything,
+    # so the UI can state the real consequences before the user confirms.
+    if body.get("dry_run"):
+        return jsonify(
+            {
+                "status": "ok",
+                "path": str(resolved),
+                "name": resolved.name,
+                "media_count": media_count,
+                "media_bytes": media_bytes,
+                "is_watch_path": _watch_path_for(resolved, state.config) is not None,
+            }
+        )
+
+    if media_count and not body.get("force"):
+        return jsonify_error(
+            f"Folder is not empty ({media_count} media file(s))",
+            409,
+            hint="Confirm the deletion to remove the folder and its contents",
+            media_count=media_count,
+            media_bytes=media_bytes,
+        )
+
+    watch_path = _watch_path_for(resolved, state.config)
+
+    try:
+        shutil.rmtree(resolved)
+    except OSError as e:
+        logger.warning("Failed to delete folder %s: %s", resolved, e, exc_info=True)
+        return jsonify_error(
+            f"Cannot delete folder: {e}",
+            500,
+            hint="Check that no file in the folder is in use",
+        )
+
+    if watch_path is not None:
+        remaining = [
+            entry
+            for entry in state.config.sync.get("local", {}).get("watch_paths", [])
+            if (entry.get("path") if isinstance(entry, dict) else entry) != watch_path
+        ]
+        # Saving sync.local.watch_paths triggers a backend restart so the
+        # folder watcher rebuilds without the removed root.
+        state.update_config("sync", {"local": {"watch_paths": remaining}})
+
+    logger.info(
+        "[BROWSE] Deleted folder %s (%d media file(s), %.1f MB)%s",
+        resolved,
+        media_count,
+        media_bytes / (1024 * 1024),
+        f" — removed watch path {watch_path!r}" if watch_path else "",
+    )
+    return jsonify(
+        {
+            "status": "ok",
+            "deleted": True,
+            "path": str(resolved),
+            "media_removed": media_count,
+            "removed_watch_path": watch_path,
+        }
+    )
 
 
 def _safe_fallback(missing: Path, base: Path) -> Path | None:

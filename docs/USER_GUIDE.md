@@ -93,16 +93,19 @@ This is the zero-config path. If Metixel boots with no Wi-Fi configured and no
 Ethernet plugged in, it creates its own hotspot:
 
 1. Look at the frame's display — a **4-digit PIN** appears after the boot animation.
-2. On your phone or laptop, join the Wi-Fi network named **`Metixel-Setup`** (no password).
+2. On your phone or laptop, join the Wi-Fi network whose name starts with
+   **`Metixel-Setup`** (no password). It ends with 6 digits from that frame's
+   Wi-Fi MAC — e.g. `Metixel-Setup-A1B2C3` — so if you have more than one
+   frame, each one has its own name. The PIN screen tells you the exact name.
 3. Your browser should open the setup page automatically. If not, go to `http://192.168.42.1`.
 4. Enter the **PIN** shown on the frame, then pick your home Wi-Fi network and enter its password.
-5. The frame connects, shows its **IP address** on screen, and the `Metixel-Setup` hotspot disappears.
+5. The frame connects, shows its **IP address** on screen, and the setup hotspot disappears.
 
 ![Screenshot: Wi-Fi setup / captive portal page](images/wifi-setup.png)
 
-> **Can't see `Metixel-Setup`?** The hotspot can take up to ~90 seconds to
-> appear after boot. If it still doesn't appear, briefly plug in an Ethernet
-> cable then disconnect it — this forces a retry.
+> **Can't see a `Metixel-Setup...` network?** The hotspot can take up to ~90
+> seconds to appear after boot. If it still doesn't appear, briefly plug in an
+> Ethernet cable then disconnect it — this forces a retry.
 
 #### Method 2 — Ethernet, then set up Wi-Fi from the dashboard
 
@@ -580,8 +583,10 @@ controls (next, previous, pause, power, etc.).
 ![Screenshot: Advanced page — Keyboard / Remote Control mapping table](images/keyboard-map.png)
 
 The frame responds to your remote immediately. (HDMI-CEC support for TV remotes
-is available but needs the optional `python3-libcec` package — see
-`docs/INSTALLATION.md`.)
+uses libcec — the `cec-utils` + `libcec-dev` system packages from
+`requirements-system.txt` and the PyPI `cec` package from `requirements-pip.txt`,
+all installed by the bootstrap installer. The Debian `python3-libcec` package
+does not exist on Trixie and is not used — see `docs/INSTALLATION.md`.)
 
 ---
 

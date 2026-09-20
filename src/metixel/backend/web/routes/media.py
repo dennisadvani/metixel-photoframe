@@ -10,6 +10,7 @@ existing tests that monkeypatch ``media_mod._resolve_cache_dir`` /
 
 import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -17,15 +18,18 @@ from typing import Any
 
 from flask import Blueprint, Response, current_app, jsonify, request, send_from_directory
 
+from metixel.backend.web.helpers import get_body, jsonify_error
 from metixel.backend.web.media_service import (
     clear_cache,
     convert_heic,
+    delete_source_file,
     has_free_space,
     lookup_thumbnail,
     probe_image,
     probe_video,
     relative_to_any,
     resolve_cache_dir,
+    resolve_library_file,
     resolve_upload_dir,
     sanitize_filename,
     serve_resized_frame_bytes,
@@ -44,6 +48,11 @@ from metixel.shared.paths import resolve_install_path
 logger = logging.getLogger(__name__)
 
 media_bp = Blueprint("media", __name__)
+
+#: Video first/last frame caches live in ``<cache_dir>/videos/`` and are named
+#: ``<content_hash>.<N>.frame.jpg`` (see ``processing/frames.py``).  Only
+#: names of exactly that shape are looked up there.
+_VIDEO_FRAME_RE = re.compile(r"^[A-Za-z0-9]+\.[0-9]+\.frame\.jpg$")
 
 # Backwards-compatible aliases (logic lives in media_service.py).
 UPLOAD_SUBDIR = "my_media"
@@ -69,58 +78,82 @@ _stream_size = stream_size
 _convert_heic = convert_heic
 
 
+def find_thumbnail(state: Any, name: str) -> tuple[Path, bool] | None:
+    """Locate the file ``/api/media/thumbnail/<name>`` would serve.
+
+    Returns ``(path, is_full_res_frame)`` or ``None``.  Shared with the
+    health route so the ``thumbnail_url`` it publishes is only ever one this
+    endpoint can actually serve.  Lookup order:
+
+    1. ``<cache_dir>/thumbnails/<name>`` — image/video thumbnails (320 px).
+    2. ``<cache_dir>/videos/<hash>.<N>.frame.jpg`` — video first/last frame
+       caches (full resolution; downscaled on the way out).
+    """
+    safe_name = Path(name).name
+    if not safe_name or safe_name in (".", ".."):
+        return None
+    if not (safe_name.endswith(".jpg") or safe_name.endswith(".jpeg")):
+        return None
+    cache_dir = _resolve_cache_dir(state)
+    thumb_path = cache_dir / "thumbnails" / safe_name
+    if thumb_path.is_file():
+        return thumb_path, False
+    if _VIDEO_FRAME_RE.match(safe_name):
+        frame_path = cache_dir / "videos" / safe_name
+        if frame_path.is_file():
+            return frame_path, True
+    return None
+
+
+def _immich_sync_dir(config: Any) -> Path | None:
+    """Resolved Immich sync folder, or ``None`` when not configured."""
+    immich_cfg = config.sync.get("immich") or {}
+    sync_dir = immich_cfg.get("sync_dir") or "media/sync/immich/"
+    try:
+        return resolve_install_path(sync_dir).resolve()
+    except OSError:
+        return None
+
+
+def _is_synced(path: Path, sync_dir: Path | None) -> bool:
+    """True when ``path`` lives under the Immich sync folder.
+
+    Synced files are owned by the Immich syncer — deleting one locally is
+    pointless (the next sync restores it), so the UI hides Delete for them
+    and the delete endpoint refuses them.
+    """
+    if sync_dir is None:
+        return False
+    try:
+        path.resolve().relative_to(sync_dir)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 @media_bp.route("/thumbnail/<path:filename>")
 def serve_thumbnail(filename: str):
     """Serve a cached thumbnail or video frame image.
 
-    Looks in two locations (in order):
-
-    1. ``<cache_dir>/thumbnails/<filename>`` — image thumbnails (already 320px).
-    2. ``<media_folder>/**/<filename>`` — video frame caches
-       (``.1.frame`` / ``.2.frame`` files stored next to videos).
-
-    Video frame files are full-resolution — they are downscaled to
-    320 px max before serving, matching image thumbnail sizing.
+    Only files under the processed-media cache are served (see
+    :func:`find_thumbnail`).  Video frame files are full-resolution — they
+    are downscaled to 320 px max before serving, matching image thumbnail
+    sizing.
     """
     state = current_app.config["METIXEL_STATE"]
     safe_name = Path(filename).name
 
     # Security: only allow known safe extensions
-    if not (
-        safe_name.endswith(".jpg")
-        or safe_name.endswith(".jpeg")
-        or safe_name.endswith(".frame.jpg")
-    ):
+    if not (safe_name.endswith(".jpg") or safe_name.endswith(".jpeg")):
         return jsonify({"error": "Invalid file type"}), 403
 
-    # 1. Try the thumbnail cache directory (already 320 px)
-    cache_dir = _resolve_cache_dir(state)
-    thumb_dir = cache_dir / "thumbnails"
-    thumb_path = thumb_dir / safe_name
-    if thumb_path.exists() and thumb_path.is_file():
-        return send_from_directory(str(thumb_dir), safe_name, mimetype="image/jpeg")
-
-    # 2. Try the media folder for video frame caches
-    from metixel.shared.config import resolve_watch_paths
-
-    config = state.config
-    watch_paths = resolve_watch_paths(config)
-    media_folder = watch_paths[0] if watch_paths else resolve_install_path("media/")
-
-    if media_folder.exists():
-        for candidate in media_folder.rglob(safe_name):
-            if candidate.is_file():
-                # Video frames are full-resolution — downscale to
-                # thumbnail size before serving.
-                if safe_name.endswith(".frame"):
-                    return _serve_resized_frame(candidate)
-                return send_from_directory(
-                    str(candidate.parent),
-                    safe_name,
-                    mimetype="image/jpeg",
-                )
-
-    return jsonify({"error": "Thumbnail not found"}), 404
+    found = find_thumbnail(state, safe_name)
+    if found is None:
+        return jsonify({"error": "Thumbnail not found"}), 404
+    path, is_frame = found
+    if is_frame:
+        return _serve_resized_frame(path)
+    return send_from_directory(str(path.parent), path.name, mimetype="image/jpeg")
 
 
 def _serve_resized_frame(path: Path) -> Response:
@@ -180,13 +213,14 @@ def list_media():
     cache_key = str(tuple(sorted(str(p) for p in watch_paths)))
     now = time.monotonic()
 
+    all_paths: list[Path]
     with _file_list_lock:
         cached = _file_list_cache.get(cache_key)
 
         if cached is not None and (now - cached[0]) < _CACHE_TTL:
             all_paths, img_count, vid_count = cached[1], cached[2], cached[3]
         else:
-            all_paths: list[Path] = []
+            all_paths = []
             img_count = 0
             vid_count = 0
             for media_folder in watch_paths:
@@ -238,11 +272,30 @@ def list_media():
 
     # ── Slice the requested page ─────────────────────────────────────
     page_paths = filtered_paths[offset : offset + limit]
+    sync_dir = _immich_sync_dir(config)
 
     items = []
+    #: Page entries that vanished before they could be serialised — subtracted
+    #: from ``total`` at the end so pagination stays honest.
+    dropped_missing = 0
     for entry in page_paths:
         suffix = entry.suffix.lower()
         is_video = suffix in VIDEO_EXTENSIONS
+
+        # A file listed by the (cached) scan can be gone by the time we
+        # serialise it — the user deleted it, or Immich/rsync moved it.  Drop
+        # it rather than publishing a phantom tile: the alternative is a
+        # listing that offers a Delete button for something that no longer
+        # exists.  `stat()` also gives us the size, so it is done once here
+        # and never re-attempted below.
+        try:
+            size_bytes = entry.stat().st_size
+        except OSError:
+            # Gone (or unreadable) between scan and serialise.  Skip it — and
+            # note the count must shrink too, or `has_more` pagination lies.
+            dropped_missing += 1
+            continue
+
         try:
             if is_video:
                 w, h = _probe_video(entry)
@@ -264,9 +317,10 @@ def list_media():
                 "folder": folder,
                 "width": w,
                 "height": h,
-                "size_kb": round(entry.stat().st_size / 1024, 1),
+                "size_kb": round(size_bytes / 1024, 1),
                 "media_type": "video" if is_video else "image",
                 "thumbnail_url": thumbnail_url,
+                "synced": _is_synced(entry, sync_dir),
             }
 
             # Attach transcode queue status for videos
@@ -278,6 +332,14 @@ def list_media():
 
             items.append(item_data)
         except Exception:
+            # Probing failed (a corrupt image, a video ffprobe cannot read).
+            # Still list the item — the user needs to see the file in order to
+            # delete it — but with zero dimensions.
+            #
+            # This block MUST NOT re-read the filesystem: `size_bytes` was
+            # obtained above, outside this handler.  Re-calling `entry.stat()`
+            # here is what used to turn a deleted file into an unhandled
+            # FileNotFoundError and an HTTP 500 on the whole listing.
             folder = _watch_folder_name(entry, watch_paths)
             rel_path = _relative_to_any(entry, watch_paths)
             items.append(
@@ -287,11 +349,18 @@ def list_media():
                     "folder": folder,
                     "width": 0,
                     "height": 0,
-                    "size_kb": round(entry.stat().st_size / 1024, 1),
+                    "size_kb": round(size_bytes / 1024, 1),
                     "media_type": "video" if is_video else "image",
                     "thumbnail_url": None,
+                    "synced": _is_synced(entry, sync_dir),
                 }
             )
+
+    # Files that vanished mid-serialise were counted in `total` (it comes from
+    # the scan) but are not in `items`.  Reconcile so the client's pagination
+    # arithmetic stays consistent: `offset + limit < total` decides whether to
+    # offer "Load more".
+    total -= dropped_missing
 
     return jsonify(
         {
@@ -306,13 +375,35 @@ def list_media():
     )
 
 
+def _resolve_watch_folder_by_name(state: Any, folder: str) -> Path | None:
+    """Map a watch-folder *name* (as the library lists it) to its path.
+
+    Only enabled watch paths qualify — an upload into a disabled folder
+    would never reach the slideshow.  Returns ``None`` when nothing matches.
+    """
+    from metixel.shared.config import resolve_watch_paths
+
+    for wp in resolve_watch_paths(state.config):
+        if wp.name == folder:
+            return wp
+    return None
+
+
 @media_bp.route("/upload", methods=["POST"])
 def upload_media():
     """Upload media files into the user-media watch folder.
 
     Accepts ``multipart/form-data`` with multiple files under the ``files``
-    field name.  Files land in ``media/my_media/`` (an enabled watch path),
-    are auto-renamed on name collision, and must satisfy the extension
+    field name.  Files land in the destination chosen with the toolbar's
+    "Save to" control (the ``system.upload_dir`` config value, else
+    ``media/my_media/``).
+
+    A ``folder`` field naming an enabled watch folder is still honoured when
+    present, because the Media Library sends it — but nothing requires it,
+    and an unrecognised value falls back to the configured destination
+    rather than failing the upload.
+
+    Files are auto-renamed on name collision and must satisfy the extension
     whitelist.  HEIC/HEIF images are converted to JPEG on arrival because
     the media pipeline only handles the classic image formats.  Uploads are
     rejected when they would leave less than 5% of the filesystem free.
@@ -320,14 +411,34 @@ def upload_media():
     Returns:
         JSON ``{saved: [...], errors: [...]}`` with per-file results.
     """
-    state = current_app.config["METIXEL_STATE"]
-    upload_dir = _resolve_upload_dir(state)
-
     files = request.files.getlist("files")
     if not files:
         return (
             jsonify({"saved": [], "errors": [{"name": None, "error": "No files supplied"}]}),
             400,
+        )
+
+    # Only touch the filesystem once we know there is something to save.
+    state = current_app.config["METIXEL_STATE"]
+    folder = (request.form.get("folder") or "").strip()
+    try:
+        upload_dir = _resolve_watch_folder_by_name(state, folder) if folder else None
+        if upload_dir is None:
+            upload_dir = _resolve_upload_dir(state)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error("Cannot create upload directory: %s", exc)
+        return (
+            jsonify(
+                {
+                    "status": "error",
+                    "error": "Upload directory is not writable",
+                    "message": f"Upload directory is not writable: {exc}",
+                    "saved": [],
+                    "errors": [{"name": None, "error": "Upload directory is not writable"}],
+                }
+            ),
+            500,
         )
 
     saved: list[dict[str, Any]] = []
@@ -382,6 +493,59 @@ def upload_media():
         ),
         status,
     )
+
+
+@media_bp.route("/delete", methods=["POST"])
+def delete_library_media():
+    """Delete one file from the media library.
+
+    Body: ``{"folder": "<watch folder name>", "path": "<relative path>"}`` —
+    the ``folder`` and ``path`` fields exactly as ``/api/media/list``
+    publishes them, so the browser never handles absolute paths.
+
+    Safety: the file is looked up inside the enabled watch folders only
+    (traversal outside them is rejected), and files under the Immich sync
+    folder are refused because the syncer owns them.  The file is removed
+    from disk and from the playlist immediately; the folder watcher cleans
+    up cached derivatives on its next scan.
+
+    Returns:
+        JSON ``{"status": "ok", "deleted": true, "name": "<file name>"}``.
+    """
+    state = current_app.config["METIXEL_STATE"]
+    data = get_body()
+    folder = str(data.get("folder") or "").strip()
+    rel_path = str(data.get("path") or "").strip()
+    if not rel_path:
+        return jsonify_error(
+            "Missing 'path'",
+            400,
+            hint='Send {"folder": "<watch folder>", "path": "sub/photo.jpg"}',
+        )
+
+    from metixel.shared.config import resolve_watch_paths
+
+    watch_paths = resolve_watch_paths(state.config)
+    target = resolve_library_file(folder, rel_path, watch_paths)
+    if target is None:
+        logger.warning("Refusing to delete unknown library file: %s / %s", folder, rel_path)
+        return jsonify_error("File not found in the media library", 404)
+
+    if _is_synced(target, _immich_sync_dir(state.config)):
+        return jsonify_error(
+            "This file is managed by Immich sync and cannot be deleted here",
+            403,
+            hint="Remove it from the synced album in Immich instead",
+        )
+
+    try:
+        deleted = delete_source_file(state, target)
+    except OSError:
+        logger.warning("Could not delete media file: %s", target, exc_info=True)
+        return jsonify_error("Could not delete file", 500)
+
+    logger.info("[MEDIA] Deleted library file: %s", target)
+    return jsonify({"status": "ok", "deleted": deleted, "name": target.name})
 
 
 @media_bp.route("/cache/clear", methods=["POST"])

@@ -12,7 +12,7 @@ npm install
 npx playwright install chromium
 
 # 2. Run the suite against a frame
-$env:METIXEL_URL = "http://192.168.222.122"      # or set in the VS Code task (nginx on port 80)
+$env:METIXEL_URL = "http://192.168.222.122"      # or set in the VS Code task (port 80 is an iptables REDIRECT to Flask on 8080)
 npx playwright test
 ```
 
@@ -75,10 +75,17 @@ UI, so there are no screen-PIN web tests.)
 - `restart`/`reboot`/`shutdown`/`clear-cache` are **not** in the default suite.
   `destructive.spec.js` covers restart; reboot/shutdown take the Pi down and
   are best done manually.
+- **Windows host required for two specs.** `samba.spec.js` shells out to the
+  Windows-only `net use` / `cmdkey` commands to mount the SMB share, and the
+  `test:destructive` script in `package.json` uses cmd.exe syntax
+  (`set RUN_DESTRUCTIVE=1 && …`). `cross-env` is not a dependency, so on
+  Linux/macOS run the destructive spec as
+  `RUN_DESTRUCTIVE=1 npx playwright test tests/destructive.spec.js` and skip
+  `samba.spec.js`.
 
 ## Options
 
-- `METIXEL_URL` — the frame's dashboard URL (default `http://192.168.222.122` — nginx on port 80 proxies to Flask).
+- `METIXEL_URL` — the frame's dashboard URL (default `http://192.168.222.122` — an iptables `REDIRECT` rule forwards port 80 to Flask on 8080; there is no nginx).
 - `METIXEL_HOST` — the frame's SSH host for the auth global setup (defaults to the `METIXEL_URL` host).
 - `METIXEL_SSH_USER` — SSH user for the auth global setup (default `pi`).
 - `npx playwright test tests/walk.spec.js` — just the regression net.

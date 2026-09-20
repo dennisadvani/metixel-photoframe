@@ -440,8 +440,10 @@ class MQTTClient:
         """Build the shared Home Assistant device block.
 
         The device identity (identifiers) is scoped by ``mqtt.device_id``
-        (defaults to the hostname) so multiple frames on one broker appear
-        as separate HA devices.
+        (defaulting to the hardware-unique id from ``_resolve_device_id``:
+        Pi serial → MAC → machine-id → hostname) so multiple frames on one
+        broker appear as separate HA devices.  The hostname is only used
+        for ``configuration_url``.
         """
         device_id = self._resolve_device_id()
         hostname = socket.gethostname() or "metixel"

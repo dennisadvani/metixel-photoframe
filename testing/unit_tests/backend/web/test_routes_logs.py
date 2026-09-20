@@ -28,6 +28,45 @@ class TestTailFile:
 
         assert _tail_file(str(tmp_path / "nope.log")) == []
 
+    def test_chunk_boundary_exactly_on_newline_does_not_fuse_lines(self, tmp_path: Path) -> None:
+        """Regression: with 4096-byte backwards chunks, a boundary that falls
+        right after a ``\\n`` used to glue the line before it onto the line
+        after it.  Build a file whose LAST 4096 bytes are exactly one line."""
+        from metixel.backend.web.routes.logs import _tail_file
+
+        first = "A" * 10
+        last = "B" * 4095  # + "\n" = 4096 bytes = exactly one chunk
+        path = tmp_path / "metixel.log"
+        path.write_text(f"{first}\n{last}\n", encoding="utf-8")
+
+        assert _tail_file(str(path), lines=5) == [first, last]
+
+    def test_boundary_on_newline_mid_file(self, tmp_path: Path) -> None:
+        """Same seam, but with many lines on both sides of it."""
+        from metixel.backend.web.routes.logs import _tail_file
+
+        lines = [f"line{i:04d}" for i in range(20)]
+        # A final 4095-byte line + "\n" is exactly one 4096-byte chunk, so the
+        # seam between it and the preceding chunk sits right after a newline.
+        content = "\n".join(lines) + "\n" + "B" * 4095 + "\n"
+        path = tmp_path / "metixel.log"
+        path.write_text(content, encoding="utf-8")
+        result = _tail_file(str(path), lines=3)
+        assert result == ["line0018", "line0019", "B" * 4095]
+
+    def test_tail_matches_naive_split_for_various_sizes(self, tmp_path: Path) -> None:
+        """Property-style: for many file sizes the chunked tail must equal
+        the trivial ``splitlines()[-n:]``."""
+        from metixel.backend.web.routes.logs import _tail_file
+
+        path = tmp_path / "metixel.log"
+        for width in (1, 7, 100, 4095, 4096, 4097, 5000):
+            body = "\n".join(f"{i}:" + "x" * (width % 50) for i in range(400))
+            for trailing in ("", "\n"):
+                path.write_text(body + trailing, encoding="utf-8")
+                for n in (1, 3, 200, 1000):
+                    assert _tail_file(str(path), lines=n) == body.splitlines()[-n:]
+
 
 class TestRecentLogs:
     def test_reads_from_ring_buffer(self, client):
@@ -114,6 +153,10 @@ class TestSetLogLevel:
         assert resp.status_code == 400
         data = json.loads(resp.data)
         assert "valid" in data
+
+    def test_non_string_level_returns_400(self, client):
+        resp = client.post("/api/logs/level", json={"level": 10})
+        assert resp.status_code == 400
 
     def test_valid_level_persisted(self, client, mock_state):
         resp = client.post("/api/logs/level", json={"level": "WARNING"})

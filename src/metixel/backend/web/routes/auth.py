@@ -25,6 +25,10 @@ auth_bp = Blueprint("auth", __name__)
 #: Session keys
 _SESSION_AUTH = "authenticated"
 _SESSION_LOGIN_TIME = "login_time"
+#: Password generation the session was issued under — a session whose
+#: generation no longer matches the stored one (password set/cleared since
+#: login) is rejected.
+_SESSION_GENERATION = "auth_generation"
 
 
 def get_auth_service() -> WebAuthService:
@@ -44,6 +48,8 @@ def is_authenticated() -> bool:
     if not session.get(_SESSION_AUTH):
         return False
     service = get_auth_service()
+    if session.get(_SESSION_GENERATION, "") != service.generation():
+        return False
     timeout = service.session_timeout_minutes()
     if timeout <= 0:
         return True  # 0 = no idle timeout (forever)
@@ -75,6 +81,8 @@ def login():
 
     body = get_body()
     password = body.get("password", "")
+    if not isinstance(password, str):
+        return jsonify_error("'password' must be a string", 400)
     if not password:
         return jsonify_error("Password required", 400)
 
@@ -83,6 +91,7 @@ def login():
         session.clear()
         session[_SESSION_AUTH] = True
         session[_SESSION_LOGIN_TIME] = time.time()
+        session[_SESSION_GENERATION] = service.generation()
         logger.info("Web login successful")
         return jsonify({"authenticated": True, "message": "ok"})
 
@@ -120,10 +129,17 @@ def set_password():
     service = get_auth_service()
     body = get_body()
     password = body.get("password", "")
+    if not isinstance(password, str):
+        return jsonify_error("'password' must be a string", 400)
     if password:
         if len(password) < 8:
             return jsonify_error("Password must be at least 8 characters", 400)
         service.set_password(password)
+        # Every OTHER session is now invalid; keep the one that made the
+        # change logged in by re-stamping it with the new generation.
+        if session.get(_SESSION_AUTH):
+            session[_SESSION_GENERATION] = service.generation()
         return jsonify({"status": "ok", "message": "Web password set"})
     service.clear_password()
+    session.clear()
     return jsonify({"status": "ok", "message": "Web password cleared"})

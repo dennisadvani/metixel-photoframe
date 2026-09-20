@@ -647,18 +647,21 @@ class Pi3dBackend(DisplayBackend):
         """Block until the GPU command queue drains (``glFinish``)."""
         self._gpu_info.flush()
 
-    def update_texture(self, texture: Any, data: np.ndarray) -> None:
+    def update_texture(self, texture: Any, data: np.ndarray) -> Any:
         """Update an existing pi3d Texture with new pixel data in-place.
 
         Uses pi3d's ``Texture.update_ndarray()`` to upload new frames
         without destroying/recreating the GPU texture object. Critical
         for smooth video playback — avoids per-frame GPU allocation.
+
+        Returns the handle to keep using (the same object for in-place
+        updates, a new one when the fallback reloads).
         """
         if texture is not None and hasattr(texture, "update_ndarray"):
             texture.update_ndarray(data)
-        else:
-            # Fallback for textures that don't support in-place update
-            super().update_texture(texture, data)
+            return texture
+        # Fallback for textures that don't support in-place update
+        return super().update_texture(texture, data)
 
     # -- Font resolution -----------------------------------------------------
 

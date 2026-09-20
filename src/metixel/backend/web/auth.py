@@ -151,20 +151,47 @@ class WebAuthService:
     # -- Password mutation ---------------------------------------------------
 
     def set_password(self, password: str) -> None:
-        """Set (or change) the web password, storing a salted hash."""
+        """Set (or change) the web password, storing a salted hash.
+
+        Also rotates the password generation so every session issued under
+        the previous password is invalidated (see :meth:`generation`).
+        """
         with self._lock:
-            self._state.update_config("web", {"password": hash_secret(password)})
+            self._state.update_config(
+                "web",
+                {"password": hash_secret(password), "auth_generation": generate_secret()},
+            )
             self._login_attempts = 0
             self._login_locked_until = 0.0
             logger.info("Web password set")
 
     def clear_password(self) -> None:
-        """Clear the web password (auth disabled) and rotate the secret."""
+        """Clear the web password (auth disabled) and invalidate all sessions.
+
+        The password generation is rotated so a session issued under the old
+        password is no longer "authenticated" if a password is set again
+        later.  The session-signing secret itself is left alone — it is bound
+        to the running Flask app at startup.
+        """
         with self._lock:
-            self._state.update_config("web", {"password": ""})
+            self._state.update_config("web", {"password": "", "auth_generation": generate_secret()})
             self._login_attempts = 0
             self._login_locked_until = 0.0
             logger.info("Web password cleared")
+
+    # -- Session generation ---------------------------------------------------
+
+    def generation(self) -> str:
+        """Return the current password generation token.
+
+        A random token persisted alongside the password hash
+        (``web.auth_generation``).  It is stamped into the session at login
+        and compared on every auth check, so setting or clearing the
+        password invalidates every session issued before the change.  An
+        install that predates the token reports ``""`` until the password is
+        next changed.
+        """
+        return str(self._web().get("auth_generation") or "")
 
 
 class ScreenPinService:

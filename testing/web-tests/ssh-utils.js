@@ -18,6 +18,23 @@ function ssh(cmd) {
     );
 }
 
+// Is the backend answering /api/health with 200 right now?  Single shot with a
+// short timeout: during a restart the port is closed, so connect fails
+// immediately rather than hanging.
+function isHealthy(timeoutMs = 3000) {
+    return new Promise((resolve) => {
+        const req = http.get(new URL("/api/health", BASE), (res) => {
+            res.resume();
+            resolve(res.statusCode === 200);
+        });
+        req.on("error", () => resolve(false));
+        req.setTimeout(timeoutMs, () => {
+            req.destroy();
+            resolve(false);
+        });
+    });
+}
+
 // Poll GET /api/health until it returns 200 or the timeout elapses.
 function waitForHealth(timeoutMs) {
     return new Promise((resolve) => {
@@ -64,4 +81,37 @@ async function clearWebPasswordAndRestart() {
     return await waitForHealth(60000);
 }
 
-module.exports = { clearWebPasswordAndRestart, waitForHealth };
+/**
+ * Remove every test fixture under *dir* whose name starts with *prefix*.
+ *
+ * Destructive specs create real files in the frame's media library, so they
+ * must clean up even when an assertion fails — `finally` runs this on every
+ * path.  It is deliberately a **name-prefixed glob** rather than a list of
+ * paths the test remembers: if a run dies between creating a file and
+ * recording it, the next `beforeAll` sweep still catches it.
+ *
+ * Best-effort: a frame that is unreachable or mid-restart would otherwise
+ * turn cleanup into a second failure that masks the real one, so errors are
+ * reported to the console instead of thrown.
+ *
+ * @param {string} dir - Absolute directory to sweep.
+ * @param {string} prefix - Fixture name prefix (e.g. "webtest-").
+ */
+function removeTestFiles(dir, prefix) {
+    try {
+        ssh(`rm -rf ${dir}/${prefix}* 2>/dev/null; true`);
+    } catch (err) {
+        console.warn(`[ssh-utils] Could not sweep ${prefix}* from ${dir}:`, err.message);
+    }
+}
+
+module.exports = {
+    clearWebPasswordAndRestart,
+    waitForHealth,
+    isHealthy,
+    ssh,
+    removeTestFiles,
+    HOST,
+    SSH_USER,
+    BASE,
+};

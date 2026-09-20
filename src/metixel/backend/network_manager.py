@@ -26,11 +26,27 @@ from metixel.shared.paths import live_dir
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Systemd units for AP mode (created by setup_ap.sh)
+# Systemd units for AP mode (configured by scripts/reconcile.sh §6)
 # ---------------------------------------------------------------------------
 
 HOSTAPD_UNIT = "hostapd.service"
 DNSMASQ_UNIT = "dnsmasq.service"
+
+#: Config files the AP depends on.  Owned by reconcile.sh §6; listed here so
+#: failures name the file that is actually wrong instead of just the unit.
+HOSTAPD_CONF = "/etc/hostapd/hostapd.conf"
+DNSMASQ_CONF = "/etc/dnsmasq.conf"
+
+#: The AP subnet.  The Pi takes .1; clients get addresses from the range below.
+AP_IP = "192.168.42.1"
+AP_SUBNET_PREFIX = "192.168.42."
+AP_DHCP_RANGE = "192.168.42.10,192.168.42.100"
+
+#: Base SSID.  The broadcast name gets the last 6 hex digits of the Wi-Fi
+#: adapter's MAC appended (see :func:`ap_ssid`) so several frames in one house
+#: can be told apart in a Wi-Fi picker.  The bare base is kept as a constant
+#: because documentation and the uninstall script match on it.
+AP_SSID_BASE = "Metixel-Setup"
 
 # How long to wait (seconds) for a connection attempt to succeed/fail
 CONNECT_TIMEOUT = 30
@@ -48,6 +64,36 @@ _cached_scan_time: float = 0.0
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def _split_terse(line: str, maxsplit: int = -1) -> list[str]:
+    """Split one line of ``nmcli -t`` output on UNESCAPED colons.
+
+    Terse mode escapes ``:`` inside a value as ``\\:`` (and a backslash as
+    ``\\\\``), so an SSID such as ``Home:Net`` arrives as ``Home\\:Net``.  A
+    plain ``str.split(":")`` breaks such lines into the wrong number of
+    fields; this splits on real separators only and unescapes the values.
+    ``maxsplit`` behaves like :meth:`str.split` (``-1`` = unlimited).
+    """
+    fields: list[str] = []
+    current: list[str] = []
+    i = 0
+    n = len(line)
+    while i < n:
+        ch = line[i]
+        if ch == "\\" and i + 1 < n:
+            current.append(line[i + 1])
+            i += 2
+            continue
+        if ch == ":" and (maxsplit < 0 or len(fields) < maxsplit):
+            fields.append("".join(current))
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    fields.append("".join(current))
+    return fields
 
 
 def is_wifi_radio_enabled() -> bool:
@@ -184,6 +230,66 @@ def set_wifi_radio(enabled: bool) -> bool:
     return True
 
 
+def ap_ssid_for_mac(mac: str) -> str:
+    """Return the AP SSID for a Wi-Fi MAC address.
+
+    ``Metixel-Setup-A1B2C3`` — the last 6 hex digits of the adapter's MAC,
+    uppercase and with separators stripped.  Two frames in the same house
+    therefore broadcast distinguishable names instead of two identical
+    ``Metixel-Setup`` entries.
+
+    Falls back to the bare :data:`AP_SSID_BASE` when *mac* has fewer than 6
+    usable hex digits, so an unreadable MAC degrades to the old name rather
+    than producing a truncated or empty one.
+
+    This is the SINGLE definition of the name.  ``scripts/reconcile.sh``
+    renders the same string into ``hostapd.conf`` using ``sed`` (it cannot
+    import Python), so the two implementations are guarded against drift by
+    ``testing/unit_tests/backend/test_ap_identity.py`` — which builds the
+    expected SSID the same way the shell does and compares.
+    """
+    digits = "".join(c for c in mac if c in "0123456789abcdefABCDEF").upper()
+    if len(digits) < 6:
+        return AP_SSID_BASE
+    return f"{AP_SSID_BASE}-{digits[-6:]}"
+
+
+def _read_wifi_mac(device: str = "wlan0") -> str:
+    """Read the MAC address of *device* from sysfs, or "" when unavailable.
+
+    Read from ``/sys/class/net/<dev>/address`` rather than ``ip link`` so this
+    works in a hardened unit without ``/usr/sbin`` on ``PATH`` and without
+    spawning a process.  The permanent address (``address``) is used in
+    preference to ``addr_assign_type``-varying values so the SSID is stable
+    across reboots and re-flashes of the same board.
+    """
+    try:
+        with open(f"/sys/class/net/{device}/address", encoding="ascii") as fh:
+            return fh.read().strip()
+    except OSError:
+        logger.debug("Could not read MAC for %s", device, exc_info=True)
+        return ""
+
+
+def ap_ssid() -> str:
+    """The SSID the AP will broadcast on this device.
+
+    Derived from the live wlan0 MAC, matching what ``reconcile.sh`` renders
+    into ``hostapd.conf`` on this same board.  Used for the on-screen PIN
+    message and the web UI.
+
+    CAVEAT: this is derived, not read back.  An SD card moved between boards
+    keeps the PREVIOUS board's ``hostapd.conf`` until reconcile.sh next runs on
+    an install/update, so the name broadcast can differ from the name shown
+    here.  Reading the file back was tried and rejected: it is ``0600 root:root``
+    (hostapd runs as root) and the backend runs as ``pi``, so loosening the mode
+    or shelling out to ``sudo`` were the only ways to make it work — both worse
+    than this known, self-correcting mismatch.  The UI therefore labels the
+    name as "typically" to avoid asserting an exact string it cannot verify.
+    """
+    return ap_ssid_for_mac(_read_wifi_mac())
+
+
 def has_saved_wifi_networks() -> bool:
     """Check whether any Wi-Fi networks are saved/configured for auto-connect.
 
@@ -198,7 +304,7 @@ def has_saved_wifi_networks() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 2 and parts[1] == "wifi":
                 return True
         return False
@@ -247,7 +353,7 @@ def is_connected() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 2:
                 dev, state = parts[0], parts[1]
                 # Exclude the AP's own IP — 192.168.42.x is the
@@ -275,7 +381,7 @@ def is_ethernet_connected() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3 and parts[1] == "ethernet" and parts[2] == "connected":
                 return True
         return False
@@ -299,7 +405,7 @@ def is_wifi_connected() -> bool:
             timeout=5,
         )
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3 and parts[1] == "wifi" and parts[2] == "connected":
                 return True
         return False
@@ -318,8 +424,8 @@ def _interface_has_real_ip(device: str) -> bool:
         )
         for line in ip_result.stdout.strip().splitlines():
             if line.startswith("IP4.ADDRESS["):
-                val = line.split(":", 1)[-1].split("/")[0].strip()
-                if val and not val.startswith("192.168.42."):
+                val = _split_terse(line, 1)[-1].split("/")[0].strip()
+                if val and not val.startswith(AP_SUBNET_PREFIX):
                     return True
         return False
     except Exception:
@@ -403,7 +509,7 @@ def _parse_scan_results() -> list[dict[str, Any]]:
     for line in result.stdout.strip().splitlines():
         if not line:
             continue
-        parts = line.split(":")
+        parts = _split_terse(line)
         if len(parts) < 2:
             continue
         ssid = parts[0].strip()
@@ -618,7 +724,7 @@ def forget_network(ssid: str) -> bool:
         )
         uuid = None
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 2 and parts[0] == ssid:
                 uuid = parts[1]
                 break
@@ -677,7 +783,7 @@ def get_connection_status() -> dict[str, Any]:
         )
         connected_ifaces: list[dict[str, str]] = []
         for line in result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3:
                 dev, dev_type, state = parts[0], parts[1], parts[2]
                 if dev != "lo" and state == "connected":
@@ -723,7 +829,7 @@ def _fill_wifi_details(status: dict[str, Any], device: str) -> None:
             timeout=5,
         )
         for line in conn_result.stdout.strip().splitlines():
-            parts = line.split(":")
+            parts = _split_terse(line)
             if len(parts) >= 3 and parts[0] == "yes":
                 status["ssid"] = parts[1].strip()
                 with contextlib.suppress(ValueError, IndexError):
@@ -749,7 +855,7 @@ def _fill_ethernet_details(status: dict[str, Any], device: str) -> None:
         )
         for line in conn_result.stdout.strip().splitlines():
             if line.startswith("GENERAL.CONNECTION:"):
-                name = line.split(":", 1)[-1].strip()
+                name = _split_terse(line, 1)[-1].strip()
                 if name:
                     status["ssid"] = name  # Reuse ssid field for connection name
                 break
@@ -770,7 +876,7 @@ def _fill_ip_address(status: dict[str, Any], device: str) -> None:
         )
         for line in ip_result.stdout.strip().splitlines():
             if line.startswith("IP4.ADDRESS["):
-                val = line.split(":", 1)[-1].split("/")[0].strip()
+                val = _split_terse(line, 1)[-1].split("/")[0].strip()
                 if val:
                     status["ip"] = val
                     break
@@ -778,12 +884,91 @@ def _fill_ip_address(status: dict[str, Any], device: str) -> None:
         logger.debug("IP address fetch failed for %s", device, exc_info=True)
 
 
+def _dnsmasq_dhcp_configured() -> bool:
+    """Whether dnsmasq is actually configured to serve the AP's DHCP range.
+
+    This is the guard that was missing when the AP broadcast fine but handed
+    out no addresses — ``dnsmasq.service`` reported ``active`` while its config
+    contained no ``dhcp-range`` at all, so ``start_ap_mode()`` returned True and
+    every client sat at "Obtaining IP address…" forever.
+
+    A running dnsmasq proves nothing on its own: with no ``dhcp-range`` it
+    still starts (as a plain DNS forwarder) and still exits 0.  The check is
+    therefore on the CONFIGURATION, deliberately:
+      * the files dnsmasq will read — ``/etc/dnsmasq.conf`` plus any
+        ``/etc/dnsmasq.d/*.conf`` it sources — must contain a ``dhcp-range``;
+      * a ``dhcp-range`` is only honoured when its subnet matches the address
+        wlan0 actually carries, so the range is checked against AP_SUBNET_PREFIX
+        rather than merely being present.
+    """
+    try:
+        import glob
+
+        fragments: list[str] = []
+        for path in [DNSMASQ_CONF, *sorted(glob.glob("/etc/dnsmasq.d/*.conf"))]:
+            try:
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    fragments.extend(fh.read().splitlines())
+            except OSError:
+                continue
+
+        for raw in fragments:
+            line = raw.strip()
+            if not line.startswith("dhcp-range="):
+                continue
+            if AP_SUBNET_PREFIX in line.split("=", 1)[1]:
+                return True
+        return False
+    except Exception:
+        # Never let a diagnostic check be the thing that blocks the AP.
+        logger.debug("dnsmasq DHCP configuration check failed", exc_info=True)
+        return True
+
+
+def _unit_failure_detail(unit: str) -> str:
+    """Return a one-line reason why *unit* is not active, for the log.
+
+    ``systemctl is-active`` only ever answers ``inactive``/``failed`` — it says
+    nothing about *why*, which is how this bug stayed invisible: the log read
+    "dnsmasq failed to start" while the journal held the actual reason.  Pull
+    the last journal line and the ``ExecStart`` status so the cause is in the
+    backend log where the user (and a bug report) can see it.
+    """
+    detail = ""
+    try:
+        result = subprocess.run(
+            ["journalctl", "-u", unit, "-n", "3", "--no-pager", "-o", "cat"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        lines = [ln.strip() for ln in result.stdout.splitlines() if ln.strip()]
+        if lines:
+            detail = lines[-1][-300:]
+    except Exception:
+        logger.debug("journalctl lookup failed for %s", unit, exc_info=True)
+
+    if not detail:
+        try:
+            result = subprocess.run(
+                ["systemctl", "show", "-p", "ExecMainStatus", "-p", "Result", unit],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            detail = result.stdout.strip().replace("\n", " ")
+        except Exception:
+            logger.debug("systemctl show failed for %s", unit, exc_info=True)
+
+    return detail
+
+
 def start_ap_mode() -> bool:
     """Start the access point (hostapd + dnsmasq).
 
     Releases wlan0 from NetworkManager control, starts hostapd to create
     the AP, then starts dnsmasq for DHCP/DNS.  The services must be
-    installed and configured (see ``scripts/setup_ap.sh``).
+    installed and configured (see ``scripts/reconcile.sh`` §6).
 
     Returns False if the services are not installed or fail to start.
     """
@@ -824,11 +1009,28 @@ def start_ap_mode() -> bool:
             # nothing for that line.
             if unit not in check.stdout:
                 logger.error(
-                    "%s not found — AP mode unavailable. Run: sudo bash %s/scripts/setup_ap.sh",
+                    "%s not found — AP mode unavailable. Run: sudo bash %s/scripts/reconcile.sh",
                     unit,
                     live_dir(),
                 )
                 return False
+
+        # Refuse to broadcast an AP that cannot hand out addresses.  A missing
+        # dhcp-range is the one failure that looks like success from every
+        # other angle: hostapd beacons, dnsmasq is "active", and the only
+        # symptom is the client never getting an IP.  Detected BEFORE hostapd
+        # starts so a misconfigured device fails loudly in the log instead of
+        # advertising a network that cannot be joined usefully.
+        if not _dnsmasq_dhcp_configured():
+            logger.error(
+                "dnsmasq has no dhcp-range for %s* — refusing to start the AP. "
+                "Its configuration is missing or was never reconciled: check %s "
+                "and /etc/dnsmasq.d/. Re-run: sudo bash %s/scripts/reconcile.sh",
+                AP_SUBNET_PREFIX,
+                DNSMASQ_CONF,
+                live_dir(),
+            )
+            return False
 
         # Release wlan0 from NetworkManager so hostapd can take control.
         # Without this, NM keeps the interface in managed mode and
@@ -882,7 +1084,11 @@ def start_ap_mode() -> bool:
             timeout=5,
         )
         if result.stdout.strip() != "active":
-            logger.error("hostapd failed to start — AP mode unavailable")
+            logger.error(
+                "hostapd failed to start — AP mode unavailable (%s): %s",
+                HOSTAPD_CONF,
+                _unit_failure_detail(HOSTAPD_UNIT) or "no detail in journal",
+            )
             subprocess.run(
                 ["sudo", "systemctl", "stop", HOSTAPD_UNIT],
                 capture_output=True,
@@ -892,7 +1098,7 @@ def start_ap_mode() -> bool:
 
         # Bring up wlan0 with the AP static IP
         subprocess.run(
-            ["sudo", "ip", "addr", "add", "192.168.42.1/24", "dev", "wlan0"],
+            ["sudo", "ip", "addr", "add", f"{AP_IP}/24", "dev", "wlan0"],
             capture_output=True,
             timeout=5,
         )
@@ -917,7 +1123,11 @@ def start_ap_mode() -> bool:
             timeout=5,
         )
         if result.stdout.strip() != "active":
-            logger.error("dnsmasq failed to start — AP mode unavailable")
+            logger.error(
+                "dnsmasq failed to start — AP mode unavailable (%s): %s",
+                DNSMASQ_CONF,
+                _unit_failure_detail(DNSMASQ_UNIT) or "no detail in journal",
+            )
             subprocess.run(
                 ["sudo", "systemctl", "stop", HOSTAPD_UNIT, DNSMASQ_UNIT],
                 capture_output=True,
@@ -925,7 +1135,7 @@ def start_ap_mode() -> bool:
             )
             return False
 
-        logger.info("AP mode activated: SSID=Metixel-Setup, IP=192.168.42.1")
+        logger.info("AP mode activated: SSID=%s, IP=%s", ap_ssid(), AP_IP)
         return True
     except Exception:
         logger.exception("Failed to start AP mode")
@@ -942,7 +1152,7 @@ def stop_ap_mode() -> bool:
         )
         # Remove static IP
         subprocess.run(
-            ["sudo", "ip", "addr", "del", "192.168.42.1/24", "dev", "wlan0"],
+            ["sudo", "ip", "addr", "del", f"{AP_IP}/24", "dev", "wlan0"],
             capture_output=True,
             timeout=5,
         )

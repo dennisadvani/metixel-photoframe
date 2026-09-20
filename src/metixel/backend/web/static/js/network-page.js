@@ -39,8 +39,16 @@ import {
                     await apiPost("/network/ap-stop");
                     showToast("AP mode stopped", "info");
                 } else {
-                    await apiPost("/network/ap-start");
-                    showToast("AP mode started — SSID: Metixel-Setup", "success");
+                    // The SSID carries this device's MAC suffix, so it comes back
+                    // from the endpoint.  Never hardcode "Metixel-Setup" here:
+                    // with more than one frame in the house that name would point
+                    // at a different access point.
+                    var started = await apiPost("/network/ap-start");
+                    if (started && started.status === "ok") {
+                        showToast("AP mode started — SSID: " + (started.ssid || "Metixel-Setup"), "success");
+                    } else {
+                        showToast((started && started.message) || "Failed to start AP mode", "error");
+                    }
                 }
                 _refreshNetworkAPStatus();
             });
@@ -61,12 +69,39 @@ import {
                 await apiPut("/config/messages", { enabled: !this.checked });
                 showToast(this.checked ? "Network popups suppressed" : "Network popups enabled", "info");
             });
+
+            // WiFi country — bound ONCE here (not in _loadNetworkConfig, which
+            // runs on every page visit and used to stack duplicate handlers).
+            var countryEl = document.getElementById("cfg-wifi-country");
+            if (countryEl) {
+                document.getElementById("btn-save-wifi-country")?.addEventListener("click", _saveWifiCountry);
+                countryEl.addEventListener("keydown", function (e) {
+                    if (e.key === "Enter") { e.preventDefault(); _saveWifiCountry(); }
+                });
+            }
         }
 
         _refreshNetworkStatus();
         _refreshNetworkAPStatus();
         _refreshNetworkScan();
         _loadNetworkConfig();
+    }
+
+    async function _saveWifiCountry() {
+        var countryEl = document.getElementById("cfg-wifi-country");
+        if (!countryEl) return;
+        var code = countryEl.value.trim().toUpperCase().slice(0, 2);
+        countryEl.value = code;
+        if (!code || code.length !== 2) return;
+        var saved = await apiPut("/config/network", { wifi_country: code });
+        // Applying to the radio (iw reg set) is a side effect, so it is a
+        // POST — never a GET query parameter.
+        var applied = await apiPost("/config/network/apply-wifi-country", { country: code });
+        if (saved && applied) {
+            showToast("WiFi country set to " + code, "success");
+        } else {
+            showToast("Failed to set WiFi country", "error");
+        }
     }
 
     async function _loadNetworkConfig() {
@@ -76,23 +111,6 @@ import {
             var countryEl = document.getElementById("cfg-wifi-country");
             if (countryEl) {
                 countryEl.value = cfg.wifi_country || "";
-
-                async function _saveWifiCountry() {
-                    var code = countryEl.value.trim().toUpperCase().slice(0, 2);
-                    countryEl.value = code;
-                    if (code && code.length === 2) {
-                        await apiPut("/config/network", { wifi_country: code });
-                        await apiGet("/config/network?apply_wifi_country=" + encodeURIComponent(code));
-                        showToast("WiFi country set to " + code, "success");
-                    }
-                }
-
-                // Save button
-                document.getElementById("btn-save-wifi-country")?.addEventListener("click", _saveWifiCountry);
-                // Also save on Enter
-                countryEl.addEventListener("keydown", function (e) {
-                    if (e.key === "Enter") { e.preventDefault(); _saveWifiCountry(); }
-                });
             }
         }
         var msgCfg = await apiGet("/config/messages");
@@ -379,7 +397,11 @@ import {
 
         var status = await apiGet("/network/ap-status");
         if (status && status.active) {
-            el.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;color:#f0a030">warning</span> <span style="color:#f0a030">AP mode active — SSID: <strong>Metixel-Setup</strong></span>';
+            // The SSID carries the last 6 MAC digits (Metixel-Setup-12ABC3), so
+            // it is read from the API — a hardcoded name would be wrong on any
+            // frame but the first.
+            var ssid = (status.ssid) || "Metixel-Setup";
+            el.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;color:#f0a030">warning</span> <span style="color:#f0a030">AP mode active — SSID: <strong>' + escapeHtml(ssid) + '</strong></span>';
             btn.textContent = "Stop AP Mode";
         } else {
             el.innerHTML = '<span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle;color:var(--text-muted)">radio_button_unchecked</span> <span style="color:var(--text-muted)">AP mode inactive</span>';

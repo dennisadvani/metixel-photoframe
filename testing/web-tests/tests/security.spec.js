@@ -15,9 +15,19 @@ const WEB_PW = "TestWebPass123!";
 const DEVICE_PW = "TestDevicePass123!";
 
 test.describe("security", () => {
-    test.beforeAll(async () => {
-        // Ensure the frame starts with no web password (auth disabled).
+    // Each test starts from a known auth state.  The login-gate test sets and
+    // then clears the web password, and clearing it restarts the backend — so a
+    // blind reuse of the page can still find #login-overlay up, intercepting
+    // clicks meant for the form underneath.  Restoring that state explicitly
+    // (and waiting for the restart to land) keeps these tests independent.
+    test.beforeEach(async ({ page }) => {
         await clearWebPasswordAndRestart();
+        await page.goto("/#system");
+        await expect(page.locator("#page-system")).toHaveClass(/active/);
+        // Defensive: if a previous run left a password set, the gate would be
+        // up and every click below would be intercepted.  Wait it out rather
+        // than failing with a confusing "intercepts pointer events".
+        await expect(page.locator("#login-overlay")).toBeHidden({ timeout: 20_000 });
     });
 
     test("login gate appears when web password is set", async ({ page }) => {

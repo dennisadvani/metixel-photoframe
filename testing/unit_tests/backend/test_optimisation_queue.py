@@ -191,3 +191,76 @@ class TestTwoPhaseVideoPipeline:
         assert queue._state.get_playlist() == []
         assert queue._state.journal.get(v)["state"] == STATE_FAILED
         assert "encoder crashed" in queue._state.journal.get(v)["reason"]
+
+
+class TestWorkerLoopResilience:
+    """One exception inside an iteration must not kill the worker thread —
+    otherwise ``is_busy`` stays True forever and the FolderWatcher stalls."""
+
+    def test_exception_in_one_iteration_does_not_stop_loop(
+        self, queue, tmp_path, monkeypatch, caplog
+    ) -> None:
+        import logging
+
+        import metixel.backend.processing.optimisation_queue as oq
+
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path / "run"))
+        monkeypatch.setattr(oq.time, "sleep", lambda _s: None)
+        monkeypatch.setattr(queue, "_init_processors", lambda: None)
+        monkeypatch.setattr(queue, "_cleanup_partial_transcodes", lambda: None)
+        monkeypatch.setattr(queue, "reload_config", lambda: None)
+        monkeypatch.setattr(queue, "_log_resources", lambda: None)
+
+        calls: list[int] = []
+
+        def classify():
+            calls.append(len(calls))
+            queue._wake.set()  # don't block in _wake.wait()
+            if len(calls) == 1:
+                raise FileNotFoundError("cache file vanished mid-check")
+            if len(calls) >= 3:
+                queue.stop()
+
+        monkeypatch.setattr(queue, "_classify_incoming", classify)
+
+        with caplog.at_level(logging.ERROR, logger="metixel.backend.processing.optimisation_queue"):
+            queue.run()
+
+        assert len(calls) == 3, "the loop must continue after the failed iteration"
+        assert "OptimisationQueue worker error" in caplog.text
+        assert queue._running is False
+
+    def test_image_requires_optimisation_tolerates_vanishing_cache(
+        self, queue, tmp_path, monkeypatch
+    ) -> None:
+        cached = tmp_path / "cache" / "images" / "abc.jpg"
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes(b"x" * 2048)
+        item = MediaItem(
+            id="abc",
+            original_path=tmp_path / "a.jpg",
+            cached_path=cached,
+            media_type=MediaType.IMAGE,
+        )
+        assert queue._image_requires_optimisation(item) is False
+
+        # Simulate "Clear cache" racing between is_file() and stat().
+        real_stat = Path.stat
+
+        def racing_stat(self, *a, **kw):
+            if self == cached:
+                raise FileNotFoundError(str(self))
+            return real_stat(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "stat", racing_stat)
+        assert queue._image_requires_optimisation(item) is True
+
+    def test_progress_file_honours_run_dir(self, tmp_path, monkeypatch) -> None:
+        from metixel.backend.processing.optimisation_queue import _write_progress
+
+        run_dir = tmp_path / "rd"
+        run_dir.mkdir()
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(run_dir))
+        _write_progress("transcoding", 2, 1, "v.mp4")
+        data = json.loads((run_dir / "processing_status.json").read_text())
+        assert data["active"] == "transcoding"

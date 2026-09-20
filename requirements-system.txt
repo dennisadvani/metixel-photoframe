@@ -43,6 +43,13 @@ i2c-tools
 # Networking
 git
 samba
+# smbclient provides the SMB client CLI. The frame only needs the SERVER to
+# serve the media share, but the functional suite verifies the device-password
+# flow with `smbclient -L` (proving Samba actually accepts the new credential,
+# not merely that smbpasswd exited 0). It is a small, dependency-light client
+# and having it present by default keeps that verification honest instead of
+# silently skipped — see testing/functional/test_device_password.py.
+smbclient
 iptables-persistent
 hostapd
 dnsmasq

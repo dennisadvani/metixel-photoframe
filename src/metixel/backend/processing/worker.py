@@ -135,10 +135,13 @@ def _process(args: argparse.Namespace) -> dict:
                 pass
 
             # Convert to RGB — composite transparent images onto black
-            # first so alpha areas don't render as white.
-            if img.mode in ("RGBA", "PA"):
+            # first so alpha areas don't render as white.  Convert to RGBA
+            # before using the image as its own mask: PIL rejects "PA"/"P"
+            # (palette) images as a paste mask with ValueError.
+            if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+                rgba = img.convert("RGBA")
                 bg = PILImage.new("RGB", img.size, (0, 0, 0))
-                bg.paste(img, img)
+                bg.paste(rgba, mask=rgba.split()[3])
                 img = bg
             elif img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")

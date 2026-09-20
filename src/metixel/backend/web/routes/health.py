@@ -251,9 +251,9 @@ def _resolve_thumbnail_url(thumb_path: str | None) -> str | None:
 
     ``thumbnail_path`` is either a hash-based thumbnail
     (``<cache>/thumbnails/<hash>.jpg``) or a video frame cache
-    (``<video>.<N>.frame`` next to the media).  Mirror the lookup order used
-    by ``/api/media/thumbnail`` so the URL is only handed out when the
-    request would succeed.
+    (``<cache>/videos/<hash>.<N>.frame.jpg``).  Uses the exact lookup
+    ``/api/media/thumbnail`` performs (``find_thumbnail``) so the URL is
+    only handed out when the request would succeed.
     """
     if not thumb_path:
         return None
@@ -262,20 +262,15 @@ def _resolve_thumbnail_url(thumb_path: str | None) -> str | None:
     if not name:
         return None
 
-    # 1. Hash-based thumbnail in the cache directory (the common case).
     state = current_app.config.get("METIXEL_STATE")
     if state is not None:
         try:
-            from metixel.backend.web.routes.media import _resolve_cache_dir
+            from metixel.backend.web.routes.media import find_thumbnail
 
-            if (_resolve_cache_dir(state) / "thumbnails" / name).is_file():
+            if find_thumbnail(state, name) is not None:
                 return f"/api/media/thumbnail/{name}"
         except Exception:  # pragma: no cover - defensive, never break /health
-            logger.debug("Could not resolve cache thumbnail dir", exc_info=True)
-
-    # 2. Video frame cache living next to the media file.
-    if os.path.isfile(thumb_path):
-        return f"/api/media/thumbnail/{name}"
+            logger.debug("Could not resolve thumbnail location", exc_info=True)
 
     logger.debug("Current-media thumbnail not found, omitting URL: %s", thumb_path)
     return None

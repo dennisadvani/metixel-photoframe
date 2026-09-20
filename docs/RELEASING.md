@@ -188,33 +188,52 @@ PR:
 
 ```bash
 # Bump, commit on dev, push a release branch, open a PR to main, wait for CI
-scripts/release.sh minor-beta      # bump minor + beta (or: scripts/release.ps1)
+scripts/release.sh minor-beta      # bump patch + beta number
 scripts/release.sh beta            # bump beta only
-scripts/release.ps1 -Version 0.2.0-beta.2   # set an exact version (Windows)
+scripts/release.sh --version 0.2.0-beta.2   # set an exact version instead of bumping
 
 # …review and merge the PR yourself in GitHub…
 
 # Then tag main and push the tag:
-scripts/release.sh --finalize 0.2.0-beta.1     # or: scripts/release.ps1 -Finalize
+scripts/release.sh --finalize 0.2.0-beta.1
 ```
 
 Two beta options are available:
 
 | Script arg | Meaning | Example |
 |---|---|---|
-| `minor-beta` | Bump the numeric version **and** the beta number | `1.1.9-beta.9` → `1.1.10-beta.10` |
+| `minor-beta` | Bump the **patch** segment **and** the beta number (`bump_version.py --beta`) | `1.1.9-beta.9` → `1.1.10-beta.10` |
 | `beta` | Bump **only** the beta number | `1.1.9-beta.9` → `1.1.9-beta.10` |
 
 > **Note:** the `main` branch is protected by a ruleset that **requires a
 > pull request** — direct `git push origin main` is rejected. The release
-> scripts push a `release/<version>` branch and open a PR, then **stop**.
-> They do NOT merge the PR — you review and merge it yourself in the GitHub
-> UI. Afterwards, run `--finalize <version>` (sh) / `-Finalize <version>`
-> (ps1) to tag `main` and push the tag.
+> script pushes a `release/<version>` branch and opens a PR, then **stops**.
+> It does NOT merge the PR — you review and merge it yourself in the GitHub
+> UI. Afterwards, run `--finalize <version>` to tag `main` and push the tag.
 >
 > If the ruleset also requires an approving review, set
 > `required_approving_review_count` to `0` (solo maintainer) or have a
 > collaborator approve the PR — you cannot approve your own PR.
+
+**Setting an exact version.** When you already know the version you want (for
+example after agreeing it in an issue), pass `--version` instead of a release
+type — the script then calls `bump_version.py --set <version>` rather than
+deriving the version from a bump rule. A leading `v` is accepted and stripped
+(`--version v1.2.7` is the same as `--version 1.2.7`), the version is validated
+**before** anything is written, and the two forms are mutually exclusive:
+
+```bash
+scripts/release.sh --version 1.2.7          # exact version
+scripts/release.sh --version 1.2.7-beta.1   # exact pre-release
+scripts/release.sh --dry-run --version 1.2.7
+```
+
+If the version you pass is already the version committed on `dev`, the script
+skips the bump commit (rather than failing on an empty commit) and continues
+with the release branch and PR.
+
+> `release.ps1` exposes the same feature as `-Version <version>` (with
+> `-Finalize <version>` to tag) for Windows development.
 
 Doing it by hand:
 
@@ -264,8 +283,9 @@ A stable release appears on the **stable** channel.  Do this after
 betas/RCs have been tested.
 
 ```bash
-# One-shot: bump, PR to main, wait for CI, merge, tag, push
-scripts/release.sh stable   # or: scripts/release.ps1 stable   (Windows)
+# Bump, PR to main, wait for CI — then STOPS. You merge the PR in GitHub and
+# run `scripts/release.sh --finalize <version>` to tag main and push the tag.
+scripts/release.sh stable
 ```
 
 Doing it by hand:
@@ -366,6 +386,5 @@ The tag name after stripping the leading `v` must match the
 | `scripts/bump_version.py` | Bump the version programmatically |
 | `docs/CHANGELOG.md` | Human-readable release notes |
 | `pyproject.toml` | Package metadata (version is dynamic, reads `__version__`) |
-| `ARCHITECTURE.md` | Top-of-file version badge (update manually) |
 | GitHub Release | OTA discovery source + downloadable tarball |
 | Git tag (`vX.Y.Z`) | The ref the update manager checks out |
