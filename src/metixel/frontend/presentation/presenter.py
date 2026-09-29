@@ -261,7 +261,11 @@ class Presenter:
     ) -> None:
         self._config = config
         self._backend = backend
-        self._cache = cache or ImageCache()
+        # The backend owns the decoded image, not this cache: dropping a handle here
+        # only frees memory if the backend is told to drop its copy too. getattr()
+        # rather than direct access so a backend without the method simply releases
+        # nothing instead of failing to construct a presenter.
+        self._cache = cache or ImageCache(release=getattr(backend, "unload_image", None))
         # Owns the easing curves and the three transition styles.  Reused rather
         # than reimplemented: fade_through_black in particular is not something
         # to hand-roll twice.

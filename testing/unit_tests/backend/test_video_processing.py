@@ -254,6 +254,45 @@ class TestFfmpegCmds:
         assert "scale='min(1920,iw)':'min(1080,ih)'" in f
         assert "pad='ceil(iw/2)*2:ceil(ih/2)*2" in f
 
+    def test_the_colour_re_tag_leads_every_frame_filter(self):
+        """The re-tag must be FIRST in the chain, and it must be present at all.
+
+        Regression: `[LG] Eclipse {4K SDR & AAC 2.0}.mkv` is HDR10 (tagged
+        BT.2020 constant-luminance) despite its name, and libswscale cannot
+        convert constant luminance.  Every frame extraction aborted with status
+        218 / "Impossible to convert ... auto_scale_0" / -38 ENOSYS, so the video
+        was never scanned: no thumbnail, no first or last frame, and an
+        unscreenable item landed in the playlist.
+
+        Order is the point.  `format=` does NOT fix this — a frame that only
+        restates the pixel format still carries the unusable colour tags, and
+        `format=yuv420p10le` was measured to fail exactly as the bare chain did.
+        """
+        from metixel.backend.processing.ffmpeg_cmds import (
+            COLOUR_NORMALISE,
+            first_frame_cmd,
+            last_frame_cmd,
+            thumbnail_cmd,
+        )
+
+        for cmd in (
+            thumbnail_cmd(Path("in.mkv"), Path("out.jpg"), 1920, 1200),
+            first_frame_cmd(Path("in.mkv"), Path("out.jpg"), 1920, 1200),
+            last_frame_cmd(Path("in.mkv"), Path("out.jpg"), 1920, 1200),
+        ):
+            vf = cmd[cmd.index("-vf") + 1]
+            assert vf.startswith(COLOUR_NORMALISE), "the re-tag must lead the chain"
+            assert vf.index("setparams=") < vf.index("scale=")
+
+    def test_the_thumbnail_filter_is_re_tagged_too(self):
+        """The Phase 1 thumbnail path builds its own filter and failed the same way."""
+        from metixel.backend.processing.thumbnail import _thumb_scale_filter
+
+        vf = _thumb_scale_filter(320)
+        assert vf.startswith("setparams="), "the re-tag must lead the chain"
+        assert vf.index("setparams=") < vf.index("scale=")
+        assert "min(320,iw)" in vf and "force_original_aspect_ratio=decrease" in vf
+
     def test_transcode_cmd_libx264_profile(self):
         profile = {
             "codec": "h264",

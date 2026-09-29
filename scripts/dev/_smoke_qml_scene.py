@@ -24,9 +24,29 @@ import os
 import sys
 from pathlib import Path
 
-#: Default to the real scene, resolved from the repo layout rather than the cwd so
-#: the script works from anywhere it is copied to.
-DEFAULT = Path(__file__).resolve().parents[2] / "src" / "metixel" / "display" / "qml" / "Frame.qml"
+_SCENE_RELATIVE = Path("src") / "metixel" / "display" / "qml" / "Frame.qml"
+
+
+def _default_scene() -> Path:
+    """Locate ``Frame.qml``, tolerating being copied out of the repo.
+
+    The point of this script is to be scp'd to a frame and run over plain ssh —
+    where it will NOT sit at ``<repo>/scripts/dev/``.  Walking up for the scene
+    keeps that working.  A fixed ``parents[2]`` raised IndexError at *import*
+    time, before ``argv`` was read, so passing an explicit path could not rescue
+    it either.
+    """
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidate = parent / _SCENE_RELATIVE
+        if candidate.exists():
+            return candidate
+    # Nothing found: return the repo-shaped guess so the caller reports
+    # "MISSING: <path>" and exits 2 rather than raising.
+    return here.parent / _SCENE_RELATIVE
+
+
+DEFAULT = _default_scene()
 
 
 def main(argv: list[str] | None = None) -> int:

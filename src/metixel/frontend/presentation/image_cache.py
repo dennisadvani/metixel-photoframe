@@ -13,6 +13,15 @@ Two properties matter for a frame that runs for weeks on a Pi 3:
   next, and one in flight).  Qt caches pixmaps aggressively, so an unbounded
   cache is a slow OOM rather than an immediate failure — the failure mode is a
   frame that dies after three days, which is the worst kind to debug remotely.
+
+Bounding this cache is only half the job, and the missing half is not obvious: the
+handle is fetched from the *backend* by URL, so dropping it here frees nothing
+unless the backend is told.  A backend that keeps the decoded image for the scene
+to pull (the QML one stores it in an image provider) holds a strong reference this
+cache cannot see.  On the frame, that combination leaked exactly one image per
+slide — ~1 GB in ten minutes, then ``Out of memory: Killed process <frontend>``
+and a systemd restart, over and over.  Hence :attr:`ImageCache.release`, with each
+backend capping its own store as the backstop for handles nothing can release.
 * **Thread-safe.** Decoding happens on a worker thread because a large JPEG can
   take hundreds of milliseconds, and doing it on the GUI thread would stall the
   event loop — which, with the OTA health gate, now has consequences beyond a
@@ -28,6 +37,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -68,8 +78,13 @@ class ImageCache:
     video decoder for the same cores.
     """
 
-    def __init__(self, max_entries: int = MAX_ENTRIES) -> None:
+    def __init__(
+        self,
+        max_entries: int = MAX_ENTRIES,
+        release: Callable[[Any], None] | None = None,
+    ) -> None:
         self._max_entries = max_entries
+        self._release = release
         self._images: OrderedDict[str, Any] = OrderedDict()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -96,12 +111,13 @@ class ImageCache:
         the slide paints the flat ambient fill instead.  Both payloads are the
         same image, so there is nothing to gain by preferring the newer one.
 
-        Eviction returns nothing to the caller: the old handle is simply dropped,
-        and since every backend reference-counts (Qt implicitly, PIL by refcount)
-        it is freed as soon as the canvas is finished with it.
+        Evicted handles are handed to :attr:`release` rather than merely dropped.
+        Dropping is not enough: the backend owns the decoded image, and a backend
+        that serves it to the scene by URL keeps it until it is told otherwise.
         """
         if handle is None:
             return
+        evicted: list[Any] = []
         with self._lock:
             if key in self._images:
                 # Refresh its place in the LRU order, then leave it in place.
@@ -110,13 +126,36 @@ class ImageCache:
             self._images[key] = handle
             self._images.move_to_end(key)
             while len(self._images) > self._max_entries:
-                evicted, _ = self._images.popitem(last=False)
-                logger.debug("Image cache evicted %s (limit %d)", evicted, self._max_entries)
+                dropped_key, dropped_handle = self._images.popitem(last=False)
+                evicted.append(dropped_handle)
+                logger.debug("Image cache evicted %s (limit %d)", dropped_key, self._max_entries)
+        self._release_all(evicted)
 
     def clear(self) -> None:
         """Drop every cached handle (used on queue reset)."""
         with self._lock:
+            handles = list(self._images.values())
             self._images.clear()
+        self._release_all(handles)
+
+    def _release_all(self, handles: list[Any]) -> None:
+        """Hand *handles* back to the backend, with the cache lock released.
+
+        Called after the lock is dropped because ``release`` is the backend's own
+        method, and evicting while holding the lock would let a slow backend stall
+        the decode worker for no reason.
+
+        A failing release is logged and swallowed.  The worst case of losing one is
+        a leaked image; the certainty of raising here is an aborted slide change,
+        and a slideshow that stops is worse than one that leaks slowly.
+        """
+        if self._release is None:
+            return
+        for handle in handles:
+            try:
+                self._release(handle)
+            except Exception:
+                logger.debug("Failed to release an image handle", exc_info=True)
 
     @property
     def size(self) -> int:

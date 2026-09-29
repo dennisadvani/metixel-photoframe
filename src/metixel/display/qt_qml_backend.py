@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -83,6 +84,41 @@ logger = logging.getLogger(__name__)
 #: Name of the image provider QML asks for artwork through. QML refers to a
 #: handle as ``image://<PROVIDER_ID>/<key>``.
 PROVIDER_ID = "metixel"
+
+#: Maximum decoded images the provider store retains before it evicts the least
+#: recently used one.
+#:
+#: This is a backstop, not a cache policy. The store holds a *strong* reference to
+#: every image it hands out: Qt uploads it into a texture and does not take
+#: ownership, and nothing reference-counts on our behalf, so a handle that is never
+#: passed to :meth:`QmlBackend.unload_image` is never freed. Callers are therefore
+#: expected to release, and this cap only catches the ones that cannot — the
+#: presenter loads a video's last frame deliberately WITHOUT caching it, so no
+#: cache eviction can ever see that handle.
+#:
+#: Sized against what the scene can hold at once: artwork and prevArtwork during a
+#: crossfade, each with an ambient backdrop built from the *same* handle, plus the
+#: presenter's decode-ahead item. Six is twice that live set, so an eviction can
+#: only ever target an image several slides old. Unbounded, this store consumed
+#: ~1 GB in ten minutes on a Pi 5 until the OOM killer took the frontend
+#: (``Out of memory: Killed process <frontend> anon-rss:1021456kB``, once per
+#: slideshow pass, forever).
+MAX_STORED_IMAGES = 6
+
+#: How many recently-requested images stay pinned against eviction and release.
+#:
+#: The cap alone is not enough, and that is the whole reason this exists. QML
+#: re-requests a source for as long as the item is on screen, and ``prevArtwork``
+#: keeps requesting its source for the *whole* of a crossfade — so dropping a
+#: handle the presenter has finished with blanks a layer that is still being
+#: painted. Observed on the frame as, repeatedly,
+#:
+#:     QML Image: Failed to get image from provider: image://metixel/d0d3dad8…
+#:     ... Frame.qml:227:5
+#:
+#: and line 227 is ``Image { id: prevArtwork }``, the outgoing layer of a fade.
+#: Pinning what the scene asked for is what makes that impossible.
+SERVED_WINDOW = 6
 
 #: Fallback frame rate when ``display.fps_limit`` is missing or non-positive.
 #: Only the *scene tick* is paced by this — Qt Quick presents on vsync — but the
@@ -144,6 +180,114 @@ def _colour(value: Any) -> str:
     return "#000000"
 
 
+class ArtworkStore:
+    """Bounded store of decoded artwork that the scene may still be showing.
+
+    Two rules, and the second was learned the hard way:
+
+    * **Bounded.** At most ``max_images`` entries are retained, so a caller that
+      never releases cannot grow the process without limit. That was a real
+      failure: roughly one image-sized leak per slide change reached ~1 GB in ten
+      minutes and the OOM killer ended the frontend, over and over
+      (``Out of memory: Killed process … anon-rss:1021456kB``).
+    * **Never dropped while the scene can still ask for it.** Eviction by age
+      alone is not enough — ``prevArtwork`` re-requests its source for the whole
+      of a crossfade, so a handle the presenter has finished with must outlive
+      its own eviction by ``served_window`` requests. See :data:`SERVED_WINDOW`.
+
+    A released handle is therefore *deferred* rather than dropped: it is removed
+    as soon as it leaves the served window. That keeps the presenter's release
+    meaningful while making the blank-layer failure impossible.
+
+    Values are opaque, which is deliberate: it makes the whole policy testable
+    without Qt, so it runs in CI rather than only on a frame with PySide6.
+    """
+
+    def __init__(
+        self,
+        max_images: int = MAX_STORED_IMAGES,
+        served_window: int = SERVED_WINDOW,
+    ) -> None:
+        self._max_images = max_images
+        self._served_window = served_window
+        self._images: OrderedDict[str, Any] = OrderedDict()
+        self._served: OrderedDict[str, None] = OrderedDict()
+        self._pending: set[str] = set()
+        self._lock = threading.Lock()
+
+    # -- queries -------------------------------------------------------------
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._images)
+
+    def __contains__(self, key: str) -> bool:
+        with self._lock:
+            return key in self._images
+
+    # -- mutations -----------------------------------------------------------
+
+    def add(self, key: str, value: Any) -> None:
+        """Store *value* under *key*, then enforce the bounds."""
+        with self._lock:
+            self._images[key] = value
+            self._images.move_to_end(key)
+            self._trim()
+
+    def serve(self, key: str) -> Any | None:
+        """Return *key*'s value and pin it as recently requested.
+
+        ``None`` means the key is not held, which the caller turns into an empty
+        image. Pinning here is what stops a live layer from being dropped.
+        """
+        with self._lock:
+            value = self._images.get(key)
+            if value is None:
+                return None
+            self._images.move_to_end(key)
+            self._served[key] = None
+            self._served.move_to_end(key)
+            while len(self._served) > self._served_window:
+                self._served.popitem(last=False)
+            self._trim()
+            return value
+
+    def release(self, key: str) -> None:
+        """Hand *key* back, unless the scene has served it recently.
+
+        A served key becomes *pending* and is dropped when it leaves the served
+        window; anything nobody asked for goes immediately.
+        """
+        with self._lock:
+            if key in self._served:
+                self._pending.add(key)
+                return
+            self._images.pop(key, None)
+
+    def clear(self) -> None:
+        """Drop everything, pins included (teardown only)."""
+        with self._lock:
+            self._images.clear()
+            self._served.clear()
+            self._pending.clear()
+
+    # -- policy --------------------------------------------------------------
+
+    def _trim(self) -> None:
+        """Honour deferred releases, then the cap. Caller holds the lock."""
+        for key in [k for k in self._pending if k not in self._served]:
+            self._pending.discard(key)
+            self._images.pop(key, None)
+        while len(self._images) > self._max_images:
+            victim = next((k for k in self._images if k not in self._served), None)
+            if victim is None:
+                # Every entry is pinned, so the served window is the bound instead:
+                # it is at most `served_window` images, not an unbounded set.
+                break
+            del self._images[victim]
+            logger.debug("Artwork store evicted %s (cap %d)", victim, self._max_images)
+
+
 class QmlBackend(DisplayBackend):
     """GPU-composited display backend built on Qt Quick.
 
@@ -166,8 +310,10 @@ class QmlBackend(DisplayBackend):
 
         # Image provider store. Guarded because `load_image` may be called from the
         # preload worker while the scene graph is reading the same dict.
-        self._images: dict[str, QImage] = {}
-        self._images_lock = threading.Lock()
+        # Insertion-ordered, capped AND scene-aware — see ArtworkStore. The store
+        # owns a strong reference to every image it hands out, so it holds its own
+        # lock and enforces both the cap and the served window.
+        self._images = ArtworkStore()
 
         # Video
         self._video: Any = None
@@ -310,8 +456,7 @@ class QmlBackend(DisplayBackend):
         self._timer = None
         self._root = None
         self._engine = None
-        with self._images_lock:
-            self._images.clear()
+        self._images.clear()
 
     def loop_running(self) -> bool:
         return self._running
@@ -527,8 +672,7 @@ class QmlBackend(DisplayBackend):
             return None
 
         key = uuid4().hex
-        with self._images_lock:
-            self._images[key] = image
+        self._images.add(key, image)
         return f"image://{PROVIDER_ID}/{key}"
 
     def _decode(self, path: Path | np.ndarray | bytes) -> QImage | None:
@@ -565,12 +709,16 @@ class QmlBackend(DisplayBackend):
             return None
 
     def unload_image(self, handle: Any) -> None:
-        """Drop an ``image://metixel/<key>`` handle from the provider store."""
+        """Release an ``image://metixel/<key>`` handle.
+
+        The store decides when it can actually go: a handle the scene has served
+        recently is held until it leaves the served window, so releasing one
+        cannot blank a layer that is still on screen (see :class:`ArtworkStore`).
+        """
         key = self._key_of(handle)
         if key is None:
             return
-        with self._images_lock:
-            self._images.pop(key, None)
+        self._images.release(key)
 
     @staticmethod
     def _key_of(handle: Any) -> str | None:
@@ -916,7 +1064,9 @@ def _image_provider(backend: QmlBackend) -> Any:
 
     ``requestImage`` returns the stored image directly rather than a copy — Qt
     uploads it into a texture and does not take ownership, and copying a 12 MP image
-    per request would defeat the purpose of pre-decoding it.
+    per request would defeat the purpose of pre-decoding it.  "Does not take
+    ownership" is also why the store is capped: the decoded image outlives every
+    request for it until :meth:`QmlBackend.unload_image` drops that handle.
     """
 
     def _factory() -> Any:
@@ -934,8 +1084,10 @@ def _image_provider(backend: QmlBackend) -> Any:
             def requestImage(  # noqa: N802 - Qt naming
                 self, image_id: str, size: Any, requested_size: Any
             ) -> Any:
-                with backend._images_lock:  # noqa: SLF001 - owner-private by design
-                    image = backend._images.get(image_id)  # noqa: SLF001
+                # serve() pins the id as recently requested AND returns the stored
+                # image. That pin is what keeps a layer the scene is still painting
+                # from being evicted underneath it -- see ArtworkStore.
+                image = backend._images.serve(image_id)  # noqa: SLF001 - owner-private
                 if image is None:
                     # A missing key returns a null image, which QML renders as
                     # nothing. That is the correct outcome for an unloaded handle,

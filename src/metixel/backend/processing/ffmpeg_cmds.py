@@ -21,11 +21,50 @@ from metixel.shared.system_stats import read_meminfo
 
 logger = logging.getLogger(__name__)
 
+#: Prepended to every frame-extraction filter chain, so FFmpeg can convert the
+#: source at all.
+#:
+#: A source's colour tags decide whether libswscale will touch it.  HDR10 masters
+#: are commonly tagged BT.2020 **constant luminance** — ``color_space=bt2020c``
+#: with ``color_transfer=bt2020-10`` — and libswscale has no constant-luminance
+#: conversion, so the auto-inserted scaler cannot be configured at all and ffmpeg
+#: aborts with exit status 218:
+#:
+#:     Impossible to convert between the formats supported by the filter
+#:     'graph -1 input from stream 0:0' and the filter 'auto_scale_0'
+#:     Task finished with error code: -38 (Function not implemented)
+#:
+#: Measured on the frame with ``[LG] Eclipse {4K SDR & AAC 2.0}.mkv``, which is
+#: HDR10 despite its filename.  Every frame extraction failed, so the video was
+#: never scanned: no thumbnail, no first or last frame, and an unscreenable item
+#: in the playlist.  Re-tagging the frames before the scaler runs puts swscale
+#: back on its ordinary path.
+#:
+#: It MUST come first in the chain.  ``format=`` does not fix this — a frame that
+#: only restates the pixel *format* still carries the unusable colour tags, and
+#: ``format=yuv420p10le`` was measured to fail exactly as the unprefixed chain
+#: did, as were ``-hwaccel none``, ``hwdownload``, ``-pix_fmt``, ``-c:v hevc``
+#: and remuxing to MP4.
+#:
+#: This is re-tagging, not tone mapping: the 10-bit values are preserved and read
+#: as bt709, so an HDR master renders flat rather than clipped.  That is a
+#: deliberate trade — the panel is SDR and the frontend composites 8-bit, so the
+#: HDR tags are ignored downstream either way.  Tone mapping would be a separate
+#: improvement and would belong here.
+#:
+#: Inert on SDR sources, which already carry these tags.  Verified against the
+#: bt709 4K PhotoJoseph clips, which extract exactly as before.
+COLOUR_NORMALISE = "setparams=colorspace=bt709:color_trc=bt709:color_primaries=bt709,"
+
 
 def _scale_filter(screen_w: int, screen_h: int) -> str:
-    """Aspect-preserving scale + even-dimension pad filter (screen-sized)."""
+    """Aspect-preserving scale + even-dimension pad filter (screen-sized).
+
+    Prefixed with :data:`COLOUR_NORMALISE`, which is load-bearing rather than
+    cosmetic — see that constant.  The order matters: the re-tag must lead.
+    """
     return (
-        f"scale='min({screen_w},iw)':'min({screen_h},ih)'"
+        COLOUR_NORMALISE + f"scale='min({screen_w},iw)':'min({screen_h},ih)'"
         f":force_original_aspect_ratio=decrease,"
         f"pad='ceil(iw/2)*2:ceil(ih/2)*2:(ow-iw)/2:(oh-ih)/2'"
     )

@@ -27,7 +27,7 @@ from pathlib import Path
 import pytest
 
 from metixel.framing.layout import RenderPlan
-from metixel.frontend.presentation.image_cache import DecodedImage
+from metixel.frontend.presentation.image_cache import MAX_ENTRIES, DecodedImage, ImageCache
 from metixel.frontend.presentation.presenter import STALL_TIMEOUT_S, Presenter
 from metixel.shared.config import Config
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
@@ -69,6 +69,7 @@ class FakeBackend:
         self.stopped = 0
         self.paused: list[bool] = []
         self.loaded: list[object] = []
+        self.unloaded: list[object] = []
         self._running = True
         self._video_playing = False
         self._video_finished = False
@@ -102,7 +103,7 @@ class FakeBackend:
         return f"image:{path}"
 
     def unload_image(self, handle: object) -> None:
-        pass
+        self.unloaded.append(handle)
 
     # -- Video ---------------------------------------------------------------
 
@@ -595,6 +596,84 @@ class TestTheDecodeAheadPipeline:
             width=0,
             height=0,
         )
+
+
+class TestImageHandleRelease:
+    """A handle dropped from the cache must be released by the BACKEND too.
+
+    The defect behind the frame's OOM crash loop: ``ImageCache`` bounded what the
+    presenter retained, but the decoded image actually lives in the backend, keyed
+    by the handle it handed out.  Dropping the handle therefore freed nothing, and
+    the leak was exactly one full-resolution image per slide — ~1 GB in ten
+    minutes, then ``Out of memory: Killed process <frontend>
+    anon-rss:1021456kB``, then a systemd restart, forever.
+
+    Nothing here caught it because every existing assertion is about what the
+    *presenter* retains, and the leak was on the far side of that boundary.
+    """
+
+    def test_eviction_releases_the_handle_it_drops(self) -> None:
+        released: list[str] = []
+        cache = ImageCache(max_entries=2, release=released.append)
+
+        cache.put("a", "h:a")
+        cache.put("b", "h:b")
+        cache.put("c", "h:c")
+
+        assert released == ["h:a"], "the evicted handle must be handed back, not just dropped"
+
+    def test_the_least_recently_used_handle_is_the_one_released(self) -> None:
+        released: list[str] = []
+        cache = ImageCache(max_entries=2, release=released.append)
+        cache.put("a", "h:a")
+        cache.put("b", "h:b")
+
+        cache.get("a")  # "a" is now the most recent, so "b" is the eviction target
+        cache.put("c", "h:c")
+
+        assert released == ["h:b"]
+
+    def test_a_handle_that_stays_cached_is_never_released(self) -> None:
+        """A backdrop is keyed to the IDENTITY of the handle, so it must survive."""
+        released: list[str] = []
+        cache = ImageCache(release=released.append)
+        cache.put("a", "h:a")
+
+        cache.put("a", "h:second-decode-of-the-same-item")
+
+        assert released == [], "re-putting a cached key must not release the live handle"
+        assert cache.get("a") == "h:a"
+
+    def test_clear_releases_every_handle(self) -> None:
+        released: list[str] = []
+        cache = ImageCache(release=released.append)
+        cache.put("a", "h:a")
+        cache.put("b", "h:b")
+
+        cache.clear()
+
+        assert sorted(released) == ["h:a", "h:b"]
+        assert cache.size == 0
+
+    def test_a_failing_release_does_not_break_the_slideshow(self) -> None:
+        """Never raise into a slide change: a slow leak beats a stopped frame."""
+
+        def boom(_handle: object) -> None:
+            raise RuntimeError("backend went away")
+
+        cache = ImageCache(max_entries=1, release=boom)
+        cache.put("a", "h:a")
+        cache.put("b", "h:b")  # must not propagate
+
+    def test_the_presenter_releases_through_the_backend(
+        self, presenter: Presenter, backend: FakeBackend
+    ) -> None:
+        """The wiring, not just the hook: the presenter must pass the backend's own
+        ``unload_image``, or the hook has nothing to call."""
+        for i in range(MAX_ENTRIES + 1):
+            presenter._cache.put(f"k{i}", f"h:{i}")
+
+        assert backend.unloaded, "an eviction must reach FakeBackend.unload_image"
 
 
 def _reloaded(presenter: Presenter, **slideshow: object) -> Config:

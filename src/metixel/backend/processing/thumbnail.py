@@ -21,6 +21,7 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
+from metixel.backend.processing.ffmpeg_cmds import COLOUR_NORMALISE
 from metixel.backend.processing.utils import ensure_heif_support, nice_cmd
 from metixel.shared.media import content_hash
 from metixel.shared.paths import resolve_install_path
@@ -34,6 +35,21 @@ ensure_heif_support()
 THUMBNAIL_SIZE = 320
 
 # ── helpers ───────────────────────────────────────────────────────────
+
+
+def _thumb_scale_filter(size: int) -> str:
+    """Downscale to a *size* box, aspect preserved, never upscaled.
+
+    Prefixed with :data:`~metixel.backend.processing.ffmpeg_cmds.COLOUR_NORMALISE`
+    for the same reason the frame extractors are: without it, a BT.2020
+    constant-luminance source — the usual tagging on HDR10 masters — cannot be
+    converted by libswscale at all, ffmpeg exits 218, and the video ends up with
+    no thumbnail.
+    """
+    return (
+        COLOUR_NORMALISE + f"scale='min({size},iw)':'min({size},ih)'"
+        ":force_original_aspect_ratio=decrease"
+    )
 
 
 def _validate_thumbnail(path: Path) -> bool:
@@ -167,10 +183,7 @@ def generate_video_thumbnail(
         # Downscale to the thumbnail box (aspect preserved, never upscaled)
         # so a 4K frame is not written out as a multi-MB "thumbnail" — the
         # same limit image thumbnails get from ``Image.thumbnail``.
-        scale = (
-            f"scale='min({THUMBNAIL_SIZE},iw)':'min({THUMBNAIL_SIZE},ih)'"
-            ":force_original_aspect_ratio=decrease"
-        )
+        scale = _thumb_scale_filter(THUMBNAIL_SIZE)
         cmd = nice_cmd(
             [
                 "ffmpeg",
