@@ -26,8 +26,8 @@ tests), and the workflow for getting changes merged.
    for open tasks — especially anything labelled `good first issue`.
 3. **Set up a dev environment** — see [Development setup (VS Code sync to Pi)](#development-setup-vs-code-sync-to-pi) below.
 
-Metixel development targets a Raspberry Pi — the display backend (pi3d + Mesa)
-doesn't run on a desktop. The workflow is to edit code on your workstation and
+Metixel development targets a Raspberry Pi — the production renderer (Qt Quick
+under cage on Mesa) doesn't run on a desktop. The workflow is to edit code on your workstation and
 sync it to the Pi over SSH using the bundled VS Code tasks (`.vscode/tasks.json`
 + `.vscode/sync-to-pi.ps1`).
 

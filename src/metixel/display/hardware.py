@@ -41,6 +41,33 @@ _WLR_ENV: dict[str, str] = {
     "HOME": os.environ.get("HOME", "/home/pi"),
 }
 
+
+#: Merged in when adopting the 2.0.0 renderer: `display/screenshot.py` (the
+#: dashboard's "Take Screenshot" button, which shells out to `grim`) imports
+#: `wayland_env` from this module, and 1.2.6's hardware.py did not define it.
+#:
+#: NOTE: `_WLR_ENV` above is 1.2.6's own — do not add a second copy. A duplicate
+#: is silently valid Python (it just rebinds the name), so only mypy's
+#: ``no-redef`` catches it.
+#:
+#: The rest of 1.2.6's hardware.py is deliberately KEPT rather than replaced: its
+#: DisplayPower connector-selection and latched-wake logic is what
+#: test_display_power.py pins, and pyside6's copy had regressed it.
+def wayland_env() -> dict[str, str]:
+    """Return the minimal environment for talking to cage's Wayland socket.
+
+    Shared by every helper that runs a Wayland *client* as a subprocess:
+    ``wlr-randr`` (display mode and DPMS) and ``grim`` (screenshots).  The
+    backend service is not started by the cage unit, so it inherits no
+    ``WAYLAND_DISPLAY`` of its own — supplying one explicitly is what lets it
+    reach the socket at ``/run/user/1000/wayland-0`` however it was launched.
+
+    A copy is returned, so a caller can add variables without mutating the
+    module default.
+    """
+    return dict(_WLR_ENV)
+
+
 #: Map a clockwise rotation in degrees to the wlr-randr ``--transform`` value.
 _WLR_TRANSFORMS: dict[int, str] = {
     0: "normal",

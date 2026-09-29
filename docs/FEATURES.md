@@ -6,11 +6,11 @@ A comprehensive list of every feature in Metixel Photoframe, organized by subsys
 
 ## Display & Rendering
 
-- **Hardware-accelerated OpenGL ES 2.0** rendering via pi3d + Mesa EGL
-- **Automatic native resolution detection** — set `width: 0` in config, pi3d detects the display
+- **Hardware-accelerated OpenGL ES rendering** via PySide6 (Qt Quick/OpenGL widgets) under cage, with Mesa EGL
+- **Automatic native resolution detection** — set `width: 0` in config and the renderer takes the display's native mode
 - **Two-texture ping-pong GPU pipeline** — active slot displayed while inactive slot preloads the next image
 - **Smooth transitions** — crossfade, fade-through-black, or instant cut; configurable duration (default 2500ms)
-- **Configurable fit modes** — contain, cover, fill, with smart-cover for opposite-orientation images
+- **Configurable fit modes** — contain or cover, with smart cover for square / opposite-orientation images
 - **Boot screen** — animated Metixel logo with rotating spinner; smooth 0.8s ease-out fade to first slide
 - **Display sleep scheduler** — configurable on/off times (e.g. off at 22:00, on at 07:00)
 - **Display power control** — DRM DPMS via sysfs on KMS, or `vcgencmd display_power` on legacy
@@ -52,11 +52,11 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 | Feature | Detail |
 |---|---|
-| **Playback** | VLC with hardware-accelerated H.264 decode on Pi 2/3 |
-| **Transcoding** | ffmpeg converts non-H.264 or oversized videos during OPTIMISE; CRF-based quality control |
+| **Playback** | Qt Multimedia (`QMediaPlayer` + `VideoOutput`), rendered inside the Qt Quick scene — no subprocess, no separate window |
+| **Hardware decode** | Decoded on the GPU by Qt Multimedia (FFmpeg backend); the OPTIMISE phase re-encodes to a per-board codec profile because a Pi 5 has no H.264 hardware decoder |
+| **Transcoding** | ffmpeg converts non-H.265 or oversized videos during OPTIMISE; CRF-based quality control |
 | **Pre-extracted frames** | First frame (`.1.frame`) and last frame (`.2.frame`) JPEGs cached during OPTIMISE — frontend never runs ffmpeg |
-| **Non-blocking state machine** | VLC plays on top of the slideshow; frame swaps underneath are invisible |
-| **Last-frame swap** | VLC's window is covered by a cached last-frame JPEG at 50% of video duration for a seamless transition |
+| **In-scene compositing** | Video is one layer of the same scene as the slideshow, so overlays and transitions render above it — there is no window to cover |
 | **Guardrails** | Max duration filter, transcoding enabled/disabled toggle, playback enabled/disabled master switch |
 
 ---
@@ -96,7 +96,8 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **Config hot-reload** | mtime polling detects file changes; both backend and frontend reload without restart |
 | **Graceful degradation** | Never crash, never show a traceback — log errors and continue with available media |
 | **Quiet boot** | No kernel messages, no login prompt — display goes straight to the boot screen |
-| **Log rotation** | 5 log files, configurable log level applied to both processes |
+| **Dashboard screenshots** | Capture what the panel is showing to a PNG via `grim` + `wlr-screencopy` (includes video and the applied rotation). Configurable folder (default `media/screenshots/`, inside the media share); manual clearing, never pruned on a timer |
+| **Log rotation** | 5 log files per process, size-bounded; the level set in the web UI applies to the file, and the live log view follows it down to Debug |
 | **Samba share** | Production: media folder only (`metixel-media`) |
 
 ---
@@ -150,7 +151,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | Tool | Purpose |
 |---|---|
 | **TkBackend** | tkinter-based software renderer for desktop development (no Pi hardware needed) |
-| **Pi3dBackend** | Production backend for Raspberry Pi (Mesa EGL via cage/XWayland) |
+| **QmlBackend** | Production backend for Raspberry Pi (Qt Quick + Qt Multimedia under cage, Wayland-native) |
 | **WaylandBackend** | Future backend for Phase 2 (PyOpenGL + EGL on Wayland/DRM) |
 | **Backend auto-detection** | Factory in `metixel.display` selects the correct backend at runtime |
 | **pytest** | Test suite with coverage reporting |

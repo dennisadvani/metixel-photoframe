@@ -13,17 +13,76 @@ python3-libcamera
 libopenblas0
 
 # Display / graphics stack
+# cage is the Wayland compositor; Qt runs as its client with
+# QT_QPA_PLATFORM=wayland pinned in metixel-cage.service.
 cage
-xwayland
 wlr-randr
+# grim captures the composited output via wlr-screencopy (the dashboard's
+# Take Screenshot button).  It is a Wayland client of cage, driven by the
+# backend with the same minimal env wlr-randr already uses — see
+# metixel/display/screenshot.py.
+grim
 seatd
+# xwayland is retained for now. Nothing at runtime needs an X server any more —
+# Qt uses the Wayland plugin and video is a VideoOutput inside the Qt scene — but
+# it is only removed once Wayland-native rendering is proven on hardware, because a
+# missing runtime package is unrecoverable on a wall-mounted frame.
+xwayland
+
+# Qt.  These MUST come from apt: the pip PySide6 wheel omits the GBM eglfs
+# plugin, and `ota_install.sh` uses --ignore-installed so a pip copy would shadow
+# the apt one under ~/.local and break the platform plugin lookup.
+# libqt6waylandclient6 provides the `wayland` QPA plugin that
+# QT_QPA_PLATFORM=wayland resolves to; without it Qt aborts on startup, which is
+# the intended loud failure rather than a silent xcb fallback.
+#
+python3-pyside6.qtcore
+python3-pyside6.qtgui
+libqt6waylandclient6
+
+# Only the modules the QML renderer actually imports are listed above: QtCore
+# (QTimer, QUrl), QtGui (QGuiApplication, QImage), QtQml (QQmlApplicationEngine),
+# QtQuick (QQuickWindow, QQuickImageProvider) and QtMultimedia (QMediaPlayer).
+#
+# Two groups are deliberately NOT listed:
+#   qtwidgets / qtopenglwidgets — these existed for the raster QWidget canvas and
+#     the QOpenGLWidget mpv surface.  Both are gone and nothing imports QtWidgets
+#     or QOpenGLWidget any more (verified by grepping src/ and testing/).
+#   python3-mpv / mpv / libmpv2 — 2.0.0 renders video through Qt Multimedia, so
+#     the libmpv path — and the libplacebo descriptor leak it carried — is gone.
+#     Leaving them installed would only invite the old path back.
+# Re-adding either is a one-line change, so the usual "a missing runtime package
+# is unrecoverable on a wall-mounted frame" caution does not apply to packages
+# that no code imports.
+
+# Qt Quick + Qt Multimedia — the GPU-composited renderer (Frame.qml + QmlBackend).
+# Measured on a Pi 5 against the software path it replaces, on the same 60 fps
+# production-format clip: 59.91 fps presented / 99.72% of frames vsync-locked for
+# 35.5% of one core, versus 182% for the libmpv software renderer.  These are the
+# packages that make smooth playback possible, so a missing one is a performance
+# regression that looks like a rendering bug.
+#   qtquick + qml   - the scene graph and its QML engine
+#   qtmultimedia    - QMediaPlayer + VideoOutput.  Hardware-decodes HEVC on a Pi 5
+#                     through V4L2 stateless (/dev/video19, DMABuf in and out).
+#                     Note a Pi 5 has NO H.264 hardware decoder at all, which is
+#                     why the pipeline re-encodes to a per-board codec profile.
+#   qml6-module-*   - the QML modules Frame.qml imports: qtquick for the items
+#                     themselves, qtquick-shapes for ShapePath (the mat ring).
+#                     qtquick-effects is installed for MultiEffect but is
+#                     deliberately NOT used for blur — production blurs offline in
+#                     ambient_blur.py and blits a pre-blurred JPEG.
+#   libqt6quick6 / libqt6multimedia6 - the native libraries behind them.
+python3-pyside6.qtquick
+python3-pyside6.qml
+python3-pyside6.qtmultimedia
+qml6-module-qtquick
+qml6-module-qtquick-shapes
+qml6-module-qtquick-effects
+libqt6quick6
+libqt6multimedia6
 
 # Media processing
 ffmpeg
-vlc-bin
-vlc-plugin-base
-vlc-plugin-video-output
-vlc-data
 cpulimit
 
 # Input / CEC / DDC
@@ -49,6 +108,9 @@ samba
 # not merely that smbpasswd exited 0). It is a small, dependency-light client
 # and having it present by default keeps that verification honest instead of
 # silently skipped — see testing/functional/test_device_password.py.
+#
+# Kept deliberately: 2.0.0's list was written before 1.2.6 added this, so taking
+# it wholesale would silently downgrade that functional verification.
 smbclient
 iptables-persistent
 hostapd

@@ -152,14 +152,28 @@ class DisplayDriver(Protocol):
     """Rendering surface port — satisfied by :class:`metixel.display.backend.DisplayBackend`.
 
     This is the contract the presentation layer renders through; the concrete
-    implementation (pi3d / PyOpenGL / pygame / tkinter) is selected by the
-    display factory and injected at the composition root.
+    implementation (Qt Quick under cage on a Pi, PyOpenGL on Wayland, tkinter on a
+    desktop) is selected by the display factory and injected at the composition
+    root.
+
+    Only the members the ABC *requires* are declared.  The optional capabilities
+    (``present_overlay``, ``present_transition``, ``play_video``,
+    ``warm_backdrop`` …) are deliberately absent: they carry defaults on the ABC,
+    so a backend may legitimately omit them, and a port that demanded them would
+    misdescribe the contract.  Signatures are deliberately loose — the ABC owns
+    the exact types, and this port only needs to say *which* members exist.
+
+    The retired per-primitive surface (``draw_rect`` / ``draw_image`` /
+    ``draw_crossfade`` / ``load_texture`` / ``update_texture`` / ``draw_text``)
+    was removed in 2.0.0 and is deliberately NOT declared here.  Everything now
+    arrives through :meth:`present`.
     """
 
     width: int
     height: int
+    is_running: bool
 
-    def create(self) -> Any: ...
+    def create(self, *args: Any, **kwargs: Any) -> Any: ...
 
     def destroy(self) -> None: ...
 
@@ -167,19 +181,21 @@ class DisplayDriver(Protocol):
 
     def swap_buffers(self) -> None: ...
 
-    def draw_rect(self, *args: Any, **kwargs: Any) -> None: ...
+    def schedule(self, tick: Any) -> None: ...
 
-    def draw_image(self, *args: Any, **kwargs: Any) -> None: ...
+    def present(
+        self,
+        plan: Any,
+        image: Any = None,
+        alpha: float = 1.0,
+        backdrop_source: Any = None,
+    ) -> None: ...
 
-    def draw_crossfade(self, *args: Any, **kwargs: Any) -> None: ...
+    def load_image(self, path: Any) -> Any: ...
 
-    def load_texture(self, path: Any, **kwargs: Any) -> Any: ...
+    def unload_image(self, handle: Any) -> None: ...
 
-    def unload_texture(self, texture: Any) -> None: ...
-
-    def update_texture(self, texture: Any, data: Any) -> None: ...
-
-    def draw_text(self, *args: Any, **kwargs: Any) -> None: ...
+    def set_background(self, color: Any) -> None: ...
 
     def clear(self) -> None: ...
 

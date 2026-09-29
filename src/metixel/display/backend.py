@@ -3,28 +3,45 @@
 """Abstract base class for display backends.
 
 All rendering in Metixel Photoframe goes through this interface. The presentation
-engine and widget layer never import hardware-specific libraries directly.
+layer and the overlay system never import hardware-specific libraries directly.
+
+Geometry comes from :mod:`metixel.framing` — a backend is handed a
+:class:`~metixel.framing.layout.RenderPlan` of pixel rectangles and paints it.
+Backends therefore hold **no** layout knowledge, and the layout maths stays
+testable without Qt, mpv or a GPU.
+
+Consequently a backend is not a bag of drawing primitives. It is a *surface*:
+it can present a whole frame, host a video stream, and control display power.
+The old per-primitive surface (``draw_rect`` / ``draw_image`` /
+``draw_crossfade`` / ``load_texture`` / ``update_texture`` / ``clear_depth`` …)
+is gone. It existed to drive pi3d's immediate-mode texture pipeline, and it
+forced every caller to reason about GL state and depth ordering that the
+retained-mode canvas now owns outright.
 """
 
 from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from metixel.display.overlay_element import OverlayElement
+from metixel.framing.layout import RenderPlan
+
 logger = logging.getLogger(__name__)
 
 
 class DisplayBackend(ABC):
-    """Hardware-agnostic interface for 2D rendering.
+    """Hardware-agnostic display surface.
 
     Implementations:
-    - :class:`~metixel.display.dispmanx_backend.Pi3dBackend` (Phase 1: pi3d)
-    - :class:`~metixel.display.wayland_backend.WaylandBackend` (Phase 2: PyOpenGL)
+    - :class:`~metixel.display.qt_backend.PySide6Backend` (Raspberry Pi: cage + Qt + mpv)
     - :class:`~metixel.display.tk_backend.TkBackend` (Desktop dev: tkinter)
+    - :class:`~metixel.display.wayland_backend.WaylandBackend` (Phase 2: not yet implemented)
     """
 
     # -- Properties ----------------------------------------------------------
@@ -46,6 +63,20 @@ class DisplayBackend(ABC):
     def is_running(self) -> bool:
         """Whether the display loop is active."""
         ...
+
+    @property
+    def supports_video(self) -> bool:
+        """Whether this backend can play video.
+
+        ``False`` on software renderers (tkinter), which have no video pipeline.
+        The presentation layer filters video items out of the playlist rather
+        than attempting playback once per item per cycle.
+
+        Declared on the ABC, not merely on the implementations: the playlist
+        filter in ``presentation/queue.py`` reads it, so a backend that silently
+        omitted it would raise at the first video rather than degrading.
+        """
+        return True
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -89,226 +120,277 @@ class DisplayBackend(ABC):
 
     @abstractmethod
     def swap_buffers(self) -> None:
-        """Present the rendered frame to the screen."""
-        ...
+        """Present the composed frame to the screen."""
 
-    # -- 2D Rendering Primitives ---------------------------------------------
+    # -- Frame scheduling ----------------------------------------------------
 
     @abstractmethod
-    def draw_rect(
-        self,
-        x: float,
-        y: float,
-        w: float,
-        h: float,
-        color: tuple[float, float, float, float] = (0, 0, 0, 1),
-        z: float = 0.0,
-    ) -> None:
-        """Draw a filled rectangle at pixel coordinates.
+    def schedule(self, tick: Callable[[], bool]) -> None:
+        """Drive *tick* at the configured frame rate until it returns ``False``.
 
-        Args:
-            x, y: Top-left corner in pixels.
-            w, h: Width and height in pixels.
-            color: RGBA tuple with values 0.0–1.0.
-            z: Z-order (higher = in front).
+        This is the backend's ONE piece of control flow, and it exists because the
+        two backends own their loops in fundamentally different ways:
+
+        * Qt owns the main thread.  A ``QApplication`` must run its own event loop
+          or nothing is delivered — input, timers, window events, painting — so
+          the backend drives the tick from a ``QTimer`` inside ``exec()``.
+        * tkinter is cooperative and allows a plain loop that calls ``update()``.
+
+        Abstract rather than defaulted, so a new backend has to state which model
+        it uses instead of silently inheriting the wrong one.  A backend that
+        pumps its own loop *and* is handed a scheduler would either never return
+        or run the slideshow twice.
+
+        ``tick`` returns ``False`` to stop (window closed, or a shutdown signal).
+        Implementations must return only once the loop has finished, so the caller
+        can shut down afterwards.
         """
-        ...
+
+    def quit(self) -> None:  # noqa: B027
+        """Ask the running loop to stop.
+
+        Idempotent, and safe to call from another thread or a signal handler — it
+        is how a shutdown request reaches a loop the backend owns.
+        """
+
+    # -- Frame presentation --------------------------------------------------
 
     @abstractmethod
-    def draw_image(
+    def present(
         self,
-        texture: Any,
-        x: float,
-        y: float,
-        w: float,
-        h: float,
+        plan: RenderPlan,
+        image: Any = None,
         alpha: float = 1.0,
-        rotation: float = 0.0,
-        z: float = 0.0,
-        uv_offset: tuple[float, float] = (0.0, 0.0),
-        uv_scale: tuple[float, float] = (1.0, 1.0),
+        backdrop_source: Any = None,
     ) -> None:
-        """Draw a textured rectangle (sprite).
+        """Paint one complete frame for *plan*.
+
+        The single rendering entry point.  Implementations paint the plan's
+        layers in the order the framing specification mandates:
+
+            ambient fill -> artwork -> whitespace -> mat -> moulding
+
+        Ambient fill is the only full-canvas layer; the rest are annuli that are
+        disjoint from the artwork, which is why a single pass in that order
+        needs no depth buffer.
 
         Args:
-            texture: A backend-specific texture handle.
-            x, y: Position in pixels.
-            w, h: Size in pixels.
-            alpha: Opacity (0.0 = transparent, 1.0 = opaque).
-            rotation: Rotation in degrees around center.
-            z: Z-order.
-            uv_offset: Texture coordinate offset (for Ken Burns pan).
-            uv_scale: Texture coordinate scale (for Ken Burns zoom).
+            plan: Pixel geometry from
+                :meth:`metixel.framing.layout.LayoutEngine.compute`.
+            image: An opaque handle from :meth:`load_image` for the artwork, or
+                ``None`` to paint the frame without artwork (a pure mat preview,
+                or a video whose frames arrive out of band).
+            alpha: Opacity of the *artwork*.  The frame rings always paint
+                opaque, so a fading photo does not reveal the matte behind it.
+
+                This is a single-layer entry point: what is already on screen is
+                replaced.  A blend therefore cannot be built by calling it twice
+                with complementary alphas — the second call super-imposes the
+                incoming artwork on the *background*, not on the outgoing frame,
+                so the panel dims through the middle and the visible change
+                collapses towards the middle of the duration.  Use
+                :meth:`present_transition` for that.
+            backdrop_source: The media this layer's ambient backdrop was built
+                from.  Optional, and only needed where the artwork handle cannot
+                identify the backdrop — a video that has ENDED is drawn as its
+                last frame, a different handle from the poster the backdrop was
+                adopted for.  Without it such a layer's backdrop is not found and
+                the ambient band falls back to black.
         """
         ...
 
-    def draw_crossfade(  # noqa: B027
+    # -- Overlay -------------------------------------------------------------
+
+    def present_overlay(self, elements: list[OverlayElement]) -> None:  # noqa: B027
+        """Composite overlay elements on top of the current frame.
+
+        Elements are :class:`~metixel.display.overlay_element.OverlayElement`
+        instances, already flattened and sorted by the overlay manager (largest
+        ``z`` first).
+
+        Kept separate from :meth:`present` on purpose: the slideshow frame is
+        composed once per item, whereas overlay layers animate every frame
+        (boot spinner, message slide-in).  Folding them together would force a
+        full re-composite of the matte on every animation tick.
+
+        An EMPTY list is meaningful, not a no-op: it tells the backend that the
+        overlay is now clear, and a backend that keeps the previous frame must
+        act on it or a dismissed overlay stays painted.
+
+        A backend may be called only when something actually changed — the
+        overlay manager skips the pass when no visible layer reports a repaint,
+        and a canvas should skip its own repaint when the stored layers are
+        unchanged.  Repainting an identical frame is pure cost: measured on a
+        Pi 5, an unconditional 31 fps composite of an unchanging 1920x1200 frame
+        was 83% of a core, against 0.9% for an idle Qt event loop.
+
+        Default is a no-op, so a backend may present frames without overlay
+        support rather than being forced to implement it.
+        """
+
+    def present_transition(
         self,
-        tex_current: Any,
-        tex_next: Any,
-        blend: float,
-        current_rect: tuple[float, float, float, float] | None = None,
-        next_rect: tuple[float, float, float, float] | None = None,
-        slide_offset_current: float = 0.0,
-        slide_offset_next: float = 0.0,
-    ) -> None:
-        """Draw a crossfade or slide between two textures in a single GPU pass.
+        plan: RenderPlan,
+        image: Any,
+        alpha: float,
+        prev_plan: RenderPlan | None,
+        prev_image: Any,
+        prev_alpha: float,
+        backdrop_source: Any = None,
+        prev_backdrop_source: Any = None,
+    ) -> None:  # noqa: B027
+        """Composite an outgoing and an incoming frame in ONE repaint.
 
-        Uses a custom blend shader that mixes two textures per-pixel.
-        Default implementation is a no-op — backends that support GPU
-        blending (Pi3dBackend) override this.
+        A crossfade cannot be expressed as two :meth:`present` calls: a backend
+        that defers painting (Qt coalesces ``update()`` requests into one
+        ``paintEvent``) keeps only the last layer stored, so the incoming image
+        fades up from the background — which reads as "fade to black, then the
+        next slide appears" rather than a blend.
+
+        The default implementation degrades to a hard cut at the midpoint, which
+        is honest for a backend with no compositing (the Tk dev backend cannot
+        blend at all).  Backends that *can* blend override this.
 
         Args:
-            tex_current: Texture for the outgoing image.
-            tex_next: Texture for the incoming image.
-            blend: 0.0 = fully current, 1.0 = fully next.
-            current_rect: (x, y, w, h) of the current image on screen.
-            next_rect: (x, y, w, h) of the next image on screen.
-            slide_offset_current: Horizontal pixel shift for current texture.
-            slide_offset_next: Horizontal pixel shift for next texture.
+            plan: Layout of the incoming item.
+            image: Incoming artwork handle.
+            alpha: Incoming artwork opacity (0→1 across the transition).
+            prev_plan: Layout of the outgoing item, or ``None`` to skip it.
+            prev_image: Outgoing artwork handle.
+            prev_alpha: Outgoing artwork opacity (1→0 across the transition).
         """
+        if alpha >= 0.5 or prev_plan is None:
+            self.present(plan, image, alpha)
+        else:
+            self.present(prev_plan, prev_image, 1.0)
 
-    # -- Texture Management --------------------------------------------------
+    # -- Artwork -------------------------------------------------------------
 
     @abstractmethod
-    def load_texture(self, path: Path | np.ndarray, **kwargs: Any) -> Any:
-        """Load an image into a GPU texture.
+    def load_image(self, path: Path | np.ndarray | bytes) -> Any:
+        """Load an image into a backend-native handle.
+
+        For a video item, pass the pre-generated first-frame JPEG: the backend
+        shows it as a poster until :meth:`play_video` takes over.  Frames are
+        produced by the backend media pipeline during Phase 2 (OPTIMISE); the
+        presentation layer never runs ffmpeg or ffprobe.
 
         Args:
-            path: Path to an image file, or a numpy array (H, W, 3/4).
-            **kwargs: Backend-specific options (e.g., mipmap, format).
+            path: A filesystem path, an ``(H, W, 3/4)`` numpy array, or encoded
+                image ``bytes``.  The bytes form exists because the preload
+                worker decodes off-thread and hands over a payload rather than
+                letting Qt objects be constructed on a worker thread.
 
         Returns:
-            An opaque texture handle.
+            An opaque handle, or ``None`` if the image could not be loaded.
         """
         ...
 
     @abstractmethod
-    def unload_texture(self, texture: Any) -> None:
-        """Release a GPU texture from memory.
-
-        Args:
-            texture: A texture handle previously returned by :meth:`load_texture`.
-        """
+    def unload_image(self, handle: Any) -> None:
+        """Release an image handle returned by :meth:`load_image`."""
         ...
 
-    def update_texture(self, texture: Any, data: np.ndarray) -> Any:
-        """Update an existing texture's pixel data in-place.
+    # -- Video ---------------------------------------------------------------
 
-        Used by the video player to push new frames to the GPU without
-        creating/destroying texture objects every frame. The *data* array
-        must have the same dimensions and format as the original texture.
+    def play_video(self, path: Path, plan: RenderPlan) -> bool:  # noqa: B027
+        """Begin video playback, positioned per *plan*.
 
-        Default implementation falls back to unload + reload — backends
-        that support in-place updates (pi3d, PyOpenGL) should override.
+        Returns ``True`` if playback started.  Backends with no video pipeline
+        return ``False`` (and report ``supports_video = False``) so the caller
+        can advance instead of waiting on a stream that will never arrive.
 
-        Args:
-            texture: A texture handle previously returned by :meth:`load_texture`.
-            data: New pixel data as a numpy array (H, W, 3) or (H, W, 4).
+        The video occupies *plan*'s artwork rectangle and is rendered UNDER the
+        frame's ring layers: :meth:`present` paints everything except that
+        rectangle, so the video shows through it with the same ambient fill,
+        rings and overlay a photo of it would have.  That is how the virtual mat
+        composites over a playing video without a second framebuffer.
 
-        Returns:
-            The handle to use from now on.  In-place backends return
-            *texture* unchanged; the fallback returns the freshly loaded
-            handle, because the old one has been released.  Callers must
-            always keep the returned handle.
+        :meth:`present` should keep being called while the video plays — it is
+        what keeps the plan (and therefore the geometry and the ambient) current
+        across a resize or a config change.
         """
-        # Default: unload old, load new (works everywhere but is slow)
-        self.unload_texture(texture)
-        return self.load_texture(data)
+        return False
 
-    def gpu_memory_info(self) -> dict[str, Any] | None:
-        """Return GPU memory usage statistics, or ``None`` if unavailable.
+    def stop_video(self) -> None:  # noqa: B027
+        """Stop playback and release the video pipeline.
 
-        Subclasses on Raspberry Pi hardware should override to read from
-        ``vcgencmd`` and ``/sys/kernel/debug/dri/0/bo_stats``.
-
-        Returns:
-            Dict with keys like ``gpu_total_mb``, ``reloc_used_mb``,
-            ``v3d_bo_count``, ``v3d_bo_kb``, or ``None`` on non-Pi
-            platforms.
+        Must be idempotent: it is called on item advance, on queue reset, and
+        during shutdown.
         """
-        return None
 
-    def flush_gpu(self) -> None:  # noqa: B027
-        """Block until all pending GPU operations complete.
+    def pause_video(self, paused: bool = True) -> None:  # noqa: B027
+        """Pause or resume playback without tearing down the pipeline.
 
-        Subclasses should call ``glFinish()`` or equivalent to ensure
-        texture uploads, shader dispatches, and buffer writes are
-        fully committed before the CPU proceeds.  Critical on
-        memory-constrained hardware where ``free_after_load`` may
-        release source buffers before DMA transfers finish.
-
-        Default is a no-op — safe for dev backends without a GPU.
+        Used by the slideshow pause command and, in 2.1.0, by an open on-screen
+        menu.  Preferred over SIGSTOP so the decoder keeps its buffers warm and
+        resume is immediate.
         """
-        pass
 
-    def clear_depth(self) -> None:  # noqa: B027
-        """Clear the depth buffer so overlay draws appear on top.
+    def video_playing(self) -> bool:  # noqa: B027
+        """Whether video is currently playing (not paused and not ended)."""
+        return False
 
-        The slideshow's rendering may write depth values that would occlude
-        overlay content (widgets, pop-up messages).  Call this after the
-        slideshow renders and before drawing overlay elements.
+    def video_finished(self) -> bool:  # noqa: B027
+        """Whether the current video has reached its end.
 
-        Default is a no-op — safe for software renderers without a depth
-        buffer (tkinter); GPU backends should clear their depth buffer.
+        The presentation state machine polls this instead of guessing from
+        timers, so a video that ends early advances immediately.
         """
-        pass
+        return False
 
-    @property
-    def supports_video(self) -> bool:
-        """Whether this backend can render video playback.
+    def video_ready(self) -> bool:  # noqa: B027
+        """Whether there is a decoded frame on screen yet.
 
-        Video playback requires GL texture support (pi3d).  Software
-        renderers (tkinter) cannot play videos — the frontend skips them.
+        The video occupies a *hole* in the frame that a backend leaves unpainted,
+        so revealing that hole before the first frame exists shows whatever the
+        surface holds — undefined content, in practice black.  A backend should
+        report ``False`` until it genuinely has a picture.
+
+        Distinct from :meth:`video_playing`: playback can have started while the
+        first frame is still being decoded.
         """
-        return True
-
-    # -- Text Rendering ------------------------------------------------------
-
-    @abstractmethod
-    def draw_text(
-        self,
-        text: str,
-        x: float,
-        y: float,
-        font_size: int = 24,
-        color: tuple[float, float, float, float] = (1, 1, 1, 1),
-        z: float = 10.0,
-    ) -> None:
-        """Render a text string at the given position.
-
-        Args:
-            text: The string to render.
-            x, y: Position in pixels.
-            font_size: Font size in points.
-            color: RGBA color.
-            z: Z-order.
-        """
-        ...
+        return False
 
     # -- Display Control -----------------------------------------------------
 
     @abstractmethod
     def set_background(self, color: tuple[float, float, float, float]) -> None:
-        """Set the clear color for the display background.
+        """Set the clear colour for the display background.
 
         Args:
-            color: RGBA tuple (0.0–1.0).
+            color: RGBA tuple with values 0.0–1.0.
         """
         ...
 
     @abstractmethod
     def clear(self) -> None:
-        """Clear the display to the background color."""
-        ...
-
-    # -- Power Management (Phase 1: vcgencmd; Phase 2: DPMS) -----------------
+        """Clear the display to the background colour."""
 
     @abstractmethod
     def display_power(self, on: bool) -> None:
         """Turn the physical display on or off.
 
-        Phase 1 (dispmanx): Uses ``vcgencmd display_power``.
-        Phase 2 (DRM/KMS): Uses DPMS or compositor protocol.
+        Implementations use the tiered fallback chain in
+        :mod:`metixel.display.hardware` (wlr-randr → DRM DPMS sysfs →
+        ``vcgencmd``).  Must never raise: failing to sleep the panel must not
+        take down the frame.
         """
-        ...
+
+    # -- Diagnostics ---------------------------------------------------------
+
+    def connected_output(self) -> str | None:
+        """Return the connected output name (e.g. ``"HDMI-A-2"``), or ``None``.
+
+        Reported to the web UI so a user can see which port their monitor is
+        on.
+        """
+        return None
+
+    def list_modes(self) -> list[dict[str, Any]]:
+        """Return the display modes the monitor and the host both support.
+
+        Used to populate the resolution dropdown.  Returns an empty list when
+        the information is unavailable.
+        """
+        return []

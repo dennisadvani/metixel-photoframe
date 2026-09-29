@@ -82,11 +82,21 @@ warn_unused_configs = true
 disallow_untyped_defs = false
 
 # Third-party libraries without type stubs (Pi-only or untyped).
+#
+# PySide6 belongs here for the same reason pi3d does: it is apt-installed on
+# the frame and absent everywhere else — requirements-ci.txt contains none of
+# it.  The Qt imports in display/qt_qml_backend.py are deliberately lazy (inside
+# functions), but mypy still analyses the module body, and an `if TYPE_CHECKING`
+# import would be resolved too.  Without this entry the CI type check fails on a
+# package the runner does not have.
+#
+# Only the wildcard is listed, with no bare ``PySide6`` entry beside it: every
+# Qt import in the tree is a submodule import (``from PySide6.QtGui import …``),
+# and ``warn_unused_configs`` flags a bare pattern that never matches anything.
 [[tool.mypy.overrides]]
 module = [
-    "pi3d",
-    "pi3d.*",
     "evdev",
+    "PySide6.*",
 ]
 ignore_missing_imports = true
 

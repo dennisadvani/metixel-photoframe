@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 from metixel.frontend.overlay.layer import OverlayLayer
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,12 @@ SEVERITY_COLORS = {
     "success": (0.20, 0.75, 0.35),
 }
 SEVERITY_ICONS = {"info": "i", "warning": "!", "error": "x", "success": "v"}
+
+
+def _hex(rgb: tuple[float, float, float]) -> str:
+    """Convert a 0..1 RGB triple to the ``#rrggbb`` the element contract uses."""
+    r, g, b = (int(max(0.0, min(1.0, c)) * 255) for c in rgb[:3])
+    return f"#{r:02x}{g:02x}{b:02x}"
 
 
 def _wrap_text(text: str, chars_per_line: int) -> list[str]:
@@ -123,6 +130,28 @@ class MessageLayer(OverlayLayer):
         self._next_id = 0
         self._last_cleanup = 0.0
         self._video_playing = False
+        # Surface width, captured by ensure_ready().  render() runs every frame
+        # with no backend argument, so anything it needs from the backend has to
+        # be remembered from the one call that receives one.
+        self._screen_w: int = 0
+        # Monotonic time of the current tick, stored by update().  render() reads
+        # this rather than the clock, so its output is a pure function of state.
+        self._now: float = 0.0
+        # Whether this tick's output differs from what was last painted.
+        # Starts True so the first frame always paints.
+        self._dirty: bool = True
+
+    @property
+    def needs_repaint(self) -> bool:
+        """True while a message is animating, or has just changed state.
+
+        A message that is merely *visible* needs no repaint: its position and
+        alpha are fixed until the dismiss timer fires, and that transition marks
+        the layer dirty from :meth:`_tick`.  So a five-second message costs one
+        composite per animated frame and nothing at all while it is simply
+        sitting there.
+        """
+        return self._dirty
 
     # -- Public API (thread-safe) -------------------------------------------
 
@@ -171,12 +200,14 @@ class MessageLayer(OverlayLayer):
         m.state = "sliding_out"
         m._anim_start = time.monotonic()
         m._from_x = m._x
+        self._dirty = True
 
     # -- OverlayLayer interface ---------------------------------------------
 
     def update(self, shared_state: dict[str, Any] | None = None) -> None:
         self._video_playing = (shared_state or {}).get("video_playing", False)
         now = time.monotonic()
+        self._now = now
         with self._lock:
             for m in self._msgs:
                 self._tick(m, now)
@@ -193,6 +224,7 @@ class MessageLayer(OverlayLayer):
             m._from_x = 2000  # off-screen right (will be adjusted in draw)
             m._to_x = 0
             m._alpha = 0.0
+            self._dirty = True
         elif m.state == "sliding_in":
             t = (now - m._anim_start) * 1000.0 / SLIDE_IN_MS
             if t >= 1.0:
@@ -202,8 +234,9 @@ class MessageLayer(OverlayLayer):
                 m._paused_since = 0.0
                 m._paused_total = 0.0
             else:
-                # ease_out_cubic — fast start, gentle settle at full opacity
-                m._alpha = min(1.0, 1.0 - (1.0 - t) ** 3)
+                m._alpha = min(1.0, t / 0.5)
+            # Alpha and/or the slide position advance every tick.
+            self._dirty = True
         elif m.state == "visible":
             if self._video_playing:
                 # Pause the auto-dismiss timer while a video covers the
@@ -225,36 +258,160 @@ class MessageLayer(OverlayLayer):
             if t >= 1.0:
                 m.state = "done"
                 m._alpha = 0.0
+            # The message slides until it is done, so every tick repaints.
+            self._dirty = True
 
     def draw(self, backend: DisplayBackend) -> None:
-        self.reset_z()
-        # Lazy-init textures (created once, reused every frame)
-        if not hasattr(self, "_tex_bg"):
-            import numpy as np
+        """Deprecated — the overlay manager composites via :meth:`render`.
 
-            bg_arr = np.ones((1, 1, 3), dtype=np.uint8)
-            bg_arr[0, 0] = tuple(int(c * 255) for c in MSG_BG)
-            self._tex_bg = backend.load_texture(bg_arr)
-            accent_arr = np.ones((1, 1, 3), dtype=np.uint8)
-            accent_arr[0, 0] = tuple(int(c * 255) for c in ACCENT_COLOR)
-            self._tex_accent = backend.load_texture(accent_arr)
-        bw = backend.width
-        mw = MSG_WIDTH
-        margin = MSG_MARGIN
-        target_x = bw - mw - margin
+        Kept to satisfy the layer interface; message geometry and animation
+        live on in :meth:`render`, which returns a description rather than
+        issuing draw calls.
+        """
+
+    def ensure_ready(self, backend: DisplayBackend) -> None:
+        """Capture the display width needed to lay messages out.
+
+        ``render()`` takes no arguments and runs every frame, so the one piece
+        of backend state it needs — the surface width — is recorded here.
+        """
+        self._screen_w = backend.width
+
+    def render(self) -> list[OverlayElement]:
+        """Return this frame's message elements.
+
+        Ported from the old ``draw(backend)``: the slide animations, the
+        height-accumulated Y offsets and the text wrapping are unchanged.  Only
+        the mechanism differs — rect and text elements are returned instead of
+        issued as draw calls, because the backend no longer exposes primitives.
+
+        Background and accent bar are now ``rect`` elements rather than 1x1
+        textures: those existed solely to work around a pi3d colour-space bug in
+        ``draw_rect``, which the retained-mode canvas does not have.
+
+        Everything drawn here comes from stored state — :attr:`_now`, set by
+        :meth:`update`, and the messages' own fields.  It must stay that way:
+        this used to read ``time.monotonic()`` directly, which made the painted
+        position depend on a clock that no change signal can observe.  That
+        worked only by accident, because every animation phase also happened to
+        mutate ``_alpha`` or ``state``.  ``test_overlay_repaint.py`` pins it.
+        """
+        if self._screen_w <= 0:
+            return []
+
+        self.reset_z()
+        elements: list[OverlayElement] = []
+
+        bw = self._screen_w
+        target_x = bw - MSG_WIDTH - MSG_MARGIN
 
         with self._lock:
             # Accumulate Y by summing actual heights of preceding visible
-            # messages — avoids gaps/overlaps when messages have different
-            # body lengths and therefore different computed heights.
-            y_offset = margin
+            # messages — avoids gaps/overlaps when messages have different body
+            # lengths and therefore different computed heights.
+            y_offset = MSG_MARGIN
             for m in self._msgs:
                 if not m.active:
                     continue
                 mh = self._msg_height(m)
                 m._y = y_offset
                 y_offset += mh + MSG_GAP
-                self._draw_one(backend, m, bw, target_x)
+                elements.extend(self._render_one(m, bw, target_x))
+
+        # This layer's output has been captured for this frame, so the flag is
+        # retired here rather than in update(): the manager only calls render()
+        # once it has decided to repaint, which makes this the honest moment.
+        self._dirty = False
+        return elements
+
+    def _render_one(self, m: _Message, bw: int, target_x: int) -> list[OverlayElement]:
+        """Build the elements for one message, advancing its slide animation."""
+        # Compute the x position (animated).
+        if m.state == "sliding_in":
+            t = (self._now - m._anim_start) * 1000.0 / SLIDE_IN_MS
+            et = 1.0 - (1.0 - min(t, 1.0)) ** 3
+            m._x = bw + MSG_MARGIN - (bw + MSG_MARGIN - target_x) * et
+        elif m.state == "sliding_out":
+            t = (self._now - m._anim_start) * 1000.0 / SLIDE_OUT_MS
+            et = min(t, 1.0) ** 3
+            m._x = m._from_x + (bw + MSG_MARGIN - m._from_x) * et
+        else:
+            m._x = target_x
+
+        mh = self._msg_height(m)
+        x, y, alpha = m._x, m._y, m._alpha
+        if alpha <= 0.01:
+            return []
+
+        elements: list[OverlayElement] = []
+
+        # 1. Background panel.
+        elements.append(
+            OverlayElement.rect_element(
+                (x, y, MSG_WIDTH, mh),
+                _hex(MSG_BG),
+                alpha=MSG_BG_ALPHA * alpha,
+                z=self.next_z(),
+            )
+        )
+
+        # 2. Accent bar down the left edge.
+        elements.append(
+            OverlayElement.rect_element(
+                (x, y, MSG_ACCENT, mh),
+                _hex(ACCENT_COLOR),
+                alpha=1.0 * alpha,
+                z=self.next_z(),
+            )
+        )
+
+        # 3. Icon.
+        icon_x = int(x + MSG_ACCENT + MSG_PADDING)
+        elements.append(
+            OverlayElement.text_element(
+                m.icon,
+                (icon_x, int(y + 8)),
+                size=MSG_ICON_SIZE,
+                colour="#ffffff",
+                alpha=MSG_TEXT_ALPHA * alpha,
+                z=self.next_z(),
+            )
+        )
+
+        text_x = int(icon_x + MSG_ICON_SIZE + MSG_PADDING)
+
+        # 4. Title.
+        if m.title:
+            elements.append(
+                OverlayElement.text_element(
+                    m.title,
+                    (text_x, int(y + 6)),
+                    size=MSG_TITLE_SIZE,
+                    colour="#ffffff",
+                    alpha=MSG_TEXT_ALPHA * alpha,
+                    z=self.next_z(),
+                )
+            )
+
+        # 5. Body, wrapped to the available width.
+        if m.body:
+            body_start_y = int(y + MSG_TITLE_SIZE + 10) if m.title else int(y + 6)
+            char_w = MSG_BODY_SIZE * 0.55
+            avail_w = MSG_WIDTH - MSG_ACCENT - MSG_PADDING - MSG_ICON_SIZE - MSG_PADDING - 10
+            chars_per = max(20, int(avail_w / char_w))
+            for li, line in enumerate(_wrap_text(m.body, chars_per)[:5]):
+                elements.append(
+                    OverlayElement.text_element(
+                        line,
+                        (text_x, body_start_y + li * (MSG_BODY_SIZE + 4)),
+                        size=MSG_BODY_SIZE,
+                        colour="#c7c7d1",
+                        alpha=MSG_TEXT_ALPHA * 0.9 * alpha,
+                        z=self.next_z(),
+                    )
+                )
+
+        return elements
 
     @staticmethod
     def _msg_height(m: _Message) -> int:
@@ -274,75 +431,3 @@ class MessageLayer(OverlayLayer):
             h += body_lines * (MSG_BODY_SIZE + 4)
         # Ensure minimum height
         return max(h, 60)
-
-    def _draw_one(self, backend, m, bw, target_x):
-        # Compute message x position (animated)
-        if m.state == "sliding_in":
-            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_IN_MS
-            et = 1.0 - (1.0 - min(t, 1.0)) ** 3
-            m._x = bw + MSG_MARGIN - (bw + MSG_MARGIN - target_x) * et
-        elif m.state == "sliding_out":
-            t = (time.monotonic() - m._anim_start) * 1000.0 / SLIDE_OUT_MS
-            et = min(t, 1.0) ** 3
-            m._x = m._from_x + (bw + MSG_MARGIN - m._from_x) * et
-        else:
-            m._x = target_x
-
-        # Y position was computed by draw() via accumulated heights above
-        mh = self._msg_height(m)
-
-        x, y, alpha = m._x, m._y, m._alpha
-        if alpha <= 0.01:
-            return
-
-        # 1. Background — use draw_image (same as slideshow, correct colours)
-        backend.draw_image(
-            self._tex_bg, x, y, MSG_WIDTH, mh, alpha=MSG_BG_ALPHA * alpha, z=self.next_z()
-        )
-
-        # 2. Accent bar — use draw_image (bypasses draw_rect colour bug)
-        backend.draw_image(
-            self._tex_accent, x, y, MSG_ACCENT, mh, alpha=1.0 * alpha, z=self.next_z()
-        )
-
-        # 3. Icon — vertically centered in the box
-        icon_x = int(x + MSG_ACCENT + MSG_PADDING)
-        icon_y = int(y + 8)
-        backend.draw_text(
-            m.icon,
-            icon_x,
-            icon_y,
-            font_size=MSG_ICON_SIZE,
-            color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
-            z=self.next_z(),
-        )
-
-        # 4. Title — positioned higher, next to icon
-        text_x = int(icon_x + MSG_ICON_SIZE + MSG_PADDING)
-        if m.title:
-            backend.draw_text(
-                m.title,
-                text_x,
-                int(y + 6),
-                font_size=MSG_TITLE_SIZE,
-                color=(1, 1, 1, MSG_TEXT_ALPHA * alpha),
-                z=self.next_z(),
-            )
-
-        # 5. Body — wrapping support
-        if m.body:
-            # Estimate chars per line based on available pixel width
-            body_start_y = int(y + MSG_TITLE_SIZE + 10) if m.title else int(y + 6)
-            char_w = MSG_BODY_SIZE * 0.55
-            avail_w = MSG_WIDTH - MSG_ACCENT - MSG_PADDING - MSG_ICON_SIZE - MSG_PADDING - 10
-            chars_per = max(20, int(avail_w / char_w))
-            lines = _wrap_text(m.body, chars_per)
-            for li, line in enumerate(lines[:5]):  # max 5 lines
-                backend.draw_text(
-                    line,
-                    text_x,
-                    body_start_y + li * (MSG_BODY_SIZE + 4),
-                    font_size=MSG_BODY_SIZE,
-                    color=(0.78, 0.78, 0.82, MSG_TEXT_ALPHA * 0.9 * alpha),
-                    z=self.next_z(),
-                )

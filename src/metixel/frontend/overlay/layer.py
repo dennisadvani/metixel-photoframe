@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 
 
 class OverlayLayer(ABC):
@@ -63,6 +64,19 @@ class OverlayLayer(ABC):
     @visible.setter
     def visible(self, value: bool) -> None:
         self._visible = value
+
+    @property
+    def needs_repaint(self) -> bool:
+        """Whether this layer's output would differ from what was last painted.
+
+        Defaults to ``True`` — the conservative answer.  The overlay manager
+        skips a frame entirely when no visible layer asks for one, so a layer
+        that animates must be able to say so; one that cannot, or that has not
+        been migrated yet, keeps repainting rather than freezing on screen.
+        Opting IN to idling is the only safe default here: a missed repaint is a
+        frozen panel, which is far worse than a redundant composite.
+        """
+        return True
 
     # -- Z-value helpers ----------------------------------------------------
 
@@ -117,7 +131,29 @@ class OverlayLayer(ABC):
     def draw(self, backend: DisplayBackend) -> None:
         """Called every frame after :meth:`update`.  Render layer content.
 
-        Subclasses must call :meth:`reset_z` at the start of each
-        frame's draw and use :meth:`next_z` for each draw call.
+        Superseded by :meth:`render`.  It is retained on the interface because
+        the abstract method is what forces every layer to state its intent, but
+        a layer can no longer issue draw calls: the backend exposes
+        ``present(plan)`` rather than ``draw_image``/``draw_rect``, so a
+        ``draw()`` that called those would fail.
         """
         ...
+
+    def render(self) -> list[OverlayElement]:
+        """Return this layer's elements for the current frame.
+
+        Elements are :class:`~metixel.display.overlay_element.OverlayElement`
+        instances — a typed contract, so a mistyped colour or a missing image
+        handle is a static error rather than an element that silently fails to
+        draw on a device.
+
+        Elements are composited in ascending ``z``: the largest paints first, the
+        smallest last (closest to the viewer).  That matches the convention the
+        pi3d backend used with GL_LESS depth testing, so existing z-offsets keep
+        their meaning unchanged.
+
+        The default returns nothing, so a layer that has not been ported yet
+        simply draws nothing instead of crashing the frame.  Deliberate: a
+        missing overlay must never take down the slideshow.
+        """
+        return []

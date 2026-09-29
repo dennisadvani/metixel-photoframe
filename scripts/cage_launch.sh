@@ -8,16 +8,20 @@
 # cage starts the Wayland compositor with every output the DRM layer
 # reports as "connected" enabled.  A Raspberry Pi 5 has two HDMI ports,
 # and an empty port still reports "connected" with a low-resolution
-# fallback mode and no EDID.  If both outputs are enabled, cage's XWayland
-# root window spans their bounding box (e.g. 1920 + 1024 = 2944px wide),
-# so pi3d renders a 2944x1200 canvas that the compositor scales back down
+# fallback mode and no EDID.  If both outputs are enabled, the compositor's
+# output surface spans their bounding box (e.g. 1920 + 1024 = 2944px wide),
+# so the frontend paints a 2944x1200 canvas that cage then scales back down
 # to the 1920x1200 monitor — distorting the slideshow aspect ratio.
 #
-# This launcher disables outputs with no real monitor (no EDID) BEFORE
-# the frontend connects to XWayland, so the XWayland root is created at
-# the real monitor's native resolution.  It then execs the frontend.
+# This is a COMPOSITOR-side concern, not an X11 one: it would be required
+# whatever the app used to draw, and it is unrelated to XWayland.  Do not
+# remove this when tidying up X11.
 #
-# The backend's Pi3dBackend also performs the same cleanup defensively
+# This launcher disables outputs with no real monitor (no EDID) BEFORE the
+# frontend starts, so the compositor's surface is created at the real
+# monitor's native resolution.  It then execs the frontend.
+#
+# The backend's DisplayBackend also performs the same cleanup defensively
 # (covers mid-session hot-plug / desktop testing).
 set -u
 

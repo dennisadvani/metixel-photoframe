@@ -234,6 +234,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
         setValue("cfg-log-level", sys.log_level || "NONE");
         toggleSdCardWarning(sys.log_level || "NONE");
         setValue("cfg-cache-dir", sys.cache_dir || "cache/");
+        setValue("cfg-screenshot-dir", sys.screenshot_dir || "media/screenshots/");
         setChecked("cfg-quiet-boot", sys.quiet_boot === true);
 
         // Updates / System Info
@@ -244,7 +245,9 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
             setStat("info-os-release", info.os_release || "--");
             setStat("info-kernel", info.kernel || "--");
             setStat("info-python", info.python_version || "--");
-            setStat("info-pi3d", info.pi3d_version || "--");
+            // The retired pi3d probe was replaced server-side by the Qt stack
+            // (see routes/system.py) — this reports what actually renders now.
+            setStat("info-qt", info.qt_version || "--");
             setStat("info-gpu-mem", info.gpu_memory || "--");
             setStat("info-drm-driver", info.drm_driver || "--");
             setStat("info-hostname", info.hostname || "--");
@@ -308,6 +311,7 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 var sysResult = await apiPut("/config/system", {
                     log_level: logLevel,
                     cache_dir: document.getElementById("cfg-cache-dir").value,
+                    screenshot_dir: document.getElementById("cfg-screenshot-dir").value,
                     quiet_boot: quietBoot,
                 });
                 var logResult = await apiPost("/logs/level", { level: logLevel });
@@ -457,6 +461,53 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                 } else {
                     restoreCache();
                     showToast("Failed to clear image cache", "error");
+                }
+            });
+
+            // Take screenshot
+            //
+            // Captured by grim through the compositor, not by grabbing a Qt
+            // item: that is what makes the PNG include the video surface and the
+            // rotation the compositor applies.
+            var screenshotBtn = document.getElementById("btn-take-screenshot");
+            screenshotBtn?.addEventListener("click", async () => {
+                var restoreShot = setButtonBusy(screenshotBtn, "Capturing…");
+                try {
+                    var shot = await apiPost("/system/screenshot");
+                    if (shot && shot.status === "ok") {
+                        showToast("Screenshot saved: " + shot.file, "success", 5000);
+                    } else {
+                        // The route's own error text (e.g. "grim is not
+                        // installed on this device") is logged rather than
+                        // returned: the shared API layer discards the body of a
+                        // non-2xx response, so it cannot reach a toast.
+                        showToast("Screenshot failed — see the Logs card below.", "error", 6000);
+                    }
+                } finally {
+                    restoreShot();
+                }
+            });
+
+            // Clear screenshots
+            //
+            // Nothing prunes screenshots automatically — retention is manual on
+            // purpose, because an unbounded background writer is the SD-card
+            // wear the System card warns about.
+            var clearShotsBtn = document.getElementById("btn-clear-screenshots");
+            clearShotsBtn?.addEventListener("click", async () => {
+                if (!(await confirmDialog("Delete every screenshot in the screenshot folder?\n\nThis cannot be undone.", { danger: true, okText: "Clear screenshots" }))) {
+                    return;
+                }
+                var restoreShots = setButtonBusy(clearShotsBtn, "Clearing…");
+                try {
+                    var cleared = await apiPost("/system/screenshot/clear");
+                    if (cleared && cleared.status === "ok") {
+                        showToast(cleared.message + " (" + cleared.freed_mb + " MB freed)", "success", 4000);
+                    } else {
+                        showToast("Failed to clear screenshots", "error");
+                    }
+                } finally {
+                    restoreShots();
                 }
             });
 

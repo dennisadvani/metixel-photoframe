@@ -1,0 +1,531 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
+"""Layout engine — framing geometry in millimetres, converted to pixels once.
+
+This is the single bridge between the pure framing engine and a renderer.  It
+takes the engine's millimetre :class:`~metixel.framing.framing_engine.
+FramingResult` and produces a :class:`RenderPlan` of **pixel** rectangles in
+the exact paint order the canvas needs.
+
+Two boundaries are load-bearing:
+
+* **No Qt here.**  The plan is plain tuples, so every geometry rule is testable
+  on a machine without PySide6 installed (which is what CI is).  The canvas
+  layer is the only place that turns a plan into ``QRect``/``QPainter`` calls.
+* **No display backend here.**  The plan depends on a screen *size*, not on a
+  rendering surface, so it can be computed before the display exists — which is
+  what lets the same code path serve the live frontend, a preview endpoint and
+  the tests.
+
+Paint order is defined by the engine's specification and is **not** the same as
+nesting order: ambient fill first (the only full-rectangle layer), then the
+artwork, then whitespace, mat and moulding as disjoint annuli.  Because the
+annuli never overlap the artwork, drawing the artwork first is safe — and it
+means the canvas can paint a single list in order without any z-buffer.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+from metixel.framing.framing_engine import (
+    FramingRequest,
+    FramingResult,
+    Rect,
+    calculate_framing,
+    check_invariants,
+)
+from metixel.framing.resolve import MediaSize, resolve, screen_for
+
+logger = logging.getLogger(__name__)
+
+#: A pixel rectangle as ``(x, y, width, height)``.
+PxRect = tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class RenderPlan:
+    """Everything a canvas needs to paint one framed item, in pixels.
+
+    Rectangles are in screen coordinates with the origin at the top-left, and
+    are already scaled for the target resolution.  A rectangle with zero width
+    or height is omitted from the lists rather than included as a no-op.
+    """
+
+    #: The full-canvas rectangle, for clearing.
+    screen: PxRect
+
+    #: Ambient fill — the only full-rectangle layer.  ``None`` when absent.
+    #: Present only when a *fixed* Mat Window meets mismatched artwork, which
+    #: for the virtual branch means a borderless style (``ring == 0``).
+    ambient: PxRect | None
+
+    #: Where the artwork is drawn on screen.
+    artwork_dst: PxRect
+
+    #: The sub-rectangle of the *source* image to sample.  For ``overflow ==
+    #: "crop"`` this is the centred crop window; otherwise it is the whole
+    #: image.  Expressed in source pixels.
+    artwork_src: PxRect
+
+    #: Whitespace band, as up to four annulus rectangles.
+    whitespace: tuple[PxRect, ...]
+
+    #: Mat ring, as up to four annulus rectangles.
+    matte: tuple[PxRect, ...]
+
+    #: Frame moulding ring, as up to four annulus rectangles.
+    moulding: tuple[PxRect, ...]
+
+    #: Declared band colours, already resolved by the templates (``#rrggbb``).
+    matte_colour: str
+    whitespace_colour: str
+    ambient_colour: str
+
+    #: Derived diagnostics — not used for painting.
+    style: str
+    branch: str
+    overflow: str
+
+    #: Pixel size of the media this plan was laid out for, as ``(width,
+    #: height)``.  :attr:`artwork_src` is expressed in THIS space, but the image
+    #: a backend is handed is not always the media: a video is presented as its
+    #: pre-generated first-frame poster, which ffmpeg has already shrunk to fit
+    #: the screen.  Use :meth:`source_window` to cross between the two — a crop
+    #: window applied in the wrong space reaches past the image, and both Qt and
+    #: PIL pad that overhang **black**.
+    #:
+    #: ``(0, 0)`` means "not stated": the window is then taken to be in image
+    #: pixels, which is what every caller assumed before this existed.
+    source_size: tuple[float, float] = (0.0, 0.0)
+
+    #: Ambient strategy (``solid``/``blur``/``bars``).  The canvas needs it
+    #: because ``blur`` paints a full-bleed blurred backdrop rather than a flat
+    #: colour, and both are decided at the same place.
+    #:
+    #: Defaults are supplied so existing unspecific constructions (tests, the
+    #: unusable-media fallback) keep working: "solid" reproduces the behaviour
+    #: before ``blur`` existed.
+    ambient_strategy: str = "solid"
+
+    #: Blur strength (larger = heavier) and dimming toward black, for
+    #: ``ambient_strategy == "blur"``.  Both are per-slide costs, so the canvas
+    #: caches the blurred backdrop and rebuilds it only when one changes.
+    ambient_blur_radius: float = 24.0
+    ambient_darken: float = 0.35
+
+    #: Kernel used to build that backdrop (``box``/``gaussian``).  It is part of
+    #: the backdrop's identity, because the pixels are baked into the cached
+    #: image: changing the kernel has to rebuild it rather than re-use the old.
+    ambient_blur_filter: str = "box"
+
+    @property
+    def image_rect(self) -> PxRect:
+        """Legacy alias for :attr:`artwork_dst`.
+
+        Kept so callers migrating from the old ``LayoutEngine`` (which returned
+        ``{"image_rect": ..., "matte_rects": [...]}``) can be ported in stages
+        without a silent behaviour change.
+        """
+        return self.artwork_dst
+
+    @property
+    def matte_rects(self) -> tuple[PxRect, ...]:
+        """Legacy alias for :attr:`matte`."""
+        return self.matte
+
+    def source_window(self, image_width: int, image_height: int) -> PxRect:
+        """Return :attr:`artwork_src` in the pixels of the image being drawn.
+
+        For an image the two spaces are the same and this returns
+        :attr:`artwork_src` unchanged.  For a video they are not: the plan is
+        laid out against the **video's** dimensions, while what gets drawn is the
+        pre-generated first-frame poster that ffmpeg shrank to fit the screen.  A
+        1080x1920 video on a 1920x1200 panel has a 676x1200 poster, so the plan's
+        centred crop window — ``(0, 623.8, 1080, 672.4)``, in video pixels — runs
+        404 px past the poster's right edge.  Neither ``QImage.copy`` nor PIL's
+        ``crop`` clips a source rectangle: both pad the overhang **black**, which
+        is what put a portrait video's poster in the top-left corner of the
+        screen with the rest of the panel black.
+
+        Scaling the window by the image-to-media ratio samples the same part of
+        the picture, and the result is clamped into the image, so a mismatch can
+        never paint black.  Degrading to the whole image is deliberate: an
+        unframed photo beats a blank one, and rule 7 is that a display never
+        shows a broken frame.
+
+        ``(0, 0)`` in :attr:`source_size` means the caller did not say, so the
+        window is returned unchanged — the behaviour every caller had before.
+        """
+        sx, sy, sw, sh = self.artwork_src
+        media_w, media_h = self.source_size
+        if media_w <= 0 or media_h <= 0 or image_width <= 0 or image_height <= 0:
+            return self.artwork_src
+
+        scale_x = image_width / media_w
+        scale_y = image_height / media_h
+        if scale_x == 1.0 and scale_y == 1.0:
+            return self.artwork_src
+
+        left = min(max(sx * scale_x, 0.0), float(image_width))
+        top = min(max(sy * scale_y, 0.0), float(image_height))
+        right = min(max((sx + sw) * scale_x, left), float(image_width))
+        bottom = min(max((sy + sh) * scale_y, top), float(image_height))
+        if right - left < 1.0 or bottom - top < 1.0:
+            return (0.0, 0.0, float(image_width), float(image_height))
+        return (left, top, right - left, bottom - top)
+
+
+def _to_px(rect: Rect, sx: float, sy: float) -> PxRect:
+    """Scale a millimetre rectangle to pixels, per axis.
+
+    Scaling each axis by its own factor is what keeps a square artwork square
+    on a panel whose pixels are not perfectly square, and it is why the engine
+    reports ``px_per_mm`` as a pair rather than a single number.
+    """
+    return (rect.x * sx, rect.y * sy, rect.width * sx, rect.height * sy)
+
+
+def _annulus(outer: PxRect, inner: PxRect) -> tuple[PxRect, ...]:
+    """Decompose the band between two nested rectangles into up to four rects.
+
+    Returns the top, bottom, left and right bands, skipping any that are empty
+    on either axis.  Drawing four disjoint rectangles is cheaper than a
+    clipping path and needs no compositing — which matters on a Pi 3's VC4.
+
+    The early-exit test is on the *insets*, not on the widths: an inner rect
+    flush with an edge (e.g. ``inner.x == outer.x``) still has valid top and
+    bottom bands, and comparing widths would discard them.  That case is not
+    hypothetical — it is what a full-bleed or near-full-width Mat Window
+    produces.
+    """
+    ox, oy, ow, oh = outer
+    ix, iy, iw, ih = inner
+
+    # Nothing to draw only when the inner rect has consumed the outer one on
+    # BOTH axes (each inset is at or past the outer edge).
+    top_h = iy - oy
+    left_w = ix - ox
+    bottom_h = (oy + oh) - (iy + ih)
+    right_w = (ox + ow) - (ix + iw)
+    if min(top_h, left_w, bottom_h, right_w) < 0:
+        # Inner rect is not nested inside the outer — nothing meaningful to
+        # draw.  Reported rather than raised: a canvas should not crash.
+        return ()
+    if max(top_h, left_w, bottom_h, right_w) <= 0:
+        return ()
+
+    side_h = ih
+    bottom_y = iy + ih
+    right_x = ix + iw
+
+    bands: list[PxRect] = []
+    if top_h > 0:
+        bands.append((ox, oy, ow, top_h))
+    if bottom_h > 0:
+        bands.append((ox, bottom_y, ow, bottom_h))
+    if left_w > 0:
+        bands.append((ox, iy, left_w, side_h))
+    if right_w > 0:
+        bands.append((right_x, iy, right_w, side_h))
+    return tuple(bands)
+
+
+def _crop_source(result: FramingResult, media: MediaSize) -> PxRect:
+    """Return the source sub-rectangle to sample for ``overflow == "crop"``.
+
+    ``crop`` means the artwork covers a *fixed* Mat Window, so the parts of the
+    image outside the window are discarded.  The engine reports the resulting
+    on-screen rectangle; the source window is derived from the aspect mismatch
+    between that rectangle and the source image, centred.
+
+    For every other case the whole image is used, so this returns the full
+    source rectangle and the canvas scales it into ``artwork_dst``.
+    """
+    full: PxRect = (0.0, 0.0, float(media.width), float(media.height))
+    if result.overflow != "crop" or not media.is_valid:
+        return full
+
+    dst_w, dst_h = result.artwork.bounds.width, result.artwork.bounds.height
+    if dst_w <= 0 or dst_h <= 0:
+        return full
+
+    dst_ratio = dst_w / dst_h
+    src_ratio = media.width / media.height
+
+    if abs(src_ratio - dst_ratio) < 1e-9:
+        return full
+
+    if src_ratio > dst_ratio:
+        # Source is wider than the window → crop the sides.
+        keep_w = media.height * dst_ratio
+        return ((media.width - keep_w) / 2.0, 0.0, keep_w, float(media.height))
+
+    # Source is taller than the window → crop top and bottom.
+    keep_h = media.width / dst_ratio
+    return (0.0, (media.height - keep_h) / 2.0, float(media.width), keep_h)
+
+
+class LayoutEngine:
+    """Compute a :class:`RenderPlan` for a media item.
+
+    One instance per screen geometry.  Construct it with the **effective**
+    (already-rotated) pixel size the frontend is rendering at, plus the
+    rotation so the correct physical preset is chosen.
+    """
+
+    def __init__(
+        self,
+        screen_w: int = 1920,
+        screen_h: int = 1200,
+        *,
+        rotation: int = 0,
+        style: str = "gallery",
+        overflow: str | None = None,
+        ambient_strategy: str | None = None,
+        ambient_colour: str | None = None,
+        ambient_blur_radius: float | None = None,
+        ambient_darken: float | None = None,
+        ambient_blur_filter: str | None = None,
+        edge_margin: float | None = None,
+        moulding_width: float | None = None,
+    ) -> None:
+        self._screen_w = int(screen_w) if screen_w > 0 else 1920
+        self._screen_h = int(screen_h) if screen_h > 0 else 1200
+        self._rotation = rotation
+        self._style = style
+        self._overflow = overflow
+        self._ambient_strategy = ambient_strategy
+        self._ambient_colour = ambient_colour
+        self._ambient_blur_radius = ambient_blur_radius
+        self._ambient_darken = ambient_darken
+        self._ambient_blur_filter = ambient_blur_filter
+        self._edge_margin = edge_margin
+        self._moulding_width = moulding_width
+
+        self._screen = screen_for(rotation, width_px=self._screen_w, height_px=self._screen_h)
+        self._sx, self._sy = self._screen.px_per_mm  # type: ignore[misc]
+        logger.info(
+            "LayoutEngine: %dx%d px, %s, style=%s, overflow=%s (%.4f px/mm)",
+            self._screen_w,
+            self._screen_h,
+            "portrait" if rotation % 360 in (90, 270) else "landscape",
+            style,
+            overflow or "style default",
+            self._sx or 0.0,
+        )
+
+    # -- Properties ----------------------------------------------------------
+
+    @property
+    def screen_w(self) -> int:
+        return self._screen_w
+
+    @property
+    def screen_h(self) -> int:
+        return self._screen_h
+
+    @property
+    def rotation(self) -> int:
+        """The rotation this layout was built for (0, 90, 180, 270)."""
+        return self._rotation
+
+    @property
+    def style(self) -> str:
+        """The framing style key in use."""
+        return self._style
+
+    @property
+    def overflow(self) -> str | None:
+        """The overflow mode override, or ``None`` to use the style's default."""
+        return self._overflow
+
+    @property
+    def ambient_colour(self) -> str | None:
+        """Configured ambient colour (``#rrggbb``), or ``None`` for the default.
+
+        Surfaced as a property because the canvas needs it for the transition
+        curtain: in ``contain`` the two items' artworks have different rects, and
+        the residue left by the outgoing one has to be wiped at the incoming
+        item's alpha or it vanishes in a single frame when the transition ends.
+        """
+        return self._ambient_colour
+
+    @property
+    def ambient_strategy(self) -> str | None:
+        """Configured ambient strategy (``solid``/``blur``/``bars``), or ``None``.
+
+        Exposed alongside :attr:`ambient_colour` so a config reload can tell
+        whether the ambient look actually changed and needs a new engine — both
+        are constructor arguments, so an engine built at startup otherwise keeps
+        the user's original choice forever.
+        """
+        return self._ambient_strategy
+
+    @property
+    def ambient_blur_radius(self) -> float | None:
+        """Blur strength for ``strategy == "blur"``; larger is heavier.
+
+        Surfaced so a config reload can detect a change and rebuild the engine,
+        for the same reason as :attr:`ambient_strategy`.
+        """
+        return self._ambient_blur_radius
+
+    @property
+    def ambient_darken(self) -> float | None:
+        """How far to dim the blurred backdrop toward black (``0.0``–``1.0``)."""
+        return self._ambient_darken
+
+    @property
+    def ambient_blur_filter(self) -> str | None:
+        """Kernel for ``strategy == "blur"``, or ``None`` for the default.
+
+        Surfaced so a config reload can detect a change and rebuild the engine,
+        for the same reason as :attr:`ambient_strategy`.
+        """
+        return self._ambient_blur_filter
+
+    # -- Public -------------------------------------------------------------
+
+    def compute(
+        self,
+        media: MediaSize,
+        *,
+        style: str | None = None,
+        overflow: str | None = None,
+        whitespace: bool | None = None,
+    ) -> RenderPlan:
+        """Return the pixel layout for *media*.
+
+        An item with unusable dimensions (a file still being probed) is drawn
+        full-bleed with no mat rather than raising — a photo frame must never
+        show a traceback, and the caller's next playlist refresh will replace
+        it once the backend has probed it.
+        """
+        full: PxRect = (0.0, 0.0, float(self._screen_w), float(self._screen_h))
+        if not media.is_valid:
+            logger.debug(
+                "LayoutEngine: unusable media size %dx%d — full-bleed fallback",
+                media.width,
+                media.height,
+            )
+            return RenderPlan(
+                screen=full,
+                ambient=None,
+                artwork_dst=full,
+                artwork_src=(0.0, 0.0, float(max(media.width, 1)), float(max(media.height, 1))),
+                source_size=(float(max(media.width, 1)), float(max(media.height, 1))),
+                whitespace=(),
+                matte=(),
+                moulding=(),
+                matte_colour="#ffffff",
+                whitespace_colour="#ffffff",
+                ambient_colour="#101014",
+                style=style or self._style,
+                branch="virtual",
+                overflow=overflow or self._overflow or "fill",
+                # An unprobed item is drawn full-bleed, so there is no residue
+                # for an ambient look to fill; "solid" is the honest report.
+            )
+
+        request: FramingRequest = resolve(
+            self._screen,
+            media,
+            style=style or self._style,
+            overflow=overflow if overflow is not None else self._overflow,
+            whitespace=whitespace,
+            ambient_strategy=self._ambient_strategy,
+            ambient_colour=self._ambient_colour,
+            ambient_blur_radius=self._ambient_blur_radius,
+            ambient_darken=self._ambient_darken,
+            ambient_blur_filter=self._ambient_blur_filter,
+            edge_margin=self._edge_margin,
+            moulding_width=self._moulding_width,
+        )
+        result = calculate_framing(request)
+
+        # The invariant checker is the specification's own contract; a
+        # violation means a geometry bug, and the honest response is to log it
+        # loudly and still render (a frame with a slightly wrong mat band beats
+        # a black screen on a wall).
+        problems = check_invariants(result)
+        if problems:
+            logger.warning(
+                "Framing invariants violated for %dx%d %s: %s",
+                media.width,
+                media.height,
+                style or self._style,
+                "; ".join(problems),
+            )
+
+        sx, sy = result.screen.px_per_mm
+        assert sx is not None and sy is not None  # screen preset carries px dims
+
+        mat_window = _to_px(result.mat.window, sx, sy)
+        frame_opening = _to_px(result.frame.opening, sx, sy)
+        frame_outer = _to_px(result.frame.outer, sx, sy)
+        artwork_dst = _to_px(result.artwork.bounds, sx, sy)
+
+        # Paint order matters: ambient fill is the only full-rectangle layer,
+        # and the annuli are disjoint from the artwork, which is why the
+        # artwork can be drawn before the rings without a depth buffer.
+        ambient: PxRect | None = None
+        if result.ambient_fill.present:
+            ambient = _to_px(result.ambient_fill.region, sx, sy)
+
+        # Whitespace sits *inside* the Mat Window, between the window edge and
+        # the artwork — not between the artwork and the ring.
+        whitespace_outer = _to_px(result.whitespace.outer, sx, sy)
+        whitespace_bands = (
+            _annulus(whitespace_outer, artwork_dst) if result.whitespace.enabled else ()
+        )
+
+        return RenderPlan(
+            screen=full,
+            ambient=ambient,
+            artwork_dst=artwork_dst,
+            artwork_src=_crop_source(result, media),
+            source_size=(float(media.width), float(media.height)),
+            whitespace=whitespace_bands,
+            matte=_annulus(frame_opening, mat_window) if mat_window != frame_opening else (),
+            moulding=_annulus(frame_outer, frame_opening),
+            matte_colour=result.mat.colour,
+            whitespace_colour=result.whitespace.colour,
+            ambient_colour=result.ambient_fill.colour,
+            style=style or self._style,
+            branch=result.branch,
+            overflow=result.overflow,
+            ambient_strategy=result.ambient_fill.strategy,
+            ambient_blur_radius=result.ambient_fill.blur_radius,
+            ambient_darken=result.ambient_fill.darken,
+            ambient_blur_filter=result.ambient_fill.blur_filter,
+        )
+
+    # -- Debug --------------------------------------------------------------
+
+    def describe(self, plan: RenderPlan) -> dict[str, Any]:
+        """Return a JSON-serialisable summary of *plan*.
+
+        Used by the framing preview endpoint and by ``visualize_framing`` so a
+        geometry question can be answered without a screenshot.
+        """
+        return {
+            "screen": plan.screen,
+            "style": plan.style,
+            "branch": plan.branch,
+            "overflow": plan.overflow,
+            "ambient": plan.ambient,
+            "artwork_dst": plan.artwork_dst,
+            "artwork_src": plan.artwork_src,
+            "source_size": plan.source_size,
+            "whitespace": plan.whitespace,
+            "matte": plan.matte,
+            "moulding": plan.moulding,
+            "colours": {
+                "matte": plan.matte_colour,
+                "whitespace": plan.whitespace_colour,
+                "ambient": plan.ambient_colour,
+            },
+        }

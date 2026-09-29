@@ -202,9 +202,15 @@ def set_log_level():
     #     Reuses the same walk as startup so the runtime control and the
     #     persisted setting cannot apply levels differently.  Ring buffers and
     #     console handlers are deliberately skipped.
-    from metixel.__main__ import _apply_file_handler_levels
+    from metixel.shared import logging_setup
 
-    _apply_file_handler_levels(new_level)
+    # 2.0.0 moved this out of __main__ — which is now a thin CLI/composition root
+    # with no such helper — and into shared/logging_setup.py. Importing it from
+    # __main__ made the CLI module a runtime dependency of a web route, which is
+    # exactly the coupling the thin root was introduced to remove. `apply_level`
+    # is the same operation in its new home; the FileHandler walk it performs is
+    # the one _count_file_handlers() below expects.
+    logging_setup.apply_level(new_level)
     updated = _count_file_handlers()
 
     # ── 2. Persist to config so it survives a restart ──────────────────

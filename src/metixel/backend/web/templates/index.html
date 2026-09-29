@@ -1232,6 +1232,24 @@
                         </div>
                     </div>
                     <p id="sd-card-warning" class="text-[0.76rem] leading-relaxed text-[#f0a030] mt-2"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">warning</span> <strong>SD Card Warning:</strong> Leaving file logging enabled (set to Debug or Info) will write continuously to disk and can significantly increase SD card wear. Use <strong>None</strong> for production unless you need to troubleshoot a specific issue.</p>
+                    <!-- Screenshot — capture what the panel is showing right now. -->
+                    <div class="mt-5 pt-3 border-t border-border/60"></div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Screenshot Dir</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Defaults to <code>media/screenshots/</code>, which sits inside the media share so screenshots can be fetched over Samba. Do not point this at a watch path, or screenshots will join the slideshow.</span>
+                        </div>
+                        <div class="setting-control">
+                            <div class="flex gap-2 items-center">
+                                <input type="text" id="cfg-screenshot-dir" class="input-premium w-56" placeholder="media/screenshots/">
+                                <button class="btn--sm btn--secondary btn-browse" data-target="cfg-screenshot-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2 justify-end mt-3">
+                        <button id="btn-clear-screenshots" class="btn--danger">Clear Screenshots</button>
+                        <button id="btn-take-screenshot" class="btn--secondary"><span class="material-symbols-outlined" style="font-size:1em;vertical-align:middle">screenshot_monitor</span> Take Screenshot</button>
+                    </div>
                     <div class="mt-5 pt-3 border-t border-border/60 flex flex-wrap gap-2 justify-end">
                         <button id="btn-restart-services" class="btn--secondary">Restart Services</button>
                         <button id="btn-clear-cache" class="btn--danger">Clear Image Cache</button>
@@ -1255,7 +1273,7 @@
                         <div class="info-row"><span class="info-label">OS</span><span class="info-value" id="info-os-release">--</span></div>
                         <div class="info-row"><span class="info-label">Kernel</span><span class="info-value" id="info-kernel">--</span></div>
                         <div class="info-row"><span class="info-label">Python</span><span class="info-value" id="info-python">--</span></div>
-                        <div class="info-row"><span class="info-label">pi3d</span><span class="info-value" id="info-pi3d">--</span></div>
+                        <div class="info-row"><span class="info-label">Qt</span><span class="info-value" id="info-qt">--</span></div>
                         <div class="info-row"><span class="info-label">GPU Memory</span><span class="info-value" id="info-gpu-mem">--</span></div>
                         <div class="info-row"><span class="info-label">DRM Driver</span><span class="info-value" id="info-drm-driver">--</span></div>
                         <div class="info-row"><span class="info-label">Hostname</span><span class="info-value" id="info-hostname">--</span></div>
@@ -1673,6 +1691,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=71"></script>
+    <script type="module" src="/static/js/main.js?v=72"></script>
 </body>
 </html>

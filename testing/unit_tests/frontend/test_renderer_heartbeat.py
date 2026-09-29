@@ -17,7 +17,7 @@ from unittest import mock
 
 import pytest
 
-from metixel.frontend.renderer import HEARTBEAT_INTERVAL, FrontendRenderer
+from metixel.frontend.renderer import FrontendRenderer
 
 
 @pytest.fixture
@@ -64,29 +64,87 @@ class TestHeartbeat:
         assert (tmp_path / "run" / "frontend_heartbeat.json").is_file()
         assert not (tmp_path / "data").exists()
 
-    def test_write_is_throttled(self, renderer: FrontendRenderer, tmp_path: Path) -> None:
-        """Second immediate call must be a no-op — this is not a per-frame write."""
+    def test_write_always_writes(self, renderer: FrontendRenderer, tmp_path: Path) -> None:
+        """``_write_heartbeat`` is unconditional; the THREAD does the throttling.
+
+        The throttle used to live here as an early return.  It moved into the
+        heartbeat thread's ``wait(HEARTBEAT_INTERVAL)`` loop instead, because the
+        rate that matters is how often the loop *runs*, and because a conditional
+        write here would make an explicit call (like the one on startup) silently
+        do nothing.
+
+        The property that must still hold is that the beat is NOT per frame:
+        nothing on the render path calls this at all.
+        """
         renderer._write_heartbeat()
         path = tmp_path / "run" / "frontend_heartbeat.json"
-        first = path.stat().st_mtime_ns
+        first = json.loads(path.read_text(encoding="utf-8"))
 
         renderer._write_heartbeat()
+        second = json.loads(path.read_text(encoding="utf-8"))
 
-        assert path.stat().st_mtime_ns == first
+        # Same process identity — the tracker keys liveness off (pid, boot_id).
+        assert first["pid"] == second["pid"]
+        assert first["boot_id"] == second["boot_id"]
 
-    def test_rewrites_once_the_interval_elapses(
+    def test_heartbeat_is_not_called_from_the_render_path(self) -> None:
+        """The tick must never write the heartbeat — that would be per-frame IO.
+
+        This is the guard that keeps the heartbeat off the render path, which is
+        what makes a threaded writer worthwhile rather than a throttled inline one.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        from metixel.frontend import renderer as renderer_mod
+
+        # getsource() returns the method still indented by its class body, which
+        # ast.parse rejects; dedent to make it a module-level statement.
+        source = textwrap.dedent(inspect.getsource(renderer_mod.FrontendRenderer._tick))
+        tree = ast.parse(source)
+        calls = {
+            node.func.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+        assert "_write_heartbeat" not in calls, (
+            "_tick must not write the heartbeat; it now runs on its own thread so "
+            "that a Qt event-loop stall cannot make a live frontend look dead"
+        )
+
+    def test_heartbeat_runs_on_its_own_thread(
+        self, renderer: FrontendRenderer, tmp_path: Path
+    ) -> None:
+        """Deliberate: a GUI-thread stall must not stop the liveness signal.
+
+        On the Qt backend the tick runs on the GUI thread, where GL setup, an mpv
+        load or a large decode can block it for seconds.  A heartbeat driven from
+        there would stop during exactly the stall it exists to report, and the OTA
+        gate would roll back a healthy release.
+        """
+        renderer._start_heartbeat()
+        try:
+            assert renderer._heartbeat_thread is not None
+            assert renderer._heartbeat_thread.daemon
+            assert renderer._heartbeat_thread.name == "frontend-heartbeat"
+            # Starting immediately publishes one beat without waiting an interval.
+            assert (tmp_path / "run" / "frontend_heartbeat.json").is_file()
+        finally:
+            renderer._stop_heartbeat()
+
+    def test_rewrites_after_a_clobber(
         self, renderer: FrontendRenderer, tmp_path: Path, monkeypatch
     ) -> None:
-        """After the interval the beat must happen — that is the whole signal."""
-        clock = [1000.0]
-        monkeypatch.setattr("metixel.frontend.renderer.time.monotonic", lambda: clock[0])
-
+        """An explicit beat must rewrite the file — that is the whole signal."""
         renderer._write_heartbeat()
         path = tmp_path / "run" / "frontend_heartbeat.json"
         path.write_text("{}", encoding="utf-8")  # clobber to prove a rewrite
 
-        clock[0] += HEARTBEAT_INTERVAL + 0.1
         renderer._write_heartbeat()
+
+        assert path.read_text(encoding="utf-8") != "{}"
+        assert json.loads(path.read_text(encoding="utf-8"))["pid"] > 0
 
         assert json.loads(path.read_text(encoding="utf-8"))["pid"] > 0
 

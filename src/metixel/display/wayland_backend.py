@@ -5,9 +5,9 @@
 Targets Raspberry Pi 4/5 and other non-Pi SBCs (e.g., Radxa Zero 3W)
 running a modern Linux kernel with Mesa drivers and Wayland compositor.
 
-This is a STUB for future Phase 2 implementation. Phase 1 code runs against
-the Pi3dBackend; this backend will be implemented when Phase 2 hardware
-becomes the primary target.
+This is a STUB for future Phase 2 implementation. Phase 1 renders through
+:class:`~metixel.display.qt_qml_backend.QmlBackend` (Qt Quick under cage); this
+backend will be implemented when Phase 2 hardware becomes the primary target.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class WaylandBackend(DisplayBackend):
     def __init__(self) -> None:
         logger.warning(
             "WaylandBackend is a STUB — Phase 2 rendering is not yet implemented. "
-            "Use DispmanxBackend (Phase 1) or TkBackend (desktop) for now."
+            "Use QmlBackend (Pi under cage) or TkBackend (desktop) for now."
         )
         self._running: bool = False
         self._w: int = 1920
@@ -74,35 +74,38 @@ class WaylandBackend(DisplayBackend):
         return self._running
 
     def swap_buffers(self):
-        pass
+        """No-op — the surface ABC presents on the compositor's own clock."""
 
-    def draw_rect(self, x, y, w, h, color=(0, 0, 0, 1), z=0.0):
-        raise NotImplementedError("WaylandBackend stub")
+    # -- Surface ABC (2.0.0) -------------------------------------------------
+    #
+    # These four are declared by the surface ABC and this stub predated it, so the
+    # class was left ABSTRACT and `detect_backend()` raised "Can't instantiate
+    # abstract class WaylandBackend" on any Linux + Wayland machine that is not a
+    # Pi — including a developer's desktop. Importing the module succeeds, so this
+    # was only visible by INSTANTIATING the backend; a module-level smoke test does
+    # not catch it.
+    #
+    # They raise rather than silently no-op: `create()` already raises, so a silent
+    # no-op here is unreachable code that would turn "Phase 2 is not implemented"
+    # into "the frame renders nothing, for no stated reason".
+    def present(self, plan, image=None, alpha=1.0, backdrop_source=None):
+        raise NotImplementedError("WaylandBackend stub — see create()")
 
-    def draw_image(
-        self,
-        texture,
-        x,
-        y,
-        w,
-        h,
-        alpha=1.0,
-        rotation=0.0,
-        z=0.0,
-        uv_offset=(0.0, 0.0),
-        uv_scale=(1.0, 1.0),
-    ):
-        raise NotImplementedError("WaylandBackend stub")
+    def load_image(self, path):
+        raise NotImplementedError("WaylandBackend stub — see create()")
 
-    def load_texture(self, path, **kwargs):
-        raise NotImplementedError("WaylandBackend stub")
+    def unload_image(self, handle):
+        raise NotImplementedError("WaylandBackend stub — see create()")
 
-    def unload_texture(self, texture):
-        raise NotImplementedError("WaylandBackend stub")
+    def schedule(self, tick):
+        raise NotImplementedError("WaylandBackend stub — see create()")
 
-    def draw_text(self, text, x, y, font_size=24, color=(1, 1, 1, 1), z=10.0):
-        raise NotImplementedError("WaylandBackend stub")
-
+    # The primitive surface this class used to stub as well (``draw_rect`` /
+    # ``draw_image`` / ``load_texture`` / ``unload_texture`` / ``draw_text``) was
+    # retired with the rest of the per-primitive API in 2.0.0.  Stubbing a method
+    # the ABC no longer declares is worse than dead code: it advertises an
+    # interface the frame must not be built against.  Everything now arrives
+    # through ``present()``, so those were removed rather than left raising.
     def set_background(self, color):
         self._bg_color = color
 

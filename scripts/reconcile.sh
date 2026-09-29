@@ -445,7 +445,12 @@ echo "== Directory layout =="
 # The root itself must be pi-owned: atomic config writes create a temp file
 # directly in this directory before os.replace() into place.
 _ensure_dir "${DATA_DIR}" "pi:pi"
-for d in logs media media/my_media media/sync/immich cache backups; do
+# media/screenshots deliberately lives INSIDE the media tree: the dashboard's
+# "Take Screenshot" button writes there (see metixel/display/screenshot.py), and
+# placing it under media/ puts it inside the existing Samba share so screenshots
+# can be collected over the network.  It is NOT a watch path, so the folder
+# watcher never picks screenshots up as media.
+for d in logs media media/my_media media/sync/immich media/screenshots cache backups; do
     _ensure_dir "${DATA_DIR}/${d}" "pi:pi"
 done
 # ddcutil's cache lives under data/cache (the backend unit points

@@ -6,7 +6,7 @@
 - **Phase 1:** Raspberry Pi 2, 3, 4, 5, and Zero 2 W (Mesa/DRM on Trixie). Pi 5 (2GB+) is the recommended platform. Pi 4 is supported but untested. Pi 2 and Pi Zero 2 W are 32‑bit manual‑install only — no pre‑built image available. Pi Zero 2 W (512MB) is untested and image‑only (no video, optimisation, or transcoding).
 - **Phase 2:** Non-Pi SBCs like the Radxa Zero 3W (Mesa/DRM/Wayland)
 
-The application is written in **Python 3** with a display backend abstraction that isolates the rendering layer (pi3d on Phase 1, PyOpenGL on Phase 2) from the presentation logic. The `Pi3dBackend` works on any Pi with pi3d installed — it runs under cage (minimal Wayland compositor) + XWayland on Trixie/Bookworm.
+The application is written in **Python 3** with a display backend abstraction that isolates the rendering layer (Qt Quick + Qt Multimedia on Phase 1, PyOpenGL on Phase 2) from the presentation logic. The `QmlBackend` works on any Pi with PySide6 (Qt Quick + Qt Multimedia) installed — it runs under cage (minimal Wayland compositor) with `QT_QPA_PLATFORM=wayland`.
 
 ### Media Pipeline (4-Phase)
 
@@ -17,7 +17,7 @@ Phase 3: QUEUE   → Slideshow playlist (ready-to-play items only)
 Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 1)
 ```
 
-**Thumbnails and video frames** are generated ONLY by the backend processors (`image.py` / `video.py`). The frontend (`engine.py`) does NOT generate thumbnails or extract video frames — it never runs ffmpeg/ffprobe.
+**Thumbnails and video frames** are generated ONLY by the backend processors (`image.py` / `video.py`). The frontend (`presenter.py`) does NOT generate thumbnails or extract video frames — it never runs ffmpeg/ffprobe.
 
 ## Core Rules (ALWAYS follow these)
 
@@ -27,7 +27,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
    ```
    This file contains the complete system design, component relationships, and implementation roadmap.
 
-2. **Respect the display backend abstraction.** Never import `pi3d` directly in presentation or widget code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only file that may import pi3d is `src/metixel/display/dispmanx_backend.py`.
+2. **Respect the display backend abstraction.** Never import `PySide6` or Qt Multimedia directly in presentation or overlay code. Always use `metixel.display.backend.DisplayBackend` — the factory in `metixel.display.__init__` auto-detects the hardware and returns the correct backend. The only file that may import PySide6 is `src/metixel/display/qt_qml_backend.py` (the scene itself is `display/qml/Frame.qml`).
 
 3. **Respect the 4-phase media pipeline.** Media flows through four distinct phases:
    - **Phase 1 (Watch):** `FolderWatcher` gathers metadata only — file type, dimensions, video codec. Does NOT process, resize, or transcode. Pushes `MediaItem` stubs to the `OptimisationQueue`.
@@ -35,7 +35,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
    - **Phase 3 (Queue):** `StateManager` maintains the slideshow playlist. `PresentationEngine` reads from it. Only ready-to-play items are in the playlist.
    - **Phase 4 (Sync):** `ImmichSyncer` downloads to `media/sync/immich/` (default). This directory is a watch path — Phase 1 picks up new files on the next poll.
 
-4. **Thumbnails and video frames belong to the backend.** `ImageProcessor` and `VideoProcessor` generate thumbnails, first frames, and last frames during optimisation. The frontend (`engine.py`) does NOT generate thumbnails, extract video frames, or run ffmpeg/ffprobe. All frame generation was removed from the presentation engine — it only loads pre-generated cache files referenced by `MediaItem.first_frame_path` and `MediaItem.last_frame_path`.
+4. **Thumbnails and video frames belong to the backend.** `ImageProcessor` and `VideoProcessor` generate thumbnails, first frames, and last frames during optimisation. The frontend (`presenter.py`) does NOT generate thumbnails, extract video frames, or run ffmpeg/ffprobe. All frame generation was removed from the presentation engine — it only loads pre-generated cache files referenced by `MediaItem.first_frame_path` and `MediaItem.last_frame_path`.
 
 5. **Phase 1 hardware varies in capability.** The Pi Zero 2 W has 512MB RAM; Pi 2/3 have 1GB. Always:
    - Use `Texture(free_after_load=True)` to release CPU memory after GPU upload
@@ -78,7 +78,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 
 13. **Phase 1 vs Phase 2 awareness.** When writing code:
     - Check `metixel.display.__init__.detect_backend()` to know which pipeline is active
-    - Phase 1: pi3d runs under cage + XWayland on Trixie (Mesa EGL)
+    - Phase 1: Qt Quick + Qt Multimedia run under cage with `QT_QPA_PLATFORM=wayland` pinned (Wayland-native)
     - Phase 2: uses Mesa EGL, Wayland compositor, or DRM/KMS directly
     - `/opt/vc/` paths only exist on legacy Bullseye; never assume them on Trixie
 
@@ -140,7 +140,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
       `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
       installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
       for HEIC) even for devices upgrading from code that predates the hand-off.
-    - **Ownership/sudo:** the backend service is hardened (`ProtectHome=yes` → `/home` read-only;
+    - **Ownership/sudo:** the backend service is hardened (`InaccessiblePaths=/home /root`;
       `ProtectSystem=full` → `/usr` read-only), so it CANNOT install to `~/.local` or the system
       dist-packages, and plain `sudo` inherits the hardened mount namespace. The self-heal must
       run pip as **root** via `sudo -n systemd-run --wait --collect --unit=metixel-deps` into the
@@ -153,7 +153,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
       `ensure_runtime_dependencies()` which detects missing deps via `importlib.metadata` and
       installs them. This makes a **single** OTA resolve missing runtime deps (e.g. `pillow-heif`
       for HEIC) even for devices upgrading from code that predates the hand-off.
-    - **Ownership/sudo:** the backend service is hardened (`ProtectHome=yes` → `/home` read-only;
+    - **Ownership/sudo:** the backend service is hardened (`InaccessiblePaths=/home /root`;
       `ProtectSystem=full` → `/usr` read-only), so it CANNOT install to `~/.local` or the system
       dist-packages, and plain `sudo` inherits the hardened mount namespace. The self-heal must
       run pip as **root** via `sudo -n systemd-run --wait --collect --unit=metixel-deps` into the
@@ -162,6 +162,24 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
     - Runtime deps go in `requirements-pip.txt`, NOT only in pyproject optional extras (those are
       skipped by `pip install -e .` and were the root cause of the HEIC/HEIF OTA bug).
     - Guarded by `testing/unit_tests/backend/test_update_manager.py` and `testing/unit_tests/backend/test_dependencies.py`.
+
+18. **Installation / OTA scripts require explicit approval before modification.** Do **not** edit
+    `scripts/bootstrap.sh`, `scripts/update.sh`, `scripts/ota_install.sh`, `scripts/reconcile.sh`,
+    `scripts/uninstall_metixel.sh`, `scripts/quiet_boot.sh`, `scripts/configure_boot.sh`,
+    `scripts/legacy_setup_trixie_metixel.sh`, `scripts/fixups/*`, or anything else on the
+    install/upgrade path without the user's approval first.
+    - **Why:** these scripts are the only way a device gets fixed if they are wrong, and the
+      failure modes are the worst in the project — a bad `update.sh` can brick every device on
+      the next OTA, and a bad `reconcile.sh` can leave a host half-configured with no way back.
+    - **They cannot be validated by the unit test suite.** Verifying a change requires real
+      hardware work: a **fresh install** (flash → bootstrap → first boot), an **OTA upgrade**
+      from the previous release, and a **pi-gen** image build. None of that runs in CI, so a
+      green test run proves almost nothing here.
+    - **Ask first, then change.** Propose the edit, explain what needs re-testing, and wait for
+      approval. If a task seems to require touching one of these files, surface that instead of
+      making the change.
+    - This does not restrict *reading* them, or changing an unrelated file that merely mentions
+      them.
 
 ## Web UI Style Guide
 
@@ -292,7 +310,7 @@ pytest testing/unit_tests/ -q --no-cov
 |---|---|
 | `ARCHITECTURE.md` | **READ THIS FIRST** — complete system design |
 | `src/metixel/display/backend.py` | DisplayBackend ABC — the interface everything renders through |
-| `src/metixel/display/dispmanx_backend.py` | Phase 1 pi3d implementation |
+| `src/metixel/display/qt_qml_backend.py` | Phase 1 Qt Quick + Qt Multimedia implementation (`QmlBackend`) |
 | `src/metixel/display/wayland_backend.py` | Phase 2 PyOpenGL implementation (future) |
 | `src/metixel/display/tk_backend.py` | Desktop dev: tkinter-based software renderer |
 | `src/metixel/display/cursor_hider.py` | Hides the cage/Wayland cursor via a persistent virtual absolute mouse (evdev) |
@@ -314,11 +332,12 @@ pytest testing/unit_tests/ -q --no-cov
 | `src/metixel/backend/processing/frames.py` | Thumbnail + first/last frame extraction and cache cleanup |
 | `src/metixel/backend/sync/folder_watcher.py` | Phase 1 WATCH: metadata-only scanning, pushes to OptimisationQueue |
 | `src/metixel/backend/sync/immich.py` | Phase 4 SYNC: Immich API client, downloads to `media/sync/immich/` |
-| `src/metixel/frontend/presentation/engine.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
+| `src/metixel/frontend/presentation/presenter.py` | Slideshow logic (platform-agnostic) — does NOT generate thumbnails, extract frames, or run ffmpeg/ffprobe |
 | `src/metixel/shared/config.py` | Config schema, validation, defaults (includes `image` and `video` thresholds) |
 | `src/metixel/shared/ports.py` | Clean Architecture **ports** — `typing.Protocol` interfaces (HttpGateway, MqttGateway, CecController, IrSocket, DisplayDriver) + `Ports` bundle |
 | `src/metixel/shared/adapters.py` | Concrete **adapters** wrapping the real libraries (RequestsHttpGateway, PahoMqttGateway, LibCecAdapter, LircSocketAdapter) |
 | `src/metixel/shared/system_stats.py` | `/proc` system stats + GPU log formatting — single home for meminfo/stat/loadavg parsers |
+| `src/metixel/shared/logging_setup.py` | **Single owner of log levels** — the `system.log_level` name→level map, and `apply_level()` (loggers + file handlers + live view) used by the CLI bootstrap, `POST /api/logs/level` and the frontend's hot-reload. Read its docstring before changing logging: `logging` filters at the *logger* before any handler, so setting handler levels alone can only ever remove records |
 | `src/metixel/shared/platform.py` | Raspberry Pi detection (`is_raspberry_pi`, `detect_pi_model`) + `vcgencmd get_mem` helpers |
 | `src/metixel/backend/daemon.py` | Main daemon + `build_backend()` composition-root factory |
 | `src/metixel/frontend/renderer.py` | Frontend renderer + `build_renderer()` composition-root factory |

@@ -20,14 +20,15 @@ from pathlib import Path
 from metixel.display import detect_backend
 from metixel.display.backend import DisplayBackend
 from metixel.frontend.overlay import MessageLayer, OverlayManager
-from metixel.frontend.presentation.engine import PresentationEngine
+from metixel.frontend.presentation.presenter import Presenter
+from metixel.shared import logging_setup
 from metixel.shared.config import Config
 from metixel.shared.io import atomic_write_json
 from metixel.shared.ipc import ControlMessage, IPCServer
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.paths import frontend_heartbeat_path, run_dir, run_path
 from metixel.shared.platform import boot_identity
-from metixel.shared.system_stats import format_gpu_stats, read_system_stats
+from metixel.shared.system_stats import read_system_stats
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ class FrontendRenderer:
     """Main frontend process — owns the GPU context and render loop.
 
     Responsibilities:
-    - Initialize the display backend (pi3d, wayland, or dev)
+    - Initialize the display backend (qt, wayland, or dev)
     - Run the render loop at a fixed tick rate
     - Drive the presentation engine (slideshow + transitions)
     - Render widget overlay layer
@@ -68,13 +69,13 @@ class FrontendRenderer:
         self._config_path = config_path.resolve()
         self._config: Config = Config.load(config_path)
         self._backend = backend  # injected DisplayDriver port (None → detect_backend() in run())
-        self._presentation: PresentationEngine | None = None
+        self._presentation: Presenter | None = None
         self._overlay: OverlayManager | None = None
         self._ipc_server = IPCServer()
         self._running = False
         self._frame_count: int = 0
         self._last_config_check: float = 0.0
-        self._config_mtime: float = 0.0
+        self._config_mtime_ns: int = 0
         # Playlist hot-reload tracking
         self._playlist_path: Path = run_path("playlist.json")
         self._playlist_mtime: float = 0.0
@@ -89,6 +90,12 @@ class FrontendRenderer:
         self._last_heartbeat: float = 0.0
         self._heartbeat_start: float = time.monotonic()
         self._boot_id: str = boot_identity()
+        # The heartbeat runs on its OWN thread — see _start_heartbeat for why.
+        self._heartbeat_thread: threading.Thread | None = None
+        self._heartbeat_stop = threading.Event()
+        # Initial queue loading, populated by _render_loop and consumed by _tick.
+        self._queue_ready: threading.Event | None = None
+        self._loaded_items: list[MediaItem] = []
 
     # -- Main loop -----------------------------------------------------------
 
@@ -165,7 +172,7 @@ class FrontendRenderer:
                         ),
                     )
                 )
-            except (KeyError, TypeError, ValueError) as e:
+            except (KeyError, TypeError) as e:
                 logger.debug("Skipping malformed playlist entry: %s", e)
                 continue
 
@@ -187,7 +194,7 @@ class FrontendRenderer:
         display_cfg = self._config.display
 
         # ── Initialize display backend immediately ───────────────────
-        # pi3d auto-detects native resolution when width=0 in config.
+        # The backend takes the display's native resolution when width=0.
         if self._backend is None:
             self._backend = detect_backend()
         self._backend.create(
@@ -239,7 +246,7 @@ class FrontendRenderer:
             logger.warning("Could not write display info file", exc_info=True)
 
         # Initialize subsystems
-        self._presentation = PresentationEngine(self._config, self._backend)
+        self._presentation = Presenter(self._config, self._backend)
 
         # Initialize overlay layer system.
         # BootLayer (z=0.0, closest) covers the screen until the first
@@ -271,7 +278,7 @@ class FrontendRenderer:
             logger.debug("IPC server unavailable (expected on dev/Win) — controls disabled")
 
         # Track config file mtime for hot reload
-        self._config_mtime = self._get_config_mtime()
+        self._config_mtime_ns = self._get_config_mtime_ns()
 
         # Apply persisted log level to this process's file handlers.
         # (The backend API can also change it at runtime — the periodic
@@ -295,10 +302,13 @@ class FrontendRenderer:
             self._shutdown()
 
     def _render_loop(self) -> None:
-        """The main render loop — runs at the configured FPS.
+        """Run the slideshow, driven by whichever loop model the backend owns.
 
-        Frame timing is handled by the display backend's ``loop_running()``
-        (e.g., pygame's ``clock.tick()``), so we don't double-sleep here.
+        The backend decides how frames are pumped — Qt must run its own
+        ``exec()`` or nothing is delivered, whereas tkinter takes a plain loop —
+        so this method does NOT contain a loop.  It prepares what the tick needs
+        and hands ``_tick`` to ``backend.schedule()``, which returns only once the
+        loop has finished.
         """
         if self._backend is None or self._presentation is None:
             return
@@ -312,20 +322,23 @@ class FrontendRenderer:
         if self._overlay:
             self._overlay.update({"video_playing": False})
             self._overlay.draw(self._backend)
-        self._backend.loop_running()
+        self._backend.swap_buffers()
 
         # ── Start background queue loader ─────────────────────────────
         # The folder scan can take minutes on large libraries.  Run it
         # in a daemon thread so the render loop keeps spinning (boot
-        # screen stays animated).  The main thread checks a shared flag
-        # and swaps in the queue once loading is done.
-        _queue_ready = threading.Event()
-        _loaded_items: list[MediaItem] = []
+        # screen stays animated).  The tick checks a shared flag and
+        # swaps in the queue once loading is done.
+        #
+        # Held in a local as well as on self: the loader closure cannot rely on
+        # mypy narrowing an Optional attribute, and an Optional event would mean
+        # a silently never-ready queue.
+        ready = threading.Event()
+        self._queue_ready = ready
+        self._loaded_items = []
 
         def _load_initial_queue() -> None:
-            nonlocal _loaded_items
             items: list[MediaItem] = list(self._load_backend_playlist())
-
             if items:
                 logger.info("Loaded %d items from backend playlist", len(items))
             else:
@@ -334,8 +347,8 @@ class FrontendRenderer:
                     "the optimisation queue to process media.  The boot "
                     "screen stays visible until items are ready."
                 )
-            _loaded_items = items
-            _queue_ready.set()
+            self._loaded_items = items
+            ready.set()
 
         loader_thread = threading.Thread(
             target=_load_initial_queue,
@@ -344,56 +357,114 @@ class FrontendRenderer:
         )
         loader_thread.start()
 
-        while self._running and self._backend and self._backend.loop_running():
-            # ── Swap in initial queue when loading finishes ───────────
-            if _queue_ready.is_set() and self._presentation._queue_loaded is False:
-                self._presentation.set_queue(_loaded_items)
-                # Signal the backend that the slideshow has started so
-                # the network monitor can begin its AP-fallback countdown.
-                # Only fire when there are actually items to display —
-                # an empty initial load means the backend hasn't processed
-                # any media yet; the hot-reload path will populate later.
-                if _loaded_items:
-                    self._notify_slideshow_started()
-            # 1. Check for config changes (hot reload)
-            self._check_config_changed()
+        # ── Start the liveness heartbeat ──────────────────────────────
+        # On its OWN thread, deliberately.  The tick runs wherever the backend's
+        # loop lives — for Qt that is the GUI thread, which any stall (GL context
+        # setup, an mpv load, a large decode) blocks.  A heartbeat written from
+        # there would stop during exactly the stall it exists to report, and the
+        # OTA gate would read a healthy frame as dead and roll the release back.
+        # Writing a small file to tmpfs from a thread is safe and costs nothing.
+        self._start_heartbeat()
 
-            # 2. Process IPC control messages
-            self._process_ipc()
+        logger.info("Render loop starting (backend-driven scheduling)")
+        try:
+            self._backend.schedule(self._tick)
+        except KeyboardInterrupt:
+            logger.info("Render loop interrupted")
+        except Exception:
+            logger.exception("Fatal error in the render loop")
 
-            # 3. Render the current frame
-            self._render_frame()
+    def _tick(self) -> bool:
+        """One frame of frontend work.  Returns ``False`` to stop the loop.
 
-            # 4. Present to screen
-            if self._backend:
-                self._backend.swap_buffers()
+        Called by the backend from whichever thread owns its loop, so this must
+        stay cheap and must never block: a stall here is a stall of the whole
+        frontend, and — because Qt's loop also delivers input and paints — of the
+        window itself.
+        """
+        if not self._running or self._backend is None or self._presentation is None:
+            return False
 
-            self._frame_count += 1
+        # ── Swap in the initial queue once loading finishes ───────────
+        queue_ready = self._queue_ready
+        if queue_ready is not None and queue_ready.is_set() and not self._presentation.queue_loaded:
+            self._presentation.set_queue(self._loaded_items)
+            # Signal the backend that the slideshow has started so the network
+            # monitor can begin its AP-fallback countdown.  Only fire when there
+            # are actually items to display — an empty initial load means the
+            # backend has not processed any media yet, and the hot-reload path
+            # will populate the queue later.
+            if self._loaded_items:
+                self._notify_slideshow_started()
 
-            # Publish liveness for the OTA health-check.  Deliberately AFTER
-            # the frame has been rendered and presented: if rendering throws,
-            # the loop unwinds to the outer handler and the heartbeat stops,
-            # which is exactly the signal /api/health?require=render needs.
-            self._write_heartbeat()
+        # 1. Check for config changes (hot reload)
+        self._check_config_changed()
 
-            # Log FPS every 5 seconds
-            self._log_fps()
+        # 2. Process IPC control messages
+        self._process_ipc()
 
-            # Log system resources every 30 seconds (debug builds only)
-            self._log_resources()
+        # 3. Render the current frame
+        self._render_frame()
+
+        # 4. Present to screen
+        self._backend.swap_buffers()
+
+        self._frame_count += 1
+
+        # Log FPS every 5 seconds
+        self._log_fps()
+
+        # Log system resources every 30 seconds (debug builds only)
+        self._log_resources()
+
+        return self._running
+
+    def _start_heartbeat(self) -> None:
+        """Start the liveness heartbeat on its own thread.
+
+        Deliberately not driven from ``_tick``.  The tick runs wherever the
+        backend's loop lives — on Qt that is the GUI thread, which any stall
+        (GL context creation, an mpv load, a large decode) blocks.  A heartbeat
+        written from there stops during exactly the stall it exists to report,
+        and the OTA health gate would then read a *healthy* frame as dead and
+        roll the release back.
+
+        The write itself is tiny, throttled, and lands in ``run_dir()`` — tmpfs,
+        so this costs RAM rather than SD-card erase cycles.
+        """
+        if self._heartbeat_thread is not None:
+            return
+
+        def _beat() -> None:
+            while not self._heartbeat_stop.wait(HEARTBEAT_INTERVAL):
+                self._write_heartbeat()
+
+        self._heartbeat_stop.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=_beat,
+            name="frontend-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+        # Publish one immediately so the gate does not have to wait an interval
+        # to see a live frontend after a restart.
+        self._write_heartbeat()
+
+    def _stop_heartbeat(self) -> None:
+        """Stop the heartbeat thread (called during shutdown)."""
+        self._heartbeat_stop.set()
 
     def _write_heartbeat(self) -> None:
         """Publish frontend liveness to ``run_dir()`` for the health check.
 
         The file's existence and mtime are the liveness proof, so there is no
-        cheaper mechanism; writes are throttled to HEARTBEAT_INTERVAL and land
-        on tmpfs rather than the SD card.  ``pid`` + ``boot_id`` let the
-        consumer detect a *restarting* frontend — a crash loop keeps the file
-        fresh, but the identity flips, so it must not be read as healthy.
+        cheaper mechanism.  ``pid`` + ``boot_id`` let the consumer detect a
+        *restarting* frontend — a crash loop keeps the file fresh, but the
+        identity flips, so it must not be read as healthy.
+
+        Called from the heartbeat thread, not the render loop.
         """
         now = time.monotonic()
-        if now - self._last_heartbeat < HEARTBEAT_INTERVAL:
-            return
         self._last_heartbeat = now
         try:
             atomic_write_json(
@@ -493,10 +564,9 @@ class FrontendRenderer:
         )
 
         # ── GPU memory (Pi only) ─────────────────────────────────────
-        if self._backend:
-            gpu = self._backend.gpu_memory_info()
-            if gpu and "gpu_total_mb" in gpu:
-                logger.debug("GPU: %s", format_gpu_stats(gpu))
+        # The pi3d-era per-texture GPU memory probe is gone with the backend that
+        # exposed it.  The retained-mode canvas owns its own allocations, so there
+        # is no application-level texture budget left to report.
 
     def _render_frame(self) -> None:
         """Render a single frame."""
@@ -506,36 +576,39 @@ class FrontendRenderer:
         # Render presentation (slideshow + transition + matte)
         self._presentation.render()
 
-        # Render overlay layers on top of slideshow.
-        # Clear depth first so slideshow depth values don't occlude overlay.
-        self._backend.clear_depth()
+        # Overlay layers on top of the slideshow.  No depth clear: the retained
+        # mode canvas composites in paint order, so there is no depth buffer for
+        # the slideshow to write into and occlude the overlay with.
         if self._overlay:
-            # Pass video state so message timers pause during VLC playback
-            video_playing = (
-                self._presentation._video_state != 0  # _VIDEO_IDLE
-                if hasattr(self._presentation, "_video_state")
-                else False
-            )
+            # Video state so overlay message timers can pause during playback.
+            # The frontend no longer plays video (playback is being re-inserted
+            # later), so this is always False; the overlay contract is kept so
+            # nothing has to change when playback returns.
+            video_playing = False
             # Tell the boot layer whether the frontend has actually
             # loaded its queue — not just whether the backend wrote
             # playlist.json to disk.  This prevents the boot screen
             # from fading to a black screen when queue loading is
             # deferred to a background thread.
             #
-            # Additionally, the active GPU texture slot must be
-            # non-None before we signal readiness.  If the first
-            # slide's texture hasn't been uploaded yet (e.g. a sync
-            # load is still in progress), the render loop stalls
-            # and the fade timer would expire before any frames
-            # are drawn — producing a jump cut instead of a smooth
-            # crossfade.  Waiting for the texture ensures the fade
-            # runs over actual rendered frames.
+            # Readiness also requires a frame to have been PAINTED.  The boot
+            # layer fades out on a timer, so signalling ready while the first item
+            # was still decoding would run the fade over empty frames and end on a
+            # black screen.  The presenter owns that judgement rather than the
+            # renderer reaching into its internals.
+            #
+            # It also requires the first item's AMBIENT BACKDROP to be loaded when
+            # the look is ``blur``: that backdrop is built in a throttled
+            # subprocess, and fading out before it lands would show a flat band
+            # that repaints a moment later — the flicker the boot screen exists to
+            # hide.
             slideshow_ready = (
-                self._presentation._queue_loaded
-                and len(self._presentation._queue) > 0
-                and self._presentation._tex[self._presentation._active] is not None
+                self._presentation.queue_loaded
+                and len(self._presentation.queue) > 0
+                and self._presentation.has_visible_frame
+                and self._presentation.ambient_ready
             )
-            queue_size = len(self._presentation._queue) if self._presentation else 0
+            queue_size = len(self._presentation.queue) if self._presentation else 0
             self._overlay.update(
                 {
                     "video_playing": video_playing,
@@ -547,7 +620,11 @@ class FrontendRenderer:
 
         # ── Boot → slideshow transition ───────────────────────────────
         # When the boot layer finishes fading, reset the first slide's
-        # display timer so it gets its full configured duration.
+        # display timer so it gets its full configured duration, and release the
+        # presenter to prepare the FOLLOWING item's ambient backdrop.  Until the
+        # boot screen has gone, only the item being shown may have its backdrop
+        # built: the boot screen is waiting on that one, and a second throttled
+        # job would only delay the fade it is blocking.
         if (
             getattr(self, "_boot_layer", None) is not None
             and self._boot_layer.is_done
@@ -556,6 +633,7 @@ class FrontendRenderer:
             self._boot_was_active = False
             if self._presentation:
                 self._presentation.reset_slide_timer()
+                self._presentation.mark_presentation_started()
                 logger.info("First slide timer reset — boot screen finished")
 
     # -- Hot reload ----------------------------------------------------------
@@ -573,19 +651,31 @@ class FrontendRenderer:
         self._last_config_check = now
 
         # -- Config hot reload --
-        new_mtime = self._get_config_mtime()
-        if new_mtime > self._config_mtime:
-            logger.info("Config file changed — hot reloading")
-            old_log_level = self._config.system.get("log_level", "NONE")
-            self._config = Config.load(self._config_path)
-            self._config_mtime = new_mtime
-            # Re-initialize components that depend on config
-            if self._presentation:
-                self._presentation.reload_config(self._config)
-            # Re-apply file log level if it changed (matches backend behaviour)
-            new_log_level = self._config.system.get("log_level", "NONE")
-            if new_log_level != old_log_level:
-                self._apply_file_log_level()
+        #
+        # Compared with ``!=`` rather than ``>``, and in nanoseconds rather than
+        # float seconds.  Both matter:
+        #
+        # * ``>`` against a baseline captured at startup silently drops any change
+        #   whose mtime is not strictly greater than that baseline — a clock step,
+        #   a restore from backup, or an atomic ``os.replace()`` that lands on the
+        #   same timestamp.  A dropped change produced NO log line at all, so a
+        #   save that appeared to do nothing was indistinguishable from a save
+        #   that never happened.  That is what made "I can't change the fit mode"
+        #   look like a wiring bug when every layer was in fact correct.
+        # * ``float`` seconds lose precision: two saves inside the same
+        #   sub-microsecond window compare equal.  ``st_mtime_ns`` is exact.
+        new_mtime_ns = self._get_config_mtime_ns()
+        if new_mtime_ns != self._config_mtime_ns:
+            if new_mtime_ns == 0:
+                logger.debug("Config file unreadable — keeping the loaded configuration")
+            else:
+                logger.info(
+                    "Config file changed — hot reloading (mtime %d -> %d)",
+                    self._config_mtime_ns,
+                    new_mtime_ns,
+                )
+                self._reload_config()
+            self._config_mtime_ns = new_mtime_ns
 
         # -- Playlist hot reload (backend may add items from Immich sync) --
         # Poll every 0.5s when the queue is empty (boot phase) so the
@@ -660,7 +750,7 @@ class FrontendRenderer:
                     ),
                 )
                 items.append(item)
-            except (KeyError, TypeError, ValueError) as e:
+            except (KeyError, ValueError) as e:
                 logger.debug("Skipping malformed playlist entry: %s", e)
 
         if not self._presentation:
@@ -676,6 +766,10 @@ class FrontendRenderer:
             if getattr(self, "_boot_layer", None) is not None:
                 self._boot_layer.reactivate()
                 self._boot_was_active = True
+                # The boot screen is up again, so it will wait on the first
+                # item's ambient backdrop once more — and nothing else may be
+                # built until it has gone.
+                self._presentation.mark_boot_started()
             return
 
         if not self._presentation._queue:
@@ -773,50 +867,68 @@ class FrontendRenderer:
                 len(self._presentation._queue),
             )
 
-    def _get_config_mtime(self) -> float:
-        """Get the modification time of the config file."""
+    def _reload_config(self) -> None:
+        """Adopt a freshly written config and make the change visible at once.
+
+        Split out of :meth:`_check_config_changed` so the reload is testable and
+        so its two jobs are stated together.
+
+        The re-present at the end is the part that matters to the user.  Saving
+        the slideshow card already restarted nothing — ``routes/config.py`` only
+        bounces the services for pipeline-affecting sections — so the frame has
+        to pick the change up itself.  ``Presenter.reload_config`` clears the
+        cached plans when the fit decision or the panel geometry moves, but
+        clearing them only means the *next* ``_present_current()`` recomputes:
+        without an immediate repaint the change lands whenever the slide clock
+        next happens to tick, which for a long slide reads as "the setting did
+        nothing".  Re-presenting here makes it instant.
+        """
+        old_log_level = self._config.system.get("log_level", "NONE")
+        self._config = Config.load(self._config_path)
+        if self._presentation:
+            self._presentation.reload_config(self._config)
+            # Repaint the frame already on screen so a fit/geometry change is
+            # visible immediately rather than on the next slide.
+            self._presentation.represent()
+        # Re-apply file log level if it changed (matches backend behaviour)
+        new_log_level = self._config.system.get("log_level", "NONE")
+        if new_log_level != old_log_level:
+            self._apply_file_log_level()
+
+    def _get_config_mtime_ns(self) -> int:
+        """Modification time of the config file in nanoseconds, or 0 if absent.
+
+        Nanoseconds rather than float seconds so the change test is exact — the
+        slideshow card writes with an atomic ``os.replace()``, and two saves can
+        otherwise compare equal.
+        """
         try:
-            return os.path.getmtime(self._config_path)
+            return self._config_path.stat().st_mtime_ns
         except OSError:
-            return 0.0
+            return 0
 
     def _apply_file_log_level(self) -> None:
-        """Apply the persisted log level to all FileHandlers in this process.
+        """Apply the persisted log level to this process.
 
-        This runs at frontend startup and whenever the config changes,
-        ensuring the frontend's file handlers stay in sync with what
-        the user selected in the web UI (which only directly updates
-        the backend process).
+        Delegates to :mod:`metixel.shared.logging_setup` so the frontend cannot
+        resolve ``system.log_level`` differently from the backend.  It used to
+        have its own copy of the walk, and the two processes diverged on the
+        default: one built its handlers at DEBUG and wrote a full log, while the
+        other honoured ``NONE``.
+
+        Both loggers and handlers are set.  Setting only the handlers is what made
+        "Debug" inert — ``logging`` discards a record at the *logger* before any
+        handler is consulted, so a handler level can only remove records, never
+        add them.
         """
-        level_name = self._config.system.get("log_level", "NONE").upper()
-        file_levels = {
-            "DEBUG": logging.DEBUG,
-            "INFO": logging.INFO,
-            "WARNING": logging.WARNING,
-            "ERROR": logging.ERROR,
-            "NONE": 100,
-        }
-        target_level = file_levels.get(level_name, 100)
-
-        updated = 0
-        for logger_obj in logging.Logger.manager.loggerDict.values():
-            if not isinstance(logger_obj, logging.Logger):
-                continue
-            for handler in logger_obj.handlers:
-                if isinstance(handler, logging.FileHandler):
-                    handler.setLevel(target_level)
-                    updated += 1
-        for handler in logging.getLogger().handlers:
-            if isinstance(handler, logging.FileHandler):
-                handler.setLevel(target_level)
-                updated += 1
-
-        if updated:
-            logger.debug(
-                "Frontend file log level set to %s (%d handler(s) updated)",
-                level_name,
-                updated,
-            )
+        level = logging_setup.parse_level(self._config.system.get("log_level", "NONE"))
+        effective = logging_setup.apply_level(level)
+        logger.info(
+            "Frontend log level applied: %s (file=%s, metixel logger=%s)",
+            self._config.system.get("log_level", "NONE"),
+            logging.getLevelName(level),
+            logging.getLevelName(effective),
+        )
 
     # -- IPC -----------------------------------------------------------------
 
@@ -921,22 +1033,19 @@ class FrontendRenderer:
         # Remove the heartbeat so a cleanly stopped frontend is reported as
         # "missing" immediately, rather than looking stale for 30 seconds.
         # Best-effort: the file is tmpfs telemetry, never worth failing over.
+        self._stop_heartbeat()
         with contextlib.suppress(OSError):
             self._heartbeat_path.unlink()
 
         if self._ipc_server:
             self._ipc_server.stop()
 
-        # Kill a running VLC before the display goes away — the subprocess
-        # is not a child the display backend knows about, so without this
-        # it outlives a frontend restart and sits on top of the new one.
-        if self._presentation is not None:
-            try:
-                self._presentation._video_stop()
-            except Exception:
-                logger.warning("Failed to stop video during shutdown", exc_info=True)
-
         if self._backend:
+            # Ask the loop to finish before tearing the surface down.  For Qt
+            # that means leaving exec(); calling destroy() underneath a running
+            # event loop would leave the loop pumping a deleted window.
+            with contextlib.suppress(Exception):
+                self._backend.quit()
             self._backend.destroy()
             self._backend = None
 

@@ -12,6 +12,7 @@ import logging
 from typing import Any
 
 from metixel.display.backend import DisplayBackend
+from metixel.display.overlay_element import OverlayElement
 from metixel.frontend.overlay.layer import OverlayLayer
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,17 @@ class OverlayManager:
                 return ly
         return None
 
+    @property
+    def needs_repaint(self) -> bool:
+        """Whether any visible layer's output would differ from what is painted.
+
+        Conservative by construction: :attr:`OverlayLayer.needs_repaint` is
+        ``True`` by default, so a layer that cannot tell keeps repainting.  Only
+        the layers themselves know whether an animation moved, which is why the
+        question is asked of them rather than guessed from the element list.
+        """
+        return any(layer.needs_repaint for layer in self._layers if layer.visible)
+
     def update(self, shared_state: dict[str, Any] | None = None) -> None:
         state = shared_state or {}
         for layer in self._layers:
@@ -44,11 +56,54 @@ class OverlayManager:
                     logger.exception("Layer update failed: %s", layer.name)
 
     def draw(self, backend: DisplayBackend) -> None:
+        """Composite every visible layer's elements onto the display.
+
+        Layers are asked for a declarative element list (:meth:`OverlayLayer.
+        render`) rather than drawing directly.  The manager flattens those into
+        one z-ordered pass, so the backend sees a single plan instead of a
+        sequence of stateful draw calls — which is what the reduced
+        ``DisplayBackend`` interface requires.
+
+        A layer that raises is logged and skipped: an overlay must never be able
+        to stop the slideshow rendering underneath it.
+        """
         if not backend:
             return
+        if not self.needs_repaint:
+            # Nothing moved: the canvas already holds this exact picture, and
+            # asking Qt to composite it again is what kept a core busy on a
+            # static screen.
+            return
+
+        elements: list[OverlayElement] = []
         for layer in self._layers:
-            if layer.visible:
-                try:
-                    layer.draw(backend)
-                except Exception:
-                    logger.exception("Layer draw failed: %s", layer.name)
+            if not layer.visible:
+                continue
+            try:
+                layer.reset_z()
+                # A layer may need the backend to size itself and load its
+                # assets (the boot layer cannot know the display dimensions
+                # otherwise).  render() takes no arguments because it runs every
+                # frame, so any one-off preparation happens here.
+                prepare = getattr(layer, "ensure_ready", None)
+                if callable(prepare):
+                    prepare(backend)
+                elements.extend(layer.render())
+            except Exception:
+                logger.exception("Layer render failed: %s", layer.name)
+
+        # Descending z: the largest z paints first, the smallest last (closest to
+        # the viewer).  Matches the old GL_LESS convention so existing z-offsets
+        # in the layers keep their meaning.
+        elements.sort(key=lambda e: e.z, reverse=True)
+        try:
+            # Always presented, even when empty: an empty list is how the canvas
+            # learns to drop the previous overlay.  Returning early here left a
+            # dismissed message painted for good.
+            backend.present_overlay(elements)
+        except AttributeError:
+            # A backend without overlay compositing (or an older one) simply
+            # shows no overlay — better than failing the frame.
+            logger.debug("Backend does not support overlay compositing")
+        except Exception:
+            logger.exception("Overlay compositing failed")

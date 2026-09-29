@@ -2,18 +2,22 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """Tkinter-based Development Display Backend.
 
-Used for local development on machines without pi3d.
-Tkinter is bundled with Python on all platforms, making this the
-most portable dev backend available.
+Used for local development on machines without Qt or a GPU.  Tkinter ships with
+Python on all platforms, making this the most portable dev backend available and
+the reason the slideshow can be exercised end-to-end on a desktop.
 
-Renders to a tkinter Canvas with software blitting.
+Renders a :class:`~metixel.framing.layout.RenderPlan` to a tkinter Canvas using
+software blitting.  Video is not supported (``supports_video`` is ``False``), so
+the presentation layer skips video items rather than failing once per cycle.
 """
 
 from __future__ import annotations
 
 import contextlib
 import logging
+import time
 import tkinter as tk
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -21,20 +25,21 @@ import numpy as np
 from PIL import Image, ImageTk
 
 from metixel.display.backend import DisplayBackend
+from metixel.framing.layout import RenderPlan
 
 logger = logging.getLogger(__name__)
 
 
 class TkBackend(DisplayBackend):
-    """Tkinter-based display backend for zero-dependency desktop development.
+    """Tkinter display backend for zero-dependency desktop development.
 
-    Uses a tkinter Canvas for rendering — no external libraries needed
-    beyond Pillow (which is already a core dependency).
+    Renders through a tkinter Canvas using Pillow for scaling and cropping —
+    no external libraries beyond Pillow, which is already a core dependency.
 
-    tkinter is only needed on desktop dev machines. On headless Pis (no
-    tkinter installed) this module can still be imported without error
-    because `display/__init__.py`'s detect_backend() only imports
-    .tk_backend when actually creating a TkBackend.
+    tkinter is only needed on desktop dev machines.  On a headless Pi (no
+    tkinter) this module can still be IMPORTED without error;
+    ``display/__init__.py``'s ``detect_backend()`` only imports it when it is
+    actually creating a TkBackend.
     """
 
     def __init__(self) -> None:
@@ -45,9 +50,10 @@ class TkBackend(DisplayBackend):
         self._h: int = 720
         self._bg_color: str = "black"
         self._fps_limit: int = 30
-        self._textures: dict[int, Any] = {}  # id → PIL Image
-        # (texture id, alpha) → tk PhotoImage
-        self._photo_cache: dict[tuple[int, float], ImageTk.PhotoImage] = {}
+        self._images: dict[int, Image.Image] = {}  # handle → PIL Image
+        # (handle, w, h) → tk PhotoImage.  Bounded, because each entry holds a
+        # full-resolution image and a slideshow runs for weeks.
+        self._photo_cache: dict[tuple[Any, int, int], ImageTk.PhotoImage] = {}
         self._texture_counter: int = 0
         self._frame_delay_ms: int = 33  # ~30 FPS
 
@@ -67,7 +73,7 @@ class TkBackend(DisplayBackend):
 
     @property
     def supports_video(self) -> bool:
-        """Software renderer — VLC/GL video playback is not supported."""
+        """Software renderer — no video pipeline, so video items are skipped."""
         return False
 
     # -- Lifecycle -----------------------------------------------------------
@@ -128,7 +134,7 @@ class TkBackend(DisplayBackend):
 
     def destroy(self) -> None:
         self._running = False
-        self._textures.clear()
+        self._images.clear()
         self._photo_cache.clear()
         if self._root:
             with contextlib.suppress(Exception):
@@ -151,193 +157,187 @@ class TkBackend(DisplayBackend):
         except tk.TclError:
             self._running = False
             return False
-        # Start the new frame from an empty canvas.  The renderer never
-        # calls clear() between frames, so every draw_* call would add
-        # another canvas item on top of the last frame's — thousands of
-        # items after a minute, and a window that slowly grinds to a halt.
-        # The frame just drawn has already been painted by swap_buffers(),
-        # so deleting here does not blank the window.
-        self._clear_canvas()
         return True
 
     def swap_buffers(self) -> None:
-        """Paint the canvas items drawn this frame.
+        """No-op — tkinter Canvas renders immediately."""
+        pass
 
-        tkinter only repaints on idle, so flush the pending redraw now —
-        otherwise ``loop_running()`` would clear the items before they
-        were ever shown.
+    def schedule(self, tick: Callable[[], bool]) -> None:
+        """Drive *tick* from a plain loop, pumping tkinter events each frame.
+
+        tkinter is cooperative: the loop owns the thread and calls ``update()``
+        to drain events, so the tick runs on the same thread between pumps.
+        Timing is a monotonic deadline rather than ``after()``, because the
+        slideshow's own clock is what decides when a frame changes.
         """
-        if self._root is None:
-            return
-        with contextlib.suppress(tk.TclError):
-            self._root.update_idletasks()
+        period = 1.0 / max(1, self._fps_limit)
+        next_frame = time.monotonic()
+        while self._running and self.loop_running():
+            if not tick():
+                break
+            next_frame += period
+            sleep_for = next_frame - time.monotonic()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            else:
+                # We are behind: resynchronise rather than accumulate debt, or a
+                # slow stretch would make the loop spin to catch up.
+                next_frame = time.monotonic()
 
-    def _clear_canvas(self) -> None:
-        """Delete every canvas item (rects, images, text) for the next frame.
+    def quit(self) -> None:
+        """Stop the loop; safe from another thread (just clears a flag)."""
+        self._running = False
 
-        Leaves ``_photo_cache`` alone: it is bounded (see draw_image) and
-        the PhotoImage for the current slide is reused on the next frame,
-        which avoids re-encoding the image 30 times a second.
-        """
-        if self._canvas is None:
-            return
-        with contextlib.suppress(tk.TclError):
-            self._canvas.delete("all")
+    # -- Frame presentation --------------------------------------------------
 
-    # -- 2D Rendering --------------------------------------------------------
-
-    def draw_rect(
+    def present(
         self,
-        x: float,
-        y: float,
-        w: float,
-        h: float,
-        color: tuple[float, float, float, float] = (0, 0, 0, 1),
-        z: float = 0.0,
+        plan: RenderPlan,
+        image: Any = None,
+        alpha: float = 1.0,
+        backdrop_source: Any = None,
     ) -> None:
+        """Software-composite one frame from *plan*.
+
+        Paints in the order the framing specification mandates — ambient fill,
+        artwork, whitespace, mat, moulding — so this backend and the Qt one
+        agree on layering without sharing pixel code.  Tk's Canvas has no alpha
+        compositing and no z-buffer, which is exactly why the plan's ring layers
+        are disjoint from the artwork: the order alone is sufficient, and no
+        clipping or blending is required.
+
+        ``alpha`` fades the artwork only.  Tk cannot blend, so a transition here
+        degrades to a cut (see the alpha guard below) — the desktop dev backend
+        is not the place to reproduce a crossfade, and pretending otherwise would
+        mean a software blend of every frame.
+        """
         if self._canvas is None:
             return
-        r, g, b = int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)
-        a = int(color[3] * 255) if len(color) > 3 else 255
-        fill_color = f"#{r:02x}{g:02x}{b:02x}"
-        # Tkinter doesn't support per-item alpha on Canvas — skip transparent rects
-        if a < 20:
+
+        # Everything for this frame is tagged so clearing is a single delete
+        # rather than a full canvas teardown.
+        self._canvas.delete("frame")
+
+        if plan.ambient is not None:
+            self._rect(plan.ambient, plan.ambient_colour)
+
+        # A partially transparent artwork would need real alpha compositing; show
+        # it opaque above the midpoint and omit it below, which reads as a cut.
+        if image is not None and alpha >= 0.5:
+            self._artwork(image, plan)
+
+        for rect in plan.whitespace:
+            self._rect(rect, plan.whitespace_colour)
+        for rect in plan.matte:
+            self._rect(rect, plan.matte_colour)
+        for rect in plan.moulding:
+            self._rect(rect, "#000000")
+
+    def _rect(self, rect: tuple[float, float, float, float], colour: str) -> None:
+        """Fill a plan rectangle with a ``#rrggbb`` colour."""
+        if self._canvas is None:
+            return
+        x, y, w, h = rect
+        if w <= 0 or h <= 0:
             return
         self._canvas.create_rectangle(
             x,
             y,
             x + w,
             y + h,
-            fill=fill_color,
+            fill=colour,
             outline="",
-            tags="rect",
+            tags="frame",
         )
 
-    def draw_image(
-        self,
-        texture: Any,
-        x: float,
-        y: float,
-        w: float,
-        h: float,
-        alpha: float = 1.0,
-        rotation: float = 0.0,
-        z: float = 0.0,
-        uv_offset: tuple[float, float] = (0.0, 0.0),
-        uv_scale: tuple[float, float] = (1.0, 1.0),
-    ) -> None:
-        if self._canvas is None or texture is None:
-            return
+    def _artwork(self, handle: Any, plan: RenderPlan) -> None:
+        """Draw the artwork through the plan's source→destination mapping.
 
-        if isinstance(texture, int):
-            pil_img = self._textures.get(texture)
-            if pil_img is None:
-                return
-        else:
-            pil_img = texture
+        ``artwork_src`` is the sub-rectangle of the source image to sample, which
+        is how ``overflow="crop"`` discards the parts of a photo that fall
+        outside the Mat Window.  Honouring it here keeps cover-cropping identical
+        to the Qt backend instead of re-deriving it per backend.
 
-        # Resize
-        try:
-            resized = pil_img.resize((int(w), int(h)), Image.Resampling.LANCZOS)
-        except Exception:
-            return
-
-        # Apply alpha by blending with black background
-        if alpha < 1.0:
-            bg = Image.new("RGBA", resized.size, (0, 0, 0, 0))
-            resized = Image.blend(bg, resized.convert("RGBA"), alpha)
-
-        # Convert to PhotoImage (cached by texture id + alpha combo)
-        cache_key = (texture if isinstance(texture, int) else id(texture), alpha)
-        if cache_key not in self._photo_cache:
-            self._photo_cache[cache_key] = ImageTk.PhotoImage(resized)
-            # Limit cache size
-            if len(self._photo_cache) > 6:
-                oldest_key = next(iter(self._photo_cache))
-                del self._photo_cache[oldest_key]
-
-        photo = self._photo_cache[cache_key]
-        self._canvas.create_image(x, y, image=photo, anchor="nw", tags="img")
-
-    # -- Texture Management --------------------------------------------------
-
-    def load_texture(self, path: Path | np.ndarray, **kwargs: Any) -> Any:
-        """Load an image as a PIL Image.
-
-        Returns an integer handle usable with draw_image.
+        ``source_window`` crosses from the plan's media space into this image's
+        pixels.  That is the identity for a photo, but a video is drawn as its
+        pre-generated poster, which ffmpeg has already shrunk to fit the screen —
+        cropping in video pixels samples past the poster's edge, and PIL pads the
+        overhang black exactly as ``QImage.copy`` does.
         """
-        if isinstance(path, np.ndarray):
-            arr = path
-            if arr.ndim == 3 and arr.shape[2] == 4:
-                pil_img = Image.fromarray(arr, "RGBA")
-            elif arr.ndim == 3 and arr.shape[2] == 3:
-                pil_img = Image.fromarray(arr, "RGB")
+        pil_img = self._images.get(handle) if isinstance(handle, int) else handle
+        if pil_img is None or self._canvas is None:
+            return
+
+        dx, dy, dw, dh = plan.artwork_dst
+        sx, sy, sw, sh = plan.artwork_src
+        if sw <= 0 or sh <= 0 or dw <= 0 or dh <= 0:
+            return
+        sx, sy, sw, sh = plan.source_window(pil_img.width, pil_img.height)
+
+        try:
+            frame = pil_img
+            if (sx, sy, sw, sh) != (0.0, 0.0, float(pil_img.width), float(pil_img.height)):
+                frame = pil_img.crop((round(sx), round(sy), round(sx + sw), round(sy + sh)))
+            resized = frame.resize((max(1, int(dw)), max(1, int(dh))), Image.Resampling.LANCZOS)
+        except Exception:
+            logger.debug("Failed to render artwork for handle %s", handle, exc_info=True)
+            return
+
+        key = (handle if isinstance(handle, int) else id(handle), round(dw), round(dh))
+        if key not in self._photo_cache:
+            self._photo_cache[key] = ImageTk.PhotoImage(resized)
+            # Bound the cache: the plan changes size between items, and each
+            # entry holds a full-resolution PhotoImage.
+            if len(self._photo_cache) > 4:
+                self._photo_cache.pop(next(iter(self._photo_cache)))
+        self._canvas.create_image(dx, dy, image=self._photo_cache[key], anchor="nw", tags="frame")
+
+    # -- Artwork -------------------------------------------------------------
+
+    def load_image(self, path: Path | np.ndarray | bytes) -> Any:
+        """Load an image into a PIL handle.
+
+        Returns an integer handle, or ``None`` if the file could not be read —
+        a single unreadable photo must never stop the slideshow.
+
+        ``bytes`` is the encoded payload from the preload worker; ``ndarray`` is
+        used by tests and generated frames.
+        """
+        try:
+            if isinstance(path, (bytes, bytearray)):
+                import io
+
+                opened = Image.open(io.BytesIO(path))
+                opened.load()
+                pil_img = opened.convert("RGB")
+            elif isinstance(path, np.ndarray):
+                arr = path
+                if arr.ndim == 3 and arr.shape[2] == 4:
+                    pil_img = Image.fromarray(arr, "RGBA")
+                elif arr.ndim == 3 and arr.shape[2] == 3:
+                    pil_img = Image.fromarray(arr, "RGB")
+                else:
+                    raise ValueError(f"Unsupported array shape: {arr.shape}")
             else:
-                raise ValueError(f"Unsupported array shape: {arr.shape}")
-        else:
-            pil_img = Image.open(path).convert("RGB")
+                opened = Image.open(path)
+                opened.load()
+                pil_img = opened.convert("RGB")
+        except Exception:
+            logger.debug("Failed to load image: %s", path, exc_info=True)
+            return None
 
         self._texture_counter += 1
-        self._textures[self._texture_counter] = pil_img
+        self._images[self._texture_counter] = pil_img
         return self._texture_counter
 
-    def unload_texture(self, texture: Any) -> None:
-        if isinstance(texture, int):
-            self._textures.pop(texture, None)
-            # Also clean up cached PhotoImages for this texture
-            keys_to_remove = [
-                k for k in self._photo_cache if isinstance(k, tuple) and k[0] == texture
-            ]
-            for k in keys_to_remove:
-                del self._photo_cache[k]
-
-    def update_texture(self, texture: Any, data: np.ndarray) -> Any:
-        """Update a PIL Image texture with new pixel data in-place.
-
-        Creates a new PIL Image from the numpy array and swaps it in
-        the texture cache under the same handle, which is returned.
-        """
-        if not isinstance(texture, int) or texture not in self._textures:
-            return super().update_texture(texture, data)
-
-        if data.ndim == 3 and data.shape[2] == 4:
-            pil_img = Image.fromarray(data, "RGBA")
-        elif data.ndim == 3 and data.shape[2] == 3:
-            pil_img = Image.fromarray(data, "RGB")
-        else:
-            return super().update_texture(texture, data)
-
-        self._textures[texture] = pil_img
-        # Clear PhotoImage cache for this texture so next draw_image re-renders
-        keys_to_remove = [k for k in self._photo_cache if isinstance(k, tuple) and k[0] == texture]
-        for k in keys_to_remove:
-            del self._photo_cache[k]
-        return texture
-
-    # -- Text Rendering ------------------------------------------------------
-
-    def draw_text(
-        self,
-        text: str,
-        x: float,
-        y: float,
-        font_size: int = 24,
-        color: tuple[float, float, float, float] = (1, 1, 1, 1),
-        z: float = 10.0,
-    ) -> None:
-        if self._canvas is None:
+    def unload_image(self, handle: Any) -> None:
+        """Release an image handle and any cached PhotoImages derived from it."""
+        if not isinstance(handle, int):
             return
-        r, g, b = int(color[0] * 255), int(color[1] * 255), int(color[2] * 255)
-        fill_color = f"#{r:02x}{g:02x}{b:02x}"
-        self._canvas.create_text(
-            x,
-            y,
-            text=text,
-            fill=fill_color,
-            font=("TkDefaultFont", font_size),
-            anchor="nw",
-            tags="text",
-        )
+        self._images.pop(handle, None)
+        for key in [k for k in self._photo_cache if isinstance(k, tuple) and k[0] == handle]:
+            del self._photo_cache[key]
 
     # -- Display Control -----------------------------------------------------
 
@@ -346,14 +346,13 @@ class TkBackend(DisplayBackend):
         self._bg_color = f"#{r:02x}{g:02x}{b:02x}"
 
     def clear(self) -> None:
-        """Explicit clear to the background colour (also drops the photo cache)."""
-        if self._canvas:
-            self._clear_canvas()
-            with contextlib.suppress(tk.TclError):
-                self._canvas.configure(bg=self._bg_color)
-            # Drop the PhotoImage cache on an explicit clear — callers use
-            # this for scene changes, so nothing cached is still wanted.
-            self._photo_cache.clear()
+        if self._canvas is None:
+            return
+        self._canvas.delete("frame")
+        self._canvas.configure(bg=self._bg_color)
+        # PhotoImage holds a reference into Tk; dropping the cache each frame
+        # prevents an unbounded leak on a long-running slideshow.
+        self._photo_cache.clear()
 
     def display_power(self, on: bool) -> None:
         logger.debug("TkBackend display_power(%s) — no-op on desktop", on)
