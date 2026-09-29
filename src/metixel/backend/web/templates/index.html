@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=45">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=46">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -696,6 +696,72 @@
                         </div>
                         <div class="setting-control">
                             <input type="checkbox" id="cfg-shuffle" class="checkbox-premium" checked>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <!-- Ambient Fill Mode -->
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Ambient Fill</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Colour shown behind a contained photo (its letterbox bars)</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-ambient-strategy" class="select-premium input-premium w-44">
+                                <option value="solid">Solid colour</option>
+                                <option value="bars">Black bars</option>
+                                <option value="blur">Blurred photo</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Ambient Fill Colour (solid mode only) -->
+                    <div class="setting-row" id="ambient-colour-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Ambient Colour</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Used with the solid fill</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="color" id="cfg-ambient-color" class="input-premium" value="#101014">
+                        </div>
+                    </div>
+
+                    <!-- Ambient Blur Amount (blur mode only) -->
+                    <div class="setting-row" id="ambient-blur-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Blur Amount</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">How soft the blurred backdrop is</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="range" id="cfg-ambient-blur" class="range-premium w-40" min="1" max="100" step="1" value="24">
+                            <span class="range-value text-[0.72rem] font-semibold text-primary" id="cfg-ambient-blur-label">24</span>
+                        </div>
+                    </div>
+
+                    <!-- Ambient Blur Style (blur mode only) -->
+                    <div class="setting-row" id="ambient-blur-filter-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Blur Style</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Box uses less CPU; gaussian is smoother</span>
+                        </div>
+                        <div class="setting-control">
+                            <select id="cfg-ambient-blur-filter" class="select-premium input-premium w-44">
+                                <option value="box">Box</option>
+                                <option value="gaussian">Gaussian</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Backdrop Dimming (blur mode only) -->
+                    <div class="setting-row" id="ambient-darken-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Backdrop Dimming</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Dim the blurred backdrop so the photo stands out</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="range" id="cfg-ambient-darken" class="range-premium w-40" min="0" max="100" step="1" value="35">
+                            <span class="range-value text-[0.72rem] font-semibold text-primary" id="cfg-ambient-darken-label">35%</span>
                         </div>
                     </div>
 
@@ -1691,6 +1757,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=72"></script>
+    <script type="module" src="/static/js/main.js?v=73"></script>
 </body>
 </html>

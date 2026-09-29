@@ -174,9 +174,10 @@ Window {
     //
     // Overlay elements animate every frame, unlike the frame itself, which is
     // composited once per item — the ABC keeps them as separate entry points for
-    // that reason.  Each entry is {text, x, y, size, colour, opacity, align} and
-    // is drawn as plain text here; the renderer flattens and z-sorts the
-    // `OverlayElement` list before handing it over.
+    // that reason.  Each entry is one `OverlayElement` in the shape
+    // `_overlay_entry` builds — {kind, x, y, w, h, colour, alpha, text, size,
+    // source, rotation} — and the renderer has already flattened and z-sorted
+    // the list before handing it over.
     property var overlayElements: []
 
     // =========================================================================
@@ -338,21 +339,65 @@ Window {
     }
 
     // =========================================================================
-    // Layer 7 — overlay (clock, boot spinner, messages)
+    // Layer 7 — overlay (boot screen, messages, clock)
+    //
+    // The delegate draws whichever of the three kinds the element is, and it has
+    // to handle all three.  The boot screen is a black curtain, a logo, a spinner
+    // and a progress bar — rects and images with no text whatsoever — and a
+    // message is a rect panel with text drawn over it.  A text-only delegate does
+    // not degrade gracefully for either: the boot screen paints nothing at all,
+    // and the message loses its panel and, having no position, stacks every line
+    // in one corner.
+    //
+    // One `Item` per element, positioned and faded from the element itself, with
+    // the three shapes as children so geometry, opacity and stacking come from a
+    // single place.  Each child sizes from the element's rect rather than being
+    // anchored to the parent, because a text element's rect is deliberately
+    // (x, y, 0, 0) — anchoring would clip it to nothing.
     // =========================================================================
     Repeater {
         objectName: "overlay"
         model: root.overlayElements
-        delegate: Text {
+        delegate: Item {
+            objectName: "overlayDelegate"
             x: modelData.x
             y: modelData.y
-            text: modelData.text
-            color: modelData.colour
-            opacity: modelData.opacity !== undefined ? modelData.opacity : 1.0
-            font.pixelSize: modelData.size !== undefined ? modelData.size : 24
-            horizontalAlignment: modelData.align !== undefined
-                ? modelData.align
-                : Text.AlignLeft
+            opacity: modelData.alpha
+
+            // "rect" — panel backgrounds, the boot curtain, the progress bar.
+            Rectangle {
+                objectName: "overlayRect"
+                visible: modelData.kind === "rect"
+                width: modelData.w
+                height: modelData.h
+                color: modelData.colour
+            }
+
+            // "image" — the boot logo and its spinner.  The angle arrives per
+            // frame from the layer, so the spin needs no animation of its own.
+            Image {
+                objectName: "overlayImage"
+                visible: modelData.kind === "image"
+                width: modelData.w
+                height: modelData.h
+                source: modelData.source
+                fillMode: Image.Stretch
+                cache: false
+                transform: Rotation {
+                    origin.x: modelData.w / 2
+                    origin.y: modelData.h / 2
+                    angle: modelData.rotation
+                }
+            }
+
+            // "text" — messages, and the boot screen's own lines.
+            Text {
+                objectName: "overlayText"
+                visible: modelData.kind === "text"
+                text: modelData.text
+                color: modelData.colour
+                font.pixelSize: modelData.size
+            }
         }
     }
 }

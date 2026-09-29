@@ -65,6 +65,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "transition_style": "crossfade",  # crossfade, fade_through_black, none
         "fit_mode": "cover",  # contain, cover, fill
         "smart_cover": True,  # use contain for square/opposite-orientation images in cover mode
+        # Ambient look: what sits behind a contained photo, and therefore what
+        # the transition curtain paints across the outgoing image's letterbox
+        # bars.  "solid" is a flat fill of ambient_color; "bars" forces black and
+        # leaves the residue showing; "blur" stretches the artwork to fill the
+        # screen (aspect ignored) and blurs it, TV-style.
+        "ambient_strategy": "solid",  # solid, bars, blur
+        "ambient_color": "#101014",  # #rrggbb (an [r, g, b] list is also accepted)
+        # Blur mode only, and ignored otherwise.  ``ambient_blur_radius`` is the
+        # filter's pixel radius, so a LARGER value is a HEAVIER blur.  (An
+        # earlier version used it as a downscale divisor, which inverted the
+        # control and produced blocky artefacts.)  ``ambient_darken`` dims the
+        # result toward black, which the TV-style effect needs so a bright photo
+        # does not glare behind the artwork.  Both are per-slide costs, not
+        # per-frame, and both are baked into the cached backdrop — see
+        # display/ambient_blur.py, which owns the clamping and the filter choice.
+        "ambient_blur_radius": 24,
+        "ambient_darken": 0.35,
+        # Which kernel builds the blurred backdrop.  "box" is the cheap default;
+        # "gaussian" is smoother at roughly 2.4x the cost for the same radius
+        # (measured — see display/ambient_blur.py), and is offered for photos
+        # whose falloff shows the box kernel's square shoulders.  Either way the
+        # work happens in a throttled subprocess, so it never competes with the
+        # render loop.  Anything unrecognised falls back to "box".
+        "ambient_blur_filter": "box",  # box, gaussian
         "matte_color": [0, 0, 0],  # RGB
         "shuffle": True,
     },

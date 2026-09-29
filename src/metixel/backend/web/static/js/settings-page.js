@@ -29,6 +29,90 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
     }
 
     /**
+     * Show the controls that belong to the selected Ambient Fill mode.
+     *
+     * Only "Solid colour" uses the colour picker, so that row is hidden for the
+     * other two: "Black bars" fixes the colour to black, and "Blurred photo"
+     * uses the blur amount, blur style and dimming instead.  A visible control
+     * that does nothing is worse than a hidden one.
+     *
+     * @param {string} strategy - `solid`, `bars` or `blur`.
+     */
+    function _toggleAmbientColour(strategy) {
+        var colourRow = document.getElementById("ambient-colour-row");
+        if (colourRow) colourRow.style.display = strategy === "solid" ? "" : "none";
+        var isBlur = strategy === "blur";
+        var blurRow = document.getElementById("ambient-blur-row");
+        if (blurRow) blurRow.style.display = isBlur ? "" : "none";
+        var filterRow = document.getElementById("ambient-blur-filter-row");
+        if (filterRow) filterRow.style.display = isBlur ? "" : "none";
+        var darkenRow = document.getElementById("ambient-darken-row");
+        if (darkenRow) darkenRow.style.display = isBlur ? "" : "none";
+    }
+
+    /**
+     * Normalise an ambient strategy to a value this release understands.
+     *
+     * A config from an older release holds `solid` or `bars`; anything unknown
+     * must fall back rather than leaving the select blank and writing an empty
+     * string back on the next save.
+     *
+     * @param {*} value
+     * @returns {string} `solid`, `bars` or `blur`.
+     */
+    function _ambientStrategy(value) {
+        return value === "bars" || value === "blur" ? value : "solid";
+    }
+
+    /**
+     * Normalise an ambient blur kernel to a value this release understands.
+     *
+     * A config written before the control existed has no such key, and the
+     * backend rejects an unknown kernel, so an unrecognised value must fall back
+     * rather than leaving the select blank and writing an empty string back.
+     *
+     * @param {*} value
+     * @returns {string} `box` or `gaussian`.
+     */
+    function _ambientBlurFilter(value) {
+        return value === "gaussian" ? "gaussian" : "box";
+    }
+
+    /**
+     * Coerce an ambient colour to `#rrggbb`.
+     *
+     * Accepted as a hex string or as an `[r, g, b]` array, because the picker
+     * writes a hex string while the `matte_color` key beside it is a list, and a
+     * hand-edited config may hold either.  An unusable value has to become the
+     * fallback here rather than being passed through: a colour input silently
+     * ignores a value it cannot parse, so the picker would show black while the
+     * frame kept painting the configured colour.
+     *
+     * @param {*} value - Hex string, `[r, g, b]` array, or anything else.
+     * @param {string} fallback - `#rrggbb` to use when the value is unusable.
+     * @returns {string} A `#rrggbb` colour.
+     */
+    function _ambientColourToHex(value, fallback) {
+        if (typeof value === "string") {
+            var text = value.trim();
+            return /^#[0-9a-fA-F]{6}$/.test(text) ? text.toLowerCase() : fallback;
+        }
+        if (Array.isArray(value) && value.length >= 3) {
+            var parts = value.slice(0, 3).map(function (c) {
+                var n = Math.max(0, Math.min(255, parseInt(c, 10)));
+                return Number.isNaN(n) ? null : n;
+            });
+            if (parts.every(function (p) { return p !== null; })) {
+                return "#" + parts.map(function (p) {
+                    var h = p.toString(16);
+                    return h.length === 1 ? "0" + h : h;
+                }).join("");
+            }
+        }
+        return fallback;
+    }
+
+    /**
      * Load transcoding profiles from the API and populate the dropdown.
      * Auto-selects the detected Pi model on first run.
      * @param {object} videoCfg - Current video config section.
@@ -356,6 +440,30 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
         setChecked("cfg-smart-cover", s.smart_cover !== false);
         setChecked("cfg-shuffle", s.shuffle !== false);
 
+        // Ambient fill — the colour behind a contained photo, and the colour the
+        // transition curtain paints.  Normalise the mode the same way fit_mode
+        // is: an unrecognised value would leave the select blank and the next
+        // save would write an empty string.
+        var ambientStrategy = _ambientStrategy(s.ambient_strategy);
+        setValue("cfg-ambient-strategy", ambientStrategy);
+        setValue("cfg-ambient-color", _ambientColourToHex(s.ambient_color, "#101014"));
+        var blurEl = document.getElementById("cfg-ambient-blur");
+        if (blurEl) blurEl.value = sanitizeInt(s.ambient_blur_radius, 24);
+        var blurLabel = document.getElementById("cfg-ambient-blur-label");
+        if (blurLabel) blurLabel.textContent = blurEl ? blurEl.value : "24";
+        var darkenEl = document.getElementById("cfg-ambient-darken");
+        if (darkenEl) {
+            // Config stores 0.0-1.0; the slider works in whole percent, which is
+            // what the user sees.  Converting here keeps the two in step without
+            // a fractional slider step.
+            var darkenPct = Math.round(Number(s.ambient_darken) * 100);
+            darkenEl.value = Number.isFinite(darkenPct) ? Math.max(0, Math.min(100, darkenPct)) : 35;
+        }
+        var darkenLabel = document.getElementById("cfg-ambient-darken-label");
+        if (darkenLabel) darkenLabel.textContent = (darkenEl ? darkenEl.value : "35") + "%";
+        setValue("cfg-ambient-blur-filter", _ambientBlurFilter(s.ambient_blur_filter));
+        _toggleAmbientColour(ambientStrategy);
+
         // Matte color — parse RGB array to hex
         var matte = s.matte_color || [20, 20, 20];
         var matteHex = "#" + matte.map(function (c) {
@@ -574,6 +682,12 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
                     fit_mode: document.getElementById("cfg-fit").value,
                     smart_cover: document.getElementById("cfg-smart-cover").checked,
                     shuffle: document.getElementById("cfg-shuffle").checked,
+                    ambient_strategy: _ambientStrategy(document.getElementById("cfg-ambient-strategy").value),
+                    ambient_color: document.getElementById("cfg-ambient-color").value,
+                    ambient_blur_radius: sanitizeInt(document.getElementById("cfg-ambient-blur").value, 24),
+                    ambient_blur_filter: _ambientBlurFilter(document.getElementById("cfg-ambient-blur-filter").value),
+                    // The slider is whole percent; config stores 0.0-1.0.
+                    ambient_darken: sanitizeInt(document.getElementById("cfg-ambient-darken").value, 35) / 100,
                     matte_color: [r, g, b],
                 });
                 if (result) {
@@ -592,6 +706,18 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
             });
             document.getElementById("cfg-cpu-throttle-pct")?.addEventListener("input", function () {
                 var lbl = document.getElementById("cfg-cpu-throttle-pct-label");
+                if (lbl) lbl.textContent = this.value + "%";
+            });
+
+            document.getElementById("cfg-ambient-strategy")?.addEventListener("change", function () {
+                _toggleAmbientColour(this.value);
+            });
+            document.getElementById("cfg-ambient-blur")?.addEventListener("input", function () {
+                var lbl = document.getElementById("cfg-ambient-blur-label");
+                if (lbl) lbl.textContent = this.value;
+            });
+            document.getElementById("cfg-ambient-darken")?.addEventListener("input", function () {
+                var lbl = document.getElementById("cfg-ambient-darken-label");
                 if (lbl) lbl.textContent = this.value + "%";
             });
 

@@ -4,6 +4,8 @@
 # packages like pillow-heif are picked up automatically).  Pi-only packages
 # (pi3d, pysdl2, python-vlc) are intentionally excluded — they are not needed
 # to lint/type-check/test and can be flaky to build on generic CI runners.
+# PySide6 is the one exception to that rule and it is here for the opposite
+# reason: it IS needed to test.  See its entry at the bottom.
 
 Pillow>=10.0
 pillow-heif>=0.16
@@ -27,3 +29,25 @@ Flask>=3.0
 watchdog>=3.0
 paho-mqtt>=1.6
 requests>=2.31
+
+# PySide6 is REQUIRED here, unlike the Pi-only packages excluded at the top: the
+# display tests are gated on `pytest.importorskip("PySide6")`, so without it they
+# SKIP — and a test that skips is not a test.  That gap is not hypothetical: the
+# frontend's artwork-store eviction regression shipped because every test that
+# touched the Qt display path silently skipped on the dev machine and in CI, and
+# only the frame caught it (a blank outgoing crossfade layer).
+#
+# Floor only, matching the minimum Qt the app targets.  Two things worth knowing:
+#   * On the frame Qt comes from apt (python3-pyside6 6.8.2.x on Debian Trixie),
+#     so CI resolves a NEWER Qt than production and the Qt-touching tests are
+#     version-approximate rather than exact.  The behaviour they cover — the
+#     artwork store's bounding/pinning policy — is pure Python, so this does not
+#     weaken it.  Add a `<6.9` cap here if exact parity is ever wanted.
+#   * PySide6 publishes a single abi3 wheel (cp310-abi3), so it installs on every
+#     leg of the matrix (3.11, 3.13) with no per-version handling.
+#
+# PySide6 itself is a meta-package: the payload is PySide6_Essentials +
+# PySide6_Addons + shiboken6, and it installs 648 MB measured on this machine.
+# The `cache: pip` already configured in the workflow is what keeps that from
+# being paid on every run.
+PySide6>=6.8

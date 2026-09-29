@@ -1107,16 +1107,41 @@ def _image_provider(backend: QmlBackend) -> Any:
 def _overlay_entry(element: OverlayElement) -> dict[str, Any]:
     """An :class:`OverlayElement` as a JS-friendly object for the scene.
 
-    Read with ``getattr`` and defaulted because the overlay element type carries
-    more fields than the scene draws, and a missing optional must not blank the
-    whole overlay layer.
+    All three kinds cross the boundary, because the scene draws all three:
+    ``kind`` selects which delegate draws, ``rect`` becomes the x/y/w/h the scene
+    positions with, and ``source``/``rotation`` carry the boot logo and the
+    spinner.
+
+    This mapping is the whole overlay: get it wrong and the failure is silent and
+    total.  An earlier version read ``getattr(element, "x")`` and ``"opacity"`` —
+    fields :class:`OverlayElement` does not have — so every element arrived with
+    x=0, y=0 and zero geometry, and the scene drew each one as a ``Text`` whose
+    string was empty.  The boot screen is a black rect, a logo, a rotating spinner
+    and two progress rects — **no text at all** — so it painted nothing whatsoever,
+    and a notification lost its panel and degenerated to bare text piled up in the
+    top-left corner.  Neither raised: a blank overlay is a perfectly valid frame.
+
+    ``element.image`` is whatever ``DisplayBackend.load_image`` returned, which for
+    this backend is an ``image://`` URL string.  Anything else is not something QML
+    can resolve, so it maps to an empty source and blanks only its own element
+    rather than the layer.
     """
+    x, y, width, height = element.rect
+    source = element.image if isinstance(element.image, str) else ""
     return {
-        "text": str(getattr(element, "text", "") or ""),
-        "x": float(getattr(element, "x", 0.0) or 0.0),
-        "y": float(getattr(element, "y", 0.0) or 0.0),
-        "size": int(getattr(element, "size", 0) or 0) or 24,
-        "opacity": float(getattr(element, "opacity", 1.0) or 0.0),
-        "colour": _colour(getattr(element, "colour", None) or getattr(element, "color", None)),
-        "align": int(getattr(element, "align", 0) or 0),
+        "kind": str(element.kind),
+        "x": float(x),
+        "y": float(y),
+        "w": float(width),
+        "h": float(height),
+        "colour": _colour(element.colour),
+        # ``alpha``, not ``opacity``: the field is named alpha on the element and
+        # the scene reads it as opacity.  ``__post_init__`` guarantees it is a
+        # float in 0..1, so this needs no defaulting — and must not use ``or``,
+        # which would turn a deliberately invisible element into a solid one.
+        "alpha": float(element.alpha),
+        "text": str(element.text or ""),
+        "size": int(element.size or 0) or 24,
+        "source": source,
+        "rotation": float(element.rotation),
     }

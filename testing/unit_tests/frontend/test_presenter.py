@@ -431,6 +431,84 @@ class TestTransition:
         assert presenter._transition_seconds() == 2.5
 
 
+class TestTransitionLayersAreResolvedOnce:
+    """One handle per layer for the whole fade -- never one per frame.
+
+    ``_image_for`` is not a pure lookup, which is what makes this a correctness
+    property rather than a tidiness one:
+
+    * for a video that has just ended it returns a **newly decoded** last frame
+      and, with it, a newly minted backend artwork key -- that frame is
+      deliberately uncached, so nothing about it is stable;
+    * for an item the presenter's cache has dropped it falls back to a blocking
+      re-decode, which also mints a new key.
+
+    Asking for the outgoing layer on every frame of a fade therefore re-decoded a
+    full-resolution JPEG on the render thread once per frame (the outgoing layer
+    is the *previous* item -- for the 4K test clip, a 3840x2160 decode per frame),
+    and handed the scene a different image URL every time.  The backend's artwork
+    store can only pin a *stable* key, so one orphaned key was minted per frame
+    and Qt asked for keys that had already been trimmed out.
+
+    Measured on the frame, per crossfade: ~150-165 ``Failed to get image from
+    provider`` errors -- one per frame of a 2.5 s fade at 60 fps -- of which 316
+    of 318 were on ``Frame.qml:227``, the outgoing layer.
+    """
+
+    @staticmethod
+    def _enter_fade(presenter: Presenter, backend: FakeBackend) -> None:
+        presenter._item_start_time = time.monotonic() - 30.5
+        backend.presented.clear()
+
+    @staticmethod
+    def _outgoing(backend: FakeBackend) -> list[object]:
+        """The handles painted as the outgoing layer, in frame order.
+
+        Without ``present_transition`` the fake takes the two-paint fallback, and
+        the outgoing layer is painted first within each frame.
+        """
+        return [backend.presented[i][1] for i in range(0, len(backend.presented), 2)]
+
+    def test_the_outgoing_handle_survives_a_cache_eviction_mid_fade(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        presenter.set_queue(
+            [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
+        )
+        self._enter_fade(presenter, backend)
+        presenter.render()
+        first = self._outgoing(backend)
+        assert first, "the fade should paint an outgoing layer"
+        backend.loaded.clear()
+
+        # The presenter's LRU is only a few entries deep, and it is cleared
+        # outright when the queue changes.  Either can drop the item on screen
+        # while it is still the fade's outgoing layer.
+        presenter._cache.clear()
+        for _ in range(4):
+            presenter.render()
+
+        assert self._outgoing(backend) == first * len(self._outgoing(backend))
+        assert backend.loaded == [], "an evicted outgoing layer must not be re-decoded per frame"
+
+    def test_an_ended_videos_last_frame_is_decoded_once_per_fade(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        video = tmp_path / "v.mp4"
+        presenter.set_queue([_video_item("v", video), _image_item("b", tmp_path / "b.jpg")])
+        backend.finish_video()
+        # The poster was loaded while the slide was still being set up, so only
+        # the last-frame decodes are left to count.
+        backend.loaded.clear()
+
+        for _ in range(5):
+            presenter.render()
+
+        assert backend.loaded.count(video) == 1, (
+            "the ended video's last frame must be decoded once for the fade, not once per frame"
+        )
+
+
 class TestCurrentMediaStateFile:
     """``current_media.json`` drives the dashboard's "Now Playing" card.
 

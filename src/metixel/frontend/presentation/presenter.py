@@ -321,6 +321,16 @@ class Presenter:
         # the video's opening image — see ``_image_for``.
         self._video_ended_id: str | None = None
 
+        # -- The transition's two layers, resolved ONCE per transition --
+        # Keyed by item id so a change of either layer (or of the item on
+        # screen) re-resolves; cleared whenever a transition is not running.
+        # Doing this per *frame* was a real defect — see
+        # ``_transition_images``.
+        self._out_item_id: str | None = None
+        self._out_image: Any = None
+        self._in_item_id: str | None = None
+        self._in_image: Any = None
+
         logger.info(
             "Presenter: %dx%d, style=%s (pinned), fit=%s, smart_cover=%s, "
             "shuffle=%s, transition=%s, image_duration=%ss",
@@ -961,6 +971,61 @@ class Presenter:
         # would blip and the boot fade would re-run.
         self._present_current()
 
+    def _forget_transition_images(self) -> None:
+        """Drop the cached outgoing/incoming handles.
+
+        Called whenever a fade is not running: on a cut, on an advance, and when
+        the item on screen is replaced.  Holding them past that point would keep
+        an image the backend is free to release.
+        """
+        self._out_item_id = None
+        self._out_image = None
+        self._in_item_id = None
+        self._in_image = None
+
+    def _transition_images(self) -> tuple[Any, Any]:
+        """Return ``(outgoing, incoming)`` handles for the fade in progress.
+
+        Resolved ONCE per transition and reused for every frame of it.  That is a
+        correctness fix rather than an optimisation, because :meth:`_image_for`
+        is not a pure lookup:
+
+        * for a video that has just ended it returns a **newly decoded** last
+          frame and, with it, a **newly minted** backend artwork key — that frame
+          is deliberately uncached, so nothing about it is stable;
+        * for any item the presenter's cache has dropped it falls back to a
+          blocking re-decode, which also mints a new key.
+
+        Calling it per frame therefore (a) re-decoded a full-resolution JPEG on
+        the render thread on every frame of the fade — the outgoing layer is the
+        *previous* item, so for the 4K test clip that was one 3840x2160 decode per
+        frame — and (b) handed the scene a different image URL each frame, so the
+        outgoing layer could never be pinned: the store accumulated one orphaned
+        key per frame and Qt asked for keys that had already been trimmed out.
+        Measured on the frame, per crossfade: ~150-165 ``Failed to get image from
+        provider`` errors, i.e. one per frame of a 2.5 s fade at 60 fps, 316 of
+        318 of them on ``Frame.qml:227`` — ``prevArtwork``, the outgoing layer.
+
+        One stable handle per layer has the further benefit that the scene's
+        per-frame re-request of both layers now lands on the *same* key every
+        time, which is what keeps it pinned in the backend's artwork store for the
+        whole fade (see ``ArtworkStore``).
+        """
+        out_item = self._shown_item
+        if out_item is None:
+            self._out_item_id = None
+            self._out_image = None
+        elif self._out_item_id != out_item.id:
+            self._out_item_id = out_item.id
+            self._out_image = self._image_for(out_item)
+
+        next_item = self._queue[(self._current_idx + 1) % len(self._queue)]
+        if self._in_item_id != next_item.id:
+            self._in_item_id = next_item.id
+            self._in_image = self._image_for(next_item)
+
+        return self._out_image, self._in_image
+
     def _present_current(self, with_artwork: bool = True) -> None:
         """Show the current item, loading it synchronously if necessary.
 
@@ -989,6 +1054,10 @@ class Presenter:
         )
         self._shown_plan = plan
         self._shown_item = item
+        # No fade is running once a single layer is being presented, so the
+        # cached transition handles are stale by definition — and holding them
+        # would also hold the sample they name.
+        self._forget_transition_images()
         # Started AFTER the first present, so the frame shows the still poster
         # before the video takes over the artwork rect on the next tick — which
         # is the "fades in paused, then plays" the poster exists for.
@@ -1013,10 +1082,12 @@ class Presenter:
         next_plan = self._plan_for(
             MediaSize(next_item.width, next_item.height, self._media_type(next_item))
         )
-        next_image = self._image_for(next_item)
+        # Resolved ONCE for the whole fade rather than per frame — see
+        # :meth:`_transition_images` for why that is a correctness fix and not
+        # an optimisation.
+        outgoing_image, next_image = self._transition_images()
 
         outgoing = self._shown_plan or self._current_plan()
-        outgoing_image = self._image_for(self._shown_item) if self._shown_item else None
         cur_alpha = self._transitions.get_alpha(progress, "current")
         next_alpha = self._transitions.get_alpha(progress, "next")
 
@@ -1156,6 +1227,7 @@ class Presenter:
         # marker goes too, so it cannot decide the NEXT item's poster.
         self._stop_video()
         self._video_ended_id = None
+        self._forget_transition_images()
 
         self._current_idx = (self._current_idx + 1) % len(self._queue)
         self._item_start_time = time.monotonic()

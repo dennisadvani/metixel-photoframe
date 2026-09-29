@@ -81,14 +81,20 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
 
-# Third-party libraries without type stubs (Pi-only or untyped).
+# Third-party libraries that may be absent on a given machine.
 #
-# PySide6 belongs here for the same reason pi3d does: it is apt-installed on
-# the frame and absent everywhere else — requirements-ci.txt contains none of
-# it.  The Qt imports in display/qt_qml_backend.py are deliberately lazy (inside
-# functions), but mypy still analyses the module body, and an `if TYPE_CHECKING`
-# import would be resolved too.  Without this entry the CI type check fails on a
-# package the runner does not have.
+# `evdev` is Pi-only and is not installed in CI.
+#
+# `PySide6` is a different case, and the reason for keeping an entry for a package
+# that ships its own stubs: it IS installed in CI (see requirements-ci.txt), and
+# measured — with it installed and this entry removed, mypy still reports success
+# over all 208 files.  It is kept for the opposite situation, a developer machine
+# with no Qt: `display/qt_qml_backend.py` has an `if TYPE_CHECKING:` block that
+# imports Qt types, and without this entry every one of those becomes an error on
+# such a machine.  That is noise, not signal — the module is explicitly designed to
+# be importable with no Qt at all, which is what lets `detect_backend()` probe for
+# it.  `ignore_missing_imports` only applies when resolution FAILS, so nothing is
+# given up on a machine where Qt is present.
 #
 # Only the wildcard is listed, with no bare ``PySide6`` entry beside it: every
 # Qt import in the tree is a submodule import (``from PySide6.QtGui import …``),
