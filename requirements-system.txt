@@ -44,6 +44,32 @@ python3-mpv
 mpv
 libmpv2
 
+# Qt Quick + Qt Multimedia — the GPU-composited renderer (Frame.qml + QmlBackend).
+# Measured on a Pi 5 against the software path it replaces, on the same 60 fps
+# production-format clip: 59.91 fps presented / 99.72% of frames vsync-locked for
+# 35.5% of one core, versus 182% for the libmpv software renderer.  These are the
+# packages that make smooth playback possible, so a missing one is a performance
+# regression that looks like a rendering bug.
+#   qtquick + qml   - the scene graph and its QML engine
+#   qtmultimedia    - QMediaPlayer + VideoOutput.  Hardware-decodes HEVC on a Pi 5
+#                     through V4L2 stateless (/dev/video19, DMABuf in and out).
+#                     Note a Pi 5 has NO H.264 hardware decoder at all, which is
+#                     why the pipeline re-encodes to a per-board codec profile.
+#   qml6-module-*   - the QML modules Frame.qml imports: qtquick for the items
+#                     themselves, qtquick-shapes for ShapePath (the mat ring).
+#                     qtquick-effects is installed for MultiEffect but is
+#                     deliberately NOT used for blur — production blurs offline in
+#                     ambient_blur.py and blits a pre-blurred JPEG.
+#   libqt6quick6 / libqt6multimedia6 - the native libraries behind them.
+python3-pyside6.qtquick
+python3-pyside6.qml
+python3-pyside6.qtmultimedia
+qml6-module-qtquick
+qml6-module-qtquick-shapes
+qml6-module-qtquick-effects
+libqt6quick6
+libqt6multimedia6
+
 # Media processing
 ffmpeg
 cpulimit

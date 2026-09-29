@@ -31,6 +31,28 @@ Environment=XDG_RUNTIME_DIR=/run/user/1000
 # the intended, diagnosable behaviour.
 Environment=QT_QPA_PLATFORM=wayland
 
+# Pin Qt Multimedia to the FFmpeg backend, for the same reason as the QPA plugin
+# above: Qt Multimedia resolves a backend at runtime and the default is not the
+# same across builds or distributions.  The FFmpeg backend is the one verified to
+# hardware-decode on this board (V4L2 stateless HEVC via /dev/video19, DMABuf in
+# AND out; see the QT_LOGGING_RULES note below to re-confirm it).  The GStreamer
+# backend takes a different path entirely and can fall back to software decode
+# with nothing in the log to explain the judder.
+Environment=QT_MEDIA_BACKEND=ffmpeg
+
+# Pin the Qt Quick scene graph to the OpenGL RHI backend.  Qt's default has
+# changed across releases, and Vulkan is a documented hazard on this board: it has
+# no libvulkan.so.1, and forcing a Vulkan context under cage has previously taken
+# the whole machine down (mpv --gpu-context=waylandvk).  OpenGL is the backend
+# every pacing/CPU measurement in this change was taken on, so pinning it keeps
+# those numbers meaningful.
+Environment=QSG_RHI_BACKEND=opengl
+
+# Uncomment to re-verify the hardware-decode decision during bring-up.  Left off
+# by default: it is verbose, and per AGENTS.md rule 9 a loop emitting an unbounded
+# DEBUG stream onto the SD card is a bug, not a diagnostic.
+#Environment=QT_LOGGING_RULES=qt.multimedia.ffmpeg*=true
+
 # Ensure XDG_RUNTIME_DIR exists for cage's Wayland socket.
 # The '+' prefix runs these as root before dropping to User=pi.
 # loginctl enable-linger pi (run once at setup) ensures systemd-logind
