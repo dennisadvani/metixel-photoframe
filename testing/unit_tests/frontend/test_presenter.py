@@ -314,6 +314,144 @@ class TestItemDuration:
         assert presenter._item_duration(item) == 15.0
 
 
+class TestAManualSkipIsACut:
+    """Next/Prev change the frame immediately — no transition.
+
+    The configured transition is a *slideshow* effect.  Replaying it on every
+    button press made fast browsing feel laggy and made it impossible to step
+    through a few photos quickly, because each press queued another full fade.
+
+    These tests pin the *observable* consequence rather than the implementation:
+    the new item is on screen, and the index has moved, the moment the call
+    returns.
+    """
+
+    def _four(self, presenter: Presenter, tmp_path: Path) -> None:
+        presenter.set_queue(
+            [
+                _image_item("a", tmp_path / "a.jpg"),
+                _image_item("b", tmp_path / "b.jpg"),
+                _image_item("c", tmp_path / "c.jpg"),
+                _image_item("d", tmp_path / "d.jpg"),
+            ]
+        )
+
+    def test_next_moves_immediately(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        self._four(presenter, tmp_path)
+
+        presenter.next_item()
+
+        current = presenter.current_item
+        assert current is not None
+        assert current.id == "b", "the item must be current without waiting for a fade"
+        assert presenter.current_index == 1
+
+    def test_prev_moves_immediately(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        self._four(presenter, tmp_path)
+        presenter.next_item()  # now on b
+
+        presenter.prev_item()
+
+        current = presenter.current_item
+        assert current is not None
+        assert current.id == "a"
+
+    def test_no_transition_is_started(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """``_in_transition`` must be false straight after a skip.
+
+        If a manual skip drove the transition clock, this would be True and the
+        next few ticks would blend — the behaviour being reverted.
+        """
+        self._four(presenter, tmp_path)
+
+        presenter.next_item()
+
+        assert not presenter._in_transition()
+
+    def test_the_clock_is_restarted_so_the_item_gets_its_full_duration(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        self._four(presenter, tmp_path)
+        # Age the slide so a carried-over clock would be obvious.
+        presenter._item_start_time = time.monotonic() - 25.0
+
+        presenter.next_item()
+
+        elapsed = time.monotonic() - presenter._item_start_time
+        assert elapsed < 1.0, (
+            "the arrived-at item must start its own slide, not inherit the remainder "
+            "of the one being left"
+        )
+
+    def test_repeated_presses_each_step_once(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """A cut has no in-flight state, so rapid presses must be exact."""
+        self._four(presenter, tmp_path)
+
+        presenter.next_item()
+        presenter.next_item()
+        presenter.next_item()
+
+        current = presenter.current_item
+        assert current is not None
+        assert current.id == "d"
+
+    def test_presses_alternate_cleanly(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        self._four(presenter, tmp_path)
+
+        presenter.next_item()
+        presenter.prev_item()
+
+        current = presenter.current_item
+        assert current is not None
+        assert current.id == "a"
+
+    def test_a_video_is_stopped_before_leaving(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """A live video surface would keep painting over the new item."""
+        presenter.set_queue(
+            [
+                _video_item("v", tmp_path / "v.mp4"),
+                _image_item("b", tmp_path / "b.jpg"),
+            ]
+        )
+        assert presenter.video_active
+
+        presenter.next_item()
+
+        assert not presenter.video_active
+
+    def test_it_still_works_with_a_transition_configured(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """The revert is unconditional — the configured style must not resurrect it.
+
+        Reading the transition duration to decide whether to animate is exactly
+        the coupling that made a button press behave like a slide change.
+        """
+        presenter._config.update(
+            "slideshow", {"transition_style": "crossfade", "transition_duration_ms": 4000}
+        )
+        presenter.reload_config(presenter._config)
+        self._four(presenter, tmp_path)
+
+        presenter.next_item()
+
+        assert not presenter._in_transition()
+        current = presenter.current_item
+        assert current is not None and current.id == "b"
+
+
 class TestStallAndHold:
     """The behaviour that stops a slow decode producing a blank frame.
 
@@ -792,45 +930,39 @@ class TestCurrentMediaStateFile:
         assert state["id"] == "a"
 
     def test_advancing_republishes(self, presenter: Presenter, tmp_path: Path) -> None:
-        """The card follows the frame, which means it follows the FADE.
+        """A manual skip publishes immediately, because it is a cut.
 
-        A manual skip now animates, so the target is not on screen the instant
-        ``next_item`` returns — publishing it then would make the dashboard name a
-        file the viewer cannot see yet, for the whole duration of the crossfade.
-        The republish therefore happens where the index actually moves, in
-        ``_advance``, and this walks the fade out to reach it.
+        There is no fade to wait out: the new item is on screen the moment
+        ``next_item`` returns, so the card can name it straight away.  (While
+        skips animated, this had to walk the fade out first, or the dashboard
+        named a file that was still fading in.)
         """
         presenter.set_queue(
             [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
         )
         presenter.next_item()
 
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline:
-            presenter.render()
-            state = self._read(tmp_path)
-            if state is not None and state["id"] == "b":
-                return
-            time.sleep(0.01)
-        pytest.fail("current_media.json never named the item the fade landed on")
+        state = self._read(tmp_path)
+        assert state is not None
+        assert state["id"] == "b"
 
-    def test_the_state_file_tracks_the_frame_not_the_target(
+    def test_the_state_file_matches_the_frame_immediately(
         self, presenter: Presenter, tmp_path: Path
     ) -> None:
-        """Mid-fade the outgoing item is still the one on screen."""
+        """The card and the panel never disagree, even for one tick.
+
+        A cut moves the index and repaints in the same call, so there is no
+        window in which the published item differs from the one being drawn.
+        """
         presenter.set_queue(
             [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
         )
         presenter.next_item()
-        # One tick only: the blend has started but not finished.
-        presenter.render()
 
+        current = presenter.current_item
         state = self._read(tmp_path)
-        assert state is not None
-        assert state["id"] == "a", (
-            "the dashboard must not claim to be showing an item that is still only "
-            "part-way through fading in"
-        )
+        assert current is not None and state is not None
+        assert state["id"] == current.id
 
     def test_removing_everything_clears_the_state(
         self, presenter: Presenter, tmp_path: Path

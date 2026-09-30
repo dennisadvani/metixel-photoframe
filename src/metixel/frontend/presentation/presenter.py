@@ -310,16 +310,6 @@ class Presenter:
         self._shown_plan: RenderPlan | None = None
         self._shown_item: MediaItem | None = None
 
-        # -- Manual skip in flight --
-        # Set while a Next/Prev fade is running, and None otherwise.  A skip
-        # parks ``_current_idx`` one BEFORE the item it is heading to (see
-        # ``_begin_jump``), so ``current_item`` is the item being LEFT.  A second
-        # press during the fade must advance from where the first one is *going*,
-        # not from where the index is parked — otherwise it recomputes the same
-        # target and re-fades to the item already arriving.  This records that
-        # destination for the duration of the fade.
-        self._jump_target: MediaItem | None = None
-
         # -- Video playback --
         # True while the backend is playing the current item's video.  The
         # canvas holds an unpainted artwork rect open only while this holds, so
@@ -507,146 +497,50 @@ class Presenter:
     # -- Playback control ----------------------------------------------------
 
     def next_item(self) -> None:
-        """Skip forward.  Animated, using the configured transition.
+        """Skip forward.  A cut, not a transition.
 
-        The jump is expressed as "the outgoing item's window just ended", which
-        is exactly the state a natural advance passes through.  Setting the clock
-        back by the slide duration makes ``render`` walk into its ordinary
-        transition branch on the very next tick, so a manual skip animates with
-        the SAME code path, easing and backdrops as an automatic one — there is
-        no second transition implementation to keep in step.
+        Deliberately NOT animated.  A manual skip is a direct response to a
+        button press, and the configured transition is a *slideshow* effect — a
+        slow crossfade was replayed on every press, which made fast browsing
+        feel like the button was lagging and made it impossible to step through
+        a handful of photos quickly.  The frame changes on the next tick.
         """
         if not self._queue:
             return
         self._paused = False
-        self._begin_jump(1)
+        self._jump(1)
 
     def prev_item(self) -> None:
-        """Skip back.  Animated, using the configured transition.
-
-        Backwards needs one extra step that forwards does not: the blend is
-        always ``shown -> queue[current + 1]``, so to fade *backwards* the index
-        is parked one BEFORE the target and the outgoing item is kept on
-        ``_shown_plan``.  That makes the target the "next" item without teaching
-        the transition about direction, which would mean a second blend path.
-        """
+        """Skip back.  A cut, not a transition — see :meth:`next_item`."""
         if not self._queue:
             return
         self._paused = False
-        self._begin_jump(-1)
+        self._jump(-1)
 
-    def _begin_jump(self, step: int) -> None:
-        """Start an animated skip of *step* items through the transition path.
+    def _jump(self, step: int) -> None:
+        """Move *step* items and present the result immediately.
 
         Shared by :meth:`next_item` and :meth:`prev_item` because the two differ
-        only in which item ends up on ``_current_idx``.
+        only in direction.
 
-        A transition is only used when there is something to blend FROM and the
-        configured style actually has a duration; otherwise this degrades to the
-        old hard cut, which is the correct look for ``transition_style: none``
-        and the only honest option when the queue holds a single item (there is
-        no second image to blend to).
-
-        The item being left is left running until the fade replaces it — a video
-        is stopped here because a live video surface cannot be blended as an
-        image, the same reason ``_end_video`` stops it.
-
-        Repeated presses are honoured.  While a fade is in flight the index is
-        parked one BEFORE its destination, so ``current_item`` names the item
-        being LEFT; advancing from that would recompute the destination already
-        on its way in, and the second press would appear to do nothing.  The
-        origin is therefore taken from ``_jump_target`` when a fade is running,
-        which makes each press step one further from the item on screen.
+        The clock is restarted, so the item arrived at gets its full duration
+        rather than the remainder of the one being left.  A video is stopped
+        first: a live video surface is not an image and would otherwise keep
+        painting over the new item.
         """
-        transition_s = self._transition_seconds()
-        count = len(self._queue)
-
-        # Where this skip starts counting from, and what is currently on screen.
-        #
-        # These differ during a fade: ``current_item`` is the parked index's item
-        # (what is still painting) while ``_jump_target`` is what the running fade
-        # is heading to (what the next press must step past).
-        origin = self._jump_target or self.current_item
-        outgoing = self.current_item
-        if origin is None:
-            return
-
-        try:
-            origin_idx = self._queue.index(origin)
-        except ValueError:
-            # The queue was rebuilt underneath us; fall back to the live index
-            # rather than guessing at a stale item.
-            origin_idx = self._current_idx
-            origin = self.current_item
-            if origin is None:
-                return
-
-        if transition_s <= 0 or count < 2 or outgoing is None:
-            # Hard cut: no blend to run, so moving the index IS the whole change.
-            self._jump_target = None
-            self._stop_video()
-            self._forget_video_last_frame()
-            self._current_idx = (origin_idx + step) % count
-            self._item_start_time = time.monotonic()
-            self._transition_stall_logged = False
-            self._present_current()
-            self._write_current_media()
-            return
-
-        # A video cannot be blended, so it stops and its LAST frame becomes the
-        # outgoing layer (``_image_for`` supplies it).  Done before the index
-        # moves, while the video is still the current item.
         self._stop_video()
         self._forget_video_last_frame()
-
-        # Park the index so the target lands on ``current + 1`` — the only
-        # direction ``_present_transition`` blends in.
-        target = (origin_idx + step) % count
-
-        # Wipe any handle memoised for a fade that is no longer running, so the
-        # blend resolves fresh layers rather than reusing the abandoned pair.
-        #
-        # BEFORE ``_jump_target`` is set, deliberately: this call also clears that
-        # field (a destination only has meaning while a fade is in flight), so
-        # setting it first would have the fresh value wiped on the same line it
-        # was written — which silently reinstated the double-press bug.
         self._forget_transition_images()
 
-        self._current_idx = (target - 1) % count
-        self._jump_target = self._queue[target]
-
-        # Keep the item being left as the outgoing layer.  ``_shown_plan`` is
-        # what the fade starts from, and it is already the frame on screen, so
-        # this is a no-op in the common case and a repair when a previous reload
-        # dropped the cached plan.
-        if self._shown_plan is None or self._shown_item is not outgoing:
-            plan = self._current_plan()
-            if plan is not None:
-                self._shown_plan = plan
-                self._shown_item = outgoing
-
-        # Park the clock at "the parked slide just ended", so ``render`` computes
-        # ``progress = (elapsed - duration) / transition_s`` from zero on its very
-        # next tick and the fade runs in full.
-        #
-        # The duration is the PARKED item's — i.e. ``self.current_item`` — because
-        # that is exactly what ``render`` measures ``elapsed`` against.  Using the
-        # target's duration instead (the intuitive choice, since the target is
-        # what the user asked for) mis-times every jump between items of
-        # different length: parking a 30 s photo in front of a 4 s clip would
-        # start the blend 26 s late, so the frame would sit on the photo and then
-        # appear to cut.  The parked item is the one the clock is still on, so
-        # its duration is the honest anchor.
-        parked_item = self.current_item
-        if parked_item is not None:
-            self._item_start_time = time.monotonic() - self._item_duration(parked_item)
-        else:  # pragma: no cover - a queue with items always yields a current item
-            self._item_start_time = time.monotonic()
+        self._current_idx = (self._current_idx + step) % len(self._queue)
+        self._item_start_time = time.monotonic()
         self._transition_stall_logged = False
-        # Decode the target now if it is not cached: the fade needs its pixels on
-        # the first frame, and a manual skip gives the decode-ahead no warning.
+
         self._preload_next()
-        logger.debug("Animated skip %+d: %s -> %s", step, outgoing.id, self._queue[target].id)
+        self._present_current()
+        self._write_current_media()
+        item = self.current_item
+        logger.debug("Skip %+d: now showing %s", step, item.id if item else None)
 
     def pause(self) -> None:
         """Pause the slideshow.
@@ -1132,7 +1026,6 @@ class Presenter:
         self._out_image = None
         self._in_item_id = None
         self._in_image = None
-        self._jump_target = None
 
     def _forget_video_last_frame(self) -> None:
         """Clear the ended-video marker and any preloaded last-frame handle.
