@@ -125,6 +125,50 @@
     color: #5f6278;
   }
 
+  /* Colour swatch — a fixed square showing the colour, NOT a text-field button.
+   *
+   * `input[type="color"]` matched none of the shared selectors (`input[type=text]`,
+   * `input[type=range]`, `input[type=checkbox]`) and so fell through to the generic
+   * `input:focus` rule plus its own browser default.  In Chrome the default is a
+   * ~13px padding around the colour rect, so the swatch rendered as a thin grey
+   * dash in a dark rounded box — the control LOOKED broken while its value was
+   * perfectly correct, which is why the picker "worked" but the display did not.
+   *
+   * Suppressing the native chrome and painting the square ourselves also makes it
+   * look like every other premium control rather than a form-widget remnant.
+   */
+  input[type="color"].swatch-premium {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 2.25rem;
+    height: 1.6rem;
+    padding: 0;
+    border: 1px solid #2a2f45;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input[type="color"].swatch-premium:focus {
+    outline: none;
+    border-color: rgba(139, 26, 43, 0.6);
+    box-shadow: 0 0 0 1px rgba(139, 26, 43, 0.25);
+  }
+  /* The inner colour rect.  Without `padding: 0` on the input this cannot fill
+   * the box, because the rect's area is the content box. */
+  input[type="color"].swatch-premium::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  input[type="color"].swatch-premium::-webkit-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+  input[type="color"].swatch-premium::-moz-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+
   /* Refined range slider — thin track, tactile thumb */
   input[type="range"].range-premium {
     -webkit-appearance: none;

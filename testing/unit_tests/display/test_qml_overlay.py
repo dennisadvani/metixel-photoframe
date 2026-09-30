@@ -231,4 +231,62 @@ class TestTheSceneInstantiates:
         names = [child.objectName() for child in window.children() if child.objectName()]
 
         assert names[-1] == "overlay"
-        assert "artwork" in names and "matte" in names, names
+        assert "media" in names and "matte" in names, names
+
+    def test_the_backdrop_is_grouped_with_its_own_media(self) -> None:
+        """A backdrop must fade as part of its media, not as a loose layer.
+
+        Declaring the six layers loose instead produces, bottom to top:
+        ``prevAmbient, ambient, prevArtwork, artwork`` — which paints the INCOMING
+        backdrop UNDER the OUTGOING artwork.  At the ambient band's edges, where no
+        artwork covers, the incoming item's blur then shows through the outgoing
+        item for the whole crossfade.  Each slot therefore has to be one ``Item``
+        with its backdrop and artwork as children, so the item-level opacity makes
+        them fade together and cannot drift apart.
+        """
+        _engine, window, _warnings = self._load_scene()
+
+        # Found by walking the root's direct children, not with findChild: a bare
+        # ``Item`` exposes no QML type to ``findChild``'s name filter reliably, and
+        # these two are the layer containers themselves.
+        by_name = {c.objectName(): c for c in window.children() if c.objectName()}
+        slots = {
+            "prevMedia": (by_name["prevMedia"], "prevAmbient", "prevArtwork"),
+            "media": (by_name["media"], "ambient", "artwork"),
+        }
+
+        for slot_name, (slot, backdrop, artwork) in slots.items():
+            child_names = {c.objectName() for c in slot.children()}
+            assert backdrop in child_names, f"{slot_name} must own its backdrop: {child_names}"
+            assert artwork in child_names, f"{slot_name} must own its artwork: {child_names}"
+            assert len(child_names) == 2, f"{slot_name} should hold exactly a pair: {child_names}"
+
+    def test_the_rings_composite_over_the_media(self) -> None:
+        """Media farthest, rings above it, overlay closest — the whole point.
+
+        This is also what makes video need no special case: the video is media like
+        any other, so the mat composites over it by declaration order rather than
+        the video painting its own matte.
+        """
+        _engine, window, _warnings = self._load_scene()
+
+        names = [child.objectName() for child in window.children() if child.objectName()]
+
+        # Declaration order IS paint order, bottom-to-top.
+        expected = [
+            "background",
+            "prevMedia",
+            "media",
+            "videoOut",
+            "whitespace",
+            "matte",
+            "moulding",
+            "overlay",
+        ]
+        assert names == expected, names
+
+        # The rings composite over the media, and the overlay over everything.
+        assert names.index("media") < names.index("matte") < names.index("overlay"), names
+        # The video supersedes the poster, so it is above the media group and
+        # still below the rings that composite over it.
+        assert names.index("media") < names.index("videoOut") < names.index("matte"), names

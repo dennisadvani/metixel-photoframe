@@ -14,6 +14,7 @@ from metixel.display.screenshot import capture, clear_screenshots, resolve_scree
 from metixel.shared.paths import live_dir
 from metixel.shared.platform import read_device_tree_model, read_vcgencmd_mem_str
 from metixel.shared.subprocess import schedule_sudo
+from metixel.shared.timing import CURTAIN_SETTLE_SECONDS as _CURTAIN_SETTLE_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,34 @@ def _schedule_sudo(
         thread_name=thread_name,
         delay=delay,
     )
+
+
+#: Long enough for the frontend's curtain fade plus a margin, so a restart or
+#: power action never lands while the screen is still coming down.
+#:
+#: Imported from the curtain rather than written again here.  The backend cannot
+#: observe the frontend's curtain, so a delay is the only way to honour "do not
+#: act until the screen is black" — and a second copy of the number would drift
+#: from the first, silently, in the direction of the picture tearing.
+CURTAIN_SETTLE_SECONDS = _CURTAIN_SETTLE_SECONDS
+
+
+def _request_curtain(reason: str) -> None:
+    """Ask the frontend to go black before a disruptive action.
+
+    Best-effort and non-blocking by design: if there is no IPC handle (a desktop
+    run, or the frontend is already gone) the action proceeds unchanged.  A
+    cosmetic guard must never become a reason a reboot does not happen.
+    """
+    ipc = current_app.config.get("METIXEL_IPC")
+    if ipc is None:
+        return
+    try:
+        from metixel.shared.ipc import ControlMessage
+
+        ipc.send(ControlMessage(cmd="curtain", args={"reason": reason}))
+    except Exception:
+        logger.debug("Could not request the pre-action curtain", exc_info=True)
 
 
 @system_bp.route("/mqtt-status", methods=["GET"])
@@ -74,13 +103,15 @@ def restart_services():
     sent first.  Typically called after clearing the media cache so
     stale cached-file references are dropped.
     """
+    _request_curtain("a service restart")
     _schedule_sudo(
         ["systemctl", "restart", "metixel-backend", "metixel-cage"],
         ok_message="Services restarted via sudo systemctl",
         fail_message="sudo systemctl restart",
         thread_name="svc-restart",
+        delay=CURTAIN_SETTLE_SECONDS,
     )
-    logger.info("Service restart scheduled (will execute in 2s)")
+    logger.info("Service restart scheduled (will execute in %.1fs)", CURTAIN_SETTLE_SECONDS)
     return jsonify({"status": "ok", "message": "Restarting services in 2 seconds…"})
 
 
@@ -92,13 +123,15 @@ def reboot_system():
     response is fully sent first.  Requires a NOPASSWD sudoers entry
     for reboot.
     """
+    _request_curtain("a reboot")
     _schedule_sudo(
         ["reboot", "now"],
         ok_message="System reboot initiated via sudo reboot now",
         fail_message="sudo reboot now",
         thread_name="sys-reboot",
+        delay=CURTAIN_SETTLE_SECONDS,
     )
-    logger.info("System reboot scheduled (will execute in 2s)")
+    logger.info("System reboot scheduled (will execute in %.1fs)", CURTAIN_SETTLE_SECONDS)
     return jsonify({"status": "ok", "message": "Rebooting system in 2 seconds…"})
 
 
@@ -110,13 +143,15 @@ def shutdown_system():
     response is fully sent first.  Requires a NOPASSWD sudoers entry
     for shutdown.
     """
+    _request_curtain("a shutdown")
     _schedule_sudo(
         ["shutdown", "now"],
         ok_message="System shutdown initiated via sudo shutdown now",
         fail_message="sudo shutdown now",
         thread_name="sys-shutdown",
+        delay=CURTAIN_SETTLE_SECONDS,
     )
-    logger.info("System shutdown scheduled (will execute in 2s)")
+    logger.info("System shutdown scheduled (will execute in %.1fs)", CURTAIN_SETTLE_SECONDS)
     return jsonify({"status": "ok", "message": "Shutting down system in 2 seconds…"})
 
 

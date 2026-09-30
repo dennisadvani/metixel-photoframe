@@ -310,6 +310,16 @@ class Presenter:
         self._shown_plan: RenderPlan | None = None
         self._shown_item: MediaItem | None = None
 
+        # -- Manual skip in flight --
+        # Set while a Next/Prev fade is running, and None otherwise.  A skip
+        # parks ``_current_idx`` one BEFORE the item it is heading to (see
+        # ``_begin_jump``), so ``current_item`` is the item being LEFT.  A second
+        # press during the fade must advance from where the first one is *going*,
+        # not from where the index is parked — otherwise it recomputes the same
+        # target and re-fades to the item already arriving.  This records that
+        # destination for the duration of the fade.
+        self._jump_target: MediaItem | None = None
+
         # -- Video playback --
         # True while the backend is playing the current item's video.  The
         # canvas holds an unpainted artwork rect open only while this holds, so
@@ -320,6 +330,15 @@ class Presenter:
         # LAST frame rather than the poster, or the fade-out would jump back to
         # the video's opening image — see ``_image_for``.
         self._video_ended_id: str | None = None
+
+        # The last frame of the video on screen, decoded EARLY and held behind it.
+        # ``_video_last_frame_ready`` is the once-per-slide latch (set even when the
+        # load fails, so a bad frame is not retried every tick); the handle is what
+        # ``_image_for`` hands the transition.  See
+        # ``_LAST_FRAME_PRELOAD_FRACTION`` for why it is loaded during playback
+        # rather than at the end.
+        self._video_last_frame_ready: bool = False
+        self._preloaded_last_frame: Any = None
 
         # -- The transition's two layers, resolved ONCE per transition --
         # Keyed by item id so a change of either layer (or of the item on
@@ -407,7 +426,7 @@ class Presenter:
         self._cache.clear()
         # A playing video belongs to the queue being replaced.
         self._stop_video()
-        self._video_ended_id = None
+        self._forget_video_last_frame()
         self._current_idx = -1
         self._advance()
 
@@ -468,7 +487,7 @@ class Presenter:
             # The item on screen was deleted: stop its playback first, then clamp
             # the cursor and re-show whatever now occupies that position.
             self._stop_video()
-            self._video_ended_id = None
+            self._forget_video_last_frame()
             self._current_idx = min(self._current_idx, len(self._queue) - 1)
             self._shown_plan = None
             self._shown_item = None
@@ -488,26 +507,146 @@ class Presenter:
     # -- Playback control ----------------------------------------------------
 
     def next_item(self) -> None:
-        """Skip forward."""
+        """Skip forward.  Animated, using the configured transition.
+
+        The jump is expressed as "the outgoing item's window just ended", which
+        is exactly the state a natural advance passes through.  Setting the clock
+        back by the slide duration makes ``render`` walk into its ordinary
+        transition branch on the very next tick, so a manual skip animates with
+        the SAME code path, easing and backdrops as an automatic one — there is
+        no second transition implementation to keep in step.
+        """
         if not self._queue:
             return
         self._paused = False
-        self._advance()
+        self._begin_jump(1)
 
     def prev_item(self) -> None:
-        """Skip back."""
+        """Skip back.  Animated, using the configured transition.
+
+        Backwards needs one extra step that forwards does not: the blend is
+        always ``shown -> queue[current + 1]``, so to fade *backwards* the index
+        is parked one BEFORE the target and the outgoing item is kept on
+        ``_shown_plan``.  That makes the target the "next" item without teaching
+        the transition about direction, which would mean a second blend path.
+        """
         if not self._queue:
             return
         self._paused = False
-        self._current_idx = (self._current_idx - 1) % len(self._queue)
-        self._item_start_time = time.monotonic()
-        self._transition_stall_logged = False
-        # A jump is a cut, not a transition, so there is no outgoing frame to
-        # blend from — and any video on screen must stop.
+        self._begin_jump(-1)
+
+    def _begin_jump(self, step: int) -> None:
+        """Start an animated skip of *step* items through the transition path.
+
+        Shared by :meth:`next_item` and :meth:`prev_item` because the two differ
+        only in which item ends up on ``_current_idx``.
+
+        A transition is only used when there is something to blend FROM and the
+        configured style actually has a duration; otherwise this degrades to the
+        old hard cut, which is the correct look for ``transition_style: none``
+        and the only honest option when the queue holds a single item (there is
+        no second image to blend to).
+
+        The item being left is left running until the fade replaces it — a video
+        is stopped here because a live video surface cannot be blended as an
+        image, the same reason ``_end_video`` stops it.
+
+        Repeated presses are honoured.  While a fade is in flight the index is
+        parked one BEFORE its destination, so ``current_item`` names the item
+        being LEFT; advancing from that would recompute the destination already
+        on its way in, and the second press would appear to do nothing.  The
+        origin is therefore taken from ``_jump_target`` when a fade is running,
+        which makes each press step one further from the item on screen.
+        """
+        transition_s = self._transition_seconds()
+        count = len(self._queue)
+
+        # Where this skip starts counting from, and what is currently on screen.
+        #
+        # These differ during a fade: ``current_item`` is the parked index's item
+        # (what is still painting) while ``_jump_target`` is what the running fade
+        # is heading to (what the next press must step past).
+        origin = self._jump_target or self.current_item
+        outgoing = self.current_item
+        if origin is None:
+            return
+
+        try:
+            origin_idx = self._queue.index(origin)
+        except ValueError:
+            # The queue was rebuilt underneath us; fall back to the live index
+            # rather than guessing at a stale item.
+            origin_idx = self._current_idx
+            origin = self.current_item
+            if origin is None:
+                return
+
+        if transition_s <= 0 or count < 2 or outgoing is None:
+            # Hard cut: no blend to run, so moving the index IS the whole change.
+            self._jump_target = None
+            self._stop_video()
+            self._forget_video_last_frame()
+            self._current_idx = (origin_idx + step) % count
+            self._item_start_time = time.monotonic()
+            self._transition_stall_logged = False
+            self._present_current()
+            self._write_current_media()
+            return
+
+        # A video cannot be blended, so it stops and its LAST frame becomes the
+        # outgoing layer (``_image_for`` supplies it).  Done before the index
+        # moves, while the video is still the current item.
         self._stop_video()
-        self._video_ended_id = None
-        self._present_current()
-        self._write_current_media()
+        self._forget_video_last_frame()
+
+        # Park the index so the target lands on ``current + 1`` — the only
+        # direction ``_present_transition`` blends in.
+        target = (origin_idx + step) % count
+
+        # Wipe any handle memoised for a fade that is no longer running, so the
+        # blend resolves fresh layers rather than reusing the abandoned pair.
+        #
+        # BEFORE ``_jump_target`` is set, deliberately: this call also clears that
+        # field (a destination only has meaning while a fade is in flight), so
+        # setting it first would have the fresh value wiped on the same line it
+        # was written — which silently reinstated the double-press bug.
+        self._forget_transition_images()
+
+        self._current_idx = (target - 1) % count
+        self._jump_target = self._queue[target]
+
+        # Keep the item being left as the outgoing layer.  ``_shown_plan`` is
+        # what the fade starts from, and it is already the frame on screen, so
+        # this is a no-op in the common case and a repair when a previous reload
+        # dropped the cached plan.
+        if self._shown_plan is None or self._shown_item is not outgoing:
+            plan = self._current_plan()
+            if plan is not None:
+                self._shown_plan = plan
+                self._shown_item = outgoing
+
+        # Park the clock at "the parked slide just ended", so ``render`` computes
+        # ``progress = (elapsed - duration) / transition_s`` from zero on its very
+        # next tick and the fade runs in full.
+        #
+        # The duration is the PARKED item's — i.e. ``self.current_item`` — because
+        # that is exactly what ``render`` measures ``elapsed`` against.  Using the
+        # target's duration instead (the intuitive choice, since the target is
+        # what the user asked for) mis-times every jump between items of
+        # different length: parking a 30 s photo in front of a 4 s clip would
+        # start the blend 26 s late, so the frame would sit on the photo and then
+        # appear to cut.  The parked item is the one the clock is still on, so
+        # its duration is the honest anchor.
+        parked_item = self.current_item
+        if parked_item is not None:
+            self._item_start_time = time.monotonic() - self._item_duration(parked_item)
+        else:  # pragma: no cover - a queue with items always yields a current item
+            self._item_start_time = time.monotonic()
+        self._transition_stall_logged = False
+        # Decode the target now if it is not cached: the fade needs its pixels on
+        # the first frame, and a manual skip gives the decode-ahead no warning.
+        self._preload_next()
+        logger.debug("Animated skip %+d: %s -> %s", step, outgoing.id, self._queue[target].id)
 
     def pause(self) -> None:
         """Pause the slideshow.
@@ -709,6 +848,12 @@ class Presenter:
         if self._video_active and (self._backend.video_finished() or elapsed >= duration):
             self._end_video(current)
             elapsed = time.monotonic() - self._item_start_time
+        elif self._video_active:
+            # Still playing: load the last frame into the artwork layer underneath
+            # it, well before the surface goes away.  Done here rather than in
+            # ``_end_video`` so the decode is never on the critical path at the
+            # moment the video disappears.
+            self._preload_last_frame(current, elapsed)
 
         # ── Ambient backdrop for the upcoming slide ───────────────────────
         # The blur runs in a throttled subprocess (see ``display.ambient_blur``),
@@ -977,11 +1122,33 @@ class Presenter:
         Called whenever a fade is not running: on a cut, on an advance, and when
         the item on screen is replaced.  Holding them past that point would keep
         an image the backend is free to release.
+
+        The in-flight skip destination goes with them.  It only has meaning while
+        a manual fade is running, and a stale value would make the NEXT skip step
+        from an item that is no longer on its way in — the same defect this field
+        exists to prevent, one slide later.
         """
         self._out_item_id = None
         self._out_image = None
         self._in_item_id = None
         self._in_image = None
+        self._jump_target = None
+
+    def _forget_video_last_frame(self) -> None:
+        """Clear the ended-video marker and any preloaded last-frame handle.
+
+        One helper rather than two assignments at four call sites, because the two
+        are only ever correct together: the marker says "hand over the last frame",
+        and the handle is that frame.  Leaving a stale handle behind would let a
+        previous video's final image be shown as the next video's — the two are
+        keyed by nothing but the order of the calls.
+
+        Called wherever the player is stopped on the way *out* of an item: a queue
+        reset, a deletion, a manual skip, and an advance.
+        """
+        self._video_ended_id = None
+        self._video_last_frame_ready = False
+        self._preloaded_last_frame = None
 
     def _transition_images(self) -> tuple[Any, Any]:
         """Return ``(outgoing, incoming)`` handles for the fade in progress.
@@ -1047,6 +1214,17 @@ class Presenter:
                 "No image for %s — awaiting the backend's cached copy",
                 item.original_path,
             )
+        # Never present a half-built frame.  A ``None`` here means the item's
+        # handle was dropped and could not be re-decoded, and painting that would
+        # blank the artwork for a whole tick.  Holding the previous frame instead
+        # is the same trade ``_transition_ready`` makes, and it self-heals on the
+        # next tick: the cache refills, or ``_drain_cache`` drops the memo and
+        # ``_image_for`` retries.
+        #
+        # ``with_artwork=False`` is exempt on purpose — that is the deliberate
+        # ``present(..., None)`` the caller asked for.
+        if handle is None and with_artwork:
+            return
         self._backend.present(
             plan,
             handle if with_artwork else None,
@@ -1226,7 +1404,7 @@ class Presenter:
         # keeps its last frame on screen underneath the next item.  The ended
         # marker goes too, so it cannot decide the NEXT item's poster.
         self._stop_video()
-        self._video_ended_id = None
+        self._forget_video_last_frame()
         self._forget_transition_images()
 
         self._current_idx = (self._current_idx + 1) % len(self._queue)
@@ -1278,6 +1456,13 @@ class Presenter:
         """Upload any finished decode to the backend on this (GUI) thread."""
         ready = self._cache.take_ready()
         if ready is None:
+            # Still check for a vanished handle.  This guard used to sit BELOW the
+            # ``return``, where it could only ever run on the tick a decode happened
+            # to be adopted — which is not when an eviction usually strands the
+            # shown item, because ``_preload_next`` fills the cache on the *first*
+            # render of a slide.  Dead in the common case, and the check is one dict
+            # lookup.
+            self._heal_a_dropped_current_handle()
             return
         try:
             handle = self._backend.load_image(ready.data)
@@ -1286,6 +1471,30 @@ class Presenter:
             return
         if handle is not None:
             self._cache.put(ready.key, handle)
+        self._heal_a_dropped_current_handle()
+
+    def _heal_a_dropped_current_handle(self) -> None:
+        """Drop the memoised plan when the on-screen item's handle has gone.
+
+        Putting a handle can EVICT another one, and the victim is the
+        least-recently-used entry.  Nothing re-``get``s the item on screen once its
+        plan is memoised — ``_preload_next`` and ``_current_plan`` are the only
+        cache users, and the latter stops calling ``_image_for`` entirely while
+        ``_shown_plan`` is set — so the current item ages to the LRU front while
+        ``_preload_next`` keeps refreshing the item after it.
+
+        Left alone, the result is permanent rather than a dropped frame:
+        ``_current_plan`` keeps returning the memoised plan, and ``_image_for``
+        finds the item outside the cache and re-decodes it, so the artwork is
+        rebuilt from a fresh handle on EVERY tick — one full-resolution decode per
+        frame, on the render thread, for the rest of the slide.
+
+        Videos hid this, which is why it read as an image-only defect: their visible
+        pixels come from the ``VideoOutput``, so a churning artwork handle is
+        invisible there.
+        """
+        if self._shown_item is not None and self._cache.get(self._shown_item.id) is None:
+            self._shown_plan = None
 
     # -- Video ---------------------------------------------------------------
 
@@ -1331,6 +1540,29 @@ class Presenter:
         with contextlib.suppress(Exception):
             self._backend.stop_video()
 
+    # -- Last-frame preload ---------------------------------------------------
+    #: Fraction of a video's own duration at which its LAST frame is loaded into
+    #: the artwork layer *behind* the still-playing video.
+    #:
+    #: The video surface covers the artwork while it plays, so loading the last
+    #: frame early is invisible — and it means that when playback stops, the image
+    #: already on screen underneath is the final frame rather than the poster.  The
+    #: earlier version of this loaded the last frame only *at* the moment playback
+    #: ended, which is strictly worse: that load is a decode on the render thread
+    #: at the exact instant the video surface disappears, so for as long as it takes
+    #: the viewer sees whatever was underneath — the opening image.  That is the
+    #: "the first frame appeared from behind when the video finished" defect.
+    #:
+    #: Ported from the 1.2.6 method (``presentation/video_state.py``), which loaded
+    #: the last frame into a texture BEFORE launching the player and then swapped it
+    #: into the active slot at 50% of playtime as a pure pointer swap with no I/O.
+    #: 20% here, against 50% there, because the current backend serves artwork
+    #: through an image provider: the load is a decode plus a provider entry, so
+    #: starting it earlier leaves more slack for a 4K frame on a slow card.  Both
+    #: are well inside the video, so there is no chance of it flashing before the
+    #: video has even started.
+    _LAST_FRAME_PRELOAD_FRACTION: float = 0.20
+
     def _end_video(self, item: MediaItem) -> None:
         """Finish a video's slide: stop the player and mark the item ended.
 
@@ -1343,6 +1575,64 @@ class Presenter:
             # rather than the poster.
             self._video_ended_id = item.id
         self._item_start_time = time.monotonic() - self._item_duration(item)
+
+    def _preload_last_frame(self, item: MediaItem, elapsed: float) -> None:
+        """Load a playing video's last frame into the artwork layer beneath it.
+
+        Idempotent: the work happens once per slide, the first tick past
+        ``_LAST_FRAME_PRELOAD_FRACTION`` of the video's own duration — not the
+        slide's, since a video may be capped by ``video.max_duration_seconds`` and
+        a fraction of the *cap* would fire at an arbitrary point in the clip.
+
+        Deliberately not routed through ``ImageCache``: filing it under the item's
+        id would displace the first-frame handle the ambient backdrop is keyed to
+        and orphan the blur (see ``ImageCache.put``).  The handle is held on
+        ``_preloaded_last_frame`` instead and handed to the transition directly.
+        """
+        if self._video_last_frame_ready:
+            return
+        if item.media_type != MediaType.VIDEO or item.last_frame_path is None:
+            return
+        clip = item.duration_seconds if item.duration_seconds > 0 else 0.0
+        if clip <= 0.0 or elapsed < clip * self._LAST_FRAME_PRELOAD_FRACTION:
+            return
+
+        # Marked before the load, not after: a decode that fails or returns
+        # nothing must not be retried on every remaining tick of the slide.  A
+        # missing last frame degrades to the poster, which is what the pre-1.2.6
+        # behaviour was anyway.
+        self._video_last_frame_ready = True
+        handle = self._load_uncached(item.last_frame_path)
+        if handle is None:
+            logger.warning(
+                "Could not preload the last frame for %s — the poster will remain "
+                "under the video when it ends",
+                item.original_path,
+            )
+            return
+        self._preloaded_last_frame = handle
+        logger.debug(
+            "Last frame preloaded for %s at %.1fs (%.0f%% of %.1fs)",
+            item.original_path,
+            elapsed,
+            self._LAST_FRAME_PRELOAD_FRACTION * 100,
+            clip,
+        )
+
+        # Install it into the artwork layer NOW, while the video still covers it.
+        #
+        # ``artwork`` is the layer the video sits over, and the poster has been
+        # re-asserted into it on every tick while the video played — so this is a
+        # source CHANGE on the node that is currently hidden.  Assigning it at the
+        # moment the video stops is too late: the surface disappears immediately,
+        # and Qt cannot present a new ``source`` until it has resolved and uploaded
+        # it, so whatever was already in that slot (the poster) is revealed first.
+        # That is the first-frame flash.
+        #
+        # Re-sourcing a hidden layer is invisible and costs nothing to look at,
+        # which is the whole reason this is safe mid-playback — the same principle
+        # as 1.2.6 loading the last frame into a texture before launching VLC.
+        self._present_current()
 
     def _video_playback_enabled(self) -> bool:
         """Whether the user wants videos played rather than held as stills.
@@ -1438,20 +1728,32 @@ class Presenter:
 
         A video is drawn as its pre-generated FIRST-frame JPEG, except once its
         playback has ended: then the outgoing layer must be the LAST frame, or the
-        fade-out would jump back to the video's opening image.  That frame is
-        loaded uncached on purpose — filing it under the item's id would displace
-        the first-frame handle the ambient backdrop is keyed to and orphan the
-        blur (see ``ImageCache.put``).
+        fade-out would jump back to the video's opening image.
+
+        That last frame is normally the one ``_preload_last_frame`` decoded while
+        the video was still playing (held on ``_preloaded_last_frame``), so the end
+        of a video costs no decode at all — which matters, because the artwork
+        layer becomes visible at the instant the video surface is hidden, and a
+        load started then shows the poster for however long it takes.  The
+        uncached fallback is kept for a slide that ended before the preload point
+        (a manual skip, or a failed preload).
         """
         if item is None:
             return None
+        if item.media_type == MediaType.VIDEO and self._preloaded_last_frame is not None:
+            # Once the last frame has been preloaded it stays the artwork for this
+            # item — both WHILE the video plays (where it is hidden behind the
+            # surface, and keeping it there is what makes the reveal instant) and
+            # AFTER it ends (where it is the fade's outgoing layer).  Returning the
+            # poster here instead would re-source the layer back to the first frame
+            # on the very next tick and undo the preload.
+            return self._preloaded_last_frame
         if (
             item.media_type == MediaType.VIDEO
             and item.id == self._video_ended_id
             and item.last_frame_path is not None
         ):
             return self._load_uncached(item.last_frame_path)
-
         cached = self._cache.get(item.id)
         if cached is not None:
             return cached

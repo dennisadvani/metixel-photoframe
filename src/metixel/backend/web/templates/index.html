@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=46">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=47">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -670,15 +670,17 @@
                             <select id="cfg-fit" class="select-premium input-premium w-44">
                                 <option value="contain">Contain (letterbox)</option>
                                 <option value="cover">Cover (crop)</option>
-                                <option value="fill">Fill (stretch)</option>
                             </select>
                         </div>
                     </div>
 
                     <div class="mt-5 border-t border-border/60"></div>
 
-                    <!-- Smart Cover -->
-                    <div class="setting-row">
+                    <!-- Smart Cover.  Only meaningful in Cover mode: it decides
+                         which *orientation* is cropped, and in Contain mode
+                         nothing is cropped at all.  Hidden in letterbox mode by
+                         _toggleSmartCoverRow. -->
+                    <div class="setting-row" id="smart-cover-row">
                         <div class="setting-label">
                             <span class="text-[0.85rem] font-medium text-text-secondary">Smart Cover</span>
                             <span class="text-[0.72rem] text-text-muted leading-snug">Use contain for square / opposite-orientation images</span>
@@ -700,6 +702,12 @@
                     </div>
 
                     <div class="mt-5 border-t border-border/60"></div>
+
+                    <!-- Ambient Fill group.  Hidden entirely in Cover mode: the
+                         artwork is full-bleed there, so there is no letterbox for
+                         the fill to show in and every control here would be over
+                         nothing.  See _toggleAmbientGroup. -->
+                    <div id="ambient-group">
 
                     <!-- Ambient Fill Mode -->
                     <div class="setting-row">
@@ -723,7 +731,7 @@
                             <span class="text-[0.72rem] text-text-muted leading-snug">Used with the solid fill</span>
                         </div>
                         <div class="setting-control">
-                            <input type="color" id="cfg-ambient-color" class="input-premium" value="#101014">
+                            <input type="color" id="cfg-ambient-color" class="swatch-premium" value="#101014">
                         </div>
                     </div>
 
@@ -765,6 +773,9 @@
                         </div>
                     </div>
 
+                    </div>
+                    <!-- /ambient-group -->
+
                     <div class="hidden">
                         <span class="form-label">Matte Color</span>
                         <input type="color" id="cfg-matte-color" value="#141414">
@@ -793,10 +804,6 @@
                         <div class="setting-control">
                             <input type="checkbox" id="cfg-video-enabled" class="checkbox-premium">
                         </div>
-                    </div>
-                    <div id="cfg-video-rotation-warning" class="hidden flex items-center gap-2 mt-1 text-[0.72rem] leading-snug text-text-muted">
-                        <span class="material-symbols-outlined" style="font-size:1em;color:#f0a030;vertical-align:middle">warning</span>
-                        <span>Videos cannot play in portrait mode (90°/270°). Set the rotation to 0° or 180° to enable video playback.</span>
                     </div>
 
                     <div class="setting-row">
@@ -1757,6 +1764,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=73"></script>
+    <script type="module" src="/static/js/main.js?v=75"></script>
 </body>
 </html>

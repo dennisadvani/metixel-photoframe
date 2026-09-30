@@ -51,6 +51,43 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
     }
 
     /**
+     * Show or hide the whole Ambient Fill group for the selected Fit Mode.
+     *
+     * With "Cover (crop)" the artwork is scaled up to fill the panel, so there is
+     * no letterbox for an ambient fill to be visible in — the backdrop is behind
+     * an opaque, full-bleed photo and the rows would be controls over nothing.
+     * "Contain (letterbox)" is the mode that produces bars, so the group is shown
+     * only then.  This mirrors `framing_templates.py`, which decides the same
+     * thing per item.
+     *
+     * @param {string} fitMode - `contain` or `cover`.
+     */
+    function _toggleAmbientGroup(fitMode) {
+        var group = document.getElementById("ambient-group");
+        if (group) group.style.display = fitMode === "contain" ? "" : "none";
+    }
+
+    /**
+     * Show or hide the Smart Cover row for the selected Fit Mode.
+     *
+     * Smart Cover only decides *which orientation is cropped*: it downgrades
+     * square and opposite-orientation images to contain while everything else is
+     * cropped to fill.  In "Contain (letterbox)" nothing is cropped at all, so
+     * the setting has no effect and the row is hidden rather than left as a live
+     * control that silently does nothing.
+     *
+     * Hidden, not disabled: the checkbox keeps its value and the save still
+     * writes it, so switching back to Cover restores the user's choice instead of
+     * resetting it.
+     *
+     * @param {string} fitMode - `contain` or `cover`.
+     */
+    function _toggleSmartCoverRow(fitMode) {
+        var row = document.getElementById("smart-cover-row");
+        if (row) row.style.display = fitMode === "cover" ? "" : "none";
+    }
+
+    /**
      * Normalise an ambient strategy to a value this release understands.
      *
      * A config from an older release holds `solid` or `bars`; anything unknown
@@ -437,6 +474,11 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
         if (ttLabel) ttLabel.textContent = (s.transition_duration_ms || 1500) + " ms";
         setValue("cfg-transition", s.transition_style || "crossfade");
         setValue("cfg-fit", s.fit_mode || "contain");
+        // Both of these depend on the fit mode: the Ambient Fill group only
+        // means something in Contain mode, and Smart Cover only in Cover mode.
+        // See _toggleAmbientGroup / _toggleSmartCoverRow.
+        _toggleAmbientGroup(document.getElementById("cfg-fit").value);
+        _toggleSmartCoverRow(document.getElementById("cfg-fit").value);
         setChecked("cfg-smart-cover", s.smart_cover !== false);
         setChecked("cfg-shuffle", s.shuffle !== false);
 
@@ -446,7 +488,13 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
         // save would write an empty string.
         var ambientStrategy = _ambientStrategy(s.ambient_strategy);
         setValue("cfg-ambient-strategy", ambientStrategy);
-        setValue("cfg-ambient-color", _ambientColourToHex(s.ambient_color, "#101014"));
+        // `<input type="color">` only accepts `#rrggbb` — anything else (a
+        // `[r, g, b]` list, a named colour, a malformed hex) is ignored and the
+        // swatch falls back to BLACK.  So it needs the same coercion the scene
+        // gets, not just `setValue`.  Note the *property*, not the attribute:
+        // setting `value` alone can leave the drawn swatch stale.
+        var colourEl = document.getElementById("cfg-ambient-color");
+        if (colourEl) colourEl.value = _ambientColourToHex(s.ambient_color, "#101014");
         var blurEl = document.getElementById("cfg-ambient-blur");
         if (blurEl) blurEl.value = sanitizeInt(s.ambient_blur_radius, 24);
         var blurLabel = document.getElementById("cfg-ambient-blur-label");
@@ -490,22 +538,6 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
             };
         }
         setChecked("cfg-video-enabled", v.playback_enabled === true);
-        // Portrait (90/270°) — the current player cannot display rotated
-        // video, so force the toggle off and inform the user.  This is a
-        // GUI companion to the backend guard in queue.py which excludes
-        // videos from the playlist regardless of playback_enabled.
-        var rotNum = Number(((config.display || {}).rotation) || 0) % 360;
-        var portrait = (rotNum === 90 || rotNum === 270);
-        var vidEnabled = document.getElementById("cfg-video-enabled");
-        var vidWarn = document.getElementById("cfg-video-rotation-warning");
-        if (portrait) {
-            setChecked("cfg-video-enabled", false);
-            if (vidEnabled) vidEnabled.disabled = true;
-            if (vidWarn) vidWarn.classList.remove("hidden");
-        } else {
-            if (vidEnabled) vidEnabled.disabled = false;
-            if (vidWarn) vidWarn.classList.add("hidden");
-        }
         setValue("cfg-video-player-backend", v.player_backend || "auto");
         setValue("cfg-video-max-duration", v.max_duration_seconds || 0);
         setChecked("cfg-transcode-enabled", v.transcoding_enabled !== false);
@@ -632,9 +664,6 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
                 });
                 if (result) {
                     showToast("Display settings saved — frontend restarting to apply", "success", 5000);
-                    if (newRotation === 90 || newRotation === 270) {
-                        showToast("Video playback is disabled in portrait mode (90°/270°)", "info", 6000);
-                    }
                 } else {
                     showToast("Failed to save display settings", "error");
                 }
@@ -712,6 +741,10 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
             document.getElementById("cfg-ambient-strategy")?.addEventListener("change", function () {
                 _toggleAmbientColour(this.value);
             });
+            document.getElementById("cfg-fit")?.addEventListener("change", function () {
+                _toggleAmbientGroup(this.value);
+                _toggleSmartCoverRow(this.value);
+            });
             document.getElementById("cfg-ambient-blur")?.addEventListener("input", function () {
                 var lbl = document.getElementById("cfg-ambient-blur-label");
                 if (lbl) lbl.textContent = this.value;
@@ -735,16 +768,6 @@ import { bindDdcControls, loadDdcControls } from "./ddc-controls.js";
             });
 
             document.getElementById("btn-save-video")?.addEventListener("click", async () => {
-                // Portrait guard — videos cannot play at 90/270°, so never
-                // save playback_enabled=true while rotating.  The toggle is
-                // disabled by loadSettings in portrait; guard again in case
-                // the state changed before the user clicked save.
-                var vidEnabled = document.getElementById("cfg-video-enabled");
-                if (vidEnabled && vidEnabled.disabled && vidEnabled.checked) {
-                    showToast("Video playback is unavailable in portrait mode (90°/270°)", "error", 5000);
-                    vidEnabled.checked = false;
-                    return;
-                }
                 var result = await apiPut("/config/video", {
                     playback_enabled: document.getElementById("cfg-video-enabled").checked,
                     player_backend: document.getElementById("cfg-video-player-backend").value,

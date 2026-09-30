@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 from metixel.display import detect_backend
 from metixel.display.backend import DisplayBackend
@@ -25,6 +26,7 @@ from metixel.shared import logging_setup
 from metixel.shared.config import Config
 from metixel.shared.io import atomic_write_json
 from metixel.shared.ipc import ControlMessage, IPCServer
+from metixel.shared.media_workers import reap_media_workers
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
 from metixel.shared.paths import frontend_heartbeat_path, run_dir, run_path
 from metixel.shared.platform import boot_identity
@@ -245,6 +247,29 @@ class FrontendRenderer:
         except Exception:
             logger.warning("Could not write display info file", exc_info=True)
 
+        # ── Re-park the compositor cursor ─────────────────────────────
+        # The hider is triggered once by ``cage_launch.sh`` and fires for a few
+        # seconds, which covers a normal start.  A ROTATION is the case it does
+        # not cover: ``wlr-randr --transform`` reconfigures the output, and
+        # wlroots re-maps its seat cursor as part of that, so the pointer
+        # reappears with nothing left running to park it again — the burst
+        # expired long ago.
+        #
+        # This runs on every frontend start, which is exactly when a rotation has
+        # just been applied (the backend restarts the services for it, and the
+        # rotation is applied by the QML backend during ``create``).  So the
+        # cursor is re-parked immediately after the geometry changes, rather than
+        # waiting for the next compositor start.
+        #
+        # Best-effort and deliberately unconditional: the trigger is a datagram
+        # to a socket, it costs nothing when the hider is absent, and asking the
+        # service to park an already-parked cursor is a no-op.
+        with contextlib.suppress(Exception):
+            from metixel.display.cursor_hider import CursorHiderClient
+
+            if CursorHiderClient().trigger():
+                logger.debug("Re-parked the compositor cursor after display setup")
+
         # Initialize subsystems
         self._presentation = Presenter(self._config, self._backend)
 
@@ -252,12 +277,22 @@ class FrontendRenderer:
         # BootLayer (z=0.0, closest) covers the screen until the first
         # slideshow items are ready, then fades out to reveal them.
         from metixel.frontend.overlay.boot_layer import BootLayer
+        from metixel.frontend.overlay.curtain_layer import CurtainLayer
 
         self._overlay = OverlayManager()
         self._boot_layer = BootLayer()
         self._overlay.add_layer(self._boot_layer)
         self._overlay.add_layer(MessageLayer())
+        # Registered LAST and at a z below the boot screen, so it sits in front of
+        # every other layer.  It has to outrank the boot screen in particular:
+        # that is what is most likely to be on screen when a restart lands during
+        # startup, and a curtain underneath it would cover nothing.
+        self._curtain = CurtainLayer(self._backend.width, self._backend.height)
+        self._overlay.add_layer(self._curtain)
         self._boot_was_active = True  # Track for first-slide timer reset
+        # Set by _request_curtain() when a control path asks for the screen to go
+        # black before it acts; cleared once the caller has been released.
+        self._curtain_callback: Any = None
         logger.info("Overlay system initialized: %d layers", len(self._overlay._layers))
 
         # ── Show persistent messages from config ─────────────────────
@@ -402,6 +437,13 @@ class FrontendRenderer:
 
         # 2. Process IPC control messages
         self._process_ipc()
+
+        # 2b. Drive a pending curtain to black, and fire its operation the moment
+        #     the screen is fully covered.  Checked BEFORE the frame is rendered
+        #     so a fade that completes on this tick paints its final opaque frame
+        #     now — the operation must never start on a frame that has not yet
+        #     shown black.
+        self._service_curtain()
 
         # 3. Render the current frame
         self._render_frame()
@@ -568,6 +610,67 @@ class FrontendRenderer:
         # exposed it.  The retained-mode canvas owns its own allocations, so there
         # is no application-level texture budget left to report.
 
+    # -- Curtain -------------------------------------------------------------
+
+    def request_curtain(self, reason: str, then: Any = None) -> None:
+        """Fade the screen to black, then run *then* once it is fully covered.
+
+        The ordering is the contract, not a nicety: a rotation reconfigures the
+        DRM output and a settings save restarts the services, and both tear the
+        picture.  Running either before the screen is black shows the tearing.
+
+        *then* is called from the render loop on the frame AFTER the fully opaque
+        curtain has been painted, so the operation begins on a screen that has
+        demonstrably shown black.  It runs on the loop thread, so it must be
+        cheap and must not block — the existing paths it fronts are already
+        ``schedule_sudo``/``systemctl`` dispatches, which are.
+
+        Best-effort by design: with no overlay (a headless dev run) there is
+        nothing to fade, so the operation runs immediately rather than being
+        dropped.
+        """
+        if self._overlay is None or self._backend is None:
+            if then is not None:
+                then()
+            return
+
+        # A curtain already up and black: act now rather than re-fading, so a
+        # second request during the same black-out is not delayed by another
+        # half-second.
+        if self._curtain.is_held:
+            logger.debug("Curtain already held — proceeding immediately: %s", reason)
+            if then is not None:
+                then()
+            return
+
+        logger.info("Curtain: fading to black before %s", reason or "a disruptive change")
+        self._curtain_callback = then
+        self._curtain.begin(reason)
+
+    def _service_curtain(self) -> None:
+        """Fire a curtained operation once the screen is completely black.
+
+        Called every tick.  It does nothing at all unless a curtain is actually
+        coming down, so the ordinary frame path pays one attribute check.
+        """
+        callback = self._curtain_callback
+        if callback is None or not self._curtain.finished:
+            return
+
+        # Cleared BEFORE the call: the operation may itself request another
+        # curtain (a restart followed by a rotation, say), and holding the old
+        # callback would fire it twice.
+        self._curtain_callback = None
+        logger.info("Curtain: screen is black — proceeding with %s", self._curtain.reason)
+        try:
+            callback()
+        except Exception:
+            logger.exception("Curtained operation failed")
+            # The screen is black and nothing further is coming; a stuck curtain
+            # is a black panel with no way back, which is worse than the tearing
+            # it was hiding.
+            self._curtain.release()
+
     def _render_frame(self) -> None:
         """Render a single frame."""
         if not self._backend or not self._presentation:
@@ -635,6 +738,22 @@ class FrontendRenderer:
                 self._presentation.reset_slide_timer()
                 self._presentation.mark_presentation_started()
                 logger.info("First slide timer reset — boot screen finished")
+                # Hand the picture back over.  A curtain raised for a pipeline
+                # rebuild is held until here — i.e. until the boot screen has
+                # finished fading and the slideshow underneath it is ready — so
+                # the release never uncovers a half-built frame.
+                #
+                # Reached only after ``is_done``, which the boot layer sets at the
+                # END of its own fade.  Releasing at ``reactivate`` time instead
+                # would drop the curtain over a frozen boot logo.
+                if getattr(self, "_curtain", None) is not None and self._curtain.is_held:
+                    # The panel geometry may have changed under us (a rotation
+                    # swaps width and height), so the curtain is re-sized before
+                    # it goes: a stale rectangle would leave an uncovered strip at
+                    # exactly the moment the content reappears.
+                    self._curtain.retarget(self._backend.width, self._backend.height)
+                    self._curtain.release()
+                    logger.info("Curtain released — pipeline rebuild complete")
 
     # -- Hot reload ----------------------------------------------------------
 
@@ -763,6 +882,21 @@ class FrontendRenderer:
             # black screen while the pipeline rebuilds.
             logger.info("Backend playlist is empty — resetting slideshow queue")
             self._presentation.set_queue([])
+            # Snap the curtain fully opaque BEFORE the boot screen comes back.
+            #
+            # The playlist emptying is the first sign that the pipeline is being
+            # rebuilt, and it arrives independently of the curtain — so without
+            # this the boot logo can appear while the curtain is still ramping
+            # and be visible *through* a half-transparent black.  The user sees
+            # the boot screen "before the curtain has completely blacked the
+            # screen", which is exactly the tearing this is meant to hide.
+            #
+            # Snapped rather than sped up: there is no correct part-way alpha
+            # here.  The boot screen must either be fully hidden or not shown at
+            # all, so the curtain goes to black in one step and the OSD is then
+            # covered from its very first frame.
+            if getattr(self, "_curtain", None) is not None:
+                self._curtain.hold_black_now("a pipeline rebuild")
             if getattr(self, "_boot_layer", None) is not None:
                 self._boot_layer.reactivate()
                 self._boot_was_active = True
@@ -990,6 +1124,15 @@ class FrontendRenderer:
                 msgs = self._overlay.get_layer("messages")
                 if msgs is not None:
                     msgs.dismiss_all()
+        elif msg.cmd == "curtain":
+            # The backend asks for this before it restarts the services, so the
+            # tearing of a teardown/rebuild is covered.  The frontend does not
+            # perform the restart — it just goes black and holds, because it is
+            # about to be killed and cannot report back.  Held indefinitely on
+            # purpose: releasing would uncover the garbage the curtain is hiding,
+            # and nothing is going to ask for a release, since the process that
+            # would ask is the one being replaced.
+            self.request_curtain(msg.args.get("reason", "a service restart"))
         else:
             logger.warning("Unknown IPC command: %s", msg.cmd)
 
@@ -1040,6 +1183,29 @@ class FrontendRenderer:
         if self._ipc_server:
             self._ipc_server.stop()
 
+        # ── Hold black as our last painted frame ─────────────────────────
+        # A restart destroys this window and the compositor owns the screen from
+        # here on, so nothing below can animate a fade — the loop that would drive
+        # it has already exited.  What CAN be done is to leave black as the final
+        # contents of the surface, so whatever the compositor shows during the
+        # gap is black rather than a half-torn frame or the previous slide.
+        #
+        # Deliberately not a fade: at this point the transition would be an
+        # animation over a surface that is about to stop being presented, so it
+        # would be cut off part-way and read as a glitch of its own.
+        #
+        # Best-effort throughout — this is teardown, and blacking the screen must
+        # never be the thing that prevents a clean exit.
+        with contextlib.suppress(Exception):
+            if self._overlay is not None and self._backend is not None:
+                self._curtain.hold_black_now("shutdown")
+                # The slideshow is deliberately not repainted: only the curtain
+                # matters, and re-rendering the presenter would draw content back
+                # over it.
+                self._overlay.draw(self._backend)
+                with contextlib.suppress(Exception):
+                    self._backend.swap_buffers()
+
         if self._backend:
             # Ask the loop to finish before tearing the surface down.  For Qt
             # that means leaving exec(); calling destroy() underneath a running
@@ -1048,6 +1214,19 @@ class FrontendRenderer:
                 self._backend.quit()
             self._backend.destroy()
             self._backend = None
+
+        # Reap orphaned ffmpeg/ffprobe before exiting.  The frontend does not run
+        # them itself (frames and thumbnails are the backend's job), but a
+        # frontend-only restart — an OTA that just bounces cage, or a manual
+        # `systemctl restart metixel-cage` — would otherwise let the backend's
+        # in-flight workers keep grinding through the new process's first slides,
+        # and a transcode is minutes long.  Doing it here covers the restart that
+        # does NOT stop the backend, which is the case the backend's own teardown
+        # cannot reach.  Best-effort: a failure to reap must never block exit.
+        with contextlib.suppress(Exception):
+            reaped = reap_media_workers()
+            if reaped:
+                logger.info("Reaped %d orphaned media worker(s) during shutdown", reaped)
 
         logger.info("Frontend shutdown complete")
 

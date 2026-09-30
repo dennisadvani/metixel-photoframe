@@ -1162,7 +1162,21 @@ def calculate_framing(request: FramingRequest) -> FramingResult:
     # ``ambient_colour`` to wipe the outgoing item's residue), and anything else
     # that reads the result.  Resolving it later would let the band and the
     # curtain disagree, which is exactly the flicker the curtain exists to stop.
-    ambient_colour = "#000000" if request.ambient.strategy == "bars" else request.ambient.colour
+    #
+    # ``blur`` is black for the same reason, and it is not cosmetic.  The blurred
+    # backdrop is built asynchronously in a subprocess, so for the first frames
+    # after the look changes there is no backdrop and the canvas falls back to
+    # this flat colour (see ``QmlBackend._apply_backdrop``).  Inheriting the
+    # configured ``ambient_colour`` there means switching *from* the solid fill
+    # (or from black bars, whose colour was forced to black) *to* blur repaints
+    # the previous solid colour first and then swaps to the blur — the frame
+    # visibly flashes a colour the user has just stopped using.  Black is the
+    # neutral backdrop for a blur: the dimming is already toward black
+    # (``ambient_darken``), so the transition into the finished blur is a
+    # brightening of the correct pixels rather than a colour change.
+    ambient_colour = (
+        "#000000" if request.ambient.strategy in ("bars", "blur") else request.ambient.colour
+    )
 
     # -- 5. Assemble ------------------------------------------------------
     frame_result = FrameResult(

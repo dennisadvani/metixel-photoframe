@@ -2264,6 +2264,35 @@
   .input-premium::placeholder {
     color: #5f6278;
   }
+  input[type="color"].swatch-premium {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 2.25rem;
+    height: 1.6rem;
+    padding: 0;
+    border: 1px solid #2a2f45;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input[type="color"].swatch-premium:focus {
+    outline: none;
+    border-color: rgba(139, 26, 43, 0.6);
+    box-shadow: 0 0 0 1px rgba(139, 26, 43, 0.25);
+  }
+  input[type="color"].swatch-premium::-webkit-color-swatch-wrapper {
+    padding: 0;
+  }
+  input[type="color"].swatch-premium::-webkit-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
+  input[type="color"].swatch-premium::-moz-color-swatch {
+    border: none;
+    border-radius: 4px;
+  }
   input[type="range"].range-premium {
     -webkit-appearance: none;
     appearance: none;

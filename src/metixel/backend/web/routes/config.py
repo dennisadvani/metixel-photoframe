@@ -13,6 +13,7 @@ from flask import Blueprint, current_app, jsonify, request
 from metixel.backend.web.helpers import get_body, jsonify_error
 from metixel.backend.web.media_service import clear_cache
 from metixel.shared.subprocess import schedule_sudo
+from metixel.shared.timing import CURTAIN_SETTLE_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -206,13 +207,40 @@ def update_config_section(section: str):
                 )
 
         if needs_rebuild:
-            # Restart the backend; the frontend (metixel-cage) reconnects to
-            # the freshly-rebuilt pipeline.  The delay lets the response flush.
+            # Black the screen BEFORE restarting.  A pipeline rebuild tears the
+            # picture down and rebuilds it — and for a *rotation* the DRM output
+            # is reconfigured under the running window, which shows as a stretched
+            # or sheared frame for a moment.  The curtain is sent first so the
+            # frontend fades out while it is still alive to do so; it is about to
+            # be killed, so it cannot report back and simply holds black.
+            #
+            # The restart is then delayed by ``CURTAIN_SETTLE_SECONDS``, which is
+            # derived from the fade duration in ``metixel.shared.timing`` rather
+            # than being a second literal.  The wait is what makes "do not act
+            # until the screen is black" true: the backend cannot observe the
+            # frontend's curtain, so it is betting that enough time has passed,
+            # and a bet placed with a stale copy of the number fails silently —
+            # the action lands a few frames into the ramp and tears the picture.
+            ipc = current_app.config.get("METIXEL_IPC")
+            if ipc is not None:
+                try:
+                    from metixel.shared.ipc import ControlMessage
+
+                    ipc.send(
+                        ControlMessage(
+                            cmd="curtain",
+                            args={"reason": f"a {section} settings save"},
+                        )
+                    )
+                except Exception:
+                    logger.debug("Could not request the pre-restart curtain", exc_info=True)
+
             schedule_sudo(
                 ["systemctl", "restart", "metixel-backend"],
                 ok_message="Backend restarted to rebuild media pipeline",
                 fail_message="sudo systemctl restart metixel-backend",
                 thread_name="pipeline-rebuild-restart",
+                delay=CURTAIN_SETTLE_SECONDS,
             )
             logger.info(
                 "Pipeline-affecting %s settings saved — backend restart scheduled "

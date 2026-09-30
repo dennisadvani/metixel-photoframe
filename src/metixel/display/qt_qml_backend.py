@@ -183,7 +183,8 @@ def _colour(value: Any) -> str:
 class ArtworkStore:
     """Bounded store of decoded artwork that the scene may still be showing.
 
-    Two rules, and the second was learned the hard way:
+    Three rules, and the third is the one that actually makes a blank layer
+    impossible:
 
     * **Bounded.** At most ``max_images`` entries are retained, so a caller that
       never releases cannot grow the process without limit. That was a real
@@ -194,10 +195,19 @@ class ArtworkStore:
       alone is not enough — ``prevArtwork`` re-requests its source for the whole
       of a crossfade, so a handle the presenter has finished with must outlive
       its own eviction by ``served_window`` requests. See :data:`SERVED_WINDOW`.
+    * **Recoverable.** The window above is a *heuristic*: it covers the requests
+      the scene is known to make, and it is not a proof that the scene will never
+      name a key again. It cannot be, because ``ImageCache`` (3 entries) and this
+      store (6) are bounded independently and neither knows the other's budget —
+      so a release can arrive from a direction the window never anticipated.
+      Every entry therefore retains the **source** it was decoded from, and
+      :meth:`serve` re-decodes on a miss instead of returning nothing.
 
-    A released handle is therefore *deferred* rather than dropped: it is removed
-    as soon as it leaves the served window. That keeps the presenter's release
-    meaningful while making the blank-layer failure impossible.
+    The third rule is what the first two could never guarantee. Without it the
+    failure is not a dropped frame: the miss returns a null image, Qt retries the
+    same key, and the layer stays blank until its ``source`` changes. Retaining a
+    ``Path``/``bytes`` per entry is a few dozen bytes against a multi-megabyte
+    ``QImage``, so the cost is negligible and the ceiling still holds.
 
     Values are opaque, which is deliberate: it makes the whole policy testable
     without Qt, so it runs in CI rather than only on a frame with PySide6.
@@ -207,10 +217,13 @@ class ArtworkStore:
         self,
         max_images: int = MAX_STORED_IMAGES,
         served_window: int = SERVED_WINDOW,
+        decode: Callable[[Any], Any] | None = None,
     ) -> None:
         self._max_images = max_images
         self._served_window = served_window
+        self._decode = decode
         self._images: OrderedDict[str, Any] = OrderedDict()
+        self._sources: dict[str, Any] = {}
         self._served: OrderedDict[str, None] = OrderedDict()
         self._pending: set[str] = set()
         self._lock = threading.Lock()
@@ -227,23 +240,33 @@ class ArtworkStore:
 
     # -- mutations -----------------------------------------------------------
 
-    def add(self, key: str, value: Any) -> None:
-        """Store *value* under *key*, then enforce the bounds."""
+    def add(self, key: str, value: Any, source: Any = None) -> None:
+        """Store *value* under *key*, keeping *source* for a later re-decode."""
         with self._lock:
             self._images[key] = value
             self._images.move_to_end(key)
+            if source is not None:
+                self._sources[key] = source
             self._trim()
 
     def serve(self, key: str) -> Any | None:
         """Return *key*'s value and pin it as recently requested.
 
-        ``None`` means the key is not held, which the caller turns into an empty
-        image. Pinning here is what stops a live layer from being dropped.
+        On a miss the entry is re-decoded from the source retained by :meth:`add`
+        and served as if it had never gone. ``None`` is therefore returned only
+        when the key was never known, or has no source to recover from — which
+        makes a blank layer impossible for any handle the presenter legitimately
+        holds.
+
+        Pinning here is what stops a live layer from being dropped.
         """
         with self._lock:
             value = self._images.get(key)
             if value is None:
-                return None
+                recovered = self._recover(key)
+                if recovered is None:
+                    return None
+                value = recovered
             self._images.move_to_end(key)
             self._served[key] = None
             self._served.move_to_end(key)
@@ -256,7 +279,8 @@ class ArtworkStore:
         """Hand *key* back, unless the scene has served it recently.
 
         A served key becomes *pending* and is dropped when it leaves the served
-        window; anything nobody asked for goes immediately.
+        window; anything nobody asked for goes immediately. A dropped key keeps
+        its source, so :meth:`serve` can still recover it.
         """
         with self._lock:
             if key in self._served:
@@ -265,13 +289,36 @@ class ArtworkStore:
             self._images.pop(key, None)
 
     def clear(self) -> None:
-        """Drop everything, pins included (teardown only)."""
+        """Drop everything, pins and sources included (teardown only)."""
         with self._lock:
             self._images.clear()
+            self._sources.clear()
             self._served.clear()
             self._pending.clear()
 
     # -- policy --------------------------------------------------------------
+
+    def _recover(self, key: str) -> Any | None:
+        """Re-decode *key* from its retained source. Caller holds the lock.
+
+        The decode callback is supplied by the backend, so this class stays free
+        of Qt and testable without it. A source that has become unreadable (the
+        file was deleted, the cache was cleared) simply yields ``None`` again,
+        which is the same outcome as before this existed.
+        """
+        source = self._sources.get(key)
+        if source is None or self._decode is None:
+            return None
+        try:
+            value = self._decode(source)
+        except Exception:
+            logger.debug("Could not re-decode artwork %s", key, exc_info=True)
+            return None
+        if value is None:
+            return None
+        self._images[key] = value
+        logger.debug("Artwork store re-decoded %s on demand", key)
+        return value
 
     def _trim(self) -> None:
         """Honour deferred releases, then the cap. Caller holds the lock."""
@@ -313,7 +360,10 @@ class QmlBackend(DisplayBackend):
         # Insertion-ordered, capped AND scene-aware — see ArtworkStore. The store
         # owns a strong reference to every image it hands out, so it holds its own
         # lock and enforces both the cap and the served window.
-        self._images = ArtworkStore()
+        # ``decode`` is what makes a miss recoverable rather than blank: the store
+        # hands the retained source back through the SAME decoder, so a recovered
+        # image is identical to the one that was evicted.
+        self._images = ArtworkStore(decode=self._decode)
 
         # Video
         self._video: Any = None
@@ -432,10 +482,28 @@ class QmlBackend(DisplayBackend):
         # `metixel-cursor-hider.service` covers the remaining case. Recorded here so
         # the parameter's absence is visibly deliberate rather than forgotten.
         _ = hide_cursor
-        # rotation: not a transform on the scene. The framing engine already
-        # accounts for `display.rotation` when it computes the plan, so rotating
-        # here as well would apply it twice.
-        _ = rotation
+
+        # Rotation is the COMPOSITOR's job, and nothing used to do it.  The old
+        # comment here claimed the framing engine had already applied the rotation,
+        # which is only true of the *layout* — `LayoutEngine` picks the portrait
+        # preset, but the wlroots output still presents its native landscape mode,
+        # so the whole frame rendered sideways and the setting appeared dead.
+        #
+        # Both halves are required and they are independent:
+        #
+        # * ``--transform`` rotates the compositor output (and therefore the video
+        #   surface, which Qt cannot transform);
+        # * Qt then needs the ROTATED size, or the scene is laid out for the
+        #   unrotated panel and letterboxes inside the turned output.
+        #
+        # Applied here rather than on a config change because the change comes with
+        # a backend restart already (``routes/config.py`` restarts on any
+        # ``_DISPLAY_MODE_KEYS`` change, and clears the optimised-media cache because
+        # every cached image was scaled for the old canvas) — so this runs once, on
+        # the fresh process, at exactly the moment the new geometry takes effect.
+        if rotation % 360 in (90, 270):
+            self._width, self._height = self._height, self._width
+        self._apply_rotation(rotation)
 
         self._running = True
         logger.info(
@@ -589,8 +657,17 @@ class QmlBackend(DisplayBackend):
 
         if prev_plan is None:
             root.setProperty("prevArtworkOpacity", 0.0)
+            root.setProperty("prevBackdropOpacity", 0.0)
         else:
             root.setProperty("prevArtworkSource", self._url(prev_image))
+            # Whether the OUTGOING media group fades at all — see the scene's
+            # Layer 3 note.  ``prev_alpha`` is 1.0 through an ordinary crossfade
+            # (the outgoing layer stays opaque and is covered, not dissolved), so
+            # using it as the group's opacity would delete the outgoing item the
+            # moment a fade began.  The group fades only when the media actually
+            # changed, which ``image`` differing from ``prev_image`` tells us.
+            group_alpha = 0.0 if image == prev_image else float(prev_alpha)
+            root.setProperty("prevBackdropOpacity", group_alpha)
             root.setProperty("prevArtworkOpacity", float(prev_alpha))
             self._apply_rect(root, "prevArtwork", prev_plan.artwork_dst)
             self._apply_source_rect(root, "prevArtwork", prev_plan.artwork_src)
@@ -672,7 +749,12 @@ class QmlBackend(DisplayBackend):
             return None
 
         key = uuid4().hex
-        self._images.add(key, image)
+        # The source travels WITH the image.  It is a ``Path``, ``bytes`` or numpy
+        # array — tens of bytes against a multi-megabyte ``QImage`` — and it is what
+        # lets the store re-decode if the scene asks for a key that has been
+        # released, instead of handing back a null image and leaving the layer
+        # blank.
+        self._images.add(key, image, source=path)
         return f"image://{PROVIDER_ID}/{key}"
 
     def _decode(self, path: Path | np.ndarray | bytes) -> QImage | None:
@@ -828,6 +910,11 @@ class QmlBackend(DisplayBackend):
 
     def _apply_backdrop(self, root: QQuickWindow, plan: RenderPlan, source: Any) -> None:
         """Point the ambient layer at the blurred JPEG, or fall back to flat colour."""
+        # The canvas background follows the INCOMING item, so once the outgoing
+        # group's opacity reaches 0 the frame is standing on the new colour rather
+        # than the old one.  While the outgoing item is still opaque it covers this
+        # completely, which is why it is safe to move at the start of the fade.
+        root.setProperty("ambientColour", _colour(plan.ambient_colour))
         request = self.backdrop_request(plan, source)
         path = self._backdrop_adopted.get(request.job_id) if request is not None else None
         if path is None:
@@ -838,8 +925,6 @@ class QmlBackend(DisplayBackend):
             return
         root.setProperty("ambientSource", self._url(path))
         root.setProperty("ambientVisible", True)
-        root.setProperty("prevAmbientSource", self._url(self._prev_backdrop_path))
-        root.setProperty("prevAmbientOpacity", 0.0 if self._prev_backdrop_path is None else 1.0)
 
     def _apply_prev_backdrop(
         self, root: QQuickWindow, prev_plan: RenderPlan | None, source: Any
@@ -847,6 +932,10 @@ class QmlBackend(DisplayBackend):
         if prev_plan is None:
             root.setProperty("prevAmbientVisible", False)
             return
+        # Colour AND geometry both follow the outgoing plan: the group is only
+        # faded, never re-sourced, so the backdrop it was built for has to still be
+        # the one it paints.
+        root.setProperty("prevAmbientColour", _colour(prev_plan.ambient_colour))
         request = self.backdrop_request(prev_plan, source)
         path = self._backdrop_adopted.get(request.job_id) if request is not None else None
         if path is None:
@@ -1016,6 +1105,31 @@ class QmlBackend(DisplayBackend):
 
             self._wlr_output = WlrOutput()
         return self._wlr_output
+
+    def _apply_rotation(self, rotation: int) -> None:
+        """Rotate the compositor output, or put it back to normal.
+
+        Never raises and never aborts startup.  ``reconcile.sh`` owns persistent
+        host state, so a rotation applied from the application is a runtime action
+        the user asked for — and a frame that cannot rotate (no wlr-randr, no
+        Wayland socket, an output that will not accept the transform) must still
+        come up.  The failure mode is the same in every case: the panel stays
+        unrotated, and that is what the log records.
+        """
+        if rotation % 360 not in (0, 90, 180, 270):
+            logger.warning("Ignoring unusable display rotation %r", rotation)
+            return
+        try:
+            applied = self._wlr().set_mode(rotation=rotation)
+        except Exception:  # noqa: BLE001 - startup must not fail on this
+            logger.warning("Display rotation %d failed", rotation, exc_info=True)
+            return
+        if not applied:
+            logger.warning(
+                "Display rotation %d could not be applied — the panel will stay "
+                "unrotated (is wlr-randr available and the output connected?)",
+                rotation,
+            )
 
     def display_power(self, on: bool) -> None:
         """Turn the panel on or off via the shared tiered fallback chain.

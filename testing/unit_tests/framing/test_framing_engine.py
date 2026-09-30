@@ -376,6 +376,69 @@ class TestPhysicalBranch:
         )
         assert result.ambient_fill.strategy == "bars"
 
+    def test_the_blur_strategy_falls_back_to_black_not_the_solid_colour(self):
+        """``blur`` paints black until its backdrop exists — never the old colour.
+
+        The blurred backdrop is built asynchronously in a subprocess, so for the
+        first frames after the look changes there is no backdrop and the canvas
+        paints this flat colour.  Inheriting ``ambient_colour`` there means
+        switching from the solid fill to blur repaints the *previous* colour and
+        then swaps to the blur — the frame visibly flashes a colour the user has
+        just stopped using.
+
+        The colour is still carried on the result (``ambient_darken`` needs it),
+        it just must not be what is painted before the blur arrives.
+        """
+        result = calculate_framing(
+            request(
+                "gallery", 3 / 2, physical=True, ambient_strategy="blur", ambient_colour="#1717d3"
+            ),
+        )
+        assert result.ambient_fill.present is True
+        assert result.ambient_fill.colour == "#000000", (
+            "the pre-blur fallback must be black, or switching to blur flashes "
+            "the previously-selected solid colour"
+        )
+
+    def test_the_blur_strategy_overrides_the_default_colour_too(self):
+        """Even with no colour configured, blur's pre-backdrop fill is black."""
+        result = calculate_framing(
+            request("gallery", 3 / 2, physical=True, ambient_strategy="blur"),
+        )
+        assert result.ambient_fill.colour == "#000000"
+
+    def test_blur_still_reports_its_strategy(self):
+        """The colour is neutralised, but the look is still ``blur``."""
+        result = calculate_framing(
+            request("gallery", 3 / 2, physical=True, ambient_strategy="blur"),
+        )
+        assert result.ambient_fill.strategy == "blur"
+
+    def test_the_solid_strategy_is_not_blackened(self):
+        """The blur fix must not leak into the solid look."""
+        result = calculate_framing(
+            request(
+                "gallery", 3 / 2, physical=True, ambient_strategy="solid", ambient_colour="#1717d3"
+            ),
+        )
+        assert result.ambient_fill.colour == "#1717d3"
+
+    def test_the_blur_params_survive_the_colour_override(self):
+        """Neutralising the colour must not disturb the blur knobs beside it."""
+        result = calculate_framing(
+            request(
+                "gallery",
+                3 / 2,
+                physical=True,
+                ambient_strategy="blur",
+                ambient_colour="#1717d3",
+                ambient_blur_radius=42.0,
+                ambient_darken=0.6,
+            ),
+        )
+        assert result.ambient_fill.blur_radius == 42.0
+        assert result.ambient_fill.darken == 0.6
+
     def test_bars_is_the_default_for_a_cropped_presentation(self):
         """A crop has no residue, so the default strategy there is ``bars``."""
         result = calculate_framing(request("gallery", 3 / 2, physical=True, overflow="crop"))

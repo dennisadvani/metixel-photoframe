@@ -118,11 +118,108 @@ class TestTheStorePolicy:
         assert len(store) == 0
 
 
+class TestTheStoreRecoversRatherThanBlanking:
+    """Rule 3: the served window is a heuristic, so a miss must be recoverable.
+
+    The window covers the requests the scene is *known* to make.  It cannot be a
+    proof, because ``ImageCache`` (3 entries) and this store (6) are bounded
+    independently and neither knows the other's budget — so a release can arrive
+    from a direction the window never anticipated, and a null image is the result.
+
+    On the frame that showed up as the artwork layers failing while the ambient
+    ones did not, which is the same asymmetry by construction: an ambient source is
+    a scratch FILE on disk that nothing evicts, whereas an artwork source is a
+    provider key in this store.  Retaining the source removes the asymmetry.
+    """
+
+    @staticmethod
+    def _decoded(source: object) -> str:
+        return f"decoded:{source}"
+
+    def test_an_evicted_key_is_re_decoded_on_demand(self) -> None:
+        store = ArtworkStore(max_images=1, decode=self._decoded)
+        store.add("k", "image", source="photo.jpg")
+        for i in range(5):  # evict it under the cap
+            store.add(f"noise{i}", i)
+
+        assert store.serve("k") == "decoded:photo.jpg", "the layer went blank instead of recovering"
+
+    def test_a_released_key_is_re_decoded_on_demand(self) -> None:
+        """The presenter's LRU release is exactly this path."""
+        store = ArtworkStore(decode=self._decoded)
+        store.add("k", "image", source="photo.jpg")
+        store.release("k")
+        assert "k" not in store, "precondition: the release dropped it"
+
+        assert store.serve("k") == "decoded:photo.jpg"
+
+    def test_a_key_with_no_source_still_returns_none(self) -> None:
+        """A handle nothing can recover must degrade, not raise."""
+        store = ArtworkStore(decode=self._decoded)
+        store.add("k", "image")  # no source
+        store.release("k")
+
+        assert store.serve("k") is None
+
+    def test_no_decoder_still_returns_none(self) -> None:
+        """The store stays usable without Qt."""
+        store = ArtworkStore()
+        store.add("k", "image", source="photo.jpg")
+        store.release("k")
+
+        assert store.serve("k") is None
+
+    def test_a_failing_decoder_is_swallowed(self) -> None:
+        def boom(_source: object) -> str:
+            raise RuntimeError("file vanished")
+
+        store = ArtworkStore(decode=boom)
+        store.add("k", "image", source="gone.jpg")
+        store.release("k")
+
+        assert store.serve("k") is None  # must not raise into the scene graph
+
+    def test_a_decoder_returning_nothing_is_handled(self) -> None:
+        store = ArtworkStore(decode=lambda _s: None)
+        store.add("k", "image", source="gone.jpg")
+        store.release("k")
+
+        assert store.serve("k") is None
+
+    def test_recovery_still_respects_the_cap(self) -> None:
+        """Recovering must not reopen the unbounded leak."""
+        store = ArtworkStore(max_images=2, decode=self._decoded)
+        for i in range(3):
+            store.add(f"k{i}", f"image{i}", source=f"s{i}")
+
+        assert len(store) <= 2, "recovery must not grow the store past its cap"
+
+    def test_clear_drops_the_sources_too(self) -> None:
+        """Teardown must not leave a store that can resurrect images."""
+        store = ArtworkStore(decode=self._decoded)
+        store.add("k", "image", source="photo.jpg")
+        store.clear()
+
+        assert store.serve("k") is None
+
+
 class TestTheBackendWiring:
     """A correct store is useless if the backend does not route through it."""
 
     def test_load_image_stores_through_the_store(self) -> None:
         assert "self._images.add(" in _code("load_image")
+
+    def test_load_image_retains_the_source_for_recovery(self) -> None:
+        """Without the source a miss can only be answered with a blank layer."""
+        assert "source=path" in _code("load_image")
+
+    def test_the_store_is_given_the_real_decoder(self) -> None:
+        """A recovery path with no decoder would silently do nothing."""
+        source = _BACKEND.read_text(encoding="utf-8")
+
+        assert "ArtworkStore(decode=self._decode)" in source, (
+            "the store can only re-decode if the backend hands it the decoder"
+        )
 
     def test_unload_image_releases_through_the_store(self) -> None:
         assert "self._images.release(" in _code("unload_image")

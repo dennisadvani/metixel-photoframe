@@ -76,13 +76,30 @@ Window {
     visible: true
     color: backColour
 
-    // -- Ambient fill (RenderPlan.ambient / ambient_colour / ambient_strategy) --
+    // -- Media: backdrop + artwork, as ONE group per item --------------------
     //
-    // The only full-canvas layer.  `ambientSource` is the pre-blurred JPEG
-    // produced during Phase 2 OPTIMISE; when it is empty the band is the flat
-    // `ambientColour` instead (the "solid" ambient strategy).  Both forms exist
-    // because a solid fill is correct when the artwork is itself the source and
-    // blurring it would be circular.
+    // There are two media slots — outgoing and incoming — and each carries its
+    // OWN backdrop.  They are declared as a single `Item` per slot further down,
+    // with `opacity` on the item so a backdrop and its artwork can never fade
+    // apart.  Nothing here is painted loose; see the Layer 3 note.
+    //
+    // Two opacity properties, deliberately separate:
+    //
+    // * `artworkOpacity` — the incoming item's crossfade progress.  Drives the
+    //   incoming group.
+    // * `prevBackdropOpacity` — whether the OUTGOING group fades at all.  1.0
+    //   while it is only being blended over from above, 0.0 when the media
+    //   actually changed and the outgoing item has to dissolve away.
+    //
+    // They cannot be one property.  A still re-presents itself on every tick, so
+    // `artworkOpacity` is 1.0 throughout a non-transition frame; the outgoing
+    // item's alpha comes from the transition engine and is ALSO 1.0 during a
+    // crossfade, because the outgoing layer is meant to stay opaque and be
+    // covered rather than dissolved.  Reusing one value for both would make the
+    // outgoing item disappear the instant a fade started.
+    //
+    // `ambientX/Y/W/H` and `ambientColour` stay global on purpose — they are the
+    // flat full-canvas fill, not a per-item image.
     property url ambientSource: ""
     property color ambientColour: "#000000"
     property bool ambientVisible: true
@@ -91,16 +108,16 @@ Window {
     property real ambientW: 0
     property real ambientH: 0
 
-    // Outgoing ambient, kept so a crossfade does not leave the band snapping to
-    // the incoming item's colour while the artwork is still fading.
+    // Outgoing item's backdrop.  `prevAmbientColour` doubles as the canvas
+    // background while the outgoing item still owns the screen.
     property url prevAmbientSource: ""
     property color prevAmbientColour: "#000000"
     property bool prevAmbientVisible: false
-    property real prevAmbientOpacity: 0.0
     property real prevAmbientX: 0
     property real prevAmbientY: 0
     property real prevAmbientW: 0
     property real prevAmbientH: 0
+    property real prevBackdropOpacity: 0.0
 
     // Background shown where no ambient layer covers.  Kept separate from
     // `ambientColour` because the renderer clears to the matte colour before the
@@ -181,108 +198,156 @@ Window {
     property var overlayElements: []
 
     // =========================================================================
-    // Layer 1 — ambient fill (full canvas)
+    // Layer 1 — BACKGROUND (flat fill only)
+    //
+    // The base colour, painted before anything else so a JPEG that fails to
+    // decode leaves a colour rather than a hole.  The *blurred* backdrop is NOT
+    // here — it belongs to its media item, see Layer 2.
+    //
+    // It follows the OUTGOING media's colour while a transition is running, so
+    // the canvas cannot flash the incoming colour behind an outgoing item that is
+    // still opaque.
     // =========================================================================
     Rectangle {
-        // Flat fallback, always present under the image so a JPEG that fails to
-        // decode leaves the ambient colour rather than a hole.
+        objectName: "background"
         anchors.fill: parent
         color: root.prevAmbientVisible ? root.prevAmbientColour : root.ambientColour
         visible: root.ambientVisible
     }
 
-    Image {
-        id: prevAmbient
-        objectName: "prevAmbient"
-        x: root.prevAmbientX
-        y: root.prevAmbientY
-        width: root.prevAmbientW
-        height: root.prevAmbientH
-        source: root.prevAmbientSource
-        fillMode: Image.Stretch
-        // The ambient band is already blurred and scaled by the time it reaches
-        // us, so smoothing only adds sampling cost with nothing to gain.
-        smooth: false
-        cache: false
-        opacity: root.prevAmbientOpacity
-        visible: root.prevAmbientVisible && root.prevAmbientOpacity > 0.001 && root.prevAmbientW > 0
-    }
-
-    Image {
-        id: ambient
-        objectName: "ambient"
-        x: root.ambientX
-        y: root.ambientY
-        width: root.ambientW
-        height: root.ambientH
-        source: root.ambientSource
-        fillMode: Image.Stretch
-        smooth: false
-        cache: false
-        visible: root.ambientVisible && root.ambientW > 0 && root.ambientH > 0
-    }
-
     // =========================================================================
-    // Layer 2 — artwork (the incoming slide's photo, or a video's poster)
+    // Layer 2 — MEDIA
+    //
+    // QML stacks by DECLARATION ORDER, so the sequence in this file bottom-to-top
+    // is: background → media → video → rings → overlay.  Nothing may be assumed
+    // about the order; it has to be the order.
+    //
+    // The media layer is deliberately a PAIR — the outgoing item and the incoming
+    // item — each drawn as a GROUP of backdrop + artwork inside one item-level
+    // opacity.
+    //
+    // The grouping is the whole point, and stacking the same six layers loose
+    // instead is a bug this file shipped:
+    //
+    //     prevAmbient (1.0)  ambient (1.0)  prevArtwork (1.0)  artwork (0.4)
+    //
+    // reads bottom-to-top as prevAmbient, ambient, prevArtwork, artwork — so the
+    // INCOMING backdrop is painted UNDER the OUTGOING artwork.  At the ambient
+    // band's edges, where the artwork does not cover, the incoming item's blur
+    // showed through the outgoing item for the whole fade.  A backdrop is part of
+    // its media, not a separate layer beneath both of them.
+    //
+    // So: one `Item` per item, `opacity` on the item, backdrop and artwork as
+    // children.  Children inherit the parent's opacity, so a backdrop and its
+    // artwork can never drift apart — they fade as one thing, in, and one thing,
+    // out.
+    //
+    // Order within the group also matters: the backdrop is UNDER its own artwork,
+    // which is what lets a `cover`-fit artwork hide the band completely, and lets
+    // a `contain`-fit artwork show it as its letterbox.  That is why the
+    // backdrop's own opacity stays 1 and only the group is faded.
     // =========================================================================
-    Image {
-        id: prevArtwork
-        objectName: "prevArtwork"
-        x: root.prevArtworkX
-        y: root.prevArtworkY
-        width: root.prevArtworkW
-        height: root.prevArtworkH
-        source: root.prevArtworkSource
-        fillMode: Image.Stretch
-        cache: false
-        sourceClipRect: Qt.rect(
-            root.prevArtworkSrcX,
-            root.prevArtworkSrcY,
-            root.prevArtworkSrcW,
-            root.prevArtworkSrcH
-        )
-        opacity: root.prevArtworkOpacity
-        visible: root.prevArtworkOpacity > 0.001 && root.prevArtworkW > 0
+
+    // -- Outgoing item -------------------------------------------------------
+    Item {
+        id: prevMedia
+        objectName: "prevMedia"
+        // Suppressed for a still: see the incoming item's note on why the
+        // outgoing artwork must stay opaque except when the media changed.
+        opacity: root.prevBackdropOpacity
+        visible: root.prevAmbientVisible || root.prevArtworkOpacity > 0.001
+
+        Image {
+            id: prevAmbient
+            objectName: "prevAmbient"
+            x: root.prevAmbientX
+            y: root.prevAmbientY
+            width: root.prevAmbientW
+            height: root.prevAmbientH
+            source: root.prevAmbientSource
+            fillMode: Image.Stretch
+            // The ambient band is already blurred and scaled by the time it
+            // reaches us, so smoothing only adds sampling cost with nothing to
+            // gain.
+            smooth: false
+            cache: false
+            visible: root.prevAmbientVisible && root.prevAmbientW > 0
+        }
+
+        Image {
+            id: prevArtwork
+            objectName: "prevArtwork"
+            x: root.prevArtworkX
+            y: root.prevArtworkY
+            width: root.prevArtworkW
+            height: root.prevArtworkH
+            source: root.prevArtworkSource
+            fillMode: Image.Stretch
+            cache: false
+            sourceClipRect: Qt.rect(
+                root.prevArtworkSrcX,
+                root.prevArtworkSrcY,
+                root.prevArtworkSrcW,
+                root.prevArtworkSrcH
+            )
+            visible: root.prevArtworkW > 0 && root.prevArtworkH > 0
+        }
     }
 
-    Image {
-        id: artwork
-        objectName: "artwork"
-        x: root.artworkX
-        y: root.artworkY
-        width: root.artworkW
-        height: root.artworkH
-        source: root.artworkSource
-        fillMode: Image.Stretch
-        cache: false
-        sourceClipRect: Qt.rect(
-            root.artworkSrcX,
-            root.artworkSrcY,
-            root.artworkSrcW,
-            root.artworkSrcH
-        )
+    // -- Incoming item -------------------------------------------------------
+    Item {
+        id: media
+        objectName: "media"
+        // The item's own fade.  For a crossfade `artworkOpacity` runs 1.0 → the
+        // transition's incoming alpha, so the group's backdrop fades with its
+        // artwork; for a still it is left at 1.0 and this is effectively a no-op.
         opacity: root.artworkOpacity
-        visible: root.artworkW > 0 && root.artworkH > 0
+        visible: root.ambientVisible || root.artworkW > 0
+
+        Image {
+            id: ambient
+            objectName: "ambient"
+            x: root.ambientX
+            y: root.ambientY
+            width: root.ambientW
+            height: root.ambientH
+            source: root.ambientSource
+            fillMode: Image.Stretch
+            smooth: false
+            cache: false
+            visible: root.ambientVisible && root.ambientW > 0 && root.ambientH > 0
+        }
+
+        Image {
+            id: artwork
+            objectName: "artwork"
+            x: root.artworkX
+            y: root.artworkY
+            width: root.artworkW
+            height: root.artworkH
+            source: root.artworkSource
+            fillMode: Image.Stretch
+            cache: false
+            sourceClipRect: Qt.rect(
+                root.artworkSrcX,
+                root.artworkSrcY,
+                root.artworkSrcW,
+                root.artworkSrcH
+            )
+            visible: root.artworkW > 0 && root.artworkH > 0
+        }
     }
 
     // =========================================================================
     // Layer 3 — video
     //
-    // Declared here because QML stacks by declaration order, and this is the only
-    // position that is correct on BOTH sides: ABOVE the artwork poster (so the
-    // video covers the poster once frames arrive) and BELOW the ring layers (so
-    // the mat composites over the video).  Declaring it in the properties area
-    // would make it the bottom-most item and the opaque ambient rectangle would
-    // hide it completely.
-    //
-    // This single position is what removes the raster canvas's whole video-hole
-    // apparatus: there is no unpainted region, so no clip region, no
-    // translucency toggle, no sibling z-order and no reveal ordering.
-    //
-    // `fillMode` is Stretch on purpose: `plan.artwork_dst` already carries the
-    // correct aspect ratio for the fit mode (cover/contain), so letterboxing
-    // inside it again would add redundant padding — the same reason the raster
-    // backend rounded the rect OUTWARD to whole pixels.
+    // Declared above the media group because it SUPERSEDES it: while a video
+    // plays, it covers the poster that is already in the artwork slot.  The rings
+    // then composite over the video, which is why nothing here has to paint its
+    // own matte — the only position that is correct on both sides, and the reason
+    // `fillMode` is Stretch: `plan.artwork_dst` already carries the correct aspect
+    // ratio for the fit mode, so letterboxing inside it again would add redundant
+    // padding.
     // =========================================================================
     VideoOutput {
         id: videoOut
@@ -296,11 +361,17 @@ Window {
     }
 
     // =========================================================================
-    // Layer 4 — whitespace, Layer 5 — mat, Layer 6 — moulding
+    // Layer 4 — RINGS: whitespace, mat, moulding
     //
-    // Each is `plan.<layer>`: disjoint rectangles.  Declared in the order the
-    // framing spec mandates, so the later layers paint over the earlier ones and
-    // the white mount reads as being under the mat rather than over it.
+    // Each is a `plan.<layer>` tuple of disjoint rects, passed as JS arrays of
+    // {x, y, w, h} and drawn by a Repeater, because the count and geometry are
+    // computed by `framing/layout.py` and must stay there — a backend holding
+    // layout knowledge is exactly what the ABC forbids.
+    //
+    // Declared AFTER the media so they composite OVER it.  This is the layering
+    // that makes a video work without any special case: the video is media like
+    // any other, so the rings cover it by declaration order rather than by the
+    // video painting its own matte.
     // =========================================================================
     Repeater {
         objectName: "whitespace"
@@ -339,7 +410,11 @@ Window {
     }
 
     // =========================================================================
-    // Layer 7 — overlay (boot screen, messages, clock)
+    // Layer 5 — overlay (boot screen, notifications, and the reserved OSD)
+    //
+    // Closest to the viewer: nothing may cover it.  The order below this point is
+    // media → rings → overlay, so the boot screen and a notification sit above the
+    // mat and the artwork as they must.
     //
     // The delegate draws whichever of the three kinds the element is, and it has
     // to handle all three.  The boot screen is a black curtain, a logo, a spinner

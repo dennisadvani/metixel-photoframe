@@ -509,6 +509,263 @@ class TestTransitionLayersAreResolvedOnce:
         )
 
 
+class TestTheLastFrameIsPreloadedBehindTheVideo:
+    """The last frame is fetched while the video still covers it.
+
+    Loading it *at* the moment playback ends is strictly worse, and is the defect
+    this replaces: the artwork layer becomes visible the instant the video surface
+    is hidden, so a load started then shows whatever was underneath — the opening
+    image — for however long the decode takes.  Observed on the frame as the first
+    frame "appearing from behind" the video the moment it finished.
+
+    Ported from the 1.2.6 method (``presentation/video_state.py``), which loaded the
+    last frame into a texture BEFORE launching the player and swapped it into the
+    active slot at 50% of playtime as a pure pointer swap with no I/O.  Here the
+    fraction is :data:`Presenter._LAST_FRAME_PRELOAD_FRACTION` (20%), against 50%
+    there, because this backend loads through an image provider — a decode plus a
+    provider entry — so starting earlier leaves more slack for a 4K frame.
+    """
+
+    _CLIP_SECONDS = 100.0
+
+    def _play(self, presenter: Presenter, backend: FakeBackend, tmp_path: Path) -> Path:
+        """Start a long video and clear the load log, leaving playback running."""
+        video = tmp_path / "v.mp4"
+        presenter.set_queue([_video_item("v", video, duration=self._CLIP_SECONDS)])
+        assert presenter.video_active, "the video should be playing"
+        backend.loaded.clear()
+        return video
+
+    def test_nothing_is_loaded_before_the_fraction(self, presenter, backend, tmp_path) -> None:
+        video = self._play(presenter, backend, tmp_path)
+
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.10)
+
+        assert video not in backend.loaded, "the last frame must not load this early"
+        assert presenter._preloaded_last_frame is None
+
+    def test_the_last_frame_loads_once_past_the_fraction(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        self._play(presenter, backend, tmp_path)
+
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.25)
+
+        assert presenter._preloaded_last_frame is not None
+
+    def test_the_fraction_is_a_twentieth_to_a_half_of_the_clip(self) -> None:
+        """Low enough to beat the decode, high enough not to precede the video."""
+        assert 0.05 <= Presenter._LAST_FRAME_PRELOAD_FRACTION <= 0.5
+
+    def test_the_preload_runs_once_per_slide_not_once_per_tick(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        """A per-tick load would be a decode per frame for the rest of the slide."""
+        video = self._play(presenter, backend, tmp_path)
+
+        for _ in range(10):
+            presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.30)
+
+        assert backend.loaded.count(video) == 1
+
+    def test_a_failed_preload_is_not_retried(self, presenter, backend, tmp_path) -> None:
+        """A missing last frame degrades to the poster, which is the old behaviour."""
+        video = self._play(presenter, backend, tmp_path)
+        presenter._load_uncached = lambda _path: None  # type: ignore[method-assign]
+
+        for _ in range(5):
+            presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.30)
+
+        assert presenter._preloaded_last_frame is None
+        assert presenter._video_last_frame_ready is True, "the latch must still be set"
+        assert video not in backend.loaded
+
+    def test_the_fraction_is_of_the_clip_not_the_slide(self, presenter, backend, tmp_path) -> None:
+        """A video capped by config would otherwise preload at an arbitrary point.
+
+        The fraction is taken from ``item.duration_seconds``, so a 100 s clip given
+        a 10 s slide window still preloads at 20 s of *clip* time — which is beyond
+        the slide and simply never fires, rather than firing at 2 s.
+        """
+        video = self._play(presenter, backend, tmp_path)
+
+        # Third of the slide's cap, but only 3% of the clip.
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.03)
+
+        assert video not in backend.loaded
+
+    def test_an_unknown_duration_never_preloads(self, presenter, backend, tmp_path) -> None:
+        """Without a duration there is no fraction to take, so it degrades."""
+        video = tmp_path / "v.mp4"
+        presenter.set_queue([_video_item("v", video, duration=0.0)])
+        backend.loaded.clear()
+
+        presenter._preload_last_frame(presenter.current_item, 900.0)
+
+        assert video not in backend.loaded
+        assert presenter._preloaded_last_frame is None
+
+    def test_an_image_item_is_ignored(self, presenter, backend, tmp_path) -> None:
+        presenter.set_queue([_image_item("a", tmp_path / "a.jpg")])
+        backend.loaded.clear()
+
+        presenter._preload_last_frame(presenter.current_item, 900.0)
+
+        assert backend.loaded == []
+
+    def test_the_preloaded_handle_is_what_the_transition_gets(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        """The whole point: the fade's outgoing layer must be the preloaded one."""
+        self._play(presenter, backend, tmp_path)
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.25)
+        preloaded = presenter._preloaded_last_frame
+        assert preloaded is not None
+        item = presenter.current_item
+        assert item is not None
+
+        backend.loaded.clear()
+        presenter._end_video(item)
+
+        assert presenter._image_for(item) is preloaded
+        assert backend.loaded == [], "the end of the video must cost no decode at all"
+
+    def test_skipping_before_the_fraction_still_falls_back_to_a_load(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        """A manual skip ends the slide before the preload point is ever reached."""
+        video = self._play(presenter, backend, tmp_path)
+        item = presenter.current_item
+        assert item is not None
+        assert presenter._preloaded_last_frame is None, "precondition: never preloaded"
+
+        presenter._end_video(item)
+        backend.loaded.clear()
+
+        assert presenter._image_for(item) is not None
+        assert backend.loaded.count(video) == 1, "the uncached fallback must cover this"
+
+    def test_leaving_the_video_clears_the_handle_and_the_latch(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        """A stale handle would show the previous video's last frame on the next."""
+        self._play(presenter, backend, tmp_path)
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.25)
+        assert presenter._preloaded_last_frame is not None
+
+        presenter.next_item()
+
+        assert presenter._preloaded_last_frame is None
+        assert presenter._video_ended_id is None
+        assert presenter._video_last_frame_ready is False, "the latch must not leak across slides"
+
+    def test_render_drives_the_preload_while_playing(
+        self, presenter, backend, tmp_path, monkeypatch
+    ) -> None:
+        """The trigger is ``render``, so a real slideshow reaches it without help."""
+        self._play(presenter, backend, tmp_path)
+        calls: list[float] = []
+        monkeypatch.setattr(
+            Presenter, "_preload_last_frame", lambda self, item, elapsed: calls.append(elapsed)
+        )
+
+        presenter.render()
+
+        assert calls, "render must offer the playing video a chance to preload"
+
+
+class TestThePreloadedFrameReplacesThePosterWhileHidden:
+    """The preload must re-source the artwork layer, not just decode.
+
+    Decoding early is only half the fix.  The remaining cost is the *source
+    assignment*: Qt cannot present a new ``source`` until it has resolved and
+    uploaded it, so a swap performed at the instant the video stops still leaves
+    whatever was already in the slot — the poster — on screen for that gap.  That
+    is the first-frame flash.
+
+    The video surface covers the artwork layer for the whole clip, so re-sourcing
+    it mid-playback is invisible.  Doing it there is what makes the reveal instant,
+    and it is why the preloaded handle must ALSO win in ``_image_for`` while the
+    video is still playing — otherwise the next tick re-asserts the poster and
+    throws the work away.
+    """
+
+    _CLIP_SECONDS = 100.0
+
+    def test_the_layer_is_resourced_as_soon_as_the_preload_lands(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        video = tmp_path / "v.mp4"
+        presenter.set_queue([_video_item("v", video, duration=self._CLIP_SECONDS)])
+        backend.loaded.clear()
+
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.25)
+
+        preloaded = presenter._preloaded_last_frame
+        assert preloaded is not None
+        assert backend.presented, "the preload must be pushed to the display, not only decoded"
+        assert backend.presented[-1][1] is preloaded, (
+            "the last frame must be the artwork source before the video stops"
+        )
+
+    def test_the_poster_does_not_come_back_on_the_next_tick(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        """``_present_current`` runs every tick and would otherwise undo the swap."""
+        video = tmp_path / "v.mp4"
+        presenter.set_queue([_video_item("v", video, duration=self._CLIP_SECONDS)])
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.25)
+        preloaded = presenter._preloaded_last_frame
+        assert preloaded is not None
+        item = presenter.current_item
+        assert item is not None
+        assert item.media_type == MediaType.VIDEO
+
+        backend.loaded.clear()
+        presenter._present_current()
+
+        assert presenter._image_for(item) is preloaded
+        assert backend.loaded == [], "the tick must not re-decode the poster"
+
+    def test_the_same_handle_serves_the_fade_after_the_video_ends(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        """One handle, two phases: hidden under the video, then the outgoing layer."""
+        video = tmp_path / "v.mp4"
+        presenter.set_queue([_video_item("v", video, duration=self._CLIP_SECONDS)])
+        presenter._preload_last_frame(presenter.current_item, self._CLIP_SECONDS * 0.25)
+        preloaded = presenter._preloaded_last_frame
+        item = presenter.current_item
+        assert item is not None
+
+        presenter._end_video(item)
+
+        assert presenter._image_for(item) is preloaded, (
+            "the fade must not swap in a second handle at the moment of the reveal"
+        )
+
+    def test_an_item_that_never_preloaded_still_uses_the_poster(
+        self, presenter, backend, tmp_path
+    ) -> None:
+        """No regression: without a preload the old path is untouched.
+
+        A skip before the fraction leaves no handle, so ``_image_for`` must fall
+        through to the poster rather than reporting nothing.  The poster is served
+        from ``ImageCache``, so it is already loaded and this costs no decode.
+        """
+        video = tmp_path / "v.mp4"
+        presenter.set_queue([_video_item("v", video, duration=self._CLIP_SECONDS)])
+        item = presenter.current_item
+        assert item is not None
+        assert presenter._preloaded_last_frame is None
+        assert backend.loaded.count(video) == 1, "precondition: the poster loaded once"
+
+        assert presenter._image_for(item) is not None, "no preload means the poster, not None"
+
+        presenter._present_current()
+        assert backend.loaded.count(video) == 1, "the poster must be reused, not re-decoded"
+
+
 class TestCurrentMediaStateFile:
     """``current_media.json`` drives the dashboard's "Now Playing" card.
 
@@ -535,13 +792,45 @@ class TestCurrentMediaStateFile:
         assert state["id"] == "a"
 
     def test_advancing_republishes(self, presenter: Presenter, tmp_path: Path) -> None:
+        """The card follows the frame, which means it follows the FADE.
+
+        A manual skip now animates, so the target is not on screen the instant
+        ``next_item`` returns — publishing it then would make the dashboard name a
+        file the viewer cannot see yet, for the whole duration of the crossfade.
+        The republish therefore happens where the index actually moves, in
+        ``_advance``, and this walks the fade out to reach it.
+        """
         presenter.set_queue(
             [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
         )
         presenter.next_item()
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            presenter.render()
+            state = self._read(tmp_path)
+            if state is not None and state["id"] == "b":
+                return
+            time.sleep(0.01)
+        pytest.fail("current_media.json never named the item the fade landed on")
+
+    def test_the_state_file_tracks_the_frame_not_the_target(
+        self, presenter: Presenter, tmp_path: Path
+    ) -> None:
+        """Mid-fade the outgoing item is still the one on screen."""
+        presenter.set_queue(
+            [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
+        )
+        presenter.next_item()
+        # One tick only: the blend has started but not finished.
+        presenter.render()
+
         state = self._read(tmp_path)
         assert state is not None
-        assert state["id"] == "b"
+        assert state["id"] == "a", (
+            "the dashboard must not claim to be showing an item that is still only "
+            "part-way through fading in"
+        )
 
     def test_removing_everything_clears_the_state(
         self, presenter: Presenter, tmp_path: Path
@@ -674,6 +963,101 @@ class TestTheDecodeAheadPipeline:
             width=0,
             height=0,
         )
+
+
+class TestTheCurrentItemSurvivesAdoptingADecode:
+    """Adopting a preload must not blank the item already on screen.
+
+    ``_drain_cache`` runs on the tick that a background decode finishes, and
+    ``ImageCache.put`` can evict to make room.  The victim is the
+    least-recently-used entry, and once an item's plan is memoised nothing ever
+    ``get``s its handle again — ``_preload_next`` and ``_current_plan`` are the
+    only cache users.  So the LRU victim is the item *on screen*, while
+    ``_current_plan`` keeps returning the memoised plan and ``_image_for`` then
+    hands the artwork layer ``None`` on every tick from then on.
+
+    Videos hid it, which is what made it look like an image-only bug: a video's
+    slide is driven by ``video_finished()``/its own duration and the visible pixels
+    come from the ``VideoOutput``, not from the artwork handle — so a missing
+    artwork is invisible there.
+    """
+
+    @staticmethod
+    def _queue(presenter: Presenter, tmp_path: Path, count: int = 3) -> None:
+        presenter.set_queue([_image_item(f"i{n}", tmp_path / f"i{n}.jpg") for n in range(count)])
+
+    def test_adopting_a_decode_does_not_leave_the_shown_item_plan_stale(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """The invariant, stated as behaviour: a dropped handle drops the plan.
+
+        Driving the LRU to evict the shown item specifically is fiddly — ``put``
+        refreshes an existing key, and ``_preload_next`` is already holding the
+        item after it — so this asserts the property rather than the exact
+        sequence: whenever the shown item is absent from the cache, the memoised
+        plan must not survive.  The eviction itself is pinned in
+        ``TestImageHandleRelease``.
+        """
+        self._queue(presenter, tmp_path, count=3)
+        presenter.render()
+        assert presenter._shown_plan is not None, "a rendered slide has a plan"
+
+        presenter._cache.clear()
+        presenter._drain_cache()
+
+        assert presenter._shown_plan is None, (
+            "the memoised plan must be dropped so the handle is re-resolved"
+        )
+
+    def test_the_shown_item_still_has_an_artwork_after_the_drain(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        self._queue(presenter, tmp_path, count=4)
+        presenter.render()
+        shown = presenter._shown_item
+        assert shown is not None
+
+        presenter._cache.put("filler-a", "h:a")
+        presenter._cache.put("filler-b", "h:b")
+        presenter._drain_cache()
+        presenter._cache.put("filler-c", "h:c")
+        presenter._drain_cache()
+
+        assert presenter._image_for(shown) is not None, "the item must remain displayable"
+
+    def test_a_frame_is_never_presented_without_its_artwork(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """A blank tick is worse than holding the previous frame."""
+        self._queue(presenter, tmp_path)
+        presenter.render()
+        backend.presented.clear()
+
+        # Make the handle genuinely unobtainable so the re-resolve cannot succeed.
+        presenter._shown_plan = None
+        presenter._shown_item = presenter.current_item
+        monkey_to_none = lambda _path: None  # noqa: E731
+        presenter._load_uncached = monkey_to_none  # type: ignore[method-assign]
+        presenter._cache.clear()
+
+        presenter._present_current()
+
+        painted = [img for _p, img, _a in backend.presented]
+        assert backend.presented == [] or all(img is not None for img in painted), (
+            "present() must not be called with a null artwork"
+        )
+
+    def test_with_artwork_false_still_presents(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """The deliberate ``present(..., None)`` call must not be suppressed."""
+        self._queue(presenter, tmp_path)
+        presenter.render()
+        backend.presented.clear()
+
+        presenter._present_current(with_artwork=False)
+
+        assert backend.presented, "an explicit no-artwork present must still happen"
 
 
 class TestImageHandleRelease:

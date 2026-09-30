@@ -22,6 +22,7 @@ from metixel.backend.frontend_liveness import FrontendLiveness
 from metixel.backend.state import StateManager
 from metixel.shared.config import DEFAULT_CONFIG, parse_schedule_time
 from metixel.shared.ipc import IPCClient
+from metixel.shared.media_workers import reap_media_workers
 from metixel.shared.paths import frontend_heartbeat_path, live_dir
 from metixel.shared.paths import run_dir as default_run_dir
 from metixel.shared.ports import Ports
@@ -168,6 +169,16 @@ class BackendDaemon:
         # where we left off (no re-probe of unchanged, already-processed files).
         with contextlib.suppress(Exception):
             self._state.flush_journal()
+        # Reap any ffmpeg/ffprobe still running.  Their `Popen` handles live in
+        # the processing code, not here, and a transcode runs for minutes — so
+        # without this the worker outlives the process and competes with the
+        # replacement for the SD card while systemd reports the service as
+        # restarted.  Best-effort by design: this is teardown, and a failure to
+        # reap must never be what stops the shutdown.
+        with contextlib.suppress(Exception):
+            reaped = reap_media_workers()
+            if reaped:
+                logger.info("Reaped %d orphaned media worker(s) during shutdown", reaped)
 
     def _sleep(self, seconds: float) -> bool:
         """Sleep up to *seconds*, waking early when shutdown is requested.
