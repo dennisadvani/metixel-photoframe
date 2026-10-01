@@ -256,7 +256,7 @@
 		},
 		{
 			"label": "[Pi] Sync Code (scp)",
-			"detail": "Rsyncs src/metixel/ to the selected Pi (excludes caches), then installs it into /opt/metixel/live/src/metixel via sudo rsync. Requires passwordless sudo on the Pi.",
+			"detail": "Rsyncs this whole checkout to the selected Pi (excludes .git/.venv/caches), replaces /opt/metixel/releases/vscode_dev with it, then flips the /opt/metixel/live symlink to vscode_dev. The dev build then appears as a roll-back/roll-forward target in the Metixel UI. Requires passwordless sudo on the Pi.",
 			"type": "shell",
 			"command": ".vscode/sync-to-pi.sh ${input:piHost}",
 			"options": {
@@ -274,7 +274,7 @@
 		},
 		{
 			"label": "[Pi] Sync + Restart All (scp)",
-			"detail": "Syncs code, then restarts both backend and frontend on the selected Pi.",
+			"detail": "Syncs the checkout to releases/vscode_dev (flipping live to it), then restarts both backend and frontend on the selected Pi.",
 			"dependsOn": [
 				"[Pi] Sync Code (scp)"
 			],
@@ -302,7 +302,7 @@
 		},
 		{
 			"label": "[Pi] Sync + Restart Backend (scp)",
-			"detail": "Syncs code, then restarts only the backend on the selected Pi.",
+			"detail": "Syncs the checkout to releases/vscode_dev (flipping live to it), then restarts only the backend on the selected Pi.",
 			"dependsOn": [
 				"[Pi] Sync Code (scp)"
 			],
