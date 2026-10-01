@@ -126,6 +126,19 @@ SERVED_WINDOW = 6
 #: See :func:`tick_interval_ms`.
 DEFAULT_FPS_LIMIT = 30
 
+#: Tick rate used while a transition is on screen.
+#:
+#: The configured ``display.fps_limit`` (30 on the frame) is the right pace for a
+#: still slide: nothing changes between ticks, and the idle cost is what the limit
+#: exists to save. A fade changes on every tick, and at 30 Hz a slow dissolve steps
+#: visibly — the panel refreshes at ~60 Hz, so each value is shown twice.
+#:
+#: 60 matches the panel's own refresh, so no tick is wasted and none is missing.
+#: Affordable because these are property writes rather than paints: a measured
+#: continuous 60 fps crossfade on a Pi 5 held 99.67% of frames vsync-locked for
+#: 5.7% of one core.
+TRANSITION_FPS = 60
+
 #: Where the scene lives, relative to this module.
 QML_PATH = Path(__file__).parent / "qml" / "Frame.qml"
 
@@ -379,6 +392,23 @@ class QmlBackend(DisplayBackend):
         self._backdrop_path: Path | None = None
         self._prev_backdrop_path: Path | None = None
 
+        # The incoming ambient layer's source is resolved ONCE per backdrop and
+        # then held, so a blur that finishes mid-fade cannot swap the background
+        # out from under the image fading in over it.  Keyed by job_id so a real
+        # change of item still re-resolves — see ``_apply_backdrop``.
+        self._ambient_pin_job: str | None = None
+        self._ambient_pin_path: Path | None = None
+
+        # Whether the last presented frame was a blend, which ``_pace_tick`` uses
+        # to choose the tick rate.  Set by the presentation entry points so the
+        # backend does not have to ask the presenter about its own timing.
+        self._transition_active = False
+
+        # Tick intervals, resolved in ``schedule()`` from ``fps_limit``.
+        self._tick_slow_ms = int(1000 / DEFAULT_FPS_LIMIT)
+        self._tick_fast_ms = int(1000 / TRANSITION_FPS)
+        self._tick_is_fast = False
+
         self._display_power: Any = None
         self._wlr_output: Any = None
 
@@ -555,6 +585,22 @@ class QmlBackend(DisplayBackend):
         The timer only paces the slideshow state machine. Presentation is not
         gated on it: the scene graph renders when the compositor is ready, which is
         exactly why this backend can present 60 fps video with a 30 fps tick.
+
+        **The interval is not fixed.** ``display.fps_limit`` (30 on the frame) is
+        the right pace for a slide showing a still image — nothing changes between
+        ticks, and the idle cost is what that limit exists to save. During a fade
+        something changes on every tick, and at 30 Hz a slow dissolve visibly
+        steps: the panel refreshes at ~60 Hz, so each opacity value is presented
+        for two refreshes while the Python side recomputes it once. The symptom is
+        proportional to the fade length — a 2.5 s window looks smooth, a 5 s one
+        shows the steps — which is exactly what Dennis reported.
+
+        So the tick accelerates to :data:`TRANSITION_FPS` while a transition is
+        running and returns to the configured limit afterwards. That is affordable
+        precisely because these are *property writes*, not paints: the measured
+        cost of a continuous 60 fps crossfade on a Pi 5 is 99.67% of frames
+        vsync-locked for 5.7% of one core, only 0.3% above the same scene with no
+        blend at all. The higher rate is bounded to the fade window.
         """
         from PySide6.QtCore import QTimer
 
@@ -563,11 +609,15 @@ class QmlBackend(DisplayBackend):
             return
 
         timer = QTimer()
-        timer.setInterval(tick_interval_ms(self._fps_limit))
         self._timer = timer
+        self._tick_slow_ms = tick_interval_ms(self._fps_limit)
+        self._tick_fast_ms = tick_interval_ms(TRANSITION_FPS)
+        self._tick_is_fast = False
+        timer.setInterval(self._tick_slow_ms)
 
         def _on_tick() -> None:
             try:
+                self._pace_tick(timer)
                 if not tick():
                     timer.stop()
                     self._running = False
@@ -584,6 +634,28 @@ class QmlBackend(DisplayBackend):
         timer.timeout.connect(_on_tick)
         timer.start()
         self._app.exec()
+
+    def _pace_tick(self, timer: Any) -> None:
+        """Raise the tick rate while a transition is on screen, lower it after.
+
+        Called at the top of every tick, before the tick itself runs, so the rate
+        for *this* frame already reflects whether the last one painted a blend.
+
+        ``setInterval`` on a running ``QTimer`` restarts the current period, so the
+        interval is only touched when the desired rate actually changes — otherwise
+        every tick would reset its own timer and the period would stretch.
+        """
+        want_fast = self._transition_active
+        if want_fast == self._tick_is_fast:
+            return
+        self._tick_is_fast = want_fast
+        timer.setInterval(self._tick_fast_ms if want_fast else self._tick_slow_ms)
+        logger.debug(
+            "Tick rate %s (%d ms) — %s",
+            "raised" if want_fast else "restored",
+            self._tick_fast_ms if want_fast else self._tick_slow_ms,
+            "a transition is running" if want_fast else "no transition",
+        )
 
     def swap_buffers(self) -> None:
         """No-op — deliberately.
@@ -620,6 +692,11 @@ class QmlBackend(DisplayBackend):
         root.setProperty("artworkSource", self._url(image))
         root.setProperty("artworkOpacity", float(alpha))
         root.setProperty("prevArtworkOpacity", 0.0)
+        # A single layer means no fade is running, so the tick can go back to the
+        # configured rate — see ``_pace_tick``.
+        self._transition_active = False
+        # Unpinned: a backdrop arriving after this frame is still adopted, which is
+        # what stops a Next press onto an un-built blur leaving a flat band up.
         self._apply_backdrop(root, plan, backdrop_source)
 
     def present_transition(
@@ -660,19 +737,38 @@ class QmlBackend(DisplayBackend):
             root.setProperty("prevBackdropOpacity", 0.0)
         else:
             root.setProperty("prevArtworkSource", self._url(prev_image))
-            # Whether the OUTGOING media group fades at all — see the scene's
-            # Layer 3 note.  ``prev_alpha`` is 1.0 through an ordinary crossfade
-            # (the outgoing layer stays opaque and is covered, not dissolved), so
-            # using it as the group's opacity would delete the outgoing item the
-            # moment a fade began.  The group fades only when the media actually
-            # changed, which ``image`` differing from ``prev_image`` tells us.
-            group_alpha = 0.0 if image == prev_image else float(prev_alpha)
-            root.setProperty("prevBackdropOpacity", group_alpha)
+            # The outgoing GROUP fades with ``prev_alpha`` — the transition
+            # engine's own value for the outgoing layer.
+            #
+            # This used to be forced to 0.0 whenever the media differed, on the
+            # reasoning that the outgoing item "stays opaque and is covered, not
+            # dissolved".  Collapsing to 0.0 does the opposite of covering: it
+            # deletes the outgoing item outright, so from the first frame of the
+            # fade the only thing left under the incoming image is the flat
+            # ``background`` Rectangle.  The incoming BLUR then fades in with its
+            # group while the flat colour underneath does not move at all — which
+            # is the reported defect, "the blurred background is transitioning at a
+            # different rate to the main image".
+            #
+            # Using ``prev_alpha`` is what the scene's Layer 2 note describes: for
+            # a crossfade it is 1.0 for the whole window (the outgoing layer is
+            # meant to stay opaque and be covered from above), and for
+            # ``fade_through_black`` it genuinely ramps down to 0.  So one value
+            # covers both styles with no special case — the group fades exactly
+            # when, and as much as, the engine says the outgoing layer should.
+            root.setProperty("prevBackdropOpacity", float(prev_alpha))
             root.setProperty("prevArtworkOpacity", float(prev_alpha))
             self._apply_rect(root, "prevArtwork", prev_plan.artwork_dst)
             self._apply_source_rect(root, "prevArtwork", prev_plan.artwork_src)
 
-        self._apply_backdrop(root, plan, backdrop_source)
+        # A blend is on screen, so run the tick at the display's refresh rate until
+        # it is not — a 30 Hz tick makes a long dissolve step visibly.  See
+        # ``_pace_tick``.
+        self._transition_active = True
+
+        # Pinned: this runs on every frame of the fade, so the background must not
+        # change identity part-way through it.
+        self._apply_backdrop(root, plan, backdrop_source, pin=True)
         if prev_backdrop_source is not None:
             self._apply_prev_backdrop(root, prev_plan, prev_backdrop_source)
 
@@ -908,15 +1004,51 @@ class QmlBackend(DisplayBackend):
         self._backdrop_adopted[job_id] = path
         return True
 
-    def _apply_backdrop(self, root: QQuickWindow, plan: RenderPlan, source: Any) -> None:
-        """Point the ambient layer at the blurred JPEG, or fall back to flat colour."""
+    def _apply_backdrop(
+        self,
+        root: QQuickWindow,
+        plan: RenderPlan,
+        source: Any,
+        *,
+        pin: bool = False,
+    ) -> None:
+        """Point the ambient layer at the blurred JPEG, or fall back to flat colour.
+
+        When *pin* is set a **fade is in flight**, and the source is frozen for the
+        rest of it: a blur finishing part-way through must not swap the background
+        out from under the image fading in over it.  ``present_transition`` passes
+        ``pin=True`` on every frame of the fade, so without this a re-resolve would
+        repoint the layer mid-fade — the "blurred background pops in while the
+        image is still fading in" defect.
+
+        A plain ``present`` leaves ``pin`` false, which is what lets a backdrop
+        that arrives AFTER a cut still be adopted.  Freezing it there too would
+        leave the flat band on screen for the rest of the slide, which is worse
+        than the pop it was avoiding.
+
+        The pin is keyed to the request's ``job_id``, so a genuine change of item
+        re-resolves immediately even mid-fade — only the outcome for one backdrop
+        is frozen.
+        """
         # The canvas background follows the INCOMING item, so once the outgoing
         # group's opacity reaches 0 the frame is standing on the new colour rather
         # than the old one.  While the outgoing item is still opaque it covers this
         # completely, which is why it is safe to move at the start of the fade.
         root.setProperty("ambientColour", _colour(plan.ambient_colour))
         request = self.backdrop_request(plan, source)
-        path = self._backdrop_adopted.get(request.job_id) if request is not None else None
+        job_id = request.job_id if request is not None else None
+
+        if not pin or job_id != self._ambient_pin_job:
+            # Either nothing is fading (follow the live state, and keep the pin in
+            # step so the next fade starts from what is actually on screen), or the
+            # item changed under a running fade (the old pin describes a different
+            # backdrop, so re-resolve for this one).
+            self._ambient_pin_job = job_id
+            self._ambient_pin_path = (
+                self._backdrop_adopted.get(job_id) if job_id is not None else None
+            )
+
+        path = self._ambient_pin_path
         if path is None:
             # Flat ambient fill. Correct, not a failure: it is what a non-blur plan
             # asks for, and what a plan whose blur cannot be built falls back to.

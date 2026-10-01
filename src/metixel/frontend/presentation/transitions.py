@@ -10,6 +10,7 @@ the abstract DisplayBackend layer.
 from __future__ import annotations
 
 import logging
+import math
 
 from metixel.shared.config import Config
 
@@ -51,6 +52,30 @@ class TransitionEngine:
         """Quadratic ease-out."""
         return 1.0 - (1.0 - t) * (1.0 - t)
 
+    def ease_in_out_sine(self, t: float) -> float:
+        """Symmetric ease in and out, gentler than a cubic.
+
+        ``1 - cos(pi t) / 2`` — zero gradient at BOTH ends, so the fade leaves and
+        arrives without a visible start or stop, and it is symmetric about the
+        midpoint so the fade cannot look like it is rushing.
+
+        The **sine** curve specifically, not ``ease_in_out_cubic``:
+
+        A cubic eases *hard*.  It was tried here before and removed, because it
+        put 90% of the visible change inside the middle ~54% of the window — a
+        configured 5 s dissolve then *looked* like a 2.5 s one, which surfaced as
+        "the transition duration isn't affecting the slideshow".  It also makes
+        the two ends of the fade effectively dead time, so the curve reads as a
+        pause, a rush, and another pause.
+
+        The sine is the mildest curve that still has zero gradients at the ends:
+        its maximum deviation from linear is about 0.21, against the cubic's 0.39,
+        so the pacing stays close to the linear fade it replaces while removing
+        the abrupt start and stop that made linear feel mechanical.  That
+        combination — soft ends, honest duration — is what "premium" means here.
+        """
+        return (1.0 - math.cos(math.pi * t)) / 2.0
+
     def get_alpha(self, progress: float, layer: str) -> float:
         """Get the alpha for a transition layer at a given progress.
 
@@ -82,21 +107,35 @@ class TransitionEngine:
                 # Opaque, NOT 1 - t: see the note above.  The incoming layer's
                 # rising alpha is what does the blending.
                 return 1.0
-            # LINEAR in progress, deliberately without an ease.
+            # Eased with a gentle sine, not linear and not a cubic.
             #
-            # The incoming alpha used to be ``ease_in_out_cubic(progress)``, which
-            # still reached 0 and 1 at the window's ends but did almost nothing for
-            # the first and last ~20% of it: 90% of the change happened inside the
-            # middle ~54%.  A configured 5 s dissolve therefore *looked* like a
-            # ~2.5 s one, which is what "the transition duration isn't affecting
-            # the slideshow" turned out to mean.  Proportionally, 10% of the
-            # duration is now 10% of the fade.
-            return progress
+            # LINEAR was abrupt: the incoming image started moving at full speed
+            # on the first frame and stopped dead on the last, which reads as
+            # mechanical — the fade "begins" and "ends" rather than flowing.
+            #
+            # A CUBIC was tried and removed: it eased so hard that 90% of the
+            # change happened inside the middle ~54% of the window, so a 5 s
+            # dissolve *looked* like a 2.5 s one.  That is the "the transition
+            # duration isn't affecting the slideshow" complaint.
+            #
+            # The sine is the middle ground: zero gradient at both ends (so there
+            # is no visible start or stop), symmetric about the midpoint, and a
+            # maximum deviation from linear of only ~0.21 — so a configured 5 s
+            # still reads as 5 s.  Soft ends without stealing the duration.
+            return self.ease_in_out_sine(progress)
         elif self.style == "fade_through_black":
-            t = self.ease_out_quad(progress)
+            # Symmetric: each half is eased so the dip into black and the rise out
+            # of it both leave and arrive gently.  ``ease_in_out_sine`` on the
+            # half-progress is what makes the two halves match — easing the whole
+            # curve and then splitting it (the previous ``ease_out_quad``) made the
+            # way down fast and the way up slow, which reads as a stutter at the
+            # black point rather than as one continuous breath.
+            t = self.ease_in_out_sine(progress)
             if layer == "current":
+                # First half: opaque → black.
                 return max(0.0, 1.0 - t * 2)
             else:
+                # Second half: black → opaque.
                 return max(0.0, (t - 0.5) * 2)
         elif self.style == "none":
             # No transition — hard cut at any progress

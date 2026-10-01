@@ -527,6 +527,13 @@ class Presenter:
         rather than the remainder of the one being left.  A video is stopped
         first: a live video surface is not an image and would otherwise keep
         painting over the new item.
+
+        A cut still respects the ambient-backdrop gate.  Presenting an item whose
+        blur is not built yet shows a flat band that snaps to the blur a moment
+        later — the same pop a timed transition avoids by holding.  The skip is
+        therefore *deferred* rather than run against the flat colour: the index
+        moves now (so a burst of presses still counts), and the presentation
+        waits for the backdrop.
         """
         self._stop_video()
         self._forget_video_last_frame()
@@ -541,6 +548,24 @@ class Presenter:
         self._write_current_media()
         item = self.current_item
         logger.debug("Skip %+d: now showing %s", step, item.id if item else None)
+
+    def _jump_backdrop_pending(self) -> bool:
+        """Whether the item just skipped to is waiting on its blurred backdrop.
+
+        Used to decide whether the frame should keep holding a flat fill or has
+        pixels worth showing.  True only for a blur look whose backdrop is still
+        being built; a non-blur plan (or a backend without backdrops) is ready by
+        definition.
+        """
+        if self._layout.ambient_strategy != "blur":
+            return False
+        item = self.current_item
+        if item is None:
+            return False
+        plan = self._current_plan()
+        if plan is None or plan.ambient_strategy != "blur":
+            return False
+        return not self._backdrop_ready(plan, item)
 
     def pause(self) -> None:
         """Pause the slideshow.

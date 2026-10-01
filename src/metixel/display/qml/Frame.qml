@@ -81,22 +81,30 @@ Window {
     // There are two media slots — outgoing and incoming — and each carries its
     // OWN backdrop.  They are declared as a single `Item` per slot further down,
     // with `opacity` on the item so a backdrop and its artwork can never fade
-    // apart.  Nothing here is painted loose; see the Layer 3 note.
+    // apart.  Nothing here is painted loose; see the Layer 2 note below.
     //
     // Two opacity properties, deliberately separate:
     //
     // * `artworkOpacity` — the incoming item's crossfade progress.  Drives the
     //   incoming group.
-    // * `prevBackdropOpacity` — whether the OUTGOING group fades at all.  1.0
-    //   while it is only being blended over from above, 0.0 when the media
-    //   actually changed and the outgoing item has to dissolve away.
+    // * `prevBackdropOpacity` — the OUTGOING group's own opacity, fed straight
+    //   from the transition engine's `current` alpha.  It is 1.0 for the whole
+    //   of a crossfade (the outgoing item is meant to stay opaque and be covered
+    //   from above) and ramps to 0 for `fade_through_black`, where the outgoing
+    //   item genuinely has to dissolve away.
     //
     // They cannot be one property.  A still re-presents itself on every tick, so
     // `artworkOpacity` is 1.0 throughout a non-transition frame; the outgoing
-    // item's alpha comes from the transition engine and is ALSO 1.0 during a
-    // crossfade, because the outgoing layer is meant to stay opaque and be
-    // covered rather than dissolved.  Reusing one value for both would make the
-    // outgoing item disappear the instant a fade started.
+    // item's alpha comes from the transition engine instead.
+    //
+    // NOTE: `prevBackdropOpacity` was once forced to 0.0 whenever the two items
+    // differed, on the reasoning that the outgoing layer should be "covered, not
+    // dissolved".  Collapsing it to 0 does the opposite of covering — it ERASES
+    // the outgoing item, so the only thing under the incoming image is the flat
+    // `background` Rectangle.  The incoming backdrop then faded in on the group's
+    // clock while that flat colour did not move at all, which is why the blur
+    // appeared to transition at a different rate to the image.  Feeding the
+    // engine's own value is what keeps a backdrop and its artwork moving together.
     //
     // `ambientX/Y/W/H` and `ambientColour` stay global on purpose — they are the
     // flat full-canvas fill, not a per-item image.

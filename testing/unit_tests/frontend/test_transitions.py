@@ -88,19 +88,37 @@ class TestCrossfade:
         0 and ended at 1, so the endpoints looked right — but the curve did almost
         nothing for the first and last ~20% of the window, so a configured 5 s
         dissolve *looked* like a ~2.5 s one and the duration control appeared not to
-        work.  Asserting proportionality is what catches that class of bug; the
-        endpoint assertions above could never have caught it.
+        work.
+
+        The alpha is now a **sine ease**, which is deliberately not linear — it has
+        zero gradient at both ends so the fade has no visible start or stop.  So the
+        assertion is a *bounded deviation* from proportional, not equality: the
+        point of this test is to catch a curve that steals the duration, and the
+        sine does not.
+
+        The bound is what separates the two: the sine peaks at ~0.105 of deviation
+        and keeps 10–90% of the change inside 59% of the window, where the cubic
+        peaks at ~0.192 and squeezes it into 42%.  A curve worse than the sine is a
+        regression; the old cubic is more than twice as bad and still fails here.
         """
         engine = _engine("crossfade")
+        #: Generous enough for the sine's soft ends, far too tight for a cubic.
+        tolerance = 0.12
         for percent in (5, 10, 25, 50, 75, 90, 95):
             progress = percent / 100
-            assert engine.get_alpha(progress, "next") == pytest.approx(progress, abs=0.02), (
-                f"{percent}% through the transition the incoming layer should be at "
-                f"{percent}% opacity"
+            assert engine.get_alpha(progress, "next") == pytest.approx(progress, abs=tolerance), (
+                f"{percent}% through the transition the incoming layer should still be "
+                f"close to {percent}% opacity — a curve that races ahead here is "
+                "stealing the configured duration"
             )
 
     def test_most_of_the_change_uses_most_of_the_window(self) -> None:
-        """A 10%→90% fade should occupy the large majority of the duration."""
+        """A 10%→90% fade must occupy a large majority of the duration.
+
+        The threshold is set so a gentle ease passes and the old cubic does not:
+        sine = 0.59, cubic = 0.42.  Anything under half the window means the
+        configured duration is mostly spent not moving.
+        """
         engine = _engine("crossfade")
 
         def progress_at(alpha: float) -> float:
@@ -111,7 +129,7 @@ class TestCrossfade:
             return 1.0
 
         span = progress_at(0.9) - progress_at(0.1)
-        assert span > 0.75, (
+        assert span > 0.55, (
             f"only {span:.0%} of the window carries the visible change — the rest of "
             "the configured duration is spent barely moving"
         )
@@ -194,3 +212,112 @@ class TestUnknownStyle:
         assert engine.get_alpha(0.75, "current") == 0.0
         assert engine.get_alpha(0.25, "next") == 0.0
         assert engine.get_alpha(0.75, "next") == 1.0
+
+
+class TestTheEaseIsSymmetricAndGentle:
+    """The crossfade and fade-through-black are eased, not linear.
+
+    A linear ramp starts at full speed on the first frame and stops dead on the
+    last, which reads as mechanical: the fade "begins" and "ends" rather than
+    flowing.  A gentle ease removes both abrupt edges.
+
+    The curve is a **sine**, chosen over a cubic for a reason that these tests
+    pin: a cubic eases so hard it steals the configured duration (that is the
+    historical bug), whereas the sine's soft ends cost almost no pacing.
+    """
+
+    def test_it_has_zero_gradient_at_both_ends(self) -> None:
+        """The definition of "eased": no visible start, no visible stop.
+
+        Measured as a small first and last step, which is what the eye reads as
+        smoothness at the joins.
+        """
+        engine = _engine("crossfade")
+        step = 0.001
+
+        first = engine.get_alpha(step, "next") - engine.get_alpha(0.0, "next")
+        last = engine.get_alpha(1.0, "next") - engine.get_alpha(1.0 - step, "next")
+
+        assert first < engine.ease_in_out_sine(0.01), "the fade must not lurch at the start"
+        assert last < engine.ease_in_out_sine(0.01), "the fade must not stop dead"
+
+    def test_it_is_symmetric_about_the_midpoint(self) -> None:
+        """Symmetric, so the fade cannot look like it is rushing one way.
+
+        ``f(0.5 - d) + f(0.5 + d) == 1`` is what symmetry means for a curve that
+        runs 0 → 1.
+        """
+        engine = _engine("crossfade")
+        for d in (0.05, 0.15, 0.25, 0.4):
+            low = engine.get_alpha(0.5 - d, "next")
+            high = engine.get_alpha(0.5 + d, "next")
+            assert low + high == pytest.approx(1.0, abs=1e-6)
+
+    def test_it_still_hits_both_endpoints(self) -> None:
+        """An ease must not stop short of fully opaque, or the frame dims."""
+        engine = _engine("crossfade")
+
+        assert engine.get_alpha(0.0, "next") == pytest.approx(0.0)
+        assert engine.get_alpha(1.0, "next") == pytest.approx(1.0)
+
+    def test_it_is_slower_than_linear_at_the_midpoint(self) -> None:
+        """The ease must actually be an ease, not a no-op.
+
+        A curve that matched linear exactly would be indistinguishable from no
+        easing at all — this is the assertion that would catch someone
+        "simplifying" ``ease_in_out_sine`` back to ``return t``.
+        """
+        engine = _engine("crossfade")
+
+        assert engine.get_alpha(0.25, "next") < 0.25
+        assert engine.get_alpha(0.75, "next") > 0.75
+
+    def test_the_deviation_stays_bounded(self) -> None:
+        """Gentle, not a cubic: the pacing must survive the easing.
+
+        The maximum deviation from linear is what "how hard does this ease"
+        means numerically.  The sine is ~0.105; the cubic that broke the duration
+        control was ~0.192.  Keeping the bound tight means a curve that eases
+        *harder* than the sine fails here rather than silently showing up as the
+        duration bug again.
+        """
+        engine = _engine("crossfade")
+        worst = max(
+            abs(engine.get_alpha(step / 1000, "next") - step / 1000) for step in range(1001)
+        )
+
+        assert worst < 0.13, f"the ease deviates {worst:.3f} from linear — that is a cubic"
+        assert worst > 0.05, "the curve barely eases; it is effectively linear"
+
+
+class TestFadeThroughBlackIsEasedSymmetrically:
+    def test_each_half_reaches_its_endpoint(self) -> None:
+        engine = _engine("fade_through_black")
+
+        assert engine.get_alpha(0.0, "current") == pytest.approx(1.0)
+        assert engine.get_alpha(0.5, "current") == pytest.approx(0.0)
+        assert engine.get_alpha(0.5, "next") == pytest.approx(0.0)
+        assert engine.get_alpha(1.0, "next") == pytest.approx(1.0)
+
+    def test_the_two_halves_mirror_each_other(self) -> None:
+        """The way down and the way up must take the same shape.
+
+        Asymmetric easing (the previous ``ease_out_quad``) made the dip fast and
+        the rise slow, which reads as a stutter at the black point rather than one
+        continuous breath.
+        """
+        engine = _engine("fade_through_black")
+
+        for d in (0.05, 0.15, 0.25, 0.4):
+            going_down = engine.get_alpha(0.5 - d, "current")
+            coming_up = engine.get_alpha(0.5 + d, "next")
+            assert going_down == pytest.approx(coming_up, abs=1e-6), (
+                "the descent and the ascent must mirror each other"
+            )
+
+    def test_it_still_passes_through_black(self) -> None:
+        """Easing must not lift the floor off black."""
+        engine = _engine("fade_through_black")
+        darkest = min(_coverage(engine, step / 200) for step in range(201))
+
+        assert darkest < 0.02

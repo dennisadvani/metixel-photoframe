@@ -564,3 +564,70 @@ class TestTheBackendForwardsTheCalls:
     def test_the_child_is_stopped_on_teardown(self) -> None:
         code = _code(_BACKEND, "destroy")
         assert "_backdrop_runner.close()" in code
+
+
+class TestTheAmbientSourceIsPinnedThroughAFade:
+    """A blur finishing mid-fade must not swap the background.
+
+    ``present_transition`` calls ``_apply_backdrop`` on EVERY frame of the fade,
+    so re-resolving the source there means a blur job that lands part-way through
+    repoints the ambient layer — and the viewer sees the blurred background pop in
+    while the incoming image is still fading in over it.  That is the reported
+    defect, and it is why the source is decided once and held.
+
+    The pin is scoped to the fade, not to the backdrop's lifetime.  Outside a fade
+    the resolution is live again, which is what still lets a backdrop arriving
+    after a cut (a Next press onto an item whose blur was not built) be adopted.
+    Freezing it there too would leave a flat band up for the whole slide, which is
+    worse than the pop it was avoiding.
+    """
+
+    def test_the_transition_call_site_pins(self) -> None:
+        """The pin has to be requested by the fading path, not globally."""
+        code = _code(_BACKEND, "present_transition")
+
+        assert "pin=True" in code, (
+            "the transition must pin the ambient source, or a blur landing mid-fade "
+            "repoints the background"
+        )
+
+    def test_the_single_layer_call_does_not_pin(self) -> None:
+        """Otherwise a backdrop arriving after a cut could never be adopted."""
+        code = _code(_BACKEND, "present")
+
+        assert "pin=True" not in code, (
+            "a single-layer present must stay live, so a late backdrop is still picked up"
+        )
+
+    def test_the_pin_is_keyed_to_the_backdrop_identity(self) -> None:
+        """Keyed by ``job_id``, so a real change of item still re-resolves."""
+        code = _code(_BACKEND, "_apply_backdrop")
+
+        assert "_ambient_pin_job" in code
+        assert "job_id" in code
+
+    def test_the_pin_is_only_reused_when_pinning(self) -> None:
+        """The guard that makes the pin conditional.
+
+        Without the ``not pin`` short-circuit the pin would be permanent and the
+        pop would be traded for a flat band that never resolves.
+        """
+        code = _code(_BACKEND, "_apply_backdrop")
+
+        assert "not pin" in code, (
+            "the pin must be conditional on the fade, not applied unconditionally"
+        )
+
+    def test_the_pin_state_is_initialised(self) -> None:
+        """An uninitialised attribute would crash on the first fade.
+
+        Scoped to the ``QmlBackend`` class body rather than the whole module: the
+        module also defines ``ArtworkStore``, whose ``__init__`` would otherwise
+        be the one found first.
+        """
+        source = _source(_BACKEND)
+        backend = source[source.index("class QmlBackend") :]
+        init_body = backend[backend.index("def __init__") : backend.index("def create")]
+
+        assert "_ambient_pin_job" in init_body
+        assert "_ambient_pin_path" in init_body

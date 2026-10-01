@@ -1458,3 +1458,46 @@ class TestSettingsHotReload:
         assert presenter.has_visible_frame
         presenter.reload_config(_reloaded(presenter, image_duration_seconds=45))
         assert presenter.has_visible_frame
+
+
+class TestASkipStillBuildsItsBackdrop:
+    """A cut must not strand the flat band that the backend pin protects.
+
+    The pin holds the ambient source steady *through a fade*.  A Next press is not
+    a fade, so its backdrop must still be requested and adopted afterwards —
+    otherwise the pop the pin prevents would be traded for a background that never
+    resolves at all.
+    """
+
+    def test_the_skip_warms_the_arrived_at_items_backdrop(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """``render`` after a skip must still offer the current item's backdrop."""
+        presenter.set_queue(
+            [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
+        )
+
+        presenter.next_item()
+        # The tick immediately after the skip is what warms the new item.
+        presenter.render()
+
+        assert presenter.current_item is not None
+        assert presenter.current_item.id == "b", "precondition: the skip landed"
+
+    def test_no_transition_is_in_flight_so_backdrop_work_is_allowed(
+        self, presenter: Presenter, backend: FakeBackend, tmp_path: Path
+    ) -> None:
+        """``_service_backdrops`` bails during a transition, so a cut must not be one.
+
+        If a skip left ``_in_transition`` true, the blur would never be requested
+        and the ambient layer would keep whatever it had.
+        """
+        presenter.set_queue(
+            [_image_item("a", tmp_path / "a.jpg"), _image_item("b", tmp_path / "b.jpg")]
+        )
+
+        presenter.next_item()
+
+        assert not presenter._in_transition(), (
+            "a cut must not count as a transition, or backdrop work is skipped"
+        )
