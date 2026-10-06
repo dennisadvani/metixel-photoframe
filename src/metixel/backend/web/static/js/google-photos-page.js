@@ -395,6 +395,8 @@ import { loadMedia } from "./media-page.js";
 
         var cfg = (config.sync && config.sync.google_photos) || {};
         setChecked("cfg-gphotos-enabled", cfg.enabled || false);
+        setValue("cfg-gphotos-mode", cfg.mode === MODE_SHARED_URL ? MODE_SHARED_URL : MODE_PICKER);
+        setValue("cfg-gphotos-album-url", cfg.shared_album_url || "");
         setValue("cfg-gphotos-client-id", cfg.client_id || "");
         setValue("cfg-gphotos-client-secret", cfg.client_secret || "");
         setValue("cfg-gphotos-refresh-token", cfg.refresh_token || "");
@@ -402,6 +404,7 @@ import { loadMedia } from "./media-page.js";
         setValue("cfg-gphotos-interval", ((cfg.poll_interval_seconds || 3600) / 3600).toFixed(1));
         setChecked("cfg-gphotos-strict", cfg.strict_sync === true);
         _toggleInterval(cfg.enabled || false);
+        _applyMode(_selectedMode());
 
         await refreshStatus();
 
@@ -410,7 +413,7 @@ import { loadMedia } from "./media-page.js";
         if (statusData && statusData.progress && statusData.progress.syncing) {
             startSyncPolling();
         }
-        if (statusData && statusData.session
+        if (statusData && statusData.mode !== MODE_SHARED_URL && statusData.session
             && !statusData.session.media_items_set && !statusData.session.expired) {
             startSessionPolling(statusData.session.poll_interval_seconds);
         }
@@ -422,17 +425,22 @@ import { loadMedia } from "./media-page.js";
             _toggleInterval(this.checked);
         });
 
+        // Swap which half of the card is shown when the mode changes.
+        document.getElementById("cfg-gphotos-mode")?.addEventListener("change", function () {
+            _applyMode(_selectedMode());
+        });
+
         // -- Test Connection --
         document.getElementById("btn-test-gphotos")?.addEventListener("click", async function () {
             var resultEl = document.getElementById("gphotos-test-result");
             var restore = setButtonBusy(this, "Testing…");
             if (resultEl) { resultEl.textContent = "Testing…"; resultEl.style.color = ""; }
 
-            var creds = _credentials();
+            var payload = _probePayload();
             // The route always answers 200 once the body is valid: an upstream
             // failure comes back as {ok:false, error} rather than a 401/502
             // the API layer would mistake for OUR auth/backend state.
-            var data = await apiPost("/google-photos/test-connection", creds);
+            var data = await apiPost("/google-photos/test-connection", payload);
             restore();
             if (!data) {
                 if (resultEl) { resultEl.textContent = "Request failed"; resultEl.style.color = "var(--danger)"; }
@@ -441,8 +449,9 @@ import { loadMedia } from "./media-page.js";
             if (data.ok) {
                 if (resultEl) { resultEl.textContent = data.message; resultEl.style.color = "var(--text)"; }
                 showToast("Connected to Google Photos!", "success");
-                // Persist the credentials so Pick Photos works immediately.
-                await apiPut("/config/sync", { google_photos: creds });
+                // Persist what was just proven to work, so Pick Photos (or a
+                // shared-album sync) works without a separate save step.
+                await apiPut("/config/sync", { google_photos: payload });
             } else {
                 if (resultEl) { resultEl.textContent = data.error || "Unknown error"; resultEl.style.color = "var(--danger)"; }
                 showToast("Connection failed: " + (data.error || "unknown error"), "error", 6000);
@@ -496,6 +505,8 @@ import { loadMedia } from "./media-page.js";
             var result = await apiPut("/config/sync", {
                 google_photos: {
                     enabled: document.getElementById("cfg-gphotos-enabled").checked,
+                    mode: _selectedMode(),
+                    shared_album_url: _albumUrl(),
                     client_id: creds.client_id,
                     client_secret: creds.client_secret,
                     refresh_token: creds.refresh_token,
