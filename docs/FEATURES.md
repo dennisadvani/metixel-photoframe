@@ -24,7 +24,8 @@ A comprehensive list of every feature in Metixel Photoframe, organized by subsys
 Phase 1: WATCH   → FolderWatcher gathers metadata only (type, dims, codec)
 Phase 2: OPTIMISE → OptimisationQueue thresholds + processes (images first, then videos)
 Phase 3: QUEUE   → Slideshow playlist (ready-to-play items only)
-Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 1)
+Phase 4: SYNC    → Immich downloads to media/sync/immich/, Google Photos to
+                   media/sync/google_photos/ (both picked up by Phase 1)
 ```
 
 - **Background processing** — optimisation runs in a daemon thread, decoupled from rendering
@@ -68,6 +69,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 | **Web upload** | Media Library → **Upload Media** (or drag & drop) — any browser on the network; opens the phone gallery on iOS/Android; HEIC/HEIF photos auto-converted to JPEG |
 | **Local folder** | Watch paths configured in the Web UI — new files auto-detected by polling |
 | **Immich** | Configure server URL + API key — selected albums auto-sync on a configurable interval (default 60 min) |
+| **Google Photos** | Two modes into `media/sync/google_photos/`: *Picker* (OAuth client + Google's own picker, supported) or *Shared album URL* (paste a share link and the album keeps syncing as it grows — reads Google's share page, so it is undocumented and can break) |
 
 ---
 
@@ -78,6 +80,7 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
 - **Media library** — thumbnail grid browser with video duration badges and transcode status
 - **Media upload** — upload photos/videos from any browser (phone gallery picker on iOS/Android, drag & drop on desktop); files land in `media/my_media/` and reach the slideshow within ~30s
 - **Immich management** — album selection, sync status, manual sync trigger
+- **Google Photos management** — connection test, picking session, sync status, manual sync trigger
 - **System logs** — live log viewer with configurable log level (DEBUG / INFO / WARNING / ERROR / NONE)
 - **Network** — Wi-Fi scanning, connection management, AP mode status
 - **Display settings** — resolution info, sleep schedule

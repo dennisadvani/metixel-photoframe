@@ -260,6 +260,49 @@ saved_count, error_count}` with HTTP 201 when anything was saved, else 400.
   or `{"ok": false, "status": <upstream HTTP code | "connection_error" |
   "timeout" | "error">, "error": "..."}`.
 
+### Google Photos
+Google retired the Library API's read scopes in March 2025, so there is no album
+list to browse.  Two modes replace it, selected by `sync.google_photos.mode`:
+
+- `picker` (default) — the user picks media in Google's own picker (Picker API)
+  and the frame downloads that selection.  Supported, but a selection is a
+  fixed snapshot: new photos need a new pick.
+- `shared_url` — a public shared-album link, read from the album's share page.
+  Follows the album as it grows, but reads **undocumented** endpoints, so it can
+  break when Google changes its web UI.  Set `sync.google_photos.shared_album_url`.
+
+- `POST /api/google-photos/session` — Open a picking session (`picker` mode
+  only; `409` in `shared_url` mode, which needs no pick).  Returns
+  `{"status": "ok", "session": {id, picker_uri, expire_time,
+  expires_in_seconds, media_items_set, poll_interval_seconds, ...}}`.  The user
+  opens `picker_uri` to choose media.  `400` when the credentials are missing,
+  `502` when Google refuses
+- `GET /api/google-photos/session` — Current session, refreshed from Google
+  (`session: null` when there is none).  `media_items_set: true` means the user
+  has finished picking; `expired: true` means a new session is needed
+- `POST /api/google-photos/session/clear` — Forget the session (and delete it at
+  Google).  Downloaded media is kept
+- `POST /api/google-photos/sync` — Download the picked media, or re-read the
+  shared album (runs in the background; poll
+  `GET /api/google-photos/status`).  `400` when not connected, `409` when
+  nothing has been picked (`picker` mode only)
+- `GET /api/google-photos/status` — Most recent sync result, live progress, the
+  active `mode`, and the current session (`last_sync` is `null` if a sync has
+  never run; `session` is always `null` in `shared_url` mode).  In `shared_url`
+  mode `last_sync` also carries `album_title` and `album_pages`
+- `POST /api/google-photos/cancel` — Cancel the running sync (finishes the
+  current download, then aborts)
+- `POST /api/google-photos/test-connection` — Probe whatever the mode needs.
+  Body (all optional, configured values are used when omitted):
+  `{"mode": "picker", "client_id": "...", "client_secret": "...",
+  "refresh_token": "..."}` or
+  `{"mode": "shared_url", "shared_album_url": "https://photos.app.goo.gl/..."}`
+  — the latter reads only the album's first page and answers
+  `{"ok": true, "count": N, "title": "...", "has_more_pages": bool}`.
+  Always returns HTTP `200` once the body is valid — the outcome is in the
+  body: `{"ok": true, ...}` or `{"ok": false, "status": <upstream HTTP code>,
+  "error": "..."}`
+
 ### Messages
 - `GET /api/messages/persistent` — Current list of persistent on-screen messages
 - `POST /api/messages/dismiss` — Dismiss one (`{"id": "..."}`) or all

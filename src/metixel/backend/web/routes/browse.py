@@ -100,17 +100,17 @@ def _can_create_under(path: Path) -> bool:
         return False
 
 
-def _immich_sync_dir(config: Any) -> Path | None:
-    """Resolved Immich sync folder, or ``None`` when it can't be resolved.
+def _sync_source_dir(config: Any, source: str, default: str) -> Path | None:
+    """Resolved sync folder for *source*, or ``None`` when unresolvable.
 
-    Mirrors ``routes/media._immich_sync_dir`` so folder deletion refuses the
-    same tree that file deletion already protects.  The folder is resolved
-    against :func:`data_dir` — the *same* base the request path is resolved
-    against — rather than via ``resolve_install_path``, so the two are always
-    compared in one coordinate space.
+    Mirrors ``routes/media._synced_dirs`` so folder deletion refuses the same
+    trees that file deletion already protects.  The folder is resolved against
+    :func:`data_dir` — the *same* base the request path is resolved against —
+    rather than via ``resolve_install_path``, so the two are always compared in
+    one coordinate space.
     """
-    immich_cfg = config.sync.get("immich") or {}
-    sync_dir = str(immich_cfg.get("sync_dir") or "media/sync/immich/").strip()
+    source_cfg = config.sync.get(source) or {}
+    sync_dir = str(source_cfg.get("sync_dir") or default).strip()
     if not sync_dir:
         return None
     try:
@@ -120,6 +120,25 @@ def _immich_sync_dir(config: Any) -> Path | None:
         return candidate.resolve()
     except (OSError, ValueError):
         return None
+
+
+def _immich_sync_dir(config: Any) -> Path | None:
+    """Resolved Immich sync folder, or ``None`` when it can't be resolved."""
+    return _sync_source_dir(config, "immich", "media/sync/immich/")
+
+
+def _google_photos_sync_dir(config: Any) -> Path | None:
+    """Resolved Google Photos sync folder, or ``None`` when unresolvable."""
+    return _sync_source_dir(config, "google_photos", "media/sync/google_photos/")
+
+
+def _sync_dirs(config: Any) -> list[tuple[str, Path]]:
+    """``(label, folder)`` for every sync source that owns a folder."""
+    sources = (
+        ("Immich", _immich_sync_dir(config)),
+        ("Google Photos", _google_photos_sync_dir(config)),
+    )
+    return [(label, path) for label, path in sources if path is not None]
 
 
 @browse_bp.route("", methods=["GET"])
@@ -468,17 +487,16 @@ def delete_folder():
     if not resolved.is_dir():
         return jsonify_error(f"Not a directory: {resolved}", 404)
 
-    sync_dir = _immich_sync_dir(state.config)
-    if sync_dir is not None:
+    for label, sync_dir in _sync_dirs(state.config):
         try:
             resolved.relative_to(sync_dir)
             return jsonify_error(
-                "This folder is managed by Immich sync and cannot be deleted here",
+                f"This folder is managed by {label} sync and cannot be deleted here",
                 403,
-                hint="Remove the album from the Immich sync settings instead",
+                hint=f"Change the {label} sync settings instead",
             )
         except ValueError:
-            pass
+            continue
 
     media_count, media_bytes = _summarise_folder(resolved)
 

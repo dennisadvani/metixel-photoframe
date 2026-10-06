@@ -293,6 +293,19 @@ class BackendDaemon:
         t.start()
         self._threads.append(t)
 
+        # Google Photos uses the Picker API (library-wide read access was
+        # retired in March 2025), so its loop only has work when the user has
+        # picked media that is not fully downloaded yet.  Started
+        # unconditionally for the same reason as above: ``enabled`` is re-read
+        # every cycle, so turning sync on in the web UI needs no restart.
+        logger.info("Starting Google Photos sync engine")
+        from metixel.backend.sync.google_photos import GooglePhotosSyncer
+
+        gphotos_syncer = GooglePhotosSyncer(self._state, http=self._ports.http)
+        gt = threading.Thread(target=gphotos_syncer.run, name="google-photos-syncer", daemon=True)
+        gt.start()
+        self._threads.append(gt)
+
         if config.sync.get("local", {}).get("enabled", True):
             logger.info("Local folder sync enabled — starting folder watcher")
             from metixel.backend.sync.folder_watcher import FolderWatcher

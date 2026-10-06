@@ -3,6 +3,7 @@
 """Sync engines for Metixel Photoframe."""
 
 from metixel.backend.sync.folder_watcher import FolderWatcher
+from metixel.backend.sync.google_photos import GooglePhotosSyncer
 from metixel.backend.sync.immich import ImmichSyncer
 
-__all__ = ["ImmichSyncer", "FolderWatcher"]
+__all__ = ["FolderWatcher", "GooglePhotosSyncer", "ImmichSyncer"]

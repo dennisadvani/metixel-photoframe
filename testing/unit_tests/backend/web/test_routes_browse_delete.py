@@ -272,6 +272,19 @@ class TestDeleteFolderImmich:
         assert resp.status_code == 403
         assert child.is_dir()
 
+    def test_refuses_google_photos_sync_folder(self, client, media_root: Path, mock_state):
+        sync_dir = media_root / "media" / "sync" / "google_photos"
+        sync_dir.mkdir(parents=True)
+        mock_state.update_config(
+            "sync", {"google_photos": {"sync_dir": "media/sync/google_photos/"}}
+        )
+
+        resp = client.post("/api/browse/delete", json={"path": str(sync_dir), "force": True})
+
+        assert resp.status_code == 403
+        assert "Google Photos" in resp.get_json()["error"]
+        assert sync_dir.is_dir()
+
     def test_refusal_wins_over_force(self, client, media_root: Path, mock_state):
         """A forced request must still not delete the sync folder."""
         sync_dir = media_root / "media" / "sync" / "immich"

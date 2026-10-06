@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * Immich sync page module. Album picker, synced-albums list, sync controls and live sync-status polling.
+ * Sources page module. Local watch folders, Immich album picker, synced-albums
+ * list, sync controls and live sync-status polling.  The Google Photos card on
+ * the same page lives in google-photos-page.js.
  */
 
 import {
@@ -20,6 +22,7 @@ import {
 
 import { loadMedia } from "./media-page.js";
 import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings-page.js";
+import { loadGooglePhotos } from "./google-photos-page.js";
 
     // -- Watch-folder creation ---------------------------------------------
 
@@ -240,6 +243,9 @@ import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings
         }
         // Render the configured (synced) albums list
         await _loadSyncedAlbums();
+
+        // The Google Photos card shares this page — it owns its own state.
+        await loadGooglePhotos();
 
         // Refresh sync status
         await refreshSyncStatus();

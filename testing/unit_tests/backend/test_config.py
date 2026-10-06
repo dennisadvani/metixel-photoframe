@@ -696,13 +696,15 @@ class TestResolveWatchPaths:
         assert Path("/legacy/path/") in paths
 
     def test_default_watch_paths(self) -> None:
-        """Default config has 3 enabled watch paths, resolved to the base dir."""
+        """Default config has 4 enabled watch paths, resolved to the base dir."""
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
         base = Path("/opt/metixel")
         paths = resolve_watch_paths(cfg, base_dir=str(base))
-        assert len(paths) == 3
+        # landscape, immich sync, google photos sync, my_media
+        assert len(paths) == 4
+        assert base / "media/sync/google_photos" in paths
         # All default paths are relative → resolved under the base dir
         assert all(str(p).startswith(str(base)) for p in paths)
 

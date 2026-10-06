@@ -9,11 +9,12 @@
 - [3. Adding Your Own Photos](#3-adding-your-own-photos)
 - [4. Using the Web Dashboard](#4-using-the-web-dashboard)
 - [5. Immich Sync (detailed)](#5-immich-sync-detailed)
-- [6. MQTT / Home Assistant (detailed)](#6-mqtt--home-assistant-detailed)
-- [7. Keyboard & Remote Control](#7-keyboard--remote-control)
-- [8. OTA Updates](#8-ota-updates)
-- [9. Everyday Use & Care](#9-everyday-use--care)
-- [10. Troubleshooting](#10-troubleshooting)
+- [6. Google Photos Sync (detailed)](#6-google-photos-sync-detailed)
+- [7. MQTT / Home Assistant (detailed)](#7-mqtt--home-assistant-detailed)
+- [8. Keyboard & Remote Control](#8-keyboard--remote-control)
+- [9. OTA Updates](#9-ota-updates)
+- [10. Everyday Use & Care](#10-everyday-use--care)
+- [11. Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -24,11 +25,12 @@ frame. It sits on your wall or shelf and cycles through your own photos and
 videos with smooth crossfade transitions. You manage everything from a web
 dashboard on your phone or computer — no coding, no command line needed.
 
-Your photos come from two places:
+Your photos come from three places:
 
 1. **Files you copy in** (upload from the browser, or drop them onto a shared
    network folder), and/or
-2. **Photos synced from an Immich server** (see [section 5](#5-immich-sync-detailed)).
+2. **Photos synced from an Immich server** (see [section 5](#5-immich-sync-detailed)), and/or
+3. **Photos picked from Google Photos** (see [section 6](#6-google-photos-sync-detailed)).
 
 The frame is designed to be left on and forgotten about:
 
@@ -257,6 +259,12 @@ them up.
 If you use [Immich](https://immich.app) to organise your photo library, Metixel
 can download photos automatically. See the full [Immich section](#5-immich-sync-detailed).
 
+### Option D — Google Photos
+
+Either pick photos in Google's picker, or paste a shared-album link and let the
+frame follow that album as you add to it. See
+[section 6](#6-google-photos-sync-detailed).
+
 ### Supported file types
 
 | Type | Formats |
@@ -280,7 +288,7 @@ a phone) takes you between pages.
 | **Dashboard** | See system status, what's playing, playback controls, background processing, and sync status. |
 | **Media Library** | Browse, filter, upload, and delete your photos and videos. |
 | **Settings** | Configure slideshow, display, monitor control, video, image, local folders, timezone, and clock. |
-| **Image Sync** | Set up and monitor Immich sync. |
+| **Image Sync** | Set up and monitor Immich and Google Photos sync. |
 | **Network** | Check connectivity and the current IP, change Wi-Fi. |
 | **Advanced** | System info, keyboard/remote mapping, OTA updates, security, and MQTT. |
 
@@ -292,7 +300,7 @@ The dashboard gives you a live overview:
 - **Now Playing** — the current photo or video.
 - **Controls** — pause/resume and next/previous.
 - **Background Processing** — progress bars for *scanning folders*, *optimising images*, *scanning video*, and *transcoding video*. When a file can't be processed (e.g. a transcode failed), it appears in an **issues** list below the bars with **Retry** and **Delete** actions.
-- **Sync Status** — the last Immich sync result.
+- **Sync Status** — the last Immich and Google Photos sync results.
 
 ![Screenshot: dashboard page showing status, controls, and processing bars](images/dashboard-status.png)
 
@@ -341,9 +349,9 @@ networks, or forget a saved network.
 ### Advanced page
 
 - **System** — Pi model, OS, kernel, Python, GPU memory, and hostname.
-- **Updates** — check for and install updates (see [section 8](#8-ota-updates)).
-- **Keyboard / Remote Control** — map a remote (see [section 7](#7-keyboard--remote-control)).
-- **MQTT / Home Assistant** — connect the frame to your smart-home hub (see [section 6](#6-mqtt--home-assistant-detailed)).
+- **Updates** — check for and install updates (see [section 9](#9-ota-updates)).
+- **Keyboard / Remote Control** — map a remote (see [section 8](#8-keyboard--remote-control)).
+- **MQTT / Home Assistant** — connect the frame to your smart-home hub (see [section 7](#7-mqtt--home-assistant-detailed)).
 - **Reboot / Shutdown** — restart or power off the frame cleanly.
 
 ---
@@ -444,7 +452,151 @@ photos were downloaded, skipped, or failed.
 
 ---
 
-## 6. MQTT / Home Assistant (detailed)
+## 6. Google Photos Sync (detailed)
+
+Google Photos works a little differently from Immich, and the reason is worth
+knowing: in **March 2025 Google removed the API scopes** that let apps read a
+photo library. No app can list your albums through the API any more.
+
+Metixel therefore offers two modes, chosen at the top of the **Google Photos
+Sync** card. Pick whichever trade suits you:
+
+| | **Picker** (default) | **Shared album URL** |
+|---|---|---|
+| How you choose photos | In Google's own picker | Paste the album's share link |
+| Keeps up as you add photos | **No** — pick again | **Yes**, every poll, like Immich |
+| Setup | Google Cloud project + a helper script, once | Paste a link |
+| Interface | Google's supported Picker API | Google's **web page** — undocumented |
+| Can break when Google changes things | No | **Yes** |
+| Album privacy | Album stays private | Album must be **shared by link** |
+| Videos | Supported | May fail |
+
+**Which should you use?** If you want to set the frame up once and have new
+photos appear by themselves, use **Shared album URL** and accept that a Google
+redesign may one day stop it working (switch back to Picker if that happens).
+If you would rather have something that cannot break, use **Picker** and re-pick
+when you want to add photos.
+
+Both modes download into the same folder, so you can switch at any time without
+losing photos you have already synced.
+
+### Picker mode
+
+The flow is: **connect once → pick → the frame downloads**. Picking again adds
+more photos; nothing already downloaded is re-fetched or lost.
+
+#### Step 1 — Create a Google OAuth client (one-time)
+
+1. Go to the [Google Cloud console](https://console.cloud.google.com) and
+   create (or select) a project.
+2. **APIs & Services → Library** → search for **Photos Picker API** → *Enable*.
+3. **APIs & Services → OAuth consent screen** → **External**, then add your own
+   Google account under **Test users**. (Personal use needs no verification.)
+4. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
+   application type **Desktop app**. Note the **client ID** and
+   **client secret**.
+
+#### Step 2 — Mint a refresh token
+
+Google only allows loopback redirects for desktop clients, and the frame has no
+browser of its own, so this step runs once on a computer that does:
+
+```bash
+python scripts/google_photos_auth.py --client-id <ID> --client-secret <SECRET>
+```
+
+Approve access in the browser window that opens; the script prints a **refresh
+token**. (Over SSH with no browser, add `--manual` and paste the redirected URL
+back.) Keep the refresh token private — it grants read access to the media you
+pick.
+
+#### Step 3 — Connect the frame
+
+In the dashboard, go to **Sources → Google Photos Sync**, leave **Mode** on
+*Picker*, paste the client ID, client secret and refresh token, then click
+**Test Connection**. On success the credentials are saved automatically.
+
+#### Step 4 — Pick your photos
+
+1. Click **Pick Photos**. A Google Photos link opens (if your browser blocks the
+   popup, the link stays on the card — tap it).
+2. Choose individual photos or whole albums, then confirm in Google Photos.
+3. The frame notices as soon as you finish and starts downloading into
+   `media/sync/google_photos/`. The slideshow picks them up automatically.
+
+Your selection stays valid for about an hour. After that, click **Pick Photos**
+again — already-downloaded media is untouched.
+
+### Shared album URL mode
+
+> **Before you switch to it.** Google publishes no API for shared albums, so
+> this mode reads the album's public web page the way a browser does. That
+> means it **can stop working without warning** if Google changes that page —
+> if it does, switch back to Picker mode until Metixel is updated. The album
+> must be **shared by link, so anyone who gets the link can see the photos**.
+> **Videos may fail to download.** Very large albums are paged in, up to 200
+> pages (50,000 photos). None of this applies to Picker mode — the trade is
+> that only this mode keeps up with an album as you add to it.
+
+#### Step 1 — Share the album by link
+
+In Google Photos, open the album → **Share** → **Create link** → **Copy**. You
+do not need to share it with anyone; the link itself is what Metixel reads. A
+link looks like `https://photos.app.goo.gl/XXXX` or
+`https://photos.google.com/share/XXXX?key=YYYY` — both work.
+
+> Treat the link like a password: anyone who has it can view the album. If you
+> ever want to cut access off, use **Remove link** in Google Photos (Metixel
+> will then report that the album is no longer shared).
+
+#### Step 2 — Point the frame at it
+
+In the dashboard, go to **Sources → Google Photos Sync**, set **Mode** to
+*Shared album URL*, paste the link, and click **Test Connection**. Metixel reads
+the first page of the album and reports the album name and how many photos it
+found. On success the link is saved automatically.
+
+#### Step 3 — Sync
+
+Click **Sync Now** for the first run, and turn on **Enable scheduled sync** so
+the frame re-reads the album on the interval. Photos you add to the album in
+Google Photos afterwards arrive by themselves — no further clicks. Large albums
+are fetched page by page; progress shows the running count.
+
+No Google account, OAuth client or refresh token is involved in this mode, and
+no credentials are needed on the frame.
+
+### Settings
+
+- **Mode** — *Picker* or *Shared album URL* (see above). Switching modes keeps
+  everything already downloaded.
+- **Enable scheduled sync** — in *Shared album URL* mode this is what keeps the
+  album up to date, so turn it on. In *Picker* mode it only lets the frame
+  finish a selection whose download was interrupted (a reboot, a network drop):
+  because a selection is a fixed snapshot, new photos still need a fresh pick.
+- **Sync interval** — how often the album is re-read (or, in Picker mode, how
+  often the catch-up check runs). Default 1 hour.
+- **Strict sync** (optional) — when on, the sync folder mirrors the album (or
+  your latest selection) exactly: files that are no longer there are deleted.
+  Off by default, so nothing is ever removed.
+- **Sync Now** — import the current selection immediately.
+
+### Troubleshooting
+
+| Problem | What to check |
+|---------|---------------|
+| **"Google rejected the credentials"** | Is the **Photos Picker API** enabled for the project? Was the refresh token minted with the same client ID/secret? |
+| **No refresh token printed** | The account had already approved this client. Remove its access at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) and re-run the script. |
+| **"The selection expired"** | Sessions last about an hour. Click **Pick Photos** again. |
+| **Nothing appears in the library** | Check that `media/sync/google_photos/` is in **Sources → Local Folders** (Metixel adds it after the first successful download). |
+| **New Google album photos don't arrive** | Expected in *Picker* mode — a selection is a snapshot, so pick again. Use *Shared album URL* mode if you want them to arrive by themselves. |
+| **"No photos found on the album page"** | The album is probably not shared by link — check the link opens in a private browser window. If it does, Google has changed the page format: switch to *Picker* mode and report it. |
+| **"Only the first N photos could be read"** | The album is bigger than the page limit, or Google stopped paging mid-album. The photos that were read are still downloaded; the next sync picks up where it can. |
+| **Videos missing in shared-album mode** | Known limitation of reading the share page. Use *Picker* mode for videos. |
+
+---
+
+## 7. MQTT / Home Assistant (detailed)
 
 ### What MQTT is and what it does here
 
@@ -569,7 +721,7 @@ the frame shows **Connected**.
 
 ---
 
-## 7. Keyboard & Remote Control
+## 8. Keyboard & Remote Control
 
 You can map buttons on a **USB wireless remote** or a **keyboard** to frame
 controls (next, previous, pause, power, etc.).
@@ -590,7 +742,7 @@ does not exist on Trixie and is not used — see `docs/INSTALLATION.md`.)
 
 ---
 
-## 8. OTA Updates
+## 9. OTA Updates
 
 Metixel checks for updates automatically (default every 6 hours) and shows when
 a new version is available.
@@ -638,7 +790,7 @@ the frame's data lives in `/opt/metixel/data/`, so it moves with the card.
 
 ---
 
-## 9. Everyday Use & Care
+## 10. Everyday Use & Care
 
 - **Pause / resume:** use the pause/play button on the dashboard, the on-screen
   remote, or an MQTT command.
@@ -651,7 +803,7 @@ the frame's data lives in `/opt/metixel/data/`, so it moves with the card.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 Quick fixes for common issues. See also `docs/FAQ.md` for more.
 
@@ -672,6 +824,7 @@ Quick fixes for common issues. See also `docs/FAQ.md` for more.
 - **Photos you upload / drop in:** the watched local folders (see **Settings →
   Local Folders**).
 - **Immich downloads:** `/opt/metixel/data/media/sync/immich/album_<id>/` on the frame.
+- **Google Photos downloads:** `/opt/metixel/data/media/sync/google_photos/` on the frame.
 - **Optimised/thumbnail cache:** `/opt/metixel/data/cache/` — safe to clear if
   you ever need space (the frame regenerates it).
 

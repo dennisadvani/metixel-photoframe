@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -115,20 +116,38 @@ def _immich_sync_dir(config: Any) -> Path | None:
         return None
 
 
-def _is_synced(path: Path, sync_dir: Path | None) -> bool:
-    """True when ``path`` lives under the Immich sync folder.
-
-    Synced files are owned by the Immich syncer — deleting one locally is
-    pointless (the next sync restores it), so the UI hides Delete for them
-    and the delete endpoint refuses them.
-    """
-    if sync_dir is None:
-        return False
+def _google_photos_sync_dir(config: Any) -> Path | None:
+    """Resolved Google Photos sync folder, or ``None`` when not configured."""
+    cfg = config.sync.get("google_photos") or {}
+    sync_dir = cfg.get("sync_dir") or "media/sync/google_photos/"
     try:
-        path.resolve().relative_to(sync_dir)
-        return True
-    except (OSError, ValueError):
+        return resolve_install_path(sync_dir).resolve()
+    except OSError:
+        return None
+
+
+def _synced_dirs(config: Any) -> list[Path]:
+    """Every folder a syncer owns (Immich, Google Photos)."""
+    return [d for d in (_immich_sync_dir(config), _google_photos_sync_dir(config)) if d is not None]
+
+
+def _is_synced(path: Path, sync_dirs: Path | None | Iterable[Path]) -> bool:
+    """True when ``path`` lives under one of the syncers' folders.
+
+    Synced files are owned by their syncer — deleting one locally is pointless
+    (the next sync restores it), so the UI hides Delete for them and the
+    delete endpoint refuses them.
+    """
+    if sync_dirs is None:
         return False
+    candidates = [sync_dirs] if isinstance(sync_dirs, Path) else list(sync_dirs)
+    for sync_dir in candidates:
+        try:
+            path.resolve().relative_to(sync_dir)
+            return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 @media_bp.route("/thumbnail/<path:filename>")
@@ -272,7 +291,7 @@ def list_media():
 
     # ── Slice the requested page ─────────────────────────────────────
     page_paths = filtered_paths[offset : offset + limit]
-    sync_dir = _immich_sync_dir(config)
+    sync_dirs = _synced_dirs(config)
 
     items = []
     #: Page entries that vanished before they could be serialised — subtracted
@@ -320,7 +339,7 @@ def list_media():
                 "size_kb": round(size_bytes / 1024, 1),
                 "media_type": "video" if is_video else "image",
                 "thumbnail_url": thumbnail_url,
-                "synced": _is_synced(entry, sync_dir),
+                "synced": _is_synced(entry, sync_dirs),
             }
 
             # Attach transcode queue status for videos
@@ -352,7 +371,7 @@ def list_media():
                     "size_kb": round(size_bytes / 1024, 1),
                     "media_type": "video" if is_video else "image",
                     "thumbnail_url": None,
-                    "synced": _is_synced(entry, sync_dir),
+                    "synced": _is_synced(entry, sync_dirs),
                 }
             )
 
@@ -531,11 +550,14 @@ def delete_library_media():
         logger.warning("Refusing to delete unknown library file: %s / %s", folder, rel_path)
         return jsonify_error("File not found in the media library", 404)
 
-    if _is_synced(target, _immich_sync_dir(state.config)):
+    if _is_synced(target, _synced_dirs(state.config)):
         return jsonify_error(
-            "This file is managed by Immich sync and cannot be deleted here",
+            "This file is managed by a sync source and cannot be deleted here",
             403,
-            hint="Remove it from the synced album in Immich instead",
+            hint=(
+                "Remove it from the synced Immich album, or from the picked "
+                "Google Photos selection, instead"
+            ),
         )
 
     try:

@@ -5,6 +5,37 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Google Photos sync** — a second sync source alongside Immich, on the
+  Sources page. Google retired the Library API's read scopes on 31 March 2025,
+  so there is no album list to configure. Two modes replace it:
+
+  - **Picker** (default) — the frame opens a Photos Picker session, the user
+    picks photos or whole albums in Google's own UI, and the frame downloads
+    that selection. Supported by Google, but a selection is a fixed snapshot,
+    so new photos need a new pick. `scripts/google_photos_auth.py` mints the
+    OAuth refresh token (the Pi has no browser, and Google only allows loopback
+    redirects for installed-app clients).
+  - **Shared album URL** — paste an album's share link and the frame follows
+    that album as it grows, on the poll interval, like Immich. This reads the
+    album's public share page (first page from the embedded data, the rest via
+    Google's internal continuation rpc) because no API exposes shared albums:
+    it is **undocumented and can break when Google changes its web UI**, the
+    album must be shared by link, and videos may fail. Every pagination loop is
+    capped (200 pages / 50,000 items / 10 MB per response) and a partial read
+    still downloads what it found, reporting the gap.
+
+  Both modes share one download path into `media/sync/google_photos/`, with a
+  connection test, live progress, cancellation, optional mirror ("strict") mode
+  and a scheduled pass. Files are named from the item's id — so an item already
+  on the frame is never fetched twice — with the extension taken from the
+  download itself when Google does not describe the type. The sync folder is
+  protected the same way the Immich one is: the Media Library refuses to delete
+  files inside it, and the folder browser refuses to delete the folder itself.
+
 ## [1.2.6]
 
 ### Added

@@ -223,6 +223,7 @@ import {
         await refreshDashboard();
         await refreshProcessing();
         _refreshDashSyncStatus();
+        _refreshDashGooglePhotosStatus();
 
         // Show welcome banner on first run
         _checkWelcomeBanner();
@@ -235,6 +236,7 @@ import {
                     await refreshDashboard();
                     await refreshProcessing();
                     _refreshDashSyncStatus();
+                    _refreshDashGooglePhotosStatus();
                     _scheduleDashboardPoll();
                 } else {
                     _dashboardTimer = null;
@@ -601,6 +603,55 @@ import {
         if (s.deleted > 0) parts.push(s.deleted + " deleted");
         if (s.duration_seconds) parts.push("took " + s.duration_seconds + "s");
         if (detailEl) detailEl.textContent = parts.join(" · ") || "—";
+    }
+
+    /** Add a Google Photos line to the Sync Status card once it has run. */
+
+    async function _refreshDashGooglePhotosStatus() {
+        var rowEl = document.getElementById("dash-gphotos-status");
+        var textEl = document.getElementById("dash-gphotos-text");
+        var detailEl = document.getElementById("dash-gphotos-detail");
+        if (!rowEl || !textEl) return;
+
+        var data = await apiGet("/google-photos/status");
+        // Stay out of the way until Google Photos is actually in use.
+        if (!data || (!data.configured && !data.last_sync)) {
+            rowEl.classList.add("hidden");
+            return;
+        }
+        rowEl.classList.remove("hidden");
+
+        if (!data.last_sync) {
+            textEl.textContent = "Never run";
+            textEl.style.color = "var(--text-muted)";
+            if (detailEl) detailEl.textContent = "";
+            return;
+        }
+
+        var s = data.last_sync;
+        var ago = "just now";
+        if (s.finished_at) {
+            var seconds = Math.max(0, Math.floor(Date.now() / 1000 - s.finished_at));
+            if (seconds < 60) ago = seconds + "s ago";
+            else if (seconds < 3600) ago = Math.floor(seconds / 60) + "m ago";
+            else ago = Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
+        }
+
+        if (s.success) {
+            textEl.textContent = ago + " — Success";
+            textEl.style.color = "var(--text)";
+        } else {
+            var cancelled = s.errors && s.errors.some(function (e) { return e.indexOf("Cancelled") >= 0; });
+            textEl.textContent = ago + (cancelled ? " — Cancelled" : " — Errors");
+            textEl.style.color = cancelled ? "var(--text-muted)" : "#f0a030";
+        }
+
+        var gParts = [];
+        if (s.total_remote > 0) gParts.push(s.total_remote + " picked");
+        if (s.downloaded > 0) gParts.push(s.downloaded + " downloaded");
+        if (s.skipped > 0) gParts.push(s.skipped + " already here");
+        if (s.deleted > 0) gParts.push(s.deleted + " deleted");
+        if (detailEl) detailEl.textContent = gParts.join(" · ") || "—";
     }
 
 export { loadDashboard };

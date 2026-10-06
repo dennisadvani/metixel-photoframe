@@ -98,12 +98,36 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "sync_dir": "media/sync/immich/",
             "poll_interval_seconds": 3600,  # 60 minutes
         },
+        "google_photos": {
+            "enabled": False,
+            # "picker"     — Google's supported Photos Picker API: the user
+            #                picks media and the frame downloads that selection.
+            # "shared_url" — a public shared-album link, read from the share
+            #                page.  Follows the album as it grows (like Immich),
+            #                but uses undocumented endpoints that Google can
+            #                change without notice.
+            "mode": "picker",
+            "shared_album_url": "",
+            # OAuth client (type "Desktop app") from the user's own Google
+            # Cloud project, plus the refresh token minted by
+            # scripts/google_photos_auth.py.  Google retired library-wide read
+            # access in March 2025, so there is no album list to configure:
+            # the user picks media in Google's own picker and the frame
+            # downloads what was picked.
+            "client_id": "",
+            "client_secret": "",
+            "refresh_token": "",
+            "strict_sync": False,
+            "sync_dir": "media/sync/google_photos/",
+            "poll_interval_seconds": 3600,  # 60 minutes
+        },
         "local": {
             "enabled": True,
             "watch_paths": [
                 {"path": "media/sample_media/landscape/", "enabled": True},
                 {"path": "media/sample_media/portrait/", "enabled": False},
                 {"path": "media/sync/immich/", "enabled": True},
+                {"path": "media/sync/google_photos/", "enabled": True},
                 {"path": "media/my_media/", "enabled": True},
             ],
             "poll_interval_seconds": 30,
