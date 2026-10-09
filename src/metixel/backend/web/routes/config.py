@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 
 from flask import Blueprint, current_app, jsonify, request
@@ -26,6 +27,9 @@ _DISPLAY_MODE_KEYS = ("width", "height", "refresh_rate", "rotation")
 #: so it must not invalidate the processed-media cache.
 _DISPLAY_SIZE_KEYS = ("width", "height", "rotation")
 
+#: ISO 3166-1 alpha-2 country code accepted by ``iw reg set``.
+_COUNTRY_CODE_RE = re.compile(r"^[A-Z]{2}$")
+
 
 @config_bp.route("", methods=["GET"])
 def get_config():
@@ -41,22 +45,37 @@ def get_config_section(section: str):
     config = state.config
     if section not in config.to_dict():
         return jsonify_error(f"Unknown config section: {section}", 404)
-
-    # If the caller asked to apply a WiFi country code, run iw reg set
-    # immediately so the radio uses correct channels without a reboot.
-    country = request.args.get("apply_wifi_country", "").strip().upper()
-    if section == "network" and country and len(country) == 2:
-        try:
-            subprocess.run(
-                ["sudo", "iw", "reg", "set", country],
-                capture_output=True,
-                timeout=5,
-            )
-            logger.info("WiFi regulatory domain set to: %s", country)
-        except Exception:
-            logger.warning("Failed to set WiFi country to %s", country, exc_info=True)
-
     return jsonify(config.to_dict()[section])
+
+
+@config_bp.route("/network/apply-wifi-country", methods=["POST"])
+def apply_wifi_country():
+    """Apply a WiFi regulatory country code immediately (``iw reg set``).
+
+    Body: ``{"country": "AU"}`` — a two-letter ISO 3166-1 alpha-2 code.  The
+    persisted setting is saved separately via ``PUT /api/config/network``;
+    this endpoint only pushes it to the radio so the correct channels are
+    used without a reboot.  A state-changing side effect, so it is a POST
+    (never a GET query parameter).
+    """
+    data = get_body()
+    country = data.get("country", "")
+    if not isinstance(country, str):
+        return jsonify_error("'country' must be a string", 400)
+    country = country.strip().upper()
+    if not _COUNTRY_CODE_RE.match(country):
+        return jsonify_error("'country' must be a two-letter country code", 400)
+    try:
+        subprocess.run(
+            ["sudo", "iw", "reg", "set", country],
+            capture_output=True,
+            timeout=5,
+        )
+        logger.info("WiFi regulatory domain set to: %s", country)
+    except Exception:
+        logger.warning("Failed to set WiFi country to %s", country, exc_info=True)
+        return jsonify_error("Failed to apply WiFi country", 500)
+    return jsonify({"status": "ok", "country": country})
 
 
 @config_bp.route("/video/profiles", methods=["GET"])

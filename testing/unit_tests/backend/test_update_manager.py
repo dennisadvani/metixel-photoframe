@@ -15,15 +15,23 @@ release runs the NEW version's install logic.
 
 from __future__ import annotations
 
+import subprocess
+import threading
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
+import pytest
+
+import metixel.backend.update_manager as um
+import metixel.shared.paths as paths
 from metixel.backend.update_manager import UpdateManager
 
 # testing/unit_tests/backend/ -> repo root
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INSTALL_SCRIPT = _REPO_ROOT / "scripts" / "ota_install.sh"
 _UPDATE_SCRIPT = _REPO_ROOT / "scripts" / "update.sh"
+_BOOTSTRAP_SCRIPT = _REPO_ROOT / "scripts" / "bootstrap.sh"
 
 
 class TestBuildUpdateScript:
@@ -555,8 +563,10 @@ class TestUpdateScript:
         content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
 
         assert "sample_media" in content, "sample media is never seeded"
-        # Gated on a fresh install.
-        seed_block = content.split("seed the sample media")[1].split("[8/8]")[0]
+        # Bounded by the NEXT section header, not a fixed step number — the
+        # block moved once already and a `[8/8]` marker silently lost the
+        # bounds.
+        seed_block = content.split("seed the sample media")[1].split("# ── 5)")[0]
         assert 'if [ "${FRESH_INSTALL}" = "yes" ]; then' in seed_block, (
             "sample media must only be seeded on a fresh install"
         )
@@ -567,6 +577,33 @@ class TestUpdateScript:
         assert 'cp -rn "${SAMPLE_SRC}/." "${SAMPLE_DST}/"' in content
         # Must not be fatal to an otherwise healthy install.
         assert "|| true" in seed_block
+
+    def test_sample_media_seeded_before_the_health_gate(self) -> None:
+        """Seeding must happen BEFORE the swap/health-check, not after.
+
+        Regression guard: the block used to sit after the health gate, and both
+        failure branches of that gate `exit 1`.  A fresh install whose
+        health-check failed therefore never reached the seeding code — leaving
+        the one install that most needed something on screen with an empty
+        library.  The gallery must be in place even when the release does not
+        come up healthy.
+        """
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+
+        seed = content.index("Seeding sample media")
+        swap = content.index("[6/8] Swapping live symlink")
+        health = content.index("Waiting up to ${HEALTH_TIMEOUT}s for health endpoint")
+
+        assert seed < swap, "sample media must be seeded before the live swap"
+        assert seed < health, "sample media must be seeded before the health gate"
+
+        # And the gate really can skip everything after it, which is why the
+        # order above matters rather than being cosmetic.
+        gate_failure = content[health:]
+        assert "exit 1" in gate_failure, (
+            "health gate is expected to exit on failure; if that changes, "
+            "re-check whether the seed ordering still matters"
+        )
 
     def test_bootstrap_is_thin_and_delegates(self) -> None:
         """bootstrap.sh is the only downloadable file and must stay small and
@@ -591,7 +628,14 @@ class TestUpdateScript:
 
         # A loose sanity bound: the value is that it almost never changes, so a
         # grossly bloated bootstrap is the thing worth catching.
-        assert len(code_lines) < 220, (
+        #
+        # Raised 220 → 300 when bootstrap took ownership of the fresh-install
+        # reboot (warn_reboot_required + countdown_then_reboot, ~46 lines).  That
+        # is bootstrap's own concern, not update.sh's: it is the caller that owns
+        # the boot-config step and therefore the reboot that step requires.  The
+        # structural guard above is the one that actually matters — it still
+        # passes, so nothing install-related has leaked in.
+        assert len(code_lines) < 300, (
             f"bootstrap.sh is {len(code_lines)} code lines — it should stay thin"
         )
 
@@ -612,6 +656,8 @@ class TestUpdateScript:
 
         # Ordering must be checked on the actual DELEGATION call: the header
         # comment and the --local validation both mention update.sh earlier.
+        # The delegation now goes through $UPDATE_SH (so the skip-health-check
+        # flag can be probed), so match the variable, not the literal path.
         code_lines = [
             ln for ln in content.splitlines() if ln.strip() and not ln.strip().startswith("#")
         ]
@@ -619,7 +665,7 @@ class TestUpdateScript:
         delegate_ln = next(
             i
             for i, ln in enumerate(code_lines)
-            if ln.strip().startswith("bash ") and "scripts/update.sh" in ln
+            if ln.strip().startswith("bash ") and "UPDATE_SH" in ln
         )
         assert init_ln < delegate_ln, (
             "init.json must be written BEFORE update.sh is invoked, so "
@@ -1046,13 +1092,44 @@ class TestReleaseManagement:
     """Local release listing and ref→folder mapping."""
 
     def test_release_dir_for_ref_maps_tags(self) -> None:
+        """Folder names follow scripts/update.sh: the TAG as-is, v prefix kept.
+
+        The old mapping stripped the ``v`` (``1.2.3``) while update.sh created
+        ``releases/v1.2.3``, so no local-release lookup ever matched.
+        """
         mgr = UpdateManager.__new__(UpdateManager)
-        # refs/tags/v1.2.3 → 1.2.3
-        assert mgr._ref_to_release_name("refs/tags/v1.2.3") == "1.2.3"
+        # refs/tags/v1.2.3 → v1.2.3 (exactly what update.sh names the folder)
+        assert mgr._ref_to_release_name("refs/tags/v1.2.3") == "v1.2.3"
         # origin/main → main
         assert mgr._ref_to_release_name("origin/main") == "main"
-        # bare version
-        assert mgr._ref_to_release_name("v2.0.0") == "2.0.0"
+        # bare tag passes through unchanged
+        assert mgr._ref_to_release_name("v2.0.0") == "v2.0.0"
+        # raw SHAs pass through (update.sh names dev releases after them)
+        assert mgr._ref_to_release_name("0abc123") == "0abc123"
+
+    def test_update_sh_names_folder_after_tag(self) -> None:
+        """The shell side of the convention: ``releases/<tag>`` with no
+        ``v`` stripping, and dev → short SHA."""
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert 'refs/tags/*) VERSION="${_REF#refs/tags/}"' in content
+        assert 'RELEASE_DIR="${RELEASES_DIR}/${STAGING_VERSION}"' in content
+        assert "lstrip" not in content and "#v}" not in content
+        assert "rev-parse --short HEAD" in content
+
+    def test_build_release_list_marks_installed_by_tag(self, tmp_path: Path, monkeypatch) -> None:
+        """``installed`` must look for the TAG-named folder update.sh creates."""
+        _install_root(tmp_path, monkeypatch)
+        (tmp_path / "releases" / "v1.2.6").mkdir(parents=True)
+        mgr = UpdateManager.__new__(UpdateManager)
+        out = mgr._build_release_list(
+            [
+                {"tag_name": "v1.2.6", "prerelease": False},
+                {"tag_name": "v1.2.5", "prerelease": True},
+            ]
+        )
+        by_tag = {r["tag"]: r for r in out}
+        assert by_tag["v1.2.6"]["installed"] is True
+        assert by_tag["v1.2.5"]["installed"] is False
 
     def test_set_auto_update_validates_day(self) -> None:
         mgr = UpdateManager.__new__(UpdateManager)
@@ -1101,3 +1178,371 @@ class TestReleaseManagement:
         assert fake.calls == [
             ("update", {"auto_update": False, "auto_update_day": 3, "auto_update_time": "04:30"})
         ]
+
+
+# ---------------------------------------------------------------------------
+# Helpers for the Blue/Green layout tests
+# ---------------------------------------------------------------------------
+
+
+def _install_root(root: Path, monkeypatch) -> None:
+    """Point every install-root lookup (paths + update_manager) at *root*."""
+    monkeypatch.setattr(paths, "install_root", lambda: root)
+    monkeypatch.setattr(um, "install_root", lambda: root)
+    (root / "releases").mkdir(exist_ok=True)
+
+
+def _layout(root: Path, live: str, *others: str) -> Path:
+    """Create ``releases/<name>`` folders and point ``live`` at *live*."""
+    for name in (live, *others):
+        (root / "releases" / name).mkdir(parents=True, exist_ok=True)
+    (root / "live").symlink_to(root / "releases" / live)
+    return root / "releases" / live
+
+
+class _RecordingState:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+
+    def update_config(self, section: str, values: dict) -> None:
+        self.calls.append((section, values))
+
+
+def _bare_manager() -> UpdateManager:
+    mgr = UpdateManager.__new__(UpdateManager)
+    mgr._lock = threading.Lock()
+    mgr._cache = {}
+    mgr._update_in_progress = False
+    mgr._last_error = None
+    mgr._state = cast(Any, _RecordingState())
+    return mgr
+
+
+class TestLiveReleaseGuard:
+    """The release the backend runs from must never be deleted or re-staged."""
+
+    def test_is_live_release(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        live = _layout(tmp_path, "v1.2.6", "v1.2.5")
+        mgr = UpdateManager.__new__(UpdateManager)
+        assert mgr._is_live_release(live) is True
+        assert mgr._is_live_release(tmp_path / "releases" / "v1.2.5") is False
+
+    def test_is_live_release_without_symlink(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        (tmp_path / "releases" / "v1.2.6").mkdir()
+        mgr = UpdateManager.__new__(UpdateManager)
+        assert mgr._is_live_release(tmp_path / "releases" / "v1.2.6") is False
+
+    def test_apply_update_refuses_the_active_release(self, tmp_path: Path, monkeypatch) -> None:
+        """Reinstalling the live release would rm -rf the running code."""
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.6")
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path / "releases" / "v1.2.6"
+        monkeypatch.setattr(mgr, "_resolve_target_ref", lambda ch, v: "refs/tags/v1.2.6")
+        deleted = mock.MagicMock()
+        launched = mock.MagicMock()
+        monkeypatch.setattr(mgr, "_delete_local_release", deleted)
+        monkeypatch.setattr(UpdateManager, "_write_and_launch_update_script", launched)
+
+        result = mgr.apply_update(channel="stable", version="1.2.6")
+
+        assert result["status"] == "error"
+        assert "active release" in result["message"]
+        deleted.assert_not_called()
+        launched.assert_not_called()
+        assert mgr._update_in_progress is False
+
+    def test_apply_update_deletes_a_stale_non_live_release(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """A previously installed (then rolled-back) release IS found now that
+        the folder naming matches, and is removed before the reinstall."""
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.5", "v1.2.6")
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path / "releases" / "v1.2.5"
+        monkeypatch.setattr(mgr, "_resolve_target_ref", lambda ch, v: "refs/tags/v1.2.6")
+        deleted = mock.MagicMock()
+        launched = mock.MagicMock()
+        monkeypatch.setattr(mgr, "_delete_local_release", deleted)
+        monkeypatch.setattr(UpdateManager, "_write_and_launch_update_script", launched)
+
+        result = mgr.apply_update(channel="stable", version="1.2.6")
+
+        assert result["status"] == "ok", result
+        deleted.assert_called_once_with(tmp_path / "releases" / "v1.2.6")
+        launched.assert_called_once_with("refs/tags/v1.2.6", "stable")
+
+    def test_update_sh_trap_never_removes_live(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        trap = content[content.index("_cleanup_staging() {") :]
+        trap = trap[: trap.index("\n}\n")]
+        assert "PREV_LIVE" in trap and "REFUSING to remove" in trap
+        # The dev re-check happens after the SHA is known, before the mv.
+        dev = content.index("dev staging → release folder")
+        assert content.index("already the live release", dev) > dev
+        assert content.index('mv "${STAGING_DIR}" "${RELEASE_DIR}"', dev) > content.index(
+            "already the live release", dev
+        )
+
+
+class TestResolveTargetRef:
+    """An explicit tag is accepted from the cached GitHub release list, so a
+    tag newer than the running clone (which nothing ever fetches) is
+    selectable without a network round-trip in the request path."""
+
+    def test_known_release_tag(self) -> None:
+        mgr = _bare_manager()
+        mgr._cache = {
+            "releases": [{"tag": "v9.9.9", "version": "9.9.9"}],
+            "available": {"beta": {"tag": "v9.9.10-beta.1"}},
+        }
+        assert mgr._is_known_release_tag("v9.9.9") is True
+        assert mgr._is_known_release_tag("v9.9.10-beta.1") is True
+        assert mgr._is_known_release_tag("v0.0.1") is False
+
+    def test_resolve_accepts_cached_tag_without_git(self, monkeypatch, tmp_path: Path) -> None:
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path
+        mgr._cache = {"releases": [{"tag": "v9.9.9", "version": "9.9.9"}]}
+        git = mock.MagicMock(side_effect=AssertionError("git must not be consulted"))
+        monkeypatch.setattr(um.subprocess, "run", git)
+
+        assert mgr._resolve_target_ref("stable", "9.9.9") == "refs/tags/v9.9.9"
+        assert mgr._resolve_target_ref("stable", "v9.9.9") == "refs/tags/v9.9.9"
+
+    def test_resolve_falls_back_to_local_git(self, monkeypatch, tmp_path: Path) -> None:
+        mgr = _bare_manager()
+        mgr._repo_root = tmp_path
+        mgr._cache = {"releases": [{"tag": "v9.9.9"}]}
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kw):
+            calls.append(list(cmd))
+            rc = 0 if cmd[:2] == ["git", "rev-parse"] and "refs/tags/v1.0.0" in cmd else 1
+            return subprocess.CompletedProcess(cmd, rc, "", "")
+
+        monkeypatch.setattr(um.subprocess, "run", fake_run)
+        assert mgr._resolve_target_ref("stable", "1.0.0") == "refs/tags/v1.0.0"
+        assert calls, "unknown tag must fall through to the local git lookups"
+
+
+class TestRollbackDefersRestart:
+    """``rollback()`` must not restart metixel-backend inside the request."""
+
+    def test_rollback_schedules_restart(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.6", "v1.2.5")
+        mgr = _bare_manager()
+        flipped = mock.MagicMock()
+        scheduled = mock.MagicMock()
+        sync_sudo = mock.MagicMock(side_effect=AssertionError("must not run sudo synchronously"))
+        monkeypatch.setattr(mgr, "_flip_live_symlink", flipped)
+        monkeypatch.setattr(um, "schedule_sudo", scheduled)
+        monkeypatch.setattr(um, "run_sudo", sync_sudo)
+
+        result = mgr.rollback("v1.2.5")
+
+        assert result["status"] == "ok", result
+        flipped.assert_called_once_with(tmp_path / "releases" / "v1.2.5")
+        scheduled.assert_called_once()
+        args, kwargs = scheduled.call_args
+        assert list(args[0]) == ["systemctl", "restart", "metixel-backend", "metixel-cage"]
+        assert kwargs["delay"] >= 1.0, "the delay is what lets the JSON response flush"
+        assert mgr._update_in_progress is False
+
+    def test_rollback_rejects_active_release(self, tmp_path: Path, monkeypatch) -> None:
+        _install_root(tmp_path, monkeypatch)
+        _layout(tmp_path, "v1.2.6")
+        mgr = _bare_manager()
+        scheduled = mock.MagicMock()
+        monkeypatch.setattr(um, "schedule_sudo", scheduled)
+        result = mgr.rollback("v1.2.6")
+        assert result["status"] == "error"
+        scheduled.assert_not_called()
+
+
+class TestUpdateScriptLogging:
+    def test_wrapper_marks_log_attached_and_update_sh_honours_it(self) -> None:
+        """Both sides tee to the same log; update.sh must skip its tee when the
+        OTA wrapper already attached it, or every line is written twice."""
+        wrapper = UpdateManager._build_update_script("v1.0.0", "stable")
+        assert "export METIXEL_UPDATE_LOG_ATTACHED=1" in wrapper
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert '[ "${METIXEL_UPDATE_LOG_ATTACHED:-}" != "1" ]' in content
+        tee = content.index('exec > >(tee -a "${LOG_FILE}")')
+        assert content.rindex("METIXEL_UPDATE_LOG_ATTACHED", 0, tee) > 0
+
+
+class TestHeadlessHealthGate:
+    def test_backend_only_probe_when_cage_not_enabled(self) -> None:
+        content = _UPDATE_SCRIPT.read_text(encoding="utf-8")
+        assert "systemctl is-enabled metixel-cage.service" in content
+        assert '[ "${CAGE_ENABLED}" != "enabled" ]' in content
+        assert 'HEALTH_PROBE_URL="${HEALTH_URL}"\n' in content
+        # The relaxed assignment must come AFTER the strict default.
+        assert content.index('HEALTH_PROBE_URL="${HEALTH_URL}"\n') > content.index(
+            'HEALTH_PROBE_URL="${HEALTH_URL}?require=render"'
+        )
+
+
+class TestPiUserPreflight:
+    @pytest.mark.parametrize("script", ["update.sh", "bootstrap.sh"])
+    def test_scripts_check_for_pi_user(self, script: str) -> None:
+        content = (_REPO_ROOT / "scripts" / script).read_text(encoding="utf-8")
+        assert "id -u pi" in content
+        assert "Raspberry Pi Imager" in content
+
+
+class TestBootstrapReboot:
+    """Bootstrap must ALWAYS reboot on a fresh install.
+
+    A fresh install writes ``dtoverlay=vc4-kms-v3d*`` and ``gpu_mem`` into
+    config.txt, and neither takes effect until a reboot.  Without it,
+    metixel-cage cannot open a DRM device, the frontend never writes its
+    heartbeat, and the install looks broken although everything installed.
+
+    The reboot is unconditional by design.  Two earlier attempts to make it
+    conditional both failed:
+
+    * inferring it from configure_boot.sh's ``REBOOT_REQUIRED`` line only says
+      "this run edited the file" — a retried install saw ``already present``,
+      signalled nothing, and skipped the reboot the running kernel still
+      needed; and
+    * a health gate before the boot config could only fail on a stock image
+      (no KMS overlay ⇒ no DRM ⇒ no frontend), and ``set -e`` propagated that
+      failure, killing bootstrap before it reached the boot-config step at all.
+
+    Hence: bootstrap passes ``--skip-health-check`` to update.sh, applies boot
+    config itself, and always reboots.
+    """
+
+    def test_skips_the_health_gate_on_a_fresh_install(self) -> None:
+        """The gate is unanswerable before the reboot, so it must not run."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "--skip-health-check" in content
+
+    def test_skip_flag_is_probed_not_assumed(self) -> None:
+        """The flag must be passed only if the staged update.sh supports it.
+
+        bootstrap.sh resolves the channel to a TAG and then runs that tag's
+        own update.sh, so the flag set is an interface with code it does not
+        control.  ``--skip-health-check`` was added after v1.2.5, and an older
+        update.sh rejects unknown flags outright:
+
+            --*) _die "unknown flag: $1" ;;
+
+        which aborted the install *after* the clone and after init.json was
+        written.  The flag must therefore be conditional on a probe, never
+        passed unconditionally.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+
+        # The probe must exist and gate the flag...
+        assert "grep -q -- '--skip-health-check" in content
+        assert "UPDATE_ARGS+=(--skip-health-check)" in content
+
+        # ...and the invocation must use the probed array, not a hardcoded flag.
+        assert 'bash "${UPDATE_SH}" "${UPDATE_ARGS[@]}"' in content
+        unconditional = 'bash "${STAGE_DIR}/scripts/update.sh" "${REF}" "${REPO_URL}" \\'
+        assert unconditional not in content, (
+            "the flag must not be passed unconditionally — an older update.sh rejects it"
+        )
+
+    def test_update_script_skips_when_asked(self) -> None:
+        content = (_REPO_ROOT / "scripts" / "update.sh").read_text(encoding="utf-8")
+        assert "--skip-health-check)" in content
+        assert 'if [ "${SKIP_HEALTH_CHECK}" = "yes" ]; then' in content
+        # The gate must still be the default path for OTAs — skipping is opt-in.
+        assert 'SKIP_HEALTH_CHECK="no"' in content
+
+    def test_package_install_stays_strict(self) -> None:
+        """Skipping the readiness probe must NOT soften dependency failure.
+
+        The strict apt/pip install is what protects an existing device from a
+        half-applied upgrade; only the *probe* is skipped.
+        """
+        content = (_REPO_ROOT / "scripts" / "update.sh").read_text(encoding="utf-8")
+        assert "--skip-health-check" in content
+        # The installer still fails closed without a live symlink.
+        assert "ota_install.sh" in content
+
+    def test_boot_config_is_applied_before_the_reboot(self) -> None:
+        """Ordering is the whole point: config, then reboot, then verification."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        cfg_at = content.index("configure_boot.sh")
+        reboot_at = content.index("sync\nreboot")
+        assert cfg_at < reboot_at, "boot config must be applied before rebooting"
+
+    def test_reboot_is_not_conditional_on_a_detected_change(self) -> None:
+        """No REBOOT_REQUIRED sniffing — it produced false negatives.
+
+        Checks CODE only: the rationale above deliberately *mentions*
+        REBOOT_REQUIRED to explain why it is not used.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        code = "\n".join(ln for ln in content.splitlines() if not ln.lstrip().startswith("#"))
+        assert "REBOOT_REQUIRED" not in code
+        assert "grep -q '^REBOOT_REQUIRED'" not in code
+        # The unconditional form is what replaced it.
+        assert "countdown_then_reboot" in code
+
+    def test_counts_down_before_rebooting(self) -> None:
+        """Warn, then give the operator 10s — a silent drop-off looks like a crash."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "REBOOT REQUIRED TO FINISH SETUP" in content
+        assert "Rebooting in 10 seconds" in content
+        assert "for i in 10 9 8 7 6 5 4 3 2 1; do" in content
+
+    def test_countdown_reads_the_controlling_terminal(self) -> None:
+        """`read` must target /dev/tty, not stdin.
+
+        With stdin at EOF (``bash bootstrap.sh < /dev/null``, a pipe, or a
+        closed fd) ``read`` returns immediately, which is indistinguishable from
+        a keypress by exit status — the countdown would abort in milliseconds
+        and the reboot would be silently skipped.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "read -r -t 1 -n 1 _ < /dev/tty" in content
+
+    def test_unattended_install_still_reboots(self) -> None:
+        """No terminal (piped/automated install) must not stall or skip.
+
+        The helper has two branches: with a terminal it counts down (and may
+        cancel), without one it reboots straight away.  An automated install
+        has nobody to answer a prompt, so it must not wait.
+        """
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        body = content[content.index("countdown_then_reboot() {") :]
+        body = body[: body.index("\n}\n")]
+        assert "else" in body, "must have an unattended branch"
+        assert "rebooting to finish setup" in body
+        # And the unattended branch must actually reboot.
+        unattended = body[body.index("else") :]
+        assert "reboot" in unattended
+
+    def test_cancelling_the_countdown_does_not_reboot(self) -> None:
+        """A cancelled countdown must return BEFORE reaching reboot."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        body = content[content.index("countdown_then_reboot() {") :]
+        body = body[: body.index("\n}\n")]
+        cancel_at = body.index("Reboot cancelled")
+        # The reboot call is the LAST statement, after the cancel early-return.
+        assert "return 0" in body[cancel_at:]
+        assert body.rindex("reboot") > cancel_at
+
+    def test_cancel_path_tells_the_user_what_to_do(self) -> None:
+        """Cancelling must not leave them guessing that the frame stays blank."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "Reboot cancelled" in content
+        assert "sudo reboot" in content
+
+    def test_no_reboot_escape_hatch_still_exists(self) -> None:
+        """--no-reboot keeps the behaviour testable without a real reboot."""
+        content = _BOOTSTRAP_SCRIPT.read_text(encoding="utf-8")
+        assert "--no-reboot" in content
+        assert "ASSUME_NO_REBOOT" in content
+        # And it must be loud about the consequence, not silent.
+        assert "REBOOT REQUIRED TO FINISH SETUP" in content

@@ -165,7 +165,7 @@ class FrontendRenderer:
                         ),
                     )
                 )
-            except (KeyError, TypeError) as e:
+            except (KeyError, TypeError, ValueError) as e:
                 logger.debug("Skipping malformed playlist entry: %s", e)
                 continue
 
@@ -660,7 +660,7 @@ class FrontendRenderer:
                     ),
                 )
                 items.append(item)
-            except (KeyError, ValueError) as e:
+            except (KeyError, TypeError, ValueError) as e:
                 logger.debug("Skipping malformed playlist entry: %s", e)
 
         if not self._presentation:
@@ -926,6 +926,15 @@ class FrontendRenderer:
 
         if self._ipc_server:
             self._ipc_server.stop()
+
+        # Kill a running VLC before the display goes away — the subprocess
+        # is not a child the display backend knows about, so without this
+        # it outlives a frontend restart and sits on top of the new one.
+        if self._presentation is not None:
+            try:
+                self._presentation._video_stop()
+            except Exception:
+                logger.warning("Failed to stop video during shutdown", exc_info=True)
 
         if self._backend:
             self._backend.destroy()

@@ -25,6 +25,8 @@ node_modules/
 *.swo
 *~
 
+# Personal Notes
+Notes/
 # OS
 .DS_Store
 Thumbs.db

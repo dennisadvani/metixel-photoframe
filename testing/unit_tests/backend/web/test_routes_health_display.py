@@ -81,14 +81,28 @@ class TestCurrentMediaThumbnail:
         assert self._current_media(client)["thumbnail_url"] is None
 
     def test_publishes_url_for_video_frame_cache(self, client, tmp_path):
-        frame = tmp_path / "clip.mp4.1.frame"
+        """Video frames live in ``<cache>/videos/<hash>.<N>.frame.jpg``
+        (processing/frames.py) — the URL must point at what
+        ``/api/media/thumbnail`` can actually serve."""
+        videos_dir = self._thumbs_dir(tmp_path).parent / "videos"
+        videos_dir.mkdir(parents=True)
+        frame = videos_dir / "0123456789abcdef.1.frame.jpg"
         frame.write_bytes(b"\xff\xd8\xff")
 
         self._write_current_media(tmp_path, {"file": "clip.mp4", "thumbnail_path": str(frame)})
 
-        assert self._current_media(client)["thumbnail_url"] == (
-            "/api/media/thumbnail/clip.mp4.1.frame"
-        )
+        url = self._current_media(client)["thumbnail_url"]
+        assert url == "/api/media/thumbnail/0123456789abcdef.1.frame.jpg"
+        # And the media route agrees — the URL does not 404.
+        assert client.get(url).status_code == 200
+
+    def test_omits_url_for_frame_outside_cache(self, client, tmp_path):
+        """A frame file that exists but is NOT under the cache is not served,
+        so no URL is published for it (the old code handed out 404s here)."""
+        frame = tmp_path / "clip.mp4.1.frame"
+        frame.write_bytes(b"\xff\xd8\xff")
+        self._write_current_media(tmp_path, {"file": "clip.mp4", "thumbnail_path": str(frame)})
+        assert self._current_media(client)["thumbnail_url"] is None
 
 
 class TestDisplayModes:

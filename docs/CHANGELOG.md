@@ -5,6 +5,146 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.2.6]
+
+### Added
+
+- **Delete folders from the folder browser** — the browse modal can now remove
+  a folder tree under the media folder, instead of only adding one. A folder
+  that is itself a configured watch path also has that entry removed from the
+  config, so the browser and the watch list cannot drift apart.
+- **Delete files from the Media Library** — the Media page can delete a single
+  file, which also drops its processing-journal entry and its cached thumbnails
+  and frames. Files owned by a sync source (Immich, or anything under a `sync`
+  folder) are refused: the syncer owns them and would restore them on its next
+  run.
+- **Per-device captive-portal SSID** — the setup hotspot is now named
+  `Metixel-Setup-<MAC>` (e.g. `Metixel-Setup-A1B2C3`, the last six hex digits of
+  the Wi-Fi adapter's MAC), so two frames being set up in the same room are no
+  longer indistinguishable. `network_manager.ap_ssid_for_mac()` and
+  `scripts/reconcile.sh` derive it through the same pipeline.
+
+### Security
+
+- **Auth bypass on the web API.** All of `/api/network/*` and `/api/control`
+  were exempt from the login gate, so any LAN client could scan or join Wi-Fi,
+  toggle the hotspot, or send IPC commands. Network exemptions are now limited
+  to four captive-portal routes and only while the setup hotspot is active. The
+  control route is exempt only for loopback callers.
+- **CSRF check.** State-changing API requests must carry a matching `Origin` or
+  `Referer` header, otherwise 403. Header-less clients such as `curl` still
+  pass.
+- **Sessions outlived a password change.** A random auth-generation token is
+  now rotated whenever the web password is set or cleared, which invalidates
+  every other session.
+- **Captive-portal PIN was UI-only.** Anyone on the setup hotspot could `POST`
+  to the connect route directly. The PIN grant is now enforced server-side,
+  stored in the session, and single-use.
+- **Path traversal into `rmtree`.** The Immich remove-album route deleted a
+  directory built from an unvalidated request id. It now enforces a strict id
+  regex and a resolved-path containment check.
+- **Thumbnail route served arbitrary JPEGs.** A recursive fallback search under
+  the media folder is gone; only strictly named files inside the thumbnail and
+  video cache directories are served.
+- **State change on `GET`.** Applying a Wi-Fi country code ran `sudo iw reg
+  set` from a GET query parameter. It moved to a POST route with a two-letter
+  uppercase regex.
+- **Injection into system files.** Newlines in NTP server names could inject
+  `timesyncd` directives, and control characters in the device password could
+  corrupt the `chpasswd` and `smbpasswd` input. Both are now rejected.
+- **Type validation everywhere.** Non-string JSON fields across the auth,
+  network, security, logs, time, and Immich routes now return `400` instead of
+  crashing with a `500`.
+- **Dashboard bug that disabled auth.** Saving only the session timeout with an
+  empty password field silently cleared the web password. Clearing now needs an
+  explicit confirm button.
+
+### Fixed
+
+- **Runaway ffmpeg.** A subprocess timeout killed only the `cpulimit` wrapper
+  and left `ffmpeg` frozen under `SIGSTOP`; a new session-group helper kills the
+  whole tree.
+- **Daemon shutdown.** `SIGTERM` now runs a proper shutdown that flushes the
+  processing journal and stops all worker threads, and is idempotent. Bad saved
+  schedule times no longer crash-loop the service at boot, and config writes
+  sanitise them.
+- **Permanent re-encode loop.** Cached files produced by the libx264 fallback
+  on an H.265 profile were judged wrong-codec and re-encoded every boot.
+  Several `ffprobe` level and pixel-format parsing bugs are fixed alongside.
+- **Data loss on unmounted shares.** The folder watcher treated files under a
+  missing watch root as deleted and purged playlist, journal, and cache entries.
+  Deletions under absent roots are now ignored until the root returns.
+- **Update manager.** It could `rm -rf` the release it was running from,
+  restarted services synchronously inside the HTTP request, and misnamed
+  release folders by stripping the leading `v`. The update script gained a guard
+  against deleting the live release and a fix for nested clones on the dev
+  channel.
+- **Input handlers.** An unplugged USB remote caused a 100 % CPU `epoll` spin;
+  devices are now dropped and rescanned every 5 seconds. The CEC key map was
+  wrong against the spec, so volume keys blanked the screen.
+- **Network manager.** `nmcli` terse output was split on every colon, so SSIDs
+  containing a colon broke status, scan, and forget-network.
+- **Frontend presentation engine.** Fixes for a stale preload racing a newer
+  one, a layout cache keyed on reusable object ids, VLC surviving a frontend
+  restart, pause not stopping VLC in half the video states, wrong-index skips
+  after removing items, and a re-scan on video toggle that wiped
+  backend-processed metadata.
+- **Display backends.** The texture-update fallback discarded the new handle,
+  the Tk backend never cleared the canvas and grew without bound, and the boot
+  layer leaked GPU textures on reactivate.
+- **Smaller fixes.** An Immich temp-file leak on failed downloads, log tail
+  fusing lines at chunk boundaries, oversized video thumbnails, a palette-image
+  thumbnail crash, cache cleanup deleting frame files that nothing regenerates,
+  an optimisation worker thread dying on any exception, and the dashboard
+  showing "backend down" on any 4xx.
+
+### Captive portal
+
+The setup hotspot broadcast `Metixel-Setup` but never handed out an address —
+the phone sat on "Obtaining IP address…" forever, because `hostapd.conf`
+existed while `/etc/dnsmasq.conf` carried no `dhcp-range`. The AP was half
+configured.
+
+- **The `conf-dir=` line must come first.** Debian's stock `dnsmasq.conf` ends
+  with its own `conf-dir=` line, so the AP sidecar written by the old code was
+  sourced after the stock defaults (including `interface=`) and was silently
+  ineffective. The include now sits at the top of the file.
+- **Binding is late-safe.** `interface=wlan0` is replaced by `bind-dynamic` plus
+  `except-interface=lo`, so dnsmasq no longer fails to start when `wlan0`
+  initialises after it.
+- **Readiness is judged by configuration, not existence.** Provisioning
+  verifies `dnsmasq` by its configuration and systemd unit rather than
+  `command -v`, and `/etc/dnsmasq.conf` is detected by the settings it contains
+  (27 KB of stock comments and a real `dhcp-range` are not the same thing).
+- **`start_ap_mode()` refuses to broadcast without DHCP**, and surfaces the
+  systemd logs instead of failing silently.
+- **`scripts/fixups/v1.2.6-fix-ap-dhcp.sh` repairs existing devices** on
+  upgrade. It stays a fixup rather than moving into `reconcile.sh` because both
+  defects depend on device history: blindly re-prepending the include would
+  stack duplicate header comments, and the AP SSID rename is one-way (a device
+  already renamed is indistinguishable from one a user renamed by hand).
+  `reconcile.sh` §6 keeps the device converged from that point on.
+
+### Behind the scenes
+
+- **Documentation updated to reflect reality** — mtime polling rather than
+  inotify, config under `/opt/metixel/data`, no `etc/` directory, the Blue/Green
+  `live` layout, Python 3.11, LF line endings, an iptables redirect rather than
+  nginx, the Apache 2.0 licence, and a much fuller API reference including the
+  new CSRF and exemption rules. The README and install guide now state that the
+  OS username must be `pi`.
+- **Scripts hardened** — `bootstrap.sh` and `update.sh` refuse to run without a
+  `pi` user, `release.sh` parsed a two-line version output as the version string,
+  the pre-commit hook was not executable and double-bumped the version, and the
+  precache and uninstall scripts pointed at stale paths.
+- **Tests** — six new test files plus extensions to about 25 existing ones cover
+  every fix above, including the captive-portal DHCP lease end-to-end over a
+  `veth` pair (`testing/functional/test_ap_dhcp.py`) and the backend
+  AP-identity unit tests (`testing/unit_tests/backend/test_ap_identity.py`),
+  which run the fixup script and the Python helper through the same pipeline to
+  keep their SSID formatting in step. The display-backend test also stops
+  leaking Wayland environment variables, which made it fail under WSL.
+
 ## [1.2.5]
 
 ### Features

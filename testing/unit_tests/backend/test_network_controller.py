@@ -68,6 +68,49 @@ class TestEthernetIgnoredInTestMode:
         assert ctrl._is_any_connected() is True
 
 
+class TestForceApActive:
+    """``force_ap_active()`` — the debug/test entry point into the AP state.
+
+    This exists because raising hostapd behind the controller's back (the old
+    ``/api/network/ap-start`` behaviour) produced a live AP with NO PIN, since
+    the PIN is only generated in ``_transition_to(AP_ACTIVE)``.  A portal with
+    no PIN can never validate anything.
+    """
+
+    def test_generates_a_pin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctrl = NetworkController({})
+        monkeypatch.setattr(nc, "_start_ap", lambda: True)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+
+        assert ctrl.force_ap_active() is True
+        assert ctrl._state == NetworkState.AP_ACTIVE
+        assert len(ctrl.pin) == 4 and ctrl.pin.isdigit()
+
+    def test_idempotent_when_already_active(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctrl = NetworkController({})
+        monkeypatch.setattr(nc, "_start_ap", lambda: True)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+
+        assert ctrl.force_ap_active() is True
+        first_pin = ctrl.pin
+        # A second call must not re-raise the AP or rotate the PIN out from
+        # under a client that is mid-validation.
+        assert ctrl.force_ap_active() is True
+        assert ctrl.pin == first_pin
+
+    def test_reports_failure_when_ap_cannot_start(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        ctrl = NetworkController({})
+        monkeypatch.setattr(nc, "_start_ap", lambda: False)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+
+        assert ctrl.force_ap_active() is False
+        # A failed start must not leave a PIN claiming an AP that isn't there.
+        assert ctrl.pin == ""
+
+
 class TestStateMachineInTestMode:
     def test_disconnected_when_only_ethernet_in_test_mode(
         self, monkeypatch: pytest.MonkeyPatch
@@ -99,3 +142,49 @@ class TestStateMachineInTestMode:
         ctrl = NetworkController({})
         state, _, _ = ctrl.tick()
         assert state == NetworkState.CLIENT_CONNECTED
+
+
+class TestApStartFailureRestoresEntryClock:
+    def test_state_entered_restored_when_ap_start_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed ``_start_ap()`` must restore ``_state_entered`` along with
+        ``_state`` — otherwise the grace-period clock restarts and the next
+        retry waits a whole extra ``ap_grace_period_seconds``."""
+        import time
+
+        monkeypatch.setattr(nc, "is_ap_mode_active", lambda: False)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        monkeypatch.setattr(nc, "_start_ap", lambda: False)
+
+        ctrl = NetworkController({"ap_grace_period_seconds": 300})
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+        entered = time.monotonic() - 1000.0
+        ctrl._state_entered = entered
+
+        ctrl._transition_to(NetworkState.AP_ACTIVE)
+
+        assert ctrl._state == NetworkState.CLIENT_DISCONNECTED
+        assert ctrl._state_entered == entered
+        assert ctrl._pending_actions == []
+        assert ctrl._pin == ""
+        # The retry is still due immediately (elapsed >= grace period).
+        assert ctrl._elapsed() >= 300
+
+    def test_state_entered_updated_when_ap_start_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import time
+
+        monkeypatch.setattr(nc, "is_ap_mode_active", lambda: False)
+        monkeypatch.setattr(nc, "pre_scan_for_ap", lambda: None)
+        monkeypatch.setattr(nc, "_start_ap", lambda: True)
+
+        ctrl = NetworkController({})
+        ctrl._state = NetworkState.CLIENT_DISCONNECTED
+        ctrl._state_entered = time.monotonic() - 1000.0
+
+        ctrl._transition_to(NetworkState.AP_ACTIVE)
+
+        assert ctrl._state == NetworkState.AP_ACTIVE
+        assert ctrl._elapsed() < 5

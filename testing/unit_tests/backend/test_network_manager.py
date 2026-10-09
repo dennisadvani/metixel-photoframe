@@ -271,3 +271,46 @@ class TestIsWifiRadioEnabled:
         monkeypatch.setattr(nm.subprocess, "run", boom)
         # Documented behaviour: a status check must not block the user.
         assert nm.is_wifi_radio_enabled() is True
+
+
+class TestTerseSplit:
+    """``nmcli -t`` escapes ``:`` inside values as ``\\:`` — an SSID such as
+    ``Home:Net`` must survive parsing."""
+
+    def test_split_unescapes_colon_and_backslash(self) -> None:
+        assert nm._split_terse("Home\\:Net:70:WPA2:2412") == ["Home:Net", "70", "WPA2", "2412"]
+        assert nm._split_terse("a\\\\b:c") == ["a\\b", "c"]
+        assert nm._split_terse("plain") == ["plain"]
+        assert nm._split_terse("") == [""]
+        assert nm._split_terse("a::b") == ["a", "", "b"]
+
+    def test_maxsplit_like_str_split(self) -> None:
+        assert nm._split_terse("IP4.ADDRESS[1]:192.168.1.5/24", 1) == [
+            "IP4.ADDRESS[1]",
+            "192.168.1.5/24",
+        ]
+        assert nm._split_terse("GENERAL.CONNECTION:Wired\\:Home", 1)[-1] == "Wired:Home"
+
+    def test_parse_scan_results_keeps_colon_in_ssid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, _ = _fake_run(stdout="Home\\:Net:70:WPA2:2412\nCafe:40::5180\n")
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        nets = nm._parse_scan_results()
+        assert [n["ssid"] for n in nets] == ["Home:Net", "Cafe"]
+        assert nets[0]["signal"] == 70 and nets[0]["security"] == "WPA2"
+        assert nets[0]["freq"] == 2412
+        assert nets[1]["freq"] == 5180
+
+    def test_fill_wifi_details_keeps_colon_in_ssid(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, _ = _fake_run(stdout="yes:Home\\:Net:70:WPA2\n")
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        status: dict = {}
+        nm._fill_wifi_details(status, "wlan0")
+        assert status["ssid"] == "Home:Net"
+        assert status["signal"] == 70
+        assert status["security"] == "WPA2"
+
+    def test_forget_network_matches_escaped_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        run, calls = _fake_run(stdout="Home\\:Net:1111-2222\nOther:3333\n")
+        monkeypatch.setattr(nm.subprocess, "run", run)
+        assert nm.forget_network("Home:Net") is True
+        assert ["sudo", "nmcli", "connection", "delete", "1111-2222"] in calls

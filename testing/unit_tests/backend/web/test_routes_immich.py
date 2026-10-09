@@ -114,6 +114,41 @@ class TestRemoveAlbum:
         resp = client.post("/api/immich/albums/remove", json={})
         assert resp.status_code == 400
 
+    @pytest.mark.parametrize(
+        "bad_id",
+        ["../../etc", "x/y", "..", "a b", "abc\x00", "", "abc;rm", 12345, ["a"]],
+    )
+    def test_invalid_id_rejected_and_nothing_deleted(
+        self, client, mock_state, tmp_path, bad_id
+    ) -> None:
+        """Anything outside ``[A-Za-z0-9-]+`` is refused BEFORE config or disk
+        is touched — the id builds a path that gets rmtree'd."""
+        victim = tmp_path / "etc"
+        victim.mkdir()
+        (victim / "keep").write_text("x")
+        mock_state.update_config(
+            "sync",
+            {"immich": {"albums": [{"id": "abc", "name": "F"}], "sync_dir": str(tmp_path)}},
+        )
+        resp = client.post("/api/immich/albums/remove", json={"id": bad_id})
+        assert resp.status_code == 400
+        assert (victim / "keep").exists()
+        assert mock_state.config.sync["immich"]["albums"] == [{"id": "abc", "name": "F"}]
+
+    def test_uuid_id_accepted(self, client, mock_state, tmp_path) -> None:
+        album_id = "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        album_dir = tmp_path / f"album_{album_id}"
+        album_dir.mkdir()
+        mock_state.update_config("sync", {"immich": {"sync_dir": str(tmp_path)}})
+        resp = client.post("/api/immich/albums/remove", json={"id": album_id})
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["deleted_folder"] is True
+        assert not album_dir.exists()
+
+    def test_add_rejects_invalid_id(self, client) -> None:
+        resp = client.post("/api/immich/albums/add", json={"id": "../x", "name": "N"})
+        assert resp.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # POST /api/immich/sync  +  GET /api/immich/status  +  POST /api/immich/cancel
@@ -147,3 +182,74 @@ class TestSyncTrigger:
         resp = client.post("/api/immich/cancel")
         assert resp.status_code == 200
         fake_syncer.cancel.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/immich/test-connection
+# ---------------------------------------------------------------------------
+
+
+class TestTestConnection:
+    """Upstream failures are reported in the body with HTTP 200 — a 401 from
+    Immich must not be mistaken by the dashboard for an expired web session."""
+
+    def _patch_get(self, monkeypatch, **kwargs):
+        import requests
+
+        fake = mock.MagicMock(**kwargs)
+        monkeypatch.setattr(requests, "get", fake)
+        return fake
+
+    def test_upstream_401_reported_in_body(self, client, monkeypatch) -> None:
+        resp_obj = mock.Mock(status_code=401)
+        self._patch_get(monkeypatch, return_value=resp_obj)
+        resp = client.post(
+            "/api/immich/test-connection", json={"server_url": "http://i/", "api_key": "k"}
+        )
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["ok"] is False
+        assert data["status"] == 401
+        assert "API key" in data["error"]
+
+    def test_connection_error_reported_in_body(self, client, monkeypatch) -> None:
+        import requests
+
+        self._patch_get(monkeypatch, side_effect=requests.exceptions.ConnectionError())
+        resp = client.post(
+            "/api/immich/test-connection", json={"server_url": "http://i", "api_key": "k"}
+        )
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["ok"] is False
+        assert data["status"] == "connection_error"
+
+    def test_timeout_reported_in_body(self, client, monkeypatch) -> None:
+        import requests
+
+        self._patch_get(monkeypatch, side_effect=requests.exceptions.Timeout())
+        resp = client.post(
+            "/api/immich/test-connection", json={"server_url": "http://i", "api_key": "k"}
+        )
+        assert resp.status_code == 200
+        assert json.loads(resp.data)["status"] == "timeout"
+
+    def test_success(self, client, monkeypatch) -> None:
+        resp_obj = mock.Mock(status_code=200)
+        resp_obj.json.return_value = [{"id": "a"}, {"id": "b"}]
+        self._patch_get(monkeypatch, return_value=resp_obj)
+        resp = client.post(
+            "/api/immich/test-connection", json={"server_url": "http://i", "api_key": "k"}
+        )
+        assert resp.status_code == 200
+        data = json.loads(resp.data)
+        assert data["ok"] is True
+        assert data["album_count"] == 2
+
+    def test_missing_fields_400(self, client) -> None:
+        resp = client.post("/api/immich/test-connection", json={"server_url": "http://i"})
+        assert resp.status_code == 400
+
+    def test_non_string_fields_400(self, client) -> None:
+        resp = client.post("/api/immich/test-connection", json={"server_url": 1, "api_key": "k"})
+        assert resp.status_code == 400

@@ -59,12 +59,12 @@ Phase 4: SYNC    → Immich downloads to media/sync/immich/ (picked up by Phase 
    - Network down → continue with local media only
    - Never crash. Never show a traceback on screen. Log errors and continue.
 
-8. **Configuration is atomic.** Never write `config.json` directly. Always write to a temp file and use `os.replace()` to atomically swap. The frontend watches for `inotify IN_MODIFY` events.
+8. **Configuration is atomic.** Never write `config.json` directly. Always write to a temp file and use `os.replace()` to atomically swap. The frontend polls the file's mtime to detect changes.
 
 9. **Minimise SD-card writes — flash wear is a real failure mode.** Every device runs from an SD card (or eMMC) with finite erase cycles, and `data/` is on that same flash. Anything that writes *continuously* or *on a timer* is a bug, not a convenience.
     - **The rules:** a write must be (a) triggered by an explicit user action, or (b) genuinely rare (packages, a release, a one-off migration). **Never** write from a polling loop, a watchdog tick, a heartbeat, a per-request metric, or a per-frame render path.
     - **Transient runtime values belong in tmpfs, not `config.json`.** Use `metixel.shared.runtime_state` (`/run/metixel/…`), which costs RAM and is discarded on reboot — correct, because a fresh boot re-derives them. `run_dir()` is tmpfs on the Pi.
-    - **Do not put fleeting telemetry in `config.json`.** It also fires the `inotify` change flag, so every such write makes the frontend reload its whole config. A "last seen / last checked / last polled" timestamp in config is the classic version of this bug.
+    - **Do not put fleeting telemetry in `config.json`.** It also bumps the file's mtime, so every such write makes the frontend reload its whole config. A "last seen / last checked / last polled" timestamp in config is the classic version of this bug.
     - **Generalise before you persist.** Ask whether the value survives a reboot *legitimately*: `channel` must (a user preference), `last_auto_update` must (it gates the weekly schedule — losing it would re-fire the window), but "when did we last check?" must not.
     - **Guard any unavoidable repetition** with a cache TTL or a write throttle, and prefer updating in memory with a periodic flush over write-through on every change.
     - **Exceptions are narrow and must be justified:** user-initiated actions (saving settings, uploading media, starting a sync), and genuinely infrequent maintenance (OTA install, dependency self-heal). When a user explicitly asks for something chatty (e.g. verbose file logging), honour it — but that is a deliberate, user-controlled opt-in, never a default.
@@ -177,7 +177,7 @@ The dashboard JS lives in `src/metixel/backend/web/static/js/` and is organised 
 - **Router pattern (no circular imports):** page modules call `registerPage("name", loader)`; `navigateTo(page)` dispatches through core's registry. `core.js` must never import page modules, and page modules must only import the cross-module symbols listed below.
   - Allowed cross-module edges (keep the import graph a DAG): `sync-page → media-page` (`loadMedia`), `sync-page → settings-page` (`renderWatchPaths`, `collectWatchPaths`, `addWatchPathRow`), `advanced-page → logs-page` (`refreshLogs`), `advanced-page → updates-page` (`loadUpdateStatus`, `bindUpdateControls`), and `settings-page → ddc-controls` (`loadDdcControls`, `bindDdcControls`). Everything else imports `core.js` only.
 - **Scoping & state:** use strict `import`/`export`; modules are strict-mode by default (no `"use strict"`, no IIFE wrapper). Keep module-level state private inside its own module — never share mutable state across page modules; only `core.js` holds cross-cutting state (API connection tracking).
-- **Line endings:** all web JS files are **CRLF**. When a script regenerates files, normalise `\r\n`→`\n` internally and write `\n`→`\r\n`.
+- **Line endings:** all web JS files are **LF** (`.gitattributes` normalises text files to LF; only `.bat`/`.ps1` are CRLF). When a script regenerates files, write `\n` line endings.
 - **ES modules are deferred**, so `document` is fully parsed when module top-level code runs (e.g. `core.js` may cache `#nav-drawer`/`#nav-backdrop` at load).
 - **Serving:** Flask serves `/static/` via `send_from_directory` with `Cache-Control: no-cache` and no CSP that would block modules — relative `import "./x.js"` works as-is. A backend restart is only needed when editing `templates/*.html` (Jinja template cache).
 - **Keep it modular:** if a page module grows past ~500 lines, split it further (e.g. sub-helpers per concern) rather than consolidating. During refactors, move code verbatim — never change logic, API endpoints, or CSS classes.
@@ -271,22 +271,19 @@ The dashboard uses a premium, cinematic design language — Apple-like restraint
 pip install -r requirements-pip.txt
 
 # Run the backend daemon (development)
-python -m metixel --mode backend --config etc/config.json
+python -m metixel --mode backend    # --config defaults to /opt/metixel/data/config.json (./config.json on desktop)
 
 # Run the frontend renderer (development, uses tk_backend on desktop)
-python -m metixel --mode frontend --config etc/config.json
+python -m metixel --mode frontend
 
 # Run the frontend under cage (Trixie/Pi hardware)
-cage -- python3 -m metixel --mode frontend --config etc/config.json
+cage -- python3 -m metixel --mode frontend
 
-# Run tests
-python -m pytest testing/unit_tests/ -v
-
-# Lint
-ruff check src/metixel/
-
-# Type check
-mypy src/metixel/
+# Quality gate — identical to CI (.github/workflows/ci.yml)
+ruff check src/metixel/ testing/
+ruff format --check src/metixel/ testing/
+mypy src/metixel/ testing/
+pytest testing/unit_tests/ -q --no-cov
 ```
 
 ## Key File Locations
@@ -326,7 +323,7 @@ mypy src/metixel/
 | `src/metixel/backend/daemon.py` | Main daemon + `build_backend()` composition-root factory |
 | `src/metixel/frontend/renderer.py` | Frontend renderer + `build_renderer()` composition-root factory |
 | `src/metixel/__main__.py` | Thin composition root — CLI parsing + logging, delegates to the factories |
-| `etc/config.json` | Runtime configuration file |
+| `/opt/metixel/data/config.json` | Runtime configuration file (`--config` default) |
 | `scripts/quiet_boot.sh` | Silent boot configuration |
 | `src/metixel/backend/web/static/js/main.js` | Web SPA entry point — wires core + page modules to the router |
 | `src/metixel/backend/web/static/js/core.js` | Web SPA shared infra — API layer, router (`navigateTo`/`registerPage`), toast, DOM utils |

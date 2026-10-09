@@ -229,10 +229,11 @@ def transcode_cmd(
 
 
 def _libx265_preset() -> str:
-    """Pick a lighter libx265 preset on memory-constrained devices (≤3GB).
+    """Pick a lighter libx265 preset on memory-constrained devices (≤3 GB).
 
-    libx265 uses 2–3× more RAM than libx264 at the same preset, so use a
-    lighter preset on devices with ≤2GB to avoid OOM.
+    libx265 uses 2–3× more RAM than libx264 at the same preset, so use
+    ``ultrafast`` on devices with ≤3 GB total RAM (Pi 3 / 2 GB and 4 GB-class
+    boards report just under 4 GB) to avoid OOM; ``superfast`` otherwise.
     """
     total_ram = read_meminfo().get("MemTotal", 0) * 1024
     return "ultrafast" if total_ram > 0 and total_ram <= 3 * 1024 * 1024 * 1024 else "superfast"

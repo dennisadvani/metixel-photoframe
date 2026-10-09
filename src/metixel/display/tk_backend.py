@@ -151,11 +151,38 @@ class TkBackend(DisplayBackend):
         except tk.TclError:
             self._running = False
             return False
+        # Start the new frame from an empty canvas.  The renderer never
+        # calls clear() between frames, so every draw_* call would add
+        # another canvas item on top of the last frame's — thousands of
+        # items after a minute, and a window that slowly grinds to a halt.
+        # The frame just drawn has already been painted by swap_buffers(),
+        # so deleting here does not blank the window.
+        self._clear_canvas()
         return True
 
     def swap_buffers(self) -> None:
-        """No-op — tkinter Canvas renders immediately."""
-        pass
+        """Paint the canvas items drawn this frame.
+
+        tkinter only repaints on idle, so flush the pending redraw now —
+        otherwise ``loop_running()`` would clear the items before they
+        were ever shown.
+        """
+        if self._root is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            self._root.update_idletasks()
+
+    def _clear_canvas(self) -> None:
+        """Delete every canvas item (rects, images, text) for the next frame.
+
+        Leaves ``_photo_cache`` alone: it is bounded (see draw_image) and
+        the PhotoImage for the current slide is reused on the next frame,
+        which avoids re-encoding the image 30 times a second.
+        """
+        if self._canvas is None:
+            return
+        with contextlib.suppress(tk.TclError):
+            self._canvas.delete("all")
 
     # -- 2D Rendering --------------------------------------------------------
 
@@ -264,29 +291,28 @@ class TkBackend(DisplayBackend):
             for k in keys_to_remove:
                 del self._photo_cache[k]
 
-    def update_texture(self, texture: Any, data: np.ndarray) -> None:
+    def update_texture(self, texture: Any, data: np.ndarray) -> Any:
         """Update a PIL Image texture with new pixel data in-place.
 
         Creates a new PIL Image from the numpy array and swaps it in
-        the texture cache under the same handle.
+        the texture cache under the same handle, which is returned.
         """
         if not isinstance(texture, int) or texture not in self._textures:
-            super().update_texture(texture, data)
-            return
+            return super().update_texture(texture, data)
 
         if data.ndim == 3 and data.shape[2] == 4:
             pil_img = Image.fromarray(data, "RGBA")
         elif data.ndim == 3 and data.shape[2] == 3:
             pil_img = Image.fromarray(data, "RGB")
         else:
-            super().update_texture(texture, data)
-            return
+            return super().update_texture(texture, data)
 
         self._textures[texture] = pil_img
         # Clear PhotoImage cache for this texture so next draw_image re-renders
         keys_to_remove = [k for k in self._photo_cache if isinstance(k, tuple) and k[0] == texture]
         for k in keys_to_remove:
             del self._photo_cache[k]
+        return texture
 
     # -- Text Rendering ------------------------------------------------------
 
@@ -320,11 +346,13 @@ class TkBackend(DisplayBackend):
         self._bg_color = f"#{r:02x}{g:02x}{b:02x}"
 
     def clear(self) -> None:
+        """Explicit clear to the background colour (also drops the photo cache)."""
         if self._canvas:
-            self._canvas.delete("all")
-            self._canvas.configure(bg=self._bg_color)
-            # Clear PhotoImage cache each frame to prevent memory leak
-            # (tkinter PhotoImage must be kept alive by Python ref)
+            self._clear_canvas()
+            with contextlib.suppress(tk.TclError):
+                self._canvas.configure(bg=self._bg_color)
+            # Drop the PhotoImage cache on an explicit clear — callers use
+            # this for scene changes, so nothing cached is still wanted.
             self._photo_cache.clear()
 
     def display_power(self, on: bool) -> None:

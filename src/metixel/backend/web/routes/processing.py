@@ -10,6 +10,7 @@ from pathlib import Path
 from flask import Blueprint, current_app, jsonify
 
 from metixel.backend.web.helpers import get_body, jsonify_error
+from metixel.backend.web.media_service import delete_source_file
 
 logger = logging.getLogger(__name__)
 
@@ -79,29 +80,14 @@ def delete_media():
         logger.warning("Refusing to delete file outside watch paths: %s", path_str)
         return jsonify_error("Path is not inside a watch folder", 400)
 
-    # Remove matching playlist items (by resolved original path)
-    ids = set()
-    for item in state.get_playlist():
-        try:
-            if item.original_path.resolve() == resolved:
-                ids.add(item.id)
-        except OSError:
-            pass
-    if ids:
-        state.remove_playlist_items(ids)
-
-    # Drop the journal entry so it stops showing as an issue
-    state.journal.remove(resolved)
-
-    # Delete the source file
-    deleted = False
-    if target.is_file():
-        try:
-            target.unlink()
-            deleted = True
-        except OSError:
-            logger.warning("Could not delete media file: %s", target)
-            return jsonify({"error": "Could not delete file"}), 500
+    # Remove playlist items, drop the journal entry (so it stops showing as
+    # an issue) and delete the source file — shared with the media library
+    # delete endpoint.
+    try:
+        deleted = delete_source_file(state, target)
+    except OSError:
+        logger.warning("Could not delete media file: %s", target)
+        return jsonify({"error": "Could not delete file"}), 500
 
     logger.info("[PROCESSING] Deleted media file: %s", resolved)
     return jsonify({"status": "ok", "deleted": deleted})

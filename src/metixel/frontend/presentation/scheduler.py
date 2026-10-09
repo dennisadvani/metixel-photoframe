@@ -10,7 +10,7 @@ import signal
 import time
 
 from metixel.frontend.presentation.base import BaseEngineState
-from metixel.frontend.presentation.video_state import _VIDEO_IDLE, _VIDEO_PLAYING
+from metixel.frontend.presentation.video_state import _VIDEO_IDLE
 from metixel.shared.models import MediaType
 
 logger = logging.getLogger(__name__)
@@ -151,6 +151,20 @@ class SlideshowSchedulerMixin(BaseEngineState):
     def switch_album(self, album_id: str) -> None:
         logger.info("Album switch requested: %s (handled by backend)", album_id)
 
+    def _vlc_running(self) -> bool:
+        """True while a VLC subprocess is alive in any playback state.
+
+        VLC keeps running through WAITING → PLAYING → SWAPPED (the last
+        state covers the whole second half of the clip, after the
+        last-frame swap), so pause/resume must act on every non-IDLE
+        state — not just PLAYING.
+        """
+        return (
+            self._video_state != _VIDEO_IDLE
+            and self._video_proc is not None
+            and self._video_proc.poll() is None
+        )
+
     def pause(self) -> None:
         """Pause the slideshow.
 
@@ -158,7 +172,7 @@ class SlideshowSchedulerMixin(BaseEngineState):
         so playback freezes in place.
         """
         self._paused = True
-        if self._video_state == _VIDEO_PLAYING and self._video_proc is not None:
+        if self._vlc_running() and not self._video_paused and self._video_proc is not None:
             try:
                 if _SIGSTOP is not None:
                     os.kill(self._video_proc.pid, _SIGSTOP)
@@ -175,14 +189,16 @@ class SlideshowSchedulerMixin(BaseEngineState):
         and the slide timer is reset.
         """
         self._paused = False
-        if self._video_paused and self._video_proc is not None:
+        if self._video_paused and self._video_state != _VIDEO_IDLE and self._video_proc is not None:
             try:
                 if _SIGCONT is not None:
                     os.kill(self._video_proc.pid, _SIGCONT)
-                self._video_paused = False
                 logger.info("VLC resumed via SIGCONT (pid=%d)", self._video_proc.pid)
             except OSError:
                 logger.warning("Failed to SIGCONT VLC", exc_info=True)
+            finally:
+                # Either way the state machine must poll VLC again — a
+                # process that ignored SIGCONT has exited and is reaped.
                 self._video_paused = False
         self._item_start_time = time.monotonic()
         self._write_current_media()

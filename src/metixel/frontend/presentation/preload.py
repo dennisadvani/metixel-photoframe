@@ -120,36 +120,68 @@ class TexturePreloaderMixin(BaseEngineState):
             return None
 
     def _cancel_preload(self) -> None:
-        """Cancel any in-progress preload and discard its result."""
+        """Cancel any in-progress preload and discard its result.
+
+        The worker thread cannot be interrupted mid-decode, so it is told
+        to drop its result (via its cancellation token) and any result
+        already stored is cleared.  ``_preload_thread`` is left in place —
+        :meth:`_preload_into_inactive` treats a cancelled thread as idle.
+        """
         if self._preload_thread is not None and self._preload_thread.is_alive():
             logger.debug("Cancelling stale preload")
+        if self._preload_cancel is not None:
+            self._preload_cancel.set()
+        self._preload_target = None
         with self._preload_lock:
             self._preload_array = None
             self._preload_cache_key = ""
 
     def _preload_into_inactive(self) -> None:
-        """Start preloading the next queue item into the inactive slot."""
+        """Start preloading the next queue item into the inactive slot.
+
+        If a worker is already decoding the *same* item it is left alone.
+        A worker decoding a *different* item (the queue changed under it)
+        is cancelled and a fresh worker is started — previously the engine
+        just returned, so a stale decode could block preloading for good.
+        """
         if not self._queue or self._current_idx < 0:
             return
         next_idx = (self._current_idx + 1) % len(self._queue)
         next_item = self._queue[next_idx]
 
         if self._preload_thread is not None and self._preload_thread.is_alive():
-            return
+            target = self._preload_target
+            if target is not None and target.id == next_item.id:
+                return  # already decoding the right item
+            logger.debug(
+                "Preload target changed (%s → %s) — cancelling stale worker",
+                getattr(target, "original_path", None),
+                next_item.original_path,
+            )
+            self._cancel_preload()
 
+        cancel = threading.Event()
+        self._preload_cancel = cancel
+        self._preload_target = next_item
         self._preload_thread = threading.Thread(
             target=self._preload_worker,
-            args=(next_item,),
+            args=(next_item, cancel),
             daemon=True,
             name="tex-preload",
         )
         self._preload_thread.start()
 
-    def _preload_worker(self, item: MediaItem) -> None:
+    def _preload_worker(self, item: MediaItem, cancel: threading.Event | None = None) -> None:
         """CPU work: load + downscale → numpy array.  Main thread uploads.
 
         For images: loads the JPEG, downscales, stores as numpy.
         For videos: extracts/caches the first frame, loads it the same way.
+
+        Runs on a daemon thread, so it must only ever touch the shared
+        ``_preload_*`` fields (under ``_preload_lock``) — never the
+        texture slots, which belong to the main thread.  *cancel* is
+        checked before the result is stored so a worker whose item was
+        superseded discards its work instead of racing the replacement.
         """
         try:
             from PIL import ImageFile
@@ -161,7 +193,6 @@ class TexturePreloaderMixin(BaseEngineState):
                 if path_to_load is None:
                     with self._preload_lock:
                         self._preload_array = None
-                        self._tex[self._inactive] = None
                     return
             else:
                 path_to_load = item.cached_path
@@ -211,11 +242,16 @@ class TexturePreloaderMixin(BaseEngineState):
             img.close()
 
             with self._preload_lock:
+                if cancel is not None and cancel.is_set():
+                    logger.debug("Preload cancelled — discarding [%s]", path_to_load)
+                    return
                 self._preload_array = arr
                 self._preload_cache_key = str(path_to_load)
             logger.debug("Preload ready [%s]", path_to_load)
         except Exception:
             logger.exception("Preload failed: %s", getattr(item, "cached_path", item.original_path))
+            if cancel is not None and cancel.is_set():
+                return  # a replacement worker owns the pending slot now
             with self._preload_lock:
                 self._preload_array = None
 
@@ -265,6 +301,25 @@ class TexturePreloaderMixin(BaseEngineState):
         if arr is None:
             return
 
+        if not self._queue or self._current_idx < 0:
+            return  # queue emptied while the worker was decoding
+
+        # Only upload if the decoded pixels belong to the item that is
+        # about to be tagged as "next".  The queue can change while the
+        # worker decodes (add/remove/prev/next), and tagging a stale
+        # result with the new next item shows the wrong photo under the
+        # wrong name.  Discard it and decode the right item instead.
+        next_item = self._queue[(self._current_idx + 1) % len(self._queue)]
+        expected_key = self._preload_key_for(next_item)
+        if cache_key != expected_key:
+            logger.debug(
+                "Discarding stale preload %s (next item is %s)",
+                cache_key,
+                expected_key,
+            )
+            self._preload_into_inactive()
+            return
+
         try:
             tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)  # noqa: SIM115
             try:
@@ -278,8 +333,7 @@ class TexturePreloaderMixin(BaseEngineState):
             self._unload_texture(self._tex[self._inactive])
             self._tex[self._inactive] = texture
             # Track which item this preload belongs to.
-            next_idx = (self._current_idx + 1) % len(self._queue)
-            self._tex_item[self._inactive] = self._queue[next_idx]
+            self._tex_item[self._inactive] = next_item
             logger.debug("Preload GPU upload OK: %s tex=%s", cache_key, id(texture))
         except Exception:
             logger.exception("Preload GPU upload failed: %s", cache_key)

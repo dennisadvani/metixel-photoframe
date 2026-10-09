@@ -37,6 +37,16 @@ DEVICE_PASSWORD_MIN_LENGTH = 8
 DEVICE_USER = "pi"
 
 
+def _has_control_chars(value: str) -> bool:
+    """Return whether *value* contains any ASCII control character.
+
+    The password is piped to ``chpasswd`` (``user:pw\\n``) and ``smbpasswd -s``
+    (``pw\\npw\\n``) on stdin, so a newline / carriage return / NUL would
+    terminate or corrupt the record.  Reject the whole C0 range plus DEL.
+    """
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value)
+
+
 def _run_privileged(cmd: list[str], input: str | None = None):
     """Run a password command as root in a fresh, non-hardened namespace.
 
@@ -90,12 +100,16 @@ def change_device_password():
     new_password = body.get("new_password", "")
     confirm = body.get("confirm_password", "")
 
+    if not isinstance(new_password, str) or not isinstance(confirm, str):
+        return jsonify_error("'new_password' and 'confirm_password' must be strings", 400)
     if not new_password:
         return jsonify_error("New password required", 400)
     if len(new_password) < DEVICE_PASSWORD_MIN_LENGTH:
         return jsonify_error(
             f"Password must be at least {DEVICE_PASSWORD_MIN_LENGTH} characters", 400
         )
+    if _has_control_chars(new_password):
+        return jsonify_error("Password must not contain control characters", 400)
     if new_password != confirm:
         return jsonify_error("Passwords do not match", 400)
 
@@ -168,6 +182,8 @@ def set_screen_pin():
 
     pin = body.get("pin", "")
     confirm = body.get("confirm", "")
+    if not isinstance(pin, str) or not isinstance(confirm, str):
+        return jsonify_error("'pin' and 'confirm' must be strings", 400)
     if not validate_pin_input(pin):
         return jsonify_error("PIN must be 4-6 digits", 400)
     if not pins_match(pin, confirm):

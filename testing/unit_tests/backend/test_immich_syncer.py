@@ -337,3 +337,114 @@ class TestImmichSyncer:
         cfg = syncer._state.config
         assert "album_name" not in cfg.sync["immich"]
         assert (tmp_path / "stray.jpg").exists()
+
+
+class _ChunkThenHttpError(FakeResponse):
+    """Streams one chunk, then fails — a partial download."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(status_code=200)
+        self._status = status
+
+    def iter_content(self, chunk_size: int = 1):
+        from types import SimpleNamespace
+
+        import requests
+
+        yield b"partial"
+        raise requests.exceptions.HTTPError(response=SimpleNamespace(status_code=self._status))
+
+
+class TestDownloadTempCleanup:
+    """``.immich_<id>.tmp`` must never survive a failed download."""
+
+    def test_tmp_removed_on_permanent_http_error(self, tmp_path: Path, monkeypatch) -> None:
+        http = FakeHttpGateway()
+        http.route("GET", "/api/assets/asset-1/original", _ChunkThenHttpError(404))
+        syncer = TestImmichSyncer._make_syncer(tmp_path, http)
+        monkeypatch.setattr(syncer, "_check_disk_space", lambda _p: None)
+
+        import pytest
+
+        with pytest.raises(RuntimeError, match="not found"):
+            syncer._download_asset({"id": "asset-1", "originalPath": "/x/p.jpg"}, "out.jpg")
+
+        assert not (tmp_path / ".out.jpg.tmp").exists()
+        assert not (tmp_path / "out.jpg").exists()
+
+    def test_tmp_removed_after_retries_exhausted(self, tmp_path: Path, monkeypatch) -> None:
+        import metixel.backend.sync.immich as immich_mod
+
+        http = FakeHttpGateway()
+        http.route("GET", "/api/assets/asset-1/original", _ChunkThenHttpError(500))
+        syncer = TestImmichSyncer._make_syncer(tmp_path, http)
+        monkeypatch.setattr(syncer, "_check_disk_space", lambda _p: None)
+        monkeypatch.setattr(immich_mod.time, "sleep", lambda _s: None)
+
+        import pytest
+        import requests
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            syncer._download_asset({"id": "asset-1", "originalPath": "/x/p.jpg"}, "out.jpg")
+
+        assert not (tmp_path / ".out.jpg.tmp").exists()
+
+    def test_tmp_removed_on_oserror_mid_write(self, tmp_path: Path, monkeypatch) -> None:
+        http = FakeHttpGateway()
+        http.route(
+            "GET",
+            "/api/assets/asset-1/original",
+            FakeResponse(status_code=200, iter_chunks=(b"part1", b"part2")),
+        )
+        syncer = TestImmichSyncer._make_syncer(tmp_path, http)
+        monkeypatch.setattr(syncer, "_check_disk_space", lambda _p: None)
+
+        import metixel.backend.sync.immich as immich_mod
+
+        def boom(*_a, **_k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(immich_mod.os, "fsync", boom)
+
+        import pytest
+
+        with pytest.raises(OSError):
+            syncer._download_asset({"id": "asset-1", "originalPath": "/x/p.jpg"}, "out.jpg")
+
+        assert not (tmp_path / ".out.jpg.tmp").exists()
+
+    def test_success_leaves_no_tmp(self, tmp_path: Path, monkeypatch) -> None:
+        http = FakeHttpGateway()
+        http.route(
+            "GET",
+            "/api/assets/asset-1/original",
+            FakeResponse(status_code=200, iter_chunks=(b"ok",)),
+        )
+        syncer = TestImmichSyncer._make_syncer(tmp_path, http)
+        monkeypatch.setattr(syncer, "_check_disk_space", lambda _p: None)
+        syncer._download_asset({"id": "asset-1", "originalPath": "/x/p.jpg"}, "out.jpg")
+        assert (tmp_path / "out.jpg").read_bytes() == b"ok"
+        assert not (tmp_path / ".out.jpg.tmp").exists()
+
+
+class TestRunDirFiles:
+    def test_status_and_progress_honour_metixel_run_dir(self, tmp_path: Path, monkeypatch):
+        import json
+
+        from metixel.backend.sync.immich import SyncResult
+
+        run_dir = tmp_path / "rundir"
+        monkeypatch.setenv("METIXEL_RUN_DIR", str(run_dir))
+        http = FakeHttpGateway()
+        syncer = TestImmichSyncer._make_syncer(tmp_path, http)
+
+        syncer._persist_result(SyncResult(started_at=1.0, finished_at=2.0, success=True))
+        syncer._write_progress("downloading", 3, 1, "x.jpg")
+        syncer.cancel()
+
+        assert json.loads((run_dir / "immich_sync_status.json").read_text())["success"] is True
+        assert (run_dir / "immich_sync_progress.json").is_file()
+        assert (run_dir / "immich_sync_cancel").is_file()
+        assert syncer.get_last_result() is not None
+        syncer._clear_progress()
+        assert not (run_dir / "immich_sync_progress.json").exists()

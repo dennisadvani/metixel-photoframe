@@ -47,6 +47,7 @@ devices stay repaired, because `installed_fixups.json` records what has run.
 |---|---|
 | `v1.2.1-gpu-mem.sh` | `config.txt` is the device's own file and needs a reboot — re-asserting it every update would override a user's choice. |
 | `v1.3.0-retire-logging-conf.sh` | One-way removal. `data/etc/logging.conf` is gone from the repo, so a device that never had it is indistinguishable from one already cleaned — the target state cannot be derived. |
+| `v1.2.6-fix-ap-dhcp.sh` | Repairs the captive-portal AP on devices that broadcast the SSID but serve no DHCP. `/etc/dnsmasq.conf` ships as ~27 KB of **comments**, so it always "exists" and only the *order* of its `conf-dir=` line decides whether the AP settings take effect; the SSID rename is also one-way. Both need to know what the device used to be. `reconcile.sh` §6 keeps it converged afterwards. |
 
 ## How it works
 

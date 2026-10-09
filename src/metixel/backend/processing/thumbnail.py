@@ -99,10 +99,13 @@ def generate_image_thumbnail(
         with Image.open(source_path) as handle:
             img: Image.Image = handle
             # Composite transparent images onto black before converting
-            # to RGB — otherwise transparent areas render as white.
-            if img.mode in ("RGBA", "PA"):
+            # to RGB — otherwise transparent areas render as white.  Convert
+            # to RGBA before using the image as its own mask: PIL rejects
+            # "PA"/"P" (palette) images as a paste mask with ValueError.
+            if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+                rgba = img.convert("RGBA")
                 bg = Image.new("RGB", img.size, (0, 0, 0))
-                bg.paste(img, img)
+                bg.paste(rgba, mask=rgba.split()[3])
                 img = bg
             elif img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
@@ -161,6 +164,13 @@ def generate_video_thumbnail(
             with contextlib.suppress(OSError):
                 thumb_path.unlink()
 
+        # Downscale to the thumbnail box (aspect preserved, never upscaled)
+        # so a 4K frame is not written out as a multi-MB "thumbnail" — the
+        # same limit image thumbnails get from ``Image.thumbnail``.
+        scale = (
+            f"scale='min({THUMBNAIL_SIZE},iw)':'min({THUMBNAIL_SIZE},ih)'"
+            ":force_original_aspect_ratio=decrease"
+        )
         cmd = nice_cmd(
             [
                 "ffmpeg",
@@ -170,6 +180,8 @@ def generate_video_thumbnail(
                 "2",
                 "-i",
                 str(source_path),
+                "-vf",
+                scale,
                 "-vframes",
                 "1",
                 "-q:v",

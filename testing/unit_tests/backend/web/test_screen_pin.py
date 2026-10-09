@@ -163,3 +163,13 @@ class TestScreenPinRoutes:
         mock_state.update_config("web", {"password": hash_secret("secret123")})
         resp = client.post("/api/auth/screen-pin", json={"pin": "123456", "confirm": "123456"})
         assert resp.status_code == 401
+
+
+class TestScreenPinRouteBodyTypes:
+    def test_non_string_pin_returns_400(self, client):
+        resp = client.post("/api/auth/screen-pin", json={"pin": 1234, "confirm": 1234})
+        assert resp.status_code == 400
+
+    def test_non_string_confirm_returns_400(self, client):
+        resp = client.post("/api/auth/screen-pin", json={"pin": "1234", "confirm": None})
+        assert resp.status_code == 400

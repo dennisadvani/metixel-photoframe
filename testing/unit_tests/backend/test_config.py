@@ -705,3 +705,78 @@ class TestResolveWatchPaths:
         assert len(paths) == 3
         # All default paths are relative → resolved under the base dir
         assert all(str(p).startswith(str(base)) for p in paths)
+
+
+# ── Display schedule time validation ──────────────────────────────────
+
+
+class TestScheduleTimeValidation:
+    """``display.schedule_on_time`` / ``schedule_off_time`` must always be a
+    parseable ``HH:MM`` once saved — an empty/malformed value posted by the
+    UI used to crash-loop the daemon on the next boot."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("07:00", 420),
+            ("7:05", 425),
+            (" 23:59 ", 23 * 60 + 59),
+            ("00:00", 0),
+        ],
+    )
+    def test_parse_valid(self, raw, expected):
+        from metixel.shared.config import parse_schedule_time
+
+        assert parse_schedule_time(raw) == expected
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["", "7", "07", "24:00", "07:60", "7:5", "ab:cd", "07:00:00", None, 700, ["07:00"]],
+    )
+    def test_parse_invalid_returns_none(self, raw):
+        from metixel.shared.config import parse_schedule_time
+
+        assert parse_schedule_time(raw) is None
+
+    def test_normalise_pads_hour(self):
+        from metixel.shared.config import normalise_schedule_time
+
+        assert normalise_schedule_time("7:05") == "07:05"
+        assert normalise_schedule_time("") is None
+
+    def test_update_rejects_empty_and_keeps_previous(self):
+        from metixel.shared.config import Config
+
+        config = Config()
+        config.update("display", {"schedule_on_time": "08:30"})
+        # The UI posts "" for an empty field — must not be persisted.
+        config.update("display", {"schedule_on_time": "", "schedule_off_time": "25:00"})
+        assert config.display["schedule_on_time"] == "08:30"
+        assert config.display["schedule_off_time"] == "22:00"  # default kept
+
+    def test_update_normalises_shape(self):
+        from metixel.shared.config import Config
+
+        config = Config()
+        config.update("display", {"schedule_on_time": "7:5", "schedule_off_time": "9:30"})
+        # "7:5" is malformed (1-digit minute) → dropped; "9:30" → padded.
+        assert config.display["schedule_on_time"] == "07:00"
+        assert config.display["schedule_off_time"] == "09:30"
+
+    def test_replace_sanitises_display_schedule(self):
+        from metixel.shared.config import Config
+
+        config = Config()
+        data = config.to_dict()
+        data["display"]["schedule_on_time"] = ""
+        data["display"]["schedule_off_time"] = "8:15"
+        config.replace(data)
+        assert config.display["schedule_on_time"] == "07:00"
+        assert config.display["schedule_off_time"] == "08:15"
+
+    def test_update_does_not_mutate_caller_dict(self):
+        from metixel.shared.config import Config
+
+        values = {"schedule_on_time": ""}
+        Config().update("display", values)
+        assert values == {"schedule_on_time": ""}

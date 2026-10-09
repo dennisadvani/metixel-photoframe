@@ -369,15 +369,38 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                     return;
                 }
 
-                // Save the timeout first (always), then set/clear the password.
-                await apiPut("/config/web", { session_timeout_minutes: timeout });
-                // Always call /auth/password — with a value it sets/changes the
-                // password; with an empty value it clears it (auth disabled).
+                // Save the timeout first (always).
+                var timeoutResult = await apiPut("/config/web", { session_timeout_minutes: timeout });
+                // Only touch the password when the user actually typed one.
+                // Saving just the timeout must NOT silently clear the password
+                // (clearing is an explicit action via the dedicated button).
+                if (!pw) {
+                    showToast(timeoutResult ? "Session timeout saved" : "Failed to save session timeout",
+                              timeoutResult ? "success" : "error");
+                    return;
+                }
                 var pwResult = await apiPost("/auth/password", { password: pw });
                 if (pwResult && pwResult.status === "ok") {
-                    showToast(pw ? "Web password set" : "Web password cleared", "success");
+                    showToast("Web password set", "success");
                 } else {
                     showToast("Failed to update web password: " + ((pwResult && pwResult.message) || "Unknown error"), "error");
+                }
+                document.getElementById("cfg-web-password").value = "";
+                document.getElementById("cfg-web-password-confirm").value = "";
+            });
+
+            // Explicit "clear web password" action (auth disabled).
+            document.getElementById("btn-clear-web-password")?.addEventListener("click", async () => {
+                var ok = await confirmDialog(
+                    "Remove the web dashboard password? Anyone on the network will be able to open this dashboard.",
+                    { title: "Clear web password?", okText: "Clear password", danger: true }
+                );
+                if (!ok) return;
+                var result = await apiPost("/auth/password", { password: "" });
+                if (result && result.status === "ok") {
+                    showToast("Web password cleared", "success");
+                } else {
+                    showToast("Failed to clear web password: " + ((result && result.message) || "Unknown error"), "error");
                 }
                 document.getElementById("cfg-web-password").value = "";
                 document.getElementById("cfg-web-password-confirm").value = "";
@@ -429,12 +452,8 @@ import { loadUpdateStatus, bindUpdateControls } from "./updates-page.js";
                         "Cache cleared: " + result.deleted_files + " files, " + result.freed_mb + " MB freed. Restarting services…",
                         "success", 5000
                     );
-                    // Restart services to prevent stale cached-file errors
-                    try {
-                        await apiPost("/system/restart");
-                    } catch (_) {
-                        // Expected — the backend is restarting, so the request may fail
-                    }
+                    // The cache-clear endpoint already schedules a restart of
+                    // both services — no second /system/restart call needed.
                 } else {
                     restoreCache();
                     showToast("Failed to clear image cache", "error");

@@ -127,7 +127,9 @@ class FrontendLiveness:
         ``reason``     - human-readable explanation for the OTA log
         ``age_seconds``- how long ago the heartbeat was written (``None`` if absent)
         ``pid``        - frontend process id (``None`` if unknown)
-        ``boot_id``    - boot identifier the heartbeat was written under
+        ``boot_id``    - the CURRENT boot identifier the heartbeat is checked
+                         against (``None`` if unknown) — not the one stored in
+                         the heartbeat file
         """
         now = time.monotonic()
         data = self._read_heartbeat()

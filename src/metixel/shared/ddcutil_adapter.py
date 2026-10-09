@@ -43,6 +43,25 @@ __all__ = [
 # 15 s gives ample headroom while still failing eventually on a dead bus.
 _DEFAULT_TIMEOUT = 15.0
 
+#: ddcutil's dynamic sleep algorithm (``--enable-dynamic-sleep``, the default)
+#: adapts its inter-command timings and persists what it learns in its cache.
+#: With a COLD cache it starts from conservative assumptions and can exhaust its
+#: retry budget on a panel that is perfectly capable of answering — measured on
+#: a Pi 4 driving a FALCON MCCS 2.0 panel:
+#:
+#:     cold cache, default               → "Maximum DDC retries exceeded", rc=1
+#:     cold cache, --disable-dynamic-sleep → succeeds, rc=0
+#:
+#: A cold cache is not an edge case: ``XDG_CACHE_HOME`` points into
+#: ``data/cache/ddcutil``, which an update can clear, so a device that worked
+#: yesterday can fail today with the same hardware. Fixed timings are also
+#: FASTER here (0.14 s warm vs 0.42 s), so there is no trade-off on this
+#: hardware — the adaptive path only costs us.
+#:
+#: Passed for every subcommand (detect/capabilities/getvcp/setvcp) because the
+#: failure is a property of the bus, not of one command.
+_DISABLE_DYNAMIC_SLEEP = "--disable-dynamic-sleep"
+
 _DISPLAY_RE = re.compile(r"^Display\s+(\d+)\b", re.IGNORECASE)
 _MODEL_RE = re.compile(r"^\s*Model:\s*(.+)$", re.IGNORECASE)
 _MFG_RE = re.compile(r"^\s*Mfg\s*id:\s*(.+)$", re.IGNORECASE)
@@ -388,7 +407,12 @@ class DdcutilAdapter(DdcController):
         # The equivalent environment variable is NOT honoured by ddcutil —
         # only the command-line option works, so it must be passed here rather
         # than set once in the systemd unit.
-        cmd = [self._binary, *args, "--syslog", "NEVER"]
+        #
+        # ``--disable-dynamic-sleep`` is placed alongside it for the same
+        # reason: it must be on every invocation, and like ``--syslog`` it is
+        # accepted after the subcommand arguments.  See the constant's comment
+        # for the cold-cache failure it prevents.
+        cmd = [self._binary, *args, "--syslog", "NEVER", _DISABLE_DYNAMIC_SLEEP]
         env = self._subprocess_env()
         try:
             result = self._runner(

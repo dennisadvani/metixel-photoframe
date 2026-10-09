@@ -8,7 +8,9 @@ endpoints for configuration, media management, and system monitoring.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+from urllib.parse import urlsplit
 
 from flask import (
     Flask,
@@ -23,6 +25,7 @@ from flask import (
 from metixel import __version__
 from metixel.backend.state import StateManager
 from metixel.backend.web.auth import WebAuthService
+from metixel.backend.web.helpers import jsonify_error
 from metixel.backend.web.media_service import MAX_UPLOAD_BYTES
 from metixel.shared.ipc import IPCClient
 
@@ -36,18 +39,61 @@ logger = logging.getLogger(__name__)
 #:                                 exempt — it requires an authenticated session)
 #:   * /api/slideshow-started — frontend renderer loopback signal (urllib,
 #:                              no cookies)
-#:   * /api/network/*         — captive-portal Wi-Fi setup must work before
-#:                              any password is set
-#:   * /api/control           — IPC control commands (trusted local process)
 _API_AUTH_EXEMPT_PREFIXES = (
     "/api/health",
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/me",
     "/api/slideshow-started",
-    "/api/network/",
-    "/api/control",
 )
+
+#: The ONLY network routes the captive portal (templates/captive.html) calls.
+#: They are exempt from the auth gate solely while the AP / PIN gate is
+#: active (``_is_ap_mode()``) — a phone on the setup hotspot has no way to
+#: log in.  Every other /api/network/* route (forget, radio, ap-start,
+#: ap-stop, ...) always requires an authenticated session.
+_CAPTIVE_PORTAL_PATHS = frozenset(
+    {
+        "/api/network/status",
+        "/api/network/scan",
+        "/api/network/validate-pin",
+        "/api/network/connect",
+    }
+)
+
+#: /api/control is exempt only for loopback callers (trusted local
+#: processes on the Pi itself).  The dashboard JS calls it from an
+#: authenticated browser session, which passes the normal gate.
+_CONTROL_PATH = "/api/control"
+
+#: Request methods that can change state and therefore get the same-origin
+#: (CSRF) check in ``_csrf_gate``.
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _is_loopback(addr: str | None) -> bool:
+    """Return whether *addr* is a loopback address (IPv4 or IPv6)."""
+    if not addr:
+        return False
+    try:
+        return ipaddress.ip_address(addr.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
+
+
+def _header_host(value: str | None) -> str | None:
+    """Return the lower-cased ``host[:port]`` from an Origin/Referer URL.
+
+    Returns ``None`` when the header is absent or has no parseable host
+    (e.g. ``Origin: null``) so the caller can treat it as a mismatch.
+    """
+    if not value:
+        return None
+    try:
+        netloc = urlsplit(value.strip()).netloc
+    except ValueError:
+        return None
+    return netloc.lower() or None
 
 
 def _is_ap_mode() -> bool:
@@ -147,12 +193,18 @@ def create_app(
             return None
         if path.startswith(_API_AUTH_EXEMPT_PREFIXES):
             return None
+        if path == _CONTROL_PATH and _is_loopback(request.remote_addr):
+            return None
         service = current_app.config.get("METIXEL_AUTH")
         if service is None or not service.is_enabled():
             return None
         from metixel.backend.web.routes.auth import is_authenticated
 
         if is_authenticated():
+            return None
+        # Captive-portal routes stay reachable while the setup hotspot / PIN
+        # gate is up (checked last — it may spawn systemctl).
+        if path in _CAPTIVE_PORTAL_PATHS and _is_ap_mode():
             return None
         return (
             jsonify(
@@ -164,6 +216,38 @@ def create_app(
             ),
             401,
         )
+
+    # ── CSRF gate ──────────────────────────────────────────────────────────
+    # Lightweight same-origin check for state-changing /api/* requests.  The
+    # session cookie is SameSite=Lax, but a cross-site top-level POST form or
+    # an old browser could still carry it — so require that a browser-supplied
+    # Origin (or, failing that, Referer) names this host.  Requests with
+    # neither header (curl, tests, the frontend's urllib signal) are allowed.
+    @app.before_request
+    def _csrf_gate() -> tuple[Response, int] | None:
+        if request.method not in _STATE_CHANGING_METHODS:
+            return None
+        if not request.path.startswith("/api/"):
+            return None
+        expected = request.host.lower()
+        origin = request.headers.get("Origin")
+        if origin is not None:
+            if _header_host(origin) != expected:
+                logger.warning(
+                    "Rejected cross-origin %s %s from Origin %r",
+                    request.method,
+                    request.path,
+                    origin,
+                )
+                return jsonify_error("Cross-origin request rejected", 403)
+            return None
+        referer = request.headers.get("Referer")
+        if referer is not None and _header_host(referer) != expected:
+            logger.warning(
+                "Rejected cross-origin %s %s from Referer %r", request.method, request.path, referer
+            )
+            return jsonify_error("Cross-origin request rejected", 403)
+        return None
 
     # Register route blueprints
     from metixel.backend.web.routes.auth import auth_bp

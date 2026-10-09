@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,46 @@ from metixel.shared.platform import detect_pi_model as _detect_pi_model
 from metixel.shared.system_stats import available_ram_bytes as _available_ram_bytes
 
 logger = logging.getLogger(__name__)
+
+#: 10-/12-bit pixel formats.  Matched on the bit-depth suffix (``yuv420p10le``,
+#: ``p010``) — NOT a bare substring test, which misclassified ``yuv410p`` as
+#: 10-bit and would force a needless transcode.
+_PIX_FMT_10BIT = re.compile(r"10le|10be|p010")
+_PIX_FMT_12BIT = re.compile(r"12le|12be|p012")
+
+
+def _normalise_level(raw: object) -> float | str:
+    """Normalise ffprobe's H.264 ``level`` to a comparable float.
+
+    ffprobe reports the level as an int ``level_idc`` (``40`` → 4.0).  The
+    special value ``9`` means level **1b** (below 1.1 — mapped to ``1.0``),
+    and a negative value (``-99``) means unknown → ``""``.  Strings such as
+    ``"5.1"`` are parsed; ``"1b"`` maps like the int.  Unparseable → ``""``.
+    """
+    if isinstance(raw, bool):
+        return ""
+    if isinstance(raw, int):
+        if raw < 0:
+            return ""
+        if raw == 9:
+            return 1.0
+        if raw > 9:
+            return float(raw) / 10.0
+        return float(raw)
+    if isinstance(raw, float):
+        return raw if raw >= 0 else ""
+    if isinstance(raw, str):
+        text = raw.strip().lower()
+        if not text:
+            return ""
+        if text == "1b":
+            return 1.0
+        try:
+            value = float(text)
+        except ValueError:
+            return ""
+        return value if value >= 0 else ""
+    return ""
 
 
 def available_ram_bytes() -> int | None:
@@ -68,15 +109,8 @@ def probe_video(path: Path, timeout: int) -> dict:
             info["codec_name"] = stream.get("codec_name", "")
             info["pix_fmt"] = stream.get("pix_fmt", "")
             info["h264_profile"] = stream.get("profile", "")
-            info["h264_level"] = stream.get("level", "")
-            # Normalise ffprobe level: integer 40 → float 4.0
-            if isinstance(info["h264_level"], int) and info["h264_level"] > 9:
-                info["h264_level"] = float(info["h264_level"]) / 10.0
-            elif info["h264_level"]:
-                try:
-                    info["h264_level"] = float(info["h264_level"])
-                except (ValueError, TypeError):
-                    info["h264_level"] = ""
+            # Normalise ffprobe level: integer 40 → float 4.0, 9 → 1b (1.0)
+            info["h264_level"] = _normalise_level(stream.get("level", ""))
             info["color_primaries"] = stream.get("color_primaries", "")
             info["color_trc"] = stream.get("color_transfer", "")
             info["colorspace"] = stream.get("color_space", "")
@@ -100,12 +134,12 @@ def probe_video(path: Path, timeout: int) -> dict:
         info["bitrate"] = int(fmt["bit_rate"]) // 1_000_000
     info["duration"] = float(fmt.get("duration", 0))
 
-    # Detect color depth from pixel format
-    pf = info["pix_fmt"]
-    if pf and "10" in pf:
-        info["color_depth"] = 10
-    elif pf and "12" in pf:
+    # Detect color depth from pixel format (yuv420p10le, p010, yuv444p12le …)
+    pf = info["pix_fmt"] or ""
+    if _PIX_FMT_12BIT.search(pf):
         info["color_depth"] = 12
+    elif _PIX_FMT_10BIT.search(pf):
+        info["color_depth"] = 10
 
     return info
 

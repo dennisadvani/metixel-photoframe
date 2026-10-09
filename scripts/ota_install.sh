@@ -116,6 +116,14 @@ if [ -f "$REPO/requirements-system.txt" ]; then
     done < "$REPO/requirements-system.txt"
 fi
 
+# ── Restore execute bits on the release's scripts ──
+# The cage unit execs scripts/cage_launch.sh directly, so a release whose
+# scripts lost their mode bit (a checkout touched from Windows, a clone with
+# core.fileMode=false) leaves metixel-cage dead and every update rolls back.
+# Belt and braces: never trust the mode git delivered.
+chmod 0755 "$REPO"/scripts/*.sh 2>/dev/null \
+    || _fail "could not set execute bits on $REPO/scripts/*.sh"
+
 # ── Reinstall Python package ──
 # `--ignore-installed` here too: `-e .` pulls in the same apt-provided runtime
 # deps (numpy, Pillow), so the same "cannot uninstall an apt package" failure

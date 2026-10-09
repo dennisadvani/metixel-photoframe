@@ -15,7 +15,7 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="manifest" href="/static/favicon/site.webmanifest">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@400&display=swap">
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=43">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=45">
 </head>
 <body>
     <!-- Navigation Drawer Backdrop -->
@@ -397,7 +397,7 @@
                         <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Captive Portal</span>
                     </div>
                     <div class="mt-5 border-t border-border/60"></div>
-                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">When no Wi-Fi is available, the frame creates its own hotspot "Metixel-Setup" so you can connect with your phone and configure Wi-Fi.</p>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">When no Wi-Fi is available, the frame creates its own hotspot so you can connect with your phone and configure Wi-Fi. The name ends with the last 6 digits of this frame's Wi-Fi MAC <span class="text-text-secondary">(Metixel-Setup-A1B2C3)</span> so several frames in one house can be told apart.</p>
                     <div class="setting-row">
                         <div class="setting-label">
                             <span class="text-[0.85rem] font-medium text-text-secondary">WiFi Country Code</span>
@@ -858,6 +858,7 @@
                         <span class="material-symbols-outlined" style="font-size:1.1rem;color:var(--text-muted)">schedule</span>
                         <span class="font-semibold text-[0.9rem] text-text-secondary">Server Time</span>
                         <span id="server-clock" class="font-mono text-[1.05rem] ml-1 text-text">--:--:--</span>
+                        <span id="server-clock-tz" class="text-[0.72rem] text-text-muted"></span>
                     </div>
                     <div class="setting-row">
                         <div class="setting-label">
@@ -865,8 +866,8 @@
                         </div>
                         <div class="setting-control">
                             <div class="flex gap-2 items-center">
-                                <select id="cfg-timezone" class="select-premium input-premium w-56">
-                                    <option value="">Auto-detect</option>
+                                <select id="cfg-timezone" class="select-premium input-premium w-56" aria-label="System timezone">
+                                    <option value="">Loading…</option>
                                 </select>
                                 <button id="btn-save-timezone" class="btn--sm btn--primary" title="Apply timezone">Set</button>
                             </div>
@@ -892,7 +893,10 @@
                     <div class="flex justify-end mt-2">
                         <button id="btn-add-ntp-server" class="btn--secondary btn--sm">+ Add Server</button>
                     </div>
-                    <div class="flex justify-end mt-2">
+                    <div class="flex justify-end gap-2 flex-wrap mt-2">
+                        <button id="btn-sync-time" class="btn--secondary" title="Contact the NTP servers and set the clock now">
+                            <span class="material-symbols-outlined" style="font-size:1.1rem;vertical-align:middle">sync</span> Sync Time Now
+                        </button>
                         <button id="btn-save-time" class="btn--primary">Save Time Settings</button>
                     </div>
 
@@ -1468,7 +1472,8 @@
                             </select>
                         </div>
                     </div>
-                    <div class="flex justify-end mt-2">
+                    <div class="flex justify-end gap-2 mt-2">
+                        <button id="btn-clear-web-password" class="btn--secondary">Clear Web Password</button>
                         <button id="btn-save-web-password" class="btn--primary">Save Web Password</button>
                     </div>
 
@@ -1642,6 +1647,9 @@
                     <button id="btn-browser-create" type="button" class="btn--secondary btn--sm" style="margin:0;flex-shrink:0">
                         <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">create_new_folder</span> Create
                     </button>
+                    <button id="btn-browser-delete" type="button" class="btn--danger btn--sm" style="margin:0;flex-shrink:0" aria-label="Delete the folder you are viewing" title="Delete the folder you are viewing">
+                        <span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">delete</span> Delete
+                    </button>
                 </div>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;flex-wrap:wrap">
@@ -1665,6 +1673,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=69"></script>
+    <script type="module" src="/static/js/main.js?v=71"></script>
 </body>
 </html>

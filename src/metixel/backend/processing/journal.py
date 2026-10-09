@@ -73,6 +73,15 @@ class ProcessingJournal:
                 with open(self._path, encoding="utf-8") as f:
                     data = json.load(f)
                 raw = data.get("files", {}) if isinstance(data, dict) else {}
+                if not isinstance(raw, dict):
+                    # A hand-edited / corrupt journal (``"files": []`` or a
+                    # string) is treated as empty rather than crashing the
+                    # daemon at startup.
+                    logger.warning(
+                        "Processing journal %s has a non-object 'files' entry — ignoring",
+                        self._path,
+                    )
+                    raw = {}
                 self._entries = {
                     str(key): value for key, value in raw.items() if isinstance(value, dict)
                 }
@@ -82,7 +91,7 @@ class ProcessingJournal:
                         len(self._entries),
                         self._path,
                     )
-        except (OSError, ValueError):
+        except (OSError, ValueError, AttributeError, TypeError):
             logger.warning("Could not load processing journal from %s", self._path)
 
     def _persist(self) -> None:

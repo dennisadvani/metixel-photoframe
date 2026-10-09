@@ -37,14 +37,16 @@ from metixel.backend.state import StateManager
 from metixel.shared.display import effective_screen_size
 from metixel.shared.io import merge_json
 from metixel.shared.models import MediaItem, MediaType, TranscodeStatus
-from metixel.shared.paths import resolve_install_path
+from metixel.shared.paths import resolve_install_path, run_path
 from metixel.shared.system_stats import read_meminfo, read_system_stats
 
 logger = logging.getLogger(__name__)
 
 # Progress file written during optimisation — read by the frontend
-# so it can show a progress bar during initial processing.
-PROCESSING_STATUS_PATH = "/run/metixel/processing_status.json"
+# so it can show a progress bar during initial processing.  Resolved
+# through :func:`run_path` at call time (honours ``METIXEL_RUN_DIR``) so
+# the writer and the web-layer readers always agree on the location.
+PROCESSING_STATUS_FILE = "processing_status.json"
 
 
 def _write_progress(phase: str, total: int, processed: int, current_file: str = "") -> None:
@@ -59,7 +61,7 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     """
     try:
         merge_json(
-            PROCESSING_STATUS_PATH,
+            run_path(PROCESSING_STATUS_FILE),
             lambda data: {
                 "active": phase,
                 "phases": {
@@ -87,6 +89,10 @@ class OptimisationQueue:
     # How many items to flush to the playlist at once (avoids the frontend
     # waiting for ALL files to finish before showing anything).
     _FLUSH_EVERY = 6
+
+    # Pause after an unexpected error in the worker loop before retrying, so
+    # a persistent fault (e.g. an unwritable cache dir) can't spin the CPU.
+    _ERROR_BACKOFF_SECONDS = 1.0
 
     #: Known H.264 codec names (lowercase) that skip transcoding when the
     #: video is also within the resolution threshold.
@@ -124,6 +130,11 @@ class OptimisationQueue:
         # Track whether initial processing is done
         self._initial_done: bool = False
 
+        # When config thresholds / resource usage were last refreshed / logged
+        # (monotonic seconds; 0 = never).
+        self._last_config_refresh: float = 0.0
+        self._last_resource_log: float = 0.0
+
         # Cumulative progress counters — track total backlog across
         # batches so progress bars show the full queue, not just the
         # current batch of 6.
@@ -144,51 +155,60 @@ class OptimisationQueue:
         self._cleanup_partial_transcodes()
         logger.info("OptimisationQueue worker started")
 
-        # Track when we last refreshed config thresholds
-        _last_config_refresh = 0.0
-        # Track when we last logged resource usage
-        _last_resource_log = 0.0
-
         while self._running:
-            # Refresh config thresholds periodically (every 30s) so
-            # web UI changes take effect without a backend restart.
-            now = time.monotonic()
-            if now - _last_config_refresh >= 30.0:
-                self.reload_config()
-                _last_config_refresh = now
-
-            # Log system resources every 30s for debugging
-            if now - _last_resource_log >= 30.0:
-                self._log_resources()
-                _last_resource_log = now
-
-            # Drain incoming items into the appropriate queues
-            self._classify_incoming()
-
-            # Process image queue first, then video queue
-            self._process_image_queue()
-            self._process_video_queue()
-
-            # If nothing left to do, wait for new items
-            with self._queue_lock:
-                pending = len(self._image_queue) + len(self._video_queue)
-            with self._incoming_lock:
-                pending += len(self._incoming)
-
-            if pending == 0:
-                if not self._initial_done:
-                    self._initial_done = True
-                    logger.info("OptimisationQueue: initial processing complete")
-                # Always write completion so the UI reflects the current state.
-                _write_progress("complete", 0, 0, "")
-                # Wait for wake event (with timeout to allow clean shutdown)
-                self._wake.wait(timeout=5.0)
-                self._wake.clear()
-            else:
-                # Brief sleep to avoid busy-waiting
-                time.sleep(0.1)
+            # One iteration is guarded like FolderWatcher.run / ImmichSyncer.run:
+            # an unexpected exception (e.g. a FileNotFoundError race between a
+            # cache-size check and "Clear cache" deleting the file) must not
+            # kill this thread — with the worker dead, ``is_busy`` would stay
+            # True forever and the folder watcher would never scan again.
+            try:
+                self._run_once()
+            except Exception:
+                logger.exception("OptimisationQueue worker error — continuing")
+                time.sleep(self._ERROR_BACKOFF_SECONDS)
+                continue
 
         logger.info("OptimisationQueue worker stopped")
+
+    def _run_once(self) -> None:
+        """A single pass of the worker loop (see :meth:`run`)."""
+        # Refresh config thresholds periodically (every 30s) so
+        # web UI changes take effect without a backend restart.
+        now = time.monotonic()
+        if now - self._last_config_refresh >= 30.0:
+            self.reload_config()
+            self._last_config_refresh = now
+
+        # Log system resources every 30s for debugging
+        if now - self._last_resource_log >= 30.0:
+            self._log_resources()
+            self._last_resource_log = now
+
+        # Drain incoming items into the appropriate queues
+        self._classify_incoming()
+
+        # Process image queue first, then video queue
+        self._process_image_queue()
+        self._process_video_queue()
+
+        # If nothing left to do, wait for new items
+        with self._queue_lock:
+            pending = len(self._image_queue) + len(self._video_queue)
+        with self._incoming_lock:
+            pending += len(self._incoming)
+
+        if pending == 0:
+            if not self._initial_done:
+                self._initial_done = True
+                logger.info("OptimisationQueue: initial processing complete")
+            # Always write completion so the UI reflects the current state.
+            _write_progress("complete", 0, 0, "")
+            # Wait for wake event (with timeout to allow clean shutdown)
+            self._wake.wait(timeout=5.0)
+            self._wake.clear()
+        else:
+            # Brief sleep to avoid busy-waiting
+            time.sleep(0.1)
 
     def stop(self) -> None:
         """Signal the worker loop to stop."""
@@ -605,7 +625,13 @@ class OptimisationQueue:
         the cache is missing or too small (i.e. real work will run).
         """
         cached = item.cached_path
-        return not (cached.is_file() and cached.stat().st_size >= 1024)
+        try:
+            return not (cached.is_file() and cached.stat().st_size >= 1024)
+        except OSError:
+            # Raced with "Clear cache" (or the file vanished) between the
+            # is_file() and stat() calls — the cache is gone, so real work
+            # will run.
+            return True
 
     def _video_needs_optimisation(self, item: MediaItem) -> bool:
         """Check whether a video needs transcoding.

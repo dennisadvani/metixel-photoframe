@@ -314,11 +314,45 @@ class TestDdcutilAdapter:
 
         assert runner.calls, "runner should have been called"
         for cmd in runner.calls:
-            # Trailing position: all four subcommands accept the flag there,
+            # Trailing positions: all four subcommands accept these flags there,
             # and it keeps cmd[1] as the subcommand so fakes keyed on cmd[1:]
             # still match (see FakeRunner).
-            assert cmd[-2:] == ["--syslog", "NEVER"], (
-                f"{cmd!r} is missing the trailing --syslog NEVER"
-            )
+            assert "--syslog" in cmd and "NEVER" in cmd, f"{cmd!r} is missing --syslog NEVER"
             # The subcommand must remain in position 1.
             assert cmd[1] in {"detect", "capabilities", "getvcp", "setvcp"}
+
+    def test_every_call_disables_dynamic_sleep(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``--disable-dynamic-sleep`` must be passed on every invocation.
+
+        With a COLD cache ddcutil's adaptive sleep algorithm exhausts its retry
+        budget on panels that answer fine, so ``capabilities`` returns nothing
+        and the UI shows no monitor controls at all.  Measured on a Pi 4 with a
+        FALCON MCCS 2.0 panel:
+
+            cold cache, default                 → "Maximum DDC retries exceeded"
+            cold cache, --disable-dynamic-sleep → succeeds
+
+        A cold cache is reachable in normal use because the cache lives under
+        ``data/cache/ddcutil`` and an update can clear it, so this is a
+        REGRESSION GUARD rather than a preference.
+        """
+        from metixel.shared.ddcutil_adapter import DdcutilAdapter
+
+        monkeypatch.setattr(
+            "metixel.shared.ddcutil_adapter.shutil.which",
+            lambda _name: "/usr/bin/ddcutil",
+        )
+        runner = FakeRunner(
+            {
+                ("detect",): (0, "Display 1\n   I2C bus:  /dev/i2c-2\n", ""),
+                ("getvcp", "0x10", "--display", "1"): (0, "current value = 50\n", ""),
+            }
+        )
+        adapter = DdcutilAdapter(runner=runner)
+
+        adapter.detect()
+        adapter.get_vcp(1, 0x10)
+
+        assert runner.calls, "runner should have been called"
+        for cmd in runner.calls:
+            assert "--disable-dynamic-sleep" in cmd, f"{cmd!r} is missing --disable-dynamic-sleep"

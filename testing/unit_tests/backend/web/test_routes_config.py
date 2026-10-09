@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # GET /api/config — full config
@@ -522,3 +525,98 @@ class TestSystemCommands:
         assert resp.status_code == 200
         _wait_for_call(fake)
         assert fake.call_args[0][0][:3] == ["sudo", "-n", "shutdown"]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/config/network/apply-wifi-country
+# ---------------------------------------------------------------------------
+
+
+class TestApplyWifiCountry:
+    """``iw reg set`` is a side effect, so it lives behind a POST — a GET on
+    the network section must never run it."""
+
+    def test_post_runs_iw_reg_set(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock(return_value=SimpleNamespace(returncode=0))
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        resp = client.post("/api/config/network/apply-wifi-country", json={"country": "au"})
+        assert resp.status_code == 200
+        assert json.loads(resp.data) == {"status": "ok", "country": "AU"}
+        assert fake.call_args[0][0] == ["sudo", "iw", "reg", "set", "AU"]
+
+    @pytest.mark.parametrize("country", ["", "A", "AUS", "A1", "a-", 12, None, ["A", "U"]])
+    def test_invalid_country_rejected(self, client, monkeypatch, country):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock()
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        resp = client.post("/api/config/network/apply-wifi-country", json={"country": country})
+        assert resp.status_code == 400
+        fake.assert_not_called()
+
+    def test_get_network_section_has_no_side_effect(self, client, monkeypatch):
+        import metixel.backend.web.routes.config as config_mod
+
+        fake = mock.MagicMock()
+        monkeypatch.setattr(config_mod.subprocess, "run", fake)
+        resp = client.get("/api/config/network?apply_wifi_country=AU")
+        assert resp.status_code == 200
+        fake.assert_not_called()
+
+
+class TestNtpServerValidation:
+    """Each ``servers`` entry becomes an ``NTP=`` line, so it must be a
+    single whitespace-free string."""
+
+    @pytest.mark.parametrize(
+        "servers",
+        [
+            ["0.pool.ntp.org\nNTP=evil"],
+            ["a b"],
+            [123],
+            [None],
+            ["ok.example", "bad\tone"],
+        ],
+    )
+    def test_bad_entries_rejected(self, client, monkeypatch, servers):
+        import metixel.backend.web.routes.time as time_mod
+
+        fake = mock.MagicMock()
+        monkeypatch.setattr(time_mod.subprocess, "run", fake)
+        resp = client.post("/api/time/ntp", json={"enabled": True, "servers": servers})
+        assert resp.status_code == 400
+        fake.assert_not_called()
+
+    def test_timezone_non_string_rejected(self, client):
+        resp = client.post("/api/time/timezone", json={"timezone": ["UTC"]})
+        assert resp.status_code == 400
+
+    def test_temp_file_removed_when_copy_fails(self, client, monkeypatch, tmp_path):
+        import subprocess as sp
+        import tempfile
+
+        import metixel.backend.web.routes.time as time_mod
+
+        created: list[str] = []
+        orig = tempfile.NamedTemporaryFile
+
+        def tracking_ntf(*args, **kwargs):
+            kwargs.setdefault("dir", str(tmp_path))
+            tf = orig(*args, **kwargs)
+            created.append(tf.name)
+            return tf
+
+        # The route imports tempfile inside the handler, so patch the stdlib.
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", tracking_ntf)
+
+        def failing_run(cmd, **kwargs):
+            if cmd[:3] == ["sudo", "-n", "cp"]:
+                raise sp.CalledProcessError(1, cmd, output="", stderr="denied")
+            return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+        monkeypatch.setattr(time_mod.subprocess, "run", failing_run)
+        resp = client.post("/api/time/ntp", json={"enabled": True, "servers": ["x.example"]})
+        assert resp.status_code == 500
+        assert created and not Path(created[0]).exists()

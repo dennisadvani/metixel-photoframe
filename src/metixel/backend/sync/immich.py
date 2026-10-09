@@ -28,7 +28,7 @@ import requests
 
 from metixel.backend.state import StateManager
 from metixel.shared.adapters import RequestsHttpGateway
-from metixel.shared.paths import resolve_install_path
+from metixel.shared.paths import resolve_install_path, run_path
 from metixel.shared.ports import HttpGateway
 
 logger = logging.getLogger(__name__)
@@ -44,12 +44,28 @@ _API_ALBUMS = "/api/albums"
 _API_SEARCH_METADATA = "/api/search/metadata"
 _API_ASSET_DOWNLOAD = "/api/assets/{asset_id}/original"
 
+# Runtime files under ``run_dir()`` (``/run/metixel`` on the Pi, or
+# ``METIXEL_RUN_DIR``).  Resolved through :func:`run_path` at call time so
+# the writer and the web-layer readers always agree on the location.
+#
 # The status file written after each sync (for the web dashboard).
-_SYNC_STATUS_FILE = "/run/metixel/immich_sync_status.json"
+_SYNC_STATUS_FILE = "immich_sync_status.json"
 # Live progress file updated during a sync cycle.
-_SYNC_PROGRESS_FILE = "/run/metixel/immich_sync_progress.json"
+_SYNC_PROGRESS_FILE = "immich_sync_progress.json"
 # Cancel flag — touch this file to request cancellation.
-_SYNC_CANCEL_FILE = "/run/metixel/immich_sync_cancel"
+_SYNC_CANCEL_FILE = "immich_sync_cancel"
+
+
+def _sync_status_path() -> Path:
+    return run_path(_SYNC_STATUS_FILE)
+
+
+def _sync_progress_path() -> Path:
+    return run_path(_SYNC_PROGRESS_FILE)
+
+
+def _sync_cancel_path() -> Path:
+    return run_path(_SYNC_CANCEL_FILE)
 
 
 # ── Data classes ────────────────────────────────────────────────────────────
@@ -210,7 +226,7 @@ class ImmichSyncer:
             self._cancel_requested = True
         # Also touch the cancel file for external processes
         with contextlib.suppress(OSError):
-            Path(_SYNC_CANCEL_FILE).write_text("1")
+            _sync_cancel_path().write_text("1")
         logger.info("Sync cancellation requested")
 
     def sync_once(self) -> SyncResult:
@@ -231,8 +247,9 @@ class ImmichSyncer:
         """Return the result of the most recent sync, if any."""
         # Also try reading the persisted status file (survives restarts)
         try:
-            if os.path.isfile(_SYNC_STATUS_FILE):
-                with open(_SYNC_STATUS_FILE) as f:
+            status_path = _sync_status_path()
+            if status_path.is_file():
+                with open(status_path) as f:
                     data = json.load(f)
                 if (
                     self._last_result is None
@@ -300,7 +317,7 @@ class ImmichSyncer:
             self._cancel_requested = False
             # Remove stale cancel file
             with contextlib.suppress(OSError):
-                Path(_SYNC_CANCEL_FILE).unlink(missing_ok=True)
+                _sync_cancel_path().unlink(missing_ok=True)
 
         try:
             return self._do_sync()
@@ -752,6 +769,31 @@ class ImmichSyncer:
 
         logger.debug("Downloading asset %s → %s", asset_id, filename)
 
+        # The temp file is removed in ``finally`` so that ANY failure —
+        # a raised HTTP/timeout/connection error, an OSError mid-write, or a
+        # partial download — never leaves a stray ``.immich_<id>.tmp`` behind.
+        # After a successful ``os.replace`` the temp path no longer exists, so
+        # the cleanup is a no-op on the happy path.
+        try:
+            self._download_with_retries(url, headers, tmp_path, final_path, filename, asset_id)
+        finally:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+
+    def _download_with_retries(
+        self,
+        url: str,
+        headers: dict[str, str],
+        tmp_path: Path,
+        final_path: Path,
+        filename: str,
+        asset_id: str,
+    ) -> None:
+        """Stream *url* into *tmp_path* and atomically rename to *final_path*.
+
+        Retries transient HTTP / timeout / connection errors up to
+        ``_MAX_RETRIES`` times; raises on permanent failure.
+        """
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
                 with self._http.get(
@@ -822,9 +864,8 @@ class ImmichSyncer:
                         f"Connection failed for {filename} after {_MAX_RETRIES} attempts"
                     ) from e
 
-        # Clean up temp file on failure
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
+        # Every loop branch above returns or raises; this is a safety net.
+        raise RuntimeError(f"Download failed for {filename} after {_MAX_RETRIES} attempts")
 
     # -- Helpers --------------------------------------------------------------
 
@@ -878,11 +919,12 @@ class ImmichSyncer:
     def _persist_result(self, result: SyncResult) -> None:
         """Write the sync result to the status file for the web dashboard."""
         try:
-            Path(_SYNC_STATUS_FILE).parent.mkdir(parents=True, exist_ok=True)
-            tmp = _SYNC_STATUS_FILE + ".tmp"
+            status_path = _sync_status_path()
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = status_path.with_name(status_path.name + ".tmp")
             with open(tmp, "w") as f:
                 json.dump(result.to_dict(), f, indent=2)
-            os.replace(tmp, _SYNC_STATUS_FILE)
+            os.replace(tmp, status_path)
         except OSError:
             logger.debug("Could not write sync status file — /run/metixel unavailable?")
 
@@ -898,8 +940,9 @@ class ImmichSyncer:
     ) -> None:
         """Write a live progress snapshot for the web dashboard to poll."""
         try:
-            Path(_SYNC_PROGRESS_FILE).parent.mkdir(parents=True, exist_ok=True)
-            tmp = _SYNC_PROGRESS_FILE + ".tmp"
+            progress_path = _sync_progress_path()
+            progress_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = progress_path.with_name(progress_path.name + ".tmp")
             data = {
                 "phase": phase,
                 "total": total,
@@ -913,11 +956,11 @@ class ImmichSyncer:
             }
             with open(tmp, "w") as f:
                 json.dump(data, f)
-            os.replace(tmp, _SYNC_PROGRESS_FILE)
+            os.replace(tmp, progress_path)
         except OSError:
             pass
 
     def _clear_progress(self) -> None:
         """Remove the live progress file."""
         with contextlib.suppress(OSError):
-            Path(_SYNC_PROGRESS_FILE).unlink(missing_ok=True)
+            _sync_progress_path().unlink(missing_ok=True)

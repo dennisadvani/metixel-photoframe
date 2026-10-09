@@ -417,38 +417,40 @@ class TestEngineVlcIntegration:
         )
         return cfg
 
-    @pytest.mark.skip(
-        reason="TODO: rewrite for non-blocking video state machine "
-        "(_video_launch + _video_tick + _video_finish). "
-        "The old _start_video_vlc method was replaced."
-    )
-    def test_start_video_vlc_sets_post_playback_state(
-        self,
-        mock_backend,
-        config_vlc,
-    ):
-        """After VLC finishes, _video_playing is cleared, _item_start_time
-        is set so that elapsed ≈ video duration (placing the render loop
-        at the start of the transition phase), and _current_idx is NOT
-        advanced (render() handles the advance to avoid double-advance
-        bugs when Pi plays slower than real-time)."""
+    def test_video_finish_sets_post_playback_state(self, mock_backend, config_vlc, tmp_path):
+        """After VLC exits, the state machine returns to IDLE, ``_item_start_time``
+        is set so that elapsed ≈ video duration (placing the render loop at the
+        start of the transition phase), and ``_current_idx`` is NOT advanced —
+        ``render()`` handles the advance to avoid double-advance bugs when the
+        Pi plays slower than real-time."""
+        import time
+
         from metixel.frontend.presentation.engine import PresentationEngine
         from metixel.frontend.presentation.video_player import VlcVideoPlayer
+        from metixel.frontend.presentation.video_state import _VIDEO_IDLE, _VIDEO_WAITING
 
+        first = tmp_path / "v.1.frame.jpg"
+        last = tmp_path / "v.2.frame.jpg"
+        _make_valid_jpeg(first)
+        _make_valid_jpeg(last)
+        config_vlc.update("slideshow", {"shuffle": False})
         engine = PresentationEngine(config_vlc, mock_backend)
         item = MediaItem(
             id="v1",
-            original_path=Path("/t/v.mp4"),
-            cached_path=Path("/t/v.mp4"),
+            original_path=tmp_path / "v.mp4",
+            cached_path=tmp_path / "v.mp4",
             media_type=MediaType.VIDEO,
             width=1920,
             height=1080,
             duration_seconds=5.0,
+            transcode_status=TranscodeStatus.TRANSCODED,
+            first_frame_path=first,
+            last_frame_path=last,
         )
         img_item = MediaItem(
             id="i1",
-            original_path=Path("/t/1.jpg"),
-            cached_path=Path("/t/1.jpg"),
+            original_path=tmp_path / "1.jpg",
+            cached_path=tmp_path / "1.jpg",
             media_type=MediaType.IMAGE,
             width=1920,
             height=1080,
@@ -456,47 +458,26 @@ class TestEngineVlcIntegration:
         engine.set_queue([item, img_item])
         original_idx = engine._current_idx
 
-        # Mock ffprobe, frame cache, and VLC play.
         mock_proc = mock.MagicMock()
-        mock_proc.wait.return_value = 0
-        ffprobe_result = mock.MagicMock()
-        ffprobe_result.returncode = 0
-        ffprobe_result.stdout = "1920,1080,5.0"
-        with (
-            mock.patch(
-                "metixel.frontend.presentation.engine._get_or_create_video_frame",
-                return_value=None,
-            ),
-            mock.patch(
-                "metixel.frontend.presentation.engine.subprocess.run",
-                return_value=ffprobe_result,
-            ),
-            mock.patch.object(
-                VlcVideoPlayer,
-                "play",
-                return_value=mock_proc,
-            ),
-        ):
-            engine._start_video_vlc(item, "/t/v.mp4")
+        mock_proc.poll.return_value = None
+        with mock.patch.object(VlcVideoPlayer, "play", return_value=mock_proc):
+            engine._video_launch(item)
 
-        # After VLC: _video_playing cleared.
-        assert engine._video_playing is False, "_video_playing should be False after VLC exits"
-        # _item_start_time is set so elapsed ≈ video duration.
-        # On the next render() call this places the loop at the
-        # start of the transition phase (crossfade from last frame).
-        import time
+        assert engine._video_state == _VIDEO_WAITING
+        assert engine._video_proc is mock_proc
 
-        now = time.monotonic()
+        # VLC exits — the tick notices and finishes the video.
+        mock_proc.poll.return_value = 0
+        engine._video_tick()
+
+        assert engine._video_state == _VIDEO_IDLE
+        assert engine._video_proc is None
         item_duration = engine._get_item_duration(item)
-        expected_start = now - item_duration
+        expected_start = time.monotonic() - item_duration
         assert abs(engine._item_start_time - expected_start) < 1.0, (
             f"_item_start_time should be ≈ now - duration "
             f"(got {engine._item_start_time}, expected ≈ {expected_start})"
         )
-        # _current_idx still points to the video item — _advance() is NOT
-        # called from _start_video_vlc.  The render loop's timer logic
-        # (elapsed >= duration + transition_s) triggers the advance on
-        # the next render() call.
         assert engine._current_idx == original_idx, (
-            "_current_idx should NOT change inside _start_video_vlc"
+            "_current_idx should NOT change when the video finishes"
         )

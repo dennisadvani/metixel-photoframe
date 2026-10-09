@@ -29,14 +29,30 @@ LAN by default — the password is the access boundary.
 
 **Exempt from auth** (reachable without a session):
 - `GET /api/health` — OTA update.sh health-check + monitoring
-- `POST /api/auth/login|logout|me` — the gate itself
+- `POST /api/auth/login|logout`, `GET /api/auth/me` — the gate itself
 - `POST /api/slideshow-started` — frontend renderer loopback signal
-- `/api/network/*` — captive-portal Wi-Fi setup- `POST /api/control` — IPC control commands (trusted local process)### Configuration
+- `/api/network/status|scan|validate-pin|connect` — the captive-portal
+  Wi-Fi setup calls, exempt **only while the setup hotspot / PIN gate is
+  active**.  Every other `/api/network/*` route always requires a session.
+- `POST /api/control` — exempt **only for loopback callers** (trusted local
+  processes on the Pi); the dashboard reaches it through its normal session.
+
+**Same-origin (CSRF) check:** every state-changing `/api/*` request (`POST`,
+`PUT`, `PATCH`, `DELETE`) must carry an `Origin` (or, failing that, `Referer`)
+header naming this host, otherwise it is rejected with `403`.  Requests with
+neither header (curl, tests, the frontend's loopback signal) are allowed.
+
+### Configuration
 - `GET /api/config` — Full configuration
 - `GET /api/config/<section>` — Section config
 - `PUT /api/config/<section>` — Update section (triggers hot reload)
 - `POST /api/config/reload` — Reload from disk
 - `GET /api/config/video/profiles` — Transcoding profiles + detected model
+- `GET /api/config/path` — Config file path + whether it exists (debugging)
+- `POST /api/config/network/apply-wifi-country` — Push a Wi-Fi regulatory
+  country code to the radio immediately (`iw reg set`).  Body:
+  `{"country": "AU"}`.  The persisted setting is saved separately via
+  `PUT /api/config/network`.
 
 ### System (power & admin)
 - `POST /api/system/restart` — Restart Metixel services
@@ -93,6 +109,8 @@ LAN by default — the password is the access boundary.
   - `POST /api/slideshow-started` remains a separate, one-shot signal and is
     **not** a liveness source — a device with no media never sends it.
 - `GET /api/health/display/info` — Detected display resolution
+- `GET /api/health/display/modes` — Display modes the monitor and Pi mutually
+  support (populates the resolution dropdown when auto-detect is off)
 - `GET /api/health/processing` — Background processing status
 - `GET /api/health/processing-status` — Per-phase processing progress
   (`scanning` / `optimising_images` / `inspecting_videos` / `transcoding`),
@@ -118,6 +136,13 @@ LAN by default — the password is the access boundary.
     user-owned state: the backend enables it once on a device's first boot
     (latched by `network.wifi_radio_first_run_done`) and never re-asserts it on
     boot or on an OTA.  `scripts/reconcile.sh` intentionally does not manage it.
+- `GET /api/network/ap-status` — `{active}`: whether the setup hotspot / PIN
+  gate is currently up.
+- `POST /api/network/validate-pin` — Validate the AP PIN shown on the frame.
+  Body: `{"pin": "1234"}`.  After 3 wrong attempts the PIN locks for 10 minutes.
+- `POST /api/network/ap-start` / `POST /api/network/ap-stop` — Manually
+  start/stop the access point (debugging only — the NetworkController
+  manages the AP lifecycle automatically).
 
 ### Updates
 - `GET /api/updates/status` — Version, channel, available releases, schedule
@@ -137,7 +162,14 @@ LAN by default — the password is the access boundary.
   `auto_update_hurdle`.
 - `POST /api/updates/rollback` — Flip the `live` symlink to a locally
   installed release.
-- `POST /api/updates/os-upgrade` — Full `apt upgrade` + reboot.
+- `POST /api/updates/apt-upgrade` — Full `apt update && apt upgrade` + reboot
+  (runs detached; returns `{"status": "ok"}` immediately).
+- `GET /api/updates/releases` — Cached list of GitHub releases installable
+  manually (atomic-era, >= 1.2.3); triggers a background check if not cached.
+- `PUT /api/updates/auto-update` — Configure the weekly auto-update schedule.
+  Body (any subset): `{"enabled": bool, "day": 0-6, "time": "HH:MM"}`.
+- `PUT /api/updates/channel` — Switch the update channel.  Body:
+  `{"channel": "stable|beta|dev"}`; triggers a check on the new channel.
 
 ### Processing
 - `POST /api/processing/retry` — Forget a failed/skipped journal entry so
@@ -161,7 +193,14 @@ LAN by default — the password is the access boundary.
 ### Media
 - `GET /api/media/list` — List media items
 - `POST /api/media/upload` — Upload media files (see below)
-- `DELETE /api/media/<id>` — Delete item
+- `GET /api/media/thumbnail/<filename>` — Serve a cached thumbnail or video
+  frame image (downscaled to 320 px max)
+- `POST /api/media/cache/clear` — Delete all processed caches (images,
+  thumbnails, videos), clear the playlist and reset the frontend queue.
+  Returns `{status, deleted_files, freed_bytes}`.
+
+There is no generic media delete route; failed/skipped files can be removed
+via `POST /api/processing/delete` (see Processing).
 
 #### Uploading media (`POST /api/media/upload`)
 
@@ -190,10 +229,42 @@ saved_count, error_count}` with HTTP 201 when anything was saved, else 400.
 
 ### Logs
 - `GET /api/logs/recent` — Recent log entries
+- `POST /api/logs/level` — Change the file-handler log level at runtime
+  (persisted to config).  Body: `{"level": "DEBUG|INFO|WARNING|ERROR|NONE"}`.
 
-### Widgets
-- `GET /api/widgets` — Widget configs
-- `PUT /api/widgets/<type>` — Update widget config
+### DDC/CI monitor control
+- `GET /api/ddc/status` — DDC enablement, availability and detected monitors
+- `GET /api/ddc/capabilities` — User-facing VCP features for the
+  configured/selected display (`?display=N`)
+- `GET /api/ddc/vcp/<code>` — Read a single VCP feature
+- `PUT /api/ddc/vcp/<code>` — Write a single VCP feature.  Body: `{"value": N}`
+- `POST /api/ddc/refresh` — Invalidate caches and re-probe the monitor
+- `POST /api/ddc/reset` — Restore the monitor to factory defaults (VCP 0x04)
+
+### Immich
+- `GET /api/immich/albums` — List albums from the configured server
+  (`{id, name, assetCount}`)
+- `POST /api/immich/albums/add` — Add an album to the sync group.  Body:
+  `{"id": "...", "name": "..."}`
+- `POST /api/immich/albums/remove` — Remove an album from the sync group and
+  delete its local folder
+- `POST /api/immich/sync` — Trigger a manual sync cycle (runs in the
+  background; poll `GET /api/immich/status`)
+- `GET /api/immich/status` — Most recent sync result plus live progress
+  (`null` if a sync has never run)
+- `POST /api/immich/cancel` — Cancel the running sync (finishes the current
+  download, then aborts)
+- `POST /api/immich/test-connection` — Probe a server URL + API key.  Body:
+  `{"server_url": "...", "api_key": "..."}`.  Always returns HTTP `200`
+  once the body is valid — the outcome is in the body: `{"ok": true, ...}`
+  or `{"ok": false, "status": <upstream HTTP code | "connection_error" |
+  "timeout" | "error">, "error": "..."}`.
+
+### Messages
+- `GET /api/messages/persistent` — Current list of persistent on-screen messages
+- `POST /api/messages/dismiss` — Dismiss one (`{"id": "..."}`) or all
+  (`{"all": true}`) persistent messages; removed from config and cleared
+  from the screen via IPC
 
 ## IPC Protocol (Backend → Frontend)
 
@@ -206,8 +277,8 @@ Format: JSON (one message per datagram)
 {"cmd": "prev"}
 {"cmd": "pause"}
 {"cmd": "resume"}
-{"cmd": "power_off"}
-{"cmd": "power_on"}
+{"cmd": "screen_off"}
+{"cmd": "screen_on"}
 {"cmd": "switch_album", "args": {"album_id": "abc123"}}
 ```
 

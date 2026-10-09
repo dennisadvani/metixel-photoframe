@@ -16,7 +16,7 @@ from typing import Any
 
 from PIL import Image
 
-from metixel.backend.processing.utils import ensure_heif_support
+from metixel.backend.processing.utils import ensure_heif_support, run_in_session
 from metixel.shared.media import content_hash
 from metixel.shared.models import MediaItem, MediaType
 
@@ -233,9 +233,13 @@ class ImageProcessor:
             # Wrap with cpulimit (hard CPU cap) if installed, otherwise
             # fall back to nice-only (priority hint, no hard cap).
             cmd = _wrap_worker_cmd(worker_cmd)
-            result = subprocess.run(
+            # Own session + process-group kill on timeout: with the cpulimit
+            # wrapper, subprocess.run() would only kill cpulimit and orphan a
+            # (possibly SIGSTOPped) worker.
+            result = run_in_session(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
                 timeout=120,
             )

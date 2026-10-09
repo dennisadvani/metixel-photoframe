@@ -4,8 +4,11 @@
 Metixel Photoframe entry point.
 
 Usage:
-    python -m metixel --mode backend --config etc/config.json
-    python -m metixel --mode frontend --config etc/config.json
+    python -m metixel --mode backend
+    python -m metixel --mode frontend
+
+``--config`` defaults to ``<data dir>/config.json`` (``/opt/metixel/data/config.json``
+on the Pi, ``./config.json`` on a desktop checkout).
 """
 
 import argparse

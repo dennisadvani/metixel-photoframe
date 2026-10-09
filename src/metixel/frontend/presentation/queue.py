@@ -19,6 +19,11 @@ class PlaylistControllerMixin(BaseEngineState):
     """Queue / playlist management for the presentation engine."""
 
     def set_queue(self, items: list[MediaItem]) -> None:
+        # Keep the unfiltered playlist so a later config change (e.g. the
+        # video playback toggle) can re-derive the queue from it instead of
+        # rescanning the media folder.  ``list()`` matters: ``items`` may be
+        # ``self._all_items`` itself (see ``reload_config``).
+        self._all_items = list(items)
         self._queue = list(items)
 
         # Stop any running video before replacing the queue.
@@ -28,10 +33,7 @@ class PlaylistControllerMixin(BaseEngineState):
         # ── Video guardrails ─────────────────────────────────────────
         # Read video config (new section; fall back to slideshow legacy keys)
         video_cfg = self._config.video if hasattr(self._config, "video") else {}
-        playback_enabled = video_cfg.get(
-            "playback_enabled",
-            self._config.slideshow.get("video_playback_enabled", True),
-        )
+        playback_enabled = self._video_playback_enabled(self._config)
         transcoding_enabled = video_cfg.get("transcoding_enabled", True)
         max_duration = video_cfg.get(
             "max_duration_seconds",
@@ -81,10 +83,10 @@ class PlaylistControllerMixin(BaseEngineState):
 
             # 4. Transcoding guardrails
             if transcoding_enabled:
-                # Only play transcoded videos (or failed ones that
-                # will be played as original)
+                # Only play videos the backend has marked ready (status
+                # set, playable status, first/last frame caches present).
                 if not item.is_ready_to_play:
-                    skipped_transcode += 1
+                    skipped_ready += 1
                     continue
                 # Also skip if the transcode status is FAILED but
                 # transcoding is explicitly requested (user wants
@@ -122,16 +124,17 @@ class PlaylistControllerMixin(BaseEngineState):
                 max_duration,
                 skipped_duration,
             )
-        if skipped_transcode:
-            logger.info(
-                "Videos not yet transcoded — filtered %d videos "
-                "(transcoding is enabled; they will appear after processing)",
-                skipped_transcode,
-            )
         if skipped_ready:
             logger.info(
-                "Videos not ready to play — filtered %d videos",
+                "Videos not ready to play — filtered %d videos "
+                "(transcoding is enabled; they will appear after processing)",
                 skipped_ready,
+            )
+        if skipped_transcode:
+            logger.info(
+                "Videos whose transcode failed — filtered %d videos "
+                "(transcoding is required, originals are not played)",
+                skipped_transcode,
             )
 
         self._queue = filtered
@@ -195,12 +198,15 @@ class PlaylistControllerMixin(BaseEngineState):
         if not new_items:
             return 0
 
+        # Record every new backend item in the unfiltered playlist, even
+        # those the guardrails below reject — a later playback toggle
+        # re-filters from this list (see ``reload_config``).
+        known_ids = {item.id for item in self._all_items}
+        self._all_items.extend(item for item in new_items if item.id not in known_ids)
+
         # ── Video guardrails ─────────────────────────────────────────
         video_cfg = self._config.video if hasattr(self._config, "video") else {}
-        playback_enabled = video_cfg.get(
-            "playback_enabled",
-            self._config.slideshow.get("video_playback_enabled", True),
-        )
+        playback_enabled = self._video_playback_enabled(self._config)
         transcoding_enabled = video_cfg.get("transcoding_enabled", True)
         max_duration = video_cfg.get(
             "max_duration_seconds",
@@ -285,12 +291,15 @@ class PlaylistControllerMixin(BaseEngineState):
         if not item_ids:
             return 0
 
+        # The unfiltered playlist mirrors the backend's — prune it too so a
+        # later re-filter (playback toggle) cannot resurrect deleted items.
+        self._all_items = [item for item in self._all_items if item.id not in item_ids]
+
         before = len(self._queue)
-        removed_current = (
-            any(self._queue[self._current_idx].id in item_ids for _ in [0])
-            if 0 <= self._current_idx < len(self._queue)
-            else False
-        )
+        current_id: str | None = None
+        if 0 <= self._current_idx < len(self._queue):
+            current_id = self._queue[self._current_idx].id
+        removed_current = current_id is not None and current_id in item_ids
 
         self._queue = [item for item in self._queue if item.id not in item_ids]
         removed = before - len(self._queue)
@@ -298,8 +307,20 @@ class PlaylistControllerMixin(BaseEngineState):
         if removed == 0:
             return 0
 
-        # If the current item was removed, advance or reset
+        # If the video being played right now was removed, kill VLC before
+        # the texture slots are torn down — otherwise the render loop keeps
+        # ticking the old state machine while a new item is loaded under
+        # it, and a second VLC can be launched on top of the first.
+        if (
+            self._video_state != _VIDEO_IDLE
+            and self._video_item is not None
+            and self._video_item.id in item_ids
+        ):
+            logger.info("remove_items: stopping video that was removed from the playlist")
+            self._video_stop()
+
         if removed_current:
+            # The current item was removed: advance or reset.
             if self._queue:
                 # Stay at the same index (which now points to the next item
                 # that slid into this position) or wrap to 0.
@@ -315,6 +336,22 @@ class PlaylistControllerMixin(BaseEngineState):
                 self._tex_item[i] = None
             self._active = 0
             self._item_start_time = time.monotonic()
+        else:
+            # The current item survived — re-point ``_current_idx`` at its
+            # new position.  Removing items that sat BEFORE it shifts it
+            # left; without this the index silently lands on a later item,
+            # skipping a slide and reporting the wrong file.
+            for idx, item in enumerate(self._queue):
+                if item.id == current_id:
+                    self._current_idx = idx
+                    break
+            # Drop a preloaded texture that belongs to a removed item so
+            # the next advance cannot promote it under another item's name.
+            inactive_item = self._tex_item[self._inactive]
+            if inactive_item is not None and inactive_item.id in item_ids:
+                self._unload_texture(self._tex[self._inactive])
+                self._tex[self._inactive] = None
+                self._tex_item[self._inactive] = None
 
         # Cancel in-flight preload if it matches a removed item
         with self._preload_lock:

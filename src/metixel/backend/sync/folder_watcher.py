@@ -42,7 +42,7 @@ from metixel.shared.media import (
     content_hash,
 )
 from metixel.shared.models import MediaItem, MediaType
-from metixel.shared.paths import resolve_install_path
+from metixel.shared.paths import resolve_install_path, run_path
 
 if TYPE_CHECKING:
     from metixel.backend.processing.optimisation_queue import OptimisationQueue
@@ -54,8 +54,10 @@ logger = logging.getLogger(__name__)
 ensure_heif_support()
 
 # Progress file written during initial scan — read by the frontend
-# so it can show a progress bar before the slideshow starts.
-PROCESSING_STATUS_PATH = "/run/metixel/processing_status.json"
+# so it can show a progress bar before the slideshow starts.  Resolved
+# through :func:`run_path` at call time (honours ``METIXEL_RUN_DIR``) so
+# the writer and the web-layer readers always agree on the location.
+PROCESSING_STATUS_FILE = "processing_status.json"
 
 
 def _write_progress(phase: str, total: int, processed: int, current_file: str = "") -> None:
@@ -69,7 +71,7 @@ def _write_progress(phase: str, total: int, processed: int, current_file: str = 
     """
     try:
         merge_json(
-            PROCESSING_STATUS_PATH,
+            run_path(PROCESSING_STATUS_FILE),
             lambda data: {
                 "active": phase,
                 "phases": {
@@ -128,6 +130,11 @@ class FolderWatcher:
         # Periodic config refresh (so new watch paths added via the web UI
         # are picked up without a backend restart).
         self._last_config_refresh: float = 0.0
+
+        # Watch roots that were absent on the last scan (unmounted share,
+        # unplugged USB stick).  Their journal entries are left alone until
+        # the root is back, and each disappearance is logged once.
+        self._missing_roots: set[Path] = set()
 
     @property
     def _known_files(self) -> dict[Path, tuple[int, int]]:
@@ -263,11 +270,13 @@ class FolderWatcher:
         """
         # 1. Walk all enabled watch paths and discover current files
         current_files: dict[Path, tuple[int, int]] = {}
+        missing_roots: list[Path] = []
         for watch_path in self._watch_paths:
             if not watch_path.exists():
-                logger.debug("Watch path not found: %s", watch_path)
+                missing_roots.append(watch_path)
                 continue
             self._walk_path(watch_path, current_files)
+        self._note_missing_roots(missing_roots)
 
         journal = self._journal
         is_initial = not self._initial_scan_done
@@ -303,6 +312,15 @@ class FolderWatcher:
         # 3. Handle deletions first (frees playlist/queue/cache + journal)
         current_path_keys = {str(p) for p in current_files}
         deleted_paths = set(journal.paths()) - current_path_keys
+        if deleted_paths and missing_roots:
+            # A watch root that is not there (network share down, USB stick
+            # unplugged) contributes nothing to current_files, so everything
+            # under it would look deleted — and _handle_deleted would purge
+            # the playlist entries, the journal AND the cached transcodes.
+            # Leave those entries alone until the root is back.
+            deleted_paths = {
+                p for p in deleted_paths if not self._under_any_root(Path(p), missing_roots)
+            }
         if deleted_paths:
             logger.info(
                 "Detected %d deleted file(s): %s",
@@ -337,6 +355,30 @@ class FolderWatcher:
             self._gather_and_enqueue(to_gather, is_initial=is_initial)
 
         self._initial_scan_done = True
+
+    def _note_missing_roots(self, missing: list[Path]) -> None:
+        """Log (once) each watch root that disappeared or came back."""
+        now_missing = set(missing)
+        for root in sorted(now_missing - self._missing_roots):
+            logger.info(
+                "Watch path not found: %s — its journal entries are kept until it is back",
+                root,
+            )
+        for root in sorted(self._missing_roots - now_missing):
+            logger.info("Watch path available again: %s", root)
+        self._missing_roots = now_missing
+
+    @staticmethod
+    def _under_any_root(path: Path, roots: list[Path]) -> bool:
+        """Whether *path* lives under any of *roots* (compared resolved)."""
+        for root in roots:
+            try:
+                resolved_root = root.resolve()
+            except OSError:
+                resolved_root = root
+            if path == resolved_root or path.is_relative_to(resolved_root):
+                return True
+        return False
 
     def _walk_path(self, root: Path, out: dict[Path, tuple[int, int]]) -> None:
         """Recursively walk a directory, collecting media files with stat metadata.

@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 from unittest import mock
 
+import pytest
+
 
 def _make_result(returncode: int = 0, stderr: str = "") -> mock.Mock:
     r = mock.Mock()
@@ -134,3 +136,75 @@ class TestDevicePassword:
             json={"new_password": "newpass123", "confirm_password": "newpass123"},
         )
         assert resp.status_code == 401
+
+
+class TestDevicePasswordInputHardening:
+    """The password is piped raw to chpasswd/smbpasswd stdin, so control
+    characters (newline, CR, NUL, ...) must never reach them."""
+
+    def _login(self, client, mock_state):
+        from metixel.shared.security import hash_secret
+
+        mock_state.update_config("web", {"password": hash_secret("secret123")})
+        client.post("/api/auth/login", json={"password": "secret123"})
+
+    def _arm(self, monkeypatch):
+        import metixel.backend.web.routes.security as sec_mod
+
+        calls = []
+        monkeypatch.setattr(
+            sec_mod,
+            "_run_privileged",
+            lambda cmd, input=None: calls.append((cmd, input)) or _make_result(),
+        )
+        monkeypatch.setattr(sec_mod, "is_raspberry_pi", lambda: True)
+        return calls
+
+    @pytest.mark.parametrize(
+        "pw",
+        [
+            "newpass1\nroot:pwned",
+            "newpass1\r\n",
+            "newpass1\x00x",
+            "newpass\tone",
+            "newpass1\x7f",
+            "newpass1\x1b[0m",
+        ],
+    )
+    def test_control_chars_rejected(self, client, mock_state, monkeypatch, pw):
+        self._login(client, mock_state)
+        calls = self._arm(monkeypatch)
+        resp = client.post(
+            "/api/system/device-password",
+            json={"new_password": pw, "confirm_password": pw},
+        )
+        assert resp.status_code == 400
+        assert "control" in json.loads(resp.data)["error"].lower()
+        assert calls == []
+
+    def test_colon_allowed(self, client, mock_state, monkeypatch):
+        """chpasswd splits on the FIRST colon, so a colon in the password is
+        fine (the user name comes first)."""
+        self._login(client, mock_state)
+        calls = self._arm(monkeypatch)
+        resp = client.post(
+            "/api/system/device-password",
+            json={"new_password": "pass:word1", "confirm_password": "pass:word1"},
+        )
+        assert resp.status_code == 200
+        assert calls[0][1] == "pi:pass:word1\n"
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"new_password": 12345678, "confirm_password": 12345678},
+            {"new_password": ["a"] * 8, "confirm_password": ["a"] * 8},
+            {"new_password": "newpass123", "confirm_password": None},
+        ],
+    )
+    def test_non_string_rejected(self, client, mock_state, monkeypatch, body):
+        self._login(client, mock_state)
+        calls = self._arm(monkeypatch)
+        resp = client.post("/api/system/device-password", json=body)
+        assert resp.status_code == 400
+        assert calls == []

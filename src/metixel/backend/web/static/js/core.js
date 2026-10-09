@@ -283,6 +283,81 @@ async function createFolder() {
     browseFolder(result.path);
 }
 
+/** Format a byte count for the delete confirmation (e.g. "1.2 MB"). */
+function _formatBytes(bytes) {
+    var n = Number(bytes) || 0;
+    if (n < 1024) return n + " B";
+    if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB";
+    return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+}
+
+/**
+ * Delete the folder currently being browsed, after confirming with the user.
+ *
+ * The folder is emptied recursively, so it cannot be undone.  The
+ * confirmation always names the folder and its full path, and — when the
+ * folder holds media — says how many files and how much data would go with
+ * it.  The backend re-checks the count and requires ``force`` for a
+ * non-empty folder, so the second confirmation is not merely cosmetic.
+ */
+async function deleteFolder() {
+    var path = _browserCurrentPath;
+    if (!path) return;
+
+    var deleteBtn = document.getElementById("btn-browser-delete");
+    var restore = deleteBtn ? setButtonBusy(deleteBtn, "Checking…") : function () {};
+
+    // Ask the backend what's inside first, so the confirmation can state the
+    // real consequences (a folder may look empty but hold nested media).
+    var info = await apiPost("/browse/delete", { path: path, dry_run: true });
+    restore();
+    if (!info || info.error) {
+        showToast("Cannot delete: " + ((info && info.error) || "request failed"), "error", 5000);
+        return;
+    }
+
+    var name = path.replace(/\/+$/, "").split("/").pop() || path;
+    var count = info.media_count || 0;
+    var message = count
+        ? "Delete the folder \u201c" + name + "\u201d and everything in it?\n\n"
+            + "Path: " + path + "\n"
+            + "This permanently deletes " + count + " media file"
+            + (count === 1 ? "" : "s") + " (" + _formatBytes(info.media_bytes) + ") "
+            + "and cannot be undone."
+        : "Delete the folder \u201c" + name + "\u201d?\n\n"
+            + "Path: " + path + "\n"
+            + "The folder is empty. This cannot be undone.";
+
+    var ok = await confirmDialog(message, {
+        title: count ? "Delete folder and contents?" : "Delete folder?",
+        okText: "Delete",
+        danger: true,
+    });
+    if (!ok) return;
+
+    var restore2 = deleteBtn ? setButtonBusy(deleteBtn, "Deleting…") : function () {};
+    var result = await apiPost("/browse/delete", { path: path, force: true });
+    restore2();
+    if (!result || result.error) {
+        showToast("Could not delete folder: " + ((result && result.error) || "request failed"), "error", 5000);
+        return;
+    }
+
+    var removed = result.media_removed || 0;
+    showToast(
+        "\u201c" + name + "\u201d deleted"
+            + (removed ? " (" + removed + " media file" + (removed === 1 ? "" : "s") + ")" : ""),
+        "success"
+    );
+    // The browsed folder no longer exists — step up to its parent.  Deleting
+    // a watch-path root also rewrites config, which restarts the backend, so
+    // tolerate the subsequent reload (the disconnect overlay handles it).
+    var parent = path.replace(/\/+$/, "").split("/").slice(0, -1).join("/");
+    if (parent) browseFolder(parent);
+    else closeFolderBrowser();
+}
+
 // Bind all folder-browser controls at module import time — the DOM is fully
 // parsed by then (ES modules are deferred) — so the browse buttons AND the
 // modal's controls work on every page (Settings, Sources, Media, System)
@@ -299,6 +374,8 @@ document.querySelectorAll(".btn-browse").forEach(function (btn) {
 
 // Create-folder button inside the modal.
 document.getElementById("btn-browser-create")?.addEventListener("click", createFolder);
+// Delete-folder button inside the modal (deletes the folder being viewed).
+document.getElementById("btn-browser-delete")?.addEventListener("click", deleteFolder);
 // Also allow Enter inside the new-folder name field.
 document.getElementById("browser-new-folder-name")?.addEventListener("keydown", function (e) {
     if (e.key === "Enter") {
@@ -579,6 +656,58 @@ function _handleAuthFailure(path, status) {
     }
 }
 
+/**
+ * Decide whether a non-2xx response means the backend itself is gone.
+ *
+ * Only a gateway-style status (502/503/504) counts — and even then only
+ * when the body is NOT the backend's own JSON error envelope, because a
+ * live backend legitimately answers 502/503 for an *upstream* failure
+ * (Immich unreachable, frontend not rendering).  Every 4xx is a normal
+ * error the caller must handle; it must never blank the dashboard.
+ *
+ * @param {Response} res
+ * @param {any} body  parsed JSON body (or null when not JSON)
+ */
+function _isBackendDown(res, body) {
+    if (res.status !== 502 && res.status !== 503 && res.status !== 504) return false;
+    return !(body && typeof body === "object" && body.status === "error");
+}
+
+async function _parseJsonOrNull(res) {
+    try {
+        return await res.json();
+    } catch (_) {
+        return null;
+    }
+}
+
+/**
+ * Shared non-2xx handling for apiGet/apiPut/apiPost.  Returns null (the
+ * value callers already treat as "failed") after routing the response to
+ * the right side effect: auth overlay, disconnect overlay, or just a log.
+ */
+async function _handleApiFailure(method, path, res) {
+    if (res.status === 401 || res.status === 403) {
+        _handleAuthFailure(path, res.status);
+        return null;
+    }
+    var body = await _parseJsonOrNull(res);
+    if (_isBackendDown(res, body)) {
+        console.error("API %s %s failed: %s %s", method, path, res.status, res.statusText);
+        _apiUpdateConnectionStatus(false);
+        return null;
+    }
+    // Ordinary error (400/404/409/429/500, or a backend-reported upstream
+    // failure).  The backend answered, so we are connected.
+    console.warn(
+        "API %s %s returned %s: %s",
+        method, path, res.status,
+        (body && (body.message || body.error)) || res.statusText
+    );
+    _apiUpdateConnectionStatus(true);
+    return null;
+}
+
 function _apiUpdateConnectionStatus(ok) {
     var overlay = document.getElementById("connection-overlay");
     if (!overlay) return;
@@ -603,13 +732,7 @@ export async function apiGet(path) {
     try {
         const res = await fetch(`/api${path}`, { credentials: "same-origin" });
         if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-                _handleAuthFailure(path, res.status);
-            } else {
-                console.error("API GET %s failed: %s %s", path, res.status, res.statusText);
-                _apiUpdateConnectionStatus(false);
-            }
-            return null;
+            return await _handleApiFailure("GET", path, res);
         }
         _apiUpdateConnectionStatus(true);
         return await res.json();
@@ -634,13 +757,7 @@ export async function apiPut(path, data) {
             body: JSON.stringify(data),
         });
         if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-                _handleAuthFailure(path, res.status);
-            } else {
-                console.error("API PUT %s failed: %s %s", path, res.status, res.statusText);
-                _apiUpdateConnectionStatus(false);
-            }
-            return null;
+            return await _handleApiFailure("PUT", path, res);
         }
         _apiUpdateConnectionStatus(true);
         return await res.json();
@@ -664,13 +781,7 @@ export async function apiPost(path, data) {
             body: data ? JSON.stringify(data) : undefined,
         });
         if (!res.ok) {
-            if (res.status === 401 || res.status === 403) {
-                _handleAuthFailure(path, res.status);
-            } else {
-                console.error("API POST %s failed: %s %s", path, res.status, res.statusText);
-                _apiUpdateConnectionStatus(false);
-            }
-            return null;
+            return await _handleApiFailure("POST", path, res);
         }
         _apiUpdateConnectionStatus(true);
         return await res.json();

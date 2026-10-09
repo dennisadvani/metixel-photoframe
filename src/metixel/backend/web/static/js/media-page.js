@@ -7,7 +7,9 @@
 
 import {
     apiGet,
+    apiPost,
     apiPut,
+    confirmDialog,
     escapeHtml,
     openFolderBrowser,
     setButtonBusy,
@@ -24,6 +26,8 @@ import {
     var _mediaUploadBound = false;
     /** Guard so the upload-destination browse button is bound once. */
     var _mediaDestBound = false;
+    /** Guard so the per-item "⋮" menu delegation is attached once. */
+    var _mediaMenuBound = false;
 
     async function loadMedia() {
         _mediaOffset = 0;
@@ -33,8 +37,6 @@ import {
         var el = document.getElementById("media-list");
         el.innerHTML = '<p style="color:var(--text-muted)">Loading…</p>';
 
-        // Single /config fetch shared by the upload-destination control and
-        // the folder-filter dropdown below.
         var config = await apiGet("/config");
 
         _setupUploadDestination(config);
@@ -46,6 +48,9 @@ import {
             var paths = config.sync.local.watch_paths;
             var sel = document.getElementById("media-filter-folder");
             if (sel) {
+                // Keep the current choice across reloads (e.g. after an
+                // upload) — it also decides where uploads go.
+                var previous = sel.value;
                 // Keep the "All folders" option
                 sel.innerHTML = '<option value="">All folders</option>';
                 paths.forEach(function (p) {
@@ -61,12 +66,14 @@ import {
                         sel.appendChild(opt);
                     }
                 });
+                if (previous) sel.value = previous;
             }
         }
 
         await _fetchMediaPage(0);
 
         _bindUpload();
+        _bindMediaMenus();
         _setupSambaHelp();
     }
 
@@ -272,9 +279,29 @@ import {
             } else {
                 infoText = item.width + '\u00d7' + item.height + ' \u00b7 ' + item.size_kb + ' KB';
             }
+            // Per-item "⋮" menu. Files pulled in by an image sync (Immich)
+            // are owned by the syncer — deleting one locally would just be
+            // undone on the next sync — so they get no menu at all.
+            var menuHtml = '';
+            if (!item.synced) {
+                menuHtml = '<div class="media-menu">'
+                    + '<button type="button" class="media-menu-btn" aria-label="More actions for '
+                    + escapeHtml(item.name) + '" aria-haspopup="menu" aria-expanded="false" title="More actions">'
+                    + '<span class="material-symbols-outlined">more_vert</span></button>'
+                    + '<div class="media-menu-dropdown" role="menu">'
+                    + '<button type="button" class="media-menu-item media-menu-item--danger media-delete" role="menuitem">'
+                    + '<span class="material-symbols-outlined">delete</span> Delete</button>'
+                    + '</div></div>';
+            }
+
             var div = document.createElement("div");
             div.className = "media-item";
-            div.innerHTML = thumbHtml
+            div.setAttribute("data-name", item.name);
+            div.setAttribute("data-folder", item.folder || "");
+            div.setAttribute("data-path", item.path || item.name);
+            div.setAttribute("data-type", item.media_type || "image");
+            div.innerHTML = menuHtml
+                + thumbHtml
                 + '<div class="media-name">' + escapeHtml(item.name) + badges + '</div>'
                 + folderHtml
                 + '<div class="media-info">' + infoText + '</div>';
@@ -289,8 +316,15 @@ import {
         }
     }
 
+    /** Observer that auto-loads the next page when "Load more" scrolls into view. */
+    var _loadMoreObserver = null;
+
     function _updateLoadMoreButton(el) {
-        // Remove existing button
+        // Remove existing button (and the observer watching it)
+        if (_loadMoreObserver) {
+            _loadMoreObserver.disconnect();
+            _loadMoreObserver = null;
+        }
         var existing = document.getElementById("media-load-more");
         if (existing) existing.remove();
 
@@ -300,15 +334,143 @@ import {
             btn.textContent = "Load more\u2026";
             btn.className = "btn--secondary";
             btn.style.marginTop = "1rem";
-            btn.addEventListener("click", function () {
+            var loadNext = function () {
+                if (_mediaLoading) return;
                 setButtonBusy(btn, "Loading\u2026");
                 _fetchMediaPage(_mediaOffset);
-            });
+            };
+            btn.addEventListener("click", loadNext);
             el.appendChild(btn);
+
+            // Infinite scroll: fetch the next page as the button nears the
+            // viewport, so the user rarely has to tap it.  The button stays
+            // as a visible fallback / progress indicator.  _fetchMediaPage's
+            // own in-flight guard prevents double loads, and this observer is
+            // torn down above whenever the button is re-rendered.
+            if ("IntersectionObserver" in window) {
+                _loadMoreObserver = new IntersectionObserver(function (entries) {
+                    if (entries.some(function (e) { return e.isIntersecting; })) {
+                        loadNext();
+                    }
+                }, { rootMargin: "0px 0px 300px 0px" });
+                _loadMoreObserver.observe(btn);
+            }
         }
     }
 
-// -- Upload destination --------------------------------------------------
+// -- Per-item "⋮" menu --------------------------------------------------
+
+/** Close every open item menu (optionally all except ``keep``). */
+function _closeMediaMenus(keep) {
+    document.querySelectorAll(".media-menu.open").forEach(function (m) {
+        if (m === keep) return;
+        m.classList.remove("open");
+        var b = m.querySelector(".media-menu-btn");
+        if (b) b.setAttribute("aria-expanded", "false");
+    });
+}
+
+/**
+ * Wire the per-item "⋮" menus.  Delegated on #media-list so items rendered
+ * by later pages ("Load more") and re-renders keep working without
+ * re-binding.  Bound once per page lifetime.
+ */
+function _bindMediaMenus() {
+    if (_mediaMenuBound) return;
+    _mediaMenuBound = true;
+
+    var list = document.getElementById("media-list");
+    if (!list) return;
+
+    list.addEventListener("click", function (e) {
+        var toggle = e.target.closest ? e.target.closest(".media-menu-btn") : null;
+        if (toggle) {
+            e.preventDefault();
+            e.stopPropagation();
+            var menu = toggle.closest(".media-menu");
+            var opening = !menu.classList.contains("open");
+            _closeMediaMenus(menu);
+            menu.classList.toggle("open", opening);
+            toggle.setAttribute("aria-expanded", opening ? "true" : "false");
+            return;
+        }
+
+        var del = e.target.closest ? e.target.closest(".media-delete") : null;
+        if (del) {
+            e.preventDefault();
+            e.stopPropagation();
+            _closeMediaMenus();
+            var itemEl = del.closest(".media-item");
+            if (itemEl) _deleteMediaItem(itemEl);
+        }
+    });
+
+    // Click anywhere else / Escape closes any open menu.
+    document.addEventListener("click", function (e) {
+        if (e.target.closest && e.target.closest(".media-menu")) return;
+        _closeMediaMenus();
+    });
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") _closeMediaMenus();
+    });
+}
+
+/**
+ * Confirm and delete one library item.  On success the tile is removed
+ * in place (no full reload — that would drop the user's scroll position
+ * and any "Load more" pages) and the summary count is adjusted.
+ */
+async function _deleteMediaItem(itemEl) {
+    var name = itemEl.getAttribute("data-name") || "this file";
+    var folder = itemEl.getAttribute("data-folder") || "";
+    var path = itemEl.getAttribute("data-path") || name;
+
+    var ok = await confirmDialog("Delete " + name + "?", {
+        title: "Delete media",
+        okText: "Yes",
+        danger: true
+    });
+    if (!ok) return;
+
+    itemEl.classList.add("media-item--busy");
+    var result = await apiPost("/media/delete", { folder: folder, path: path });
+    if (result && result.status === "ok") {
+        itemEl.remove();
+        _mediaOffset = Math.max(0, _mediaOffset - 1);
+        _adjustMediaSummary(itemEl.getAttribute("data-type"));
+        showToast("Deleted " + name, "success");
+    } else {
+        itemEl.classList.remove("media-item--busy");
+        var msg = (result && (result.message || result.error)) || "Failed to delete " + name;
+        showToast(msg, "error");
+    }
+}
+
+/**
+ * Adjust the "N images, M videos" summary after an in-place removal so it
+ * stays honest without a refetch.  ``mediaType`` is "image" or "video".
+ */
+function _adjustMediaSummary(mediaType) {
+    var summary = document.querySelector("#media-list .media-summary");
+    if (!summary) return;
+    var word = mediaType === "video" ? "video" : "image";
+    var re = new RegExp("(\\d+)\\s+" + word + "s?");
+    var text = summary.textContent;
+    var m = text.match(re);
+    if (m) {
+        var n = Math.max(0, parseInt(m[1], 10) - 1);
+        text = text.replace(re, n + " " + word + (n === 1 ? "" : "s"));
+    } else {
+        // Fallback shape: "T files"
+        text = text.replace(/(\d+)\s+files?/, function (_, t) {
+            var n = Math.max(0, parseInt(t, 10) - 1);
+            return n + " file" + (n === 1 ? "" : "s");
+        });
+    }
+    summary.textContent = text;
+}
+
+// -- Upload target ------------------------------------------------------
 
 /**
  * Initialise the "where uploads are copied" control in the media toolbar.
@@ -488,7 +650,7 @@ function _renderUploadResults(resp) {
 
     if (saved.length === 0 && errors.length === 0) {
         prog.style.display = "none";
-        showToast("Upload failed", "error");
+        showToast((resp && (resp.message || resp.error)) || "Upload failed", "error");
         return;
     }
 

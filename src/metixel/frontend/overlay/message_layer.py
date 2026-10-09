@@ -202,9 +202,8 @@ class MessageLayer(OverlayLayer):
                 m._paused_since = 0.0
                 m._paused_total = 0.0
             else:
-                # ease_out_cubic
-                1.0 - (1.0 - t) ** 3
-                m._alpha = min(1.0, t / 0.5)
+                # ease_out_cubic — fast start, gentle settle at full opacity
+                m._alpha = min(1.0, 1.0 - (1.0 - t) ** 3)
         elif m.state == "visible":
             if self._video_playing:
                 # Pause the auto-dismiss timer while a video covers the
