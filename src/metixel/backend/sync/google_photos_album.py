@@ -381,7 +381,9 @@ def _default_post_form(url: str, data: dict[str, str]) -> tuple[int, str]:
 
 def _retry_wait(attempt: int) -> float:
     """Exponential backoff with jitter, matching what Google expects."""
-    return min(_MAX_RETRY_WAIT, 2.0 * (2**attempt) * (0.5 + random.random() / 2))
+    # A float base keeps the whole expression typed float (``int ** int`` is
+    # ``Any`` in typeshed, since a negative exponent would yield a float).
+    return min(_MAX_RETRY_WAIT, 2.0 * (2.0**attempt) * (0.5 + random.random() / 2))
 
 
 # ── Album listing ───────────────────────────────────────────────────────────
