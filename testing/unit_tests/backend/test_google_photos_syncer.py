@@ -2,22 +2,22 @@
 # SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 """GooglePhotosSyncer — unit tests driven through the ``HttpGateway`` port.
 
-The real client talks to the Google Photos Picker API over ``requests``; here a
-``FakeHttpGateway`` serves canned responses and the OAuth token endpoint is
-monkeypatched, so no network access is required.
+The syncer mirrors one public shared album.  Here the album reader
+(:func:`google_photos_album.fetch_album`) is stubbed with a canned listing and
+a ``FakeHttpGateway`` serves the media downloads, so no network access is
+required.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-SESSIONS_URL = "https://photospicker.googleapis.com/v1/sessions"
-MEDIA_ITEMS_URL = "https://photospicker.googleapis.com/v1/mediaItems"
+ALBUM_URL = "https://photos.google.com/share/SHARE123?key=KEY456"
 
 
 class FakeResponse:
@@ -61,6 +61,7 @@ class FakeHttpGateway:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, Any]] = []
+        self.headers_seen: list[dict[str, str]] = []
         self._routes: dict[tuple[str, str], Any] = {}
 
     def route(self, method: str, url: str, response: Any) -> None:
@@ -68,6 +69,7 @@ class FakeHttpGateway:
 
     def get(self, url, *, headers=None, params=None, stream: bool = False, timeout=None):
         self.calls.append(("GET", url, params))
+        self.headers_seen.append(dict(headers or {}))
         return self._resolve("GET", url, params)
 
     def post(self, url, *, headers=None, json=None, timeout=None):
@@ -85,24 +87,9 @@ class FakeHttpGateway:
 
 @pytest.fixture(autouse=True)
 def runtime_dir(tmp_path: Path, monkeypatch):
-    """Keep status/progress/session files out of ``/run/metixel``."""
+    """Keep status/progress files out of ``/run/metixel``."""
     monkeypatch.setenv("METIXEL_RUN_DIR", str(tmp_path / "run"))
     return tmp_path / "run"
-
-
-@pytest.fixture(autouse=True)
-def fake_token(monkeypatch):
-    """Serve a canned OAuth token response instead of calling Google."""
-    import metixel.backend.sync.google_photos as gp
-
-    calls: list[dict[str, str]] = []
-
-    def _post_form(url: str, data: dict[str, str]):
-        calls.append(data)
-        return FakeResponse(json_data={"access_token": "tok-123", "expires_in": 3600})
-
-    monkeypatch.setattr(gp, "post_form", _post_form)
-    return calls
 
 
 @pytest.fixture(autouse=True)
@@ -122,9 +109,7 @@ def _make_syncer(tmp_path: Path, http: FakeHttpGateway, cfg: dict | None = None)
 
     config = Config()
     overrides: dict[str, Any] = dict(cfg or {})
-    overrides.setdefault("client_id", "cid")
-    overrides.setdefault("client_secret", "secret")
-    overrides.setdefault("refresh_token", "refresh")
+    overrides.setdefault("shared_album_url", ALBUM_URL)
     overrides.setdefault("sync_dir", str(tmp_path / "gphotos"))
     config.update("sync", {"google_photos": overrides})
     config_path = tmp_path / "config.json"
@@ -134,21 +119,75 @@ def _make_syncer(tmp_path: Path, http: FakeHttpGateway, cfg: dict | None = None)
     return GooglePhotosSyncer(state, http=http)
 
 
-def _item(
-    item_id: str,
-    filename: str = "IMG_1.JPG",
-    mime: str = "image/jpeg",
-    type_: str = "PHOTO",
-):
+def _item(key: str, *, video: bool = False) -> dict[str, Any]:
+    """One album item, as :func:`google_photos_album.fetch_album` returns it."""
+    media_key = f"AF1QipItem{key}".ljust(40, "0")
     return {
-        "id": item_id,
-        "type": type_,
-        "mediaFile": {
-            "baseUrl": f"https://lh3.googleusercontent.com/{item_id}",
-            "filename": filename,
-            "mimeType": mime,
-        },
+        "media_key": media_key,
+        "base_url": f"https://lh3.googleusercontent.com/{key}",
+        "width": 4032,
+        "height": 3024,
+        "taken_ms": 1_700_000_000_000,
+        "dedup_key": None,
+        "is_video": video,
     }
+
+
+def _media_url(item: dict[str, Any]) -> str:
+    return item["base_url"] + ("=dv" if item["is_video"] else "=d")
+
+
+@pytest.fixture
+def album_stub(monkeypatch):
+    """Replace the album reader with a canned listing.
+
+    Returns a ``listing`` dict the test can edit before syncing: ``items``,
+    ``pages``, ``truncated``, ``complete``, or ``raise`` (an exception).
+    """
+    import metixel.backend.sync.google_photos as gp
+
+    listing: dict[str, Any] = {"items": [], "pages": 1, "truncated": False}
+    calls: list[str] = []
+
+    def _fetch_album(url, **kwargs):
+        calls.append(url)
+        if listing.get("raise"):
+            raise listing["raise"]
+        on_progress = kwargs.get("on_progress")
+        if on_progress:
+            on_progress(len(listing["items"]), listing["pages"])
+        payload = {
+            "url": url,
+            "title": "Holiday",
+            "album_key": "AF1QipAlbum",
+            "pages": listing["pages"],
+            "truncated": listing["truncated"],
+            "items": list(listing["items"]),
+        }
+        if "complete" in listing:
+            payload["complete"] = listing["complete"]
+        return payload
+
+    monkeypatch.setattr(gp.album, "fetch_album", _fetch_album)
+    listing["calls"] = calls
+    return listing
+
+
+def _wire(tmp_path: Path, album_stub, items: list[dict], cfg: dict | None = None, **listing):
+    """A syncer whose album holds *items*, each downloadable as a JPEG/MP4."""
+    album_stub["items"] = items
+    album_stub.update(listing)
+    http = FakeHttpGateway()
+    for item in items:
+        http.route(
+            "GET",
+            _media_url(item),
+            FakeResponse(
+                iter_chunks=(b"bytes-", item["media_key"].encode()),
+                headers={"Content-Type": "video/mp4" if item["is_video"] else "image/jpeg"},
+            ),
+        )
+    return _make_syncer(tmp_path, http, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -157,16 +196,56 @@ def _item(
 
 
 class TestConfiguration:
-    def test_is_configured_requires_all_three_credentials(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
+    def test_configured_by_album_url_alone(self, tmp_path: Path) -> None:
+        assert _make_syncer(tmp_path, FakeHttpGateway()).is_configured() is True
+
+    def test_short_links_count_as_configured(self, tmp_path: Path) -> None:
+        syncer = _make_syncer(
+            tmp_path, FakeHttpGateway(), {"shared_album_url": "https://photos.app.goo.gl/abc"}
+        )
         assert syncer.is_configured() is True
 
-        partial = _make_syncer(tmp_path, FakeHttpGateway(), {"refresh_token": ""})
-        assert partial.is_configured() is False
+    @pytest.mark.parametrize("url", ["", "https://example.com/album", "not a url"])
+    def test_missing_or_bad_url_is_not_configured(self, tmp_path: Path, url: str) -> None:
+        syncer = _make_syncer(tmp_path, FakeHttpGateway(), {"shared_album_url": url})
+        assert syncer.is_configured() is False
 
     def test_sync_dir_defaults_under_the_data_tree(self, tmp_path: Path) -> None:
         syncer = _make_syncer(tmp_path, FakeHttpGateway(), {"sync_dir": ""})
         assert syncer._sync_dir.name == "google_photos"
+
+    @pytest.mark.parametrize("value", [0, -5, "0", None, "soon"])
+    def test_poll_interval_is_clamped(self, tmp_path: Path, value) -> None:
+        """A zero interval would re-read the album in a tight loop."""
+        syncer = _make_syncer(tmp_path, FakeHttpGateway(), {"poll_interval_seconds": value})
+        assert syncer._poll_interval >= 60
+
+    def test_poll_interval_is_kept_when_sane(self, tmp_path: Path) -> None:
+        syncer = _make_syncer(tmp_path, FakeHttpGateway(), {"poll_interval_seconds": 43200})
+        assert syncer._poll_interval == 43200
+
+    def test_config_is_not_reloaded_mid_sync(self, tmp_path: Path) -> None:
+        """A dashboard poll during a sync must not switch album or folder under it."""
+        syncer = _make_syncer(tmp_path, FakeHttpGateway())
+        original_dir = syncer._sync_dir
+        syncer._state.update_config(
+            "sync",
+            {
+                "google_photos": {
+                    "shared_album_url": "https://photos.app.goo.gl/other",
+                    "sync_dir": str(tmp_path / "elsewhere"),
+                }
+            },
+        )
+
+        syncer._syncing = True
+        syncer._reload_config()
+        assert syncer._shared_album_url == ALBUM_URL
+        assert syncer._sync_dir == original_dir
+
+        syncer._syncing = False
+        syncer._reload_config()
+        assert syncer._shared_album_url == "https://photos.app.goo.gl/other"
 
 
 # ---------------------------------------------------------------------------
@@ -175,304 +254,48 @@ class TestConfiguration:
 
 
 class TestFilenames:
-    def test_filename_is_deterministic_for_an_item(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        first = syncer._filename_for(_item("abc"))
-        second = syncer._filename_for(_item("abc"))
-        assert first == second
+    def test_stem_is_deterministic_for_an_item(self) -> None:
+        from metixel.backend.sync.google_photos import GooglePhotosSyncer
+
+        first = GooglePhotosSyncer._stem_for(_item("abc"))
+        assert first == GooglePhotosSyncer._stem_for(_item("abc"))
         assert first.startswith("gphoto_")
-        assert first.endswith(".jpg")
 
-    def test_different_items_get_different_names(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        assert syncer._filename_for(_item("abc")) != syncer._filename_for(_item("xyz"))
+    def test_different_items_get_different_stems(self) -> None:
+        from metixel.backend.sync.google_photos import GooglePhotosSyncer
 
-    def test_unsafe_characters_are_stripped_from_the_stem(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        name = syncer._filename_for(_item("abc", filename="../../etc/pa sswd.jpg"))
-        assert "/" not in name
-        assert ".." not in name
-        assert name.endswith(".jpg")
+        assert GooglePhotosSyncer._stem_for(_item("abc")) != GooglePhotosSyncer._stem_for(
+            _item("xyz")
+        )
 
-    def test_extension_comes_from_the_mime_type(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        heic = syncer._filename_for(_item("a", filename="x", mime="image/heic"))
-        video = syncer._filename_for(_item("b", filename="clip", mime="video/mp4", type_="VIDEO"))
-        assert heic.endswith(".heic")
-        assert video.endswith(".mp4")
+    def test_stem_matches_files_already_on_frames(self) -> None:
+        """Changing the naming would re-download every photo already synced."""
+        from metixel.backend.sync.google_photos import GooglePhotosSyncer
 
-    def test_video_without_mime_falls_back_to_mp4(self, tmp_path: Path) -> None:
+        key = "AF1QipPg4kkwxVMshxETCLNTqR540cscnN03Dtr0wAEc"
+        expected = "gphoto_" + hashlib.blake2s(key.encode(), digest_size=8).hexdigest()
+        assert GooglePhotosSyncer._stem_for({"media_key": key}) == expected
+
+    def test_extension_comes_from_the_content_type(self) -> None:
         from metixel.backend.sync.google_photos import _extension_for
 
-        assert _extension_for({}, "VIDEO") == ".mp4"
-        assert _extension_for({}, "PHOTO") == ".jpg"
-        assert _extension_for({"filename": "x.png"}, "PHOTO") == ".png"
+        assert _extension_for("image/heic", False) == ".heic"
+        assert _extension_for("image/jpeg; charset=binary", False) == ".jpg"
+        assert _extension_for("video/quicktime", True) == ".mov"
 
+    def test_unknown_content_type_falls_back_by_media_type(self) -> None:
+        from metixel.backend.sync.google_photos import _extension_for
 
-# ---------------------------------------------------------------------------
-# Timestamp / polling helpers
-# ---------------------------------------------------------------------------
+        assert _extension_for("", True) == ".mp4"
+        assert _extension_for("", False) == ".jpg"
 
+    def test_generic_content_types_never_become_bin(self) -> None:
+        """``Accept: application/octet-stream`` invites exactly that answer."""
+        from metixel.backend.sync.google_photos import _extension_for
 
-class TestTimestampHelpers:
-    def test_parse_rfc3339_accepts_z_suffix(self) -> None:
-        from metixel.backend.sync.google_photos import parse_rfc3339
-
-        assert parse_rfc3339("1970-01-01T00:00:10Z") == 10.0
-
-    def test_parse_rfc3339_tolerates_nanoseconds(self) -> None:
-        from metixel.backend.sync.google_photos import parse_rfc3339
-
-        assert parse_rfc3339("1970-01-01T00:00:10.123456789Z") == pytest.approx(10.123456)
-
-    def test_parse_rfc3339_returns_none_for_junk(self) -> None:
-        from metixel.backend.sync.google_photos import parse_rfc3339
-
-        assert parse_rfc3339("not a time") is None
-        assert parse_rfc3339(None) is None
-
-    def test_expiry_detection(self) -> None:
-        from metixel.backend.sync.google_photos import _is_expired
-
-        assert _is_expired({"expire_time": "1970-01-01T00:00:00Z"}) is True
-        assert _is_expired({"expire_time": "2999-01-01T00:00:00Z"}) is False
-        # No expiry known — treat the session as live rather than dead.
-        assert _is_expired({}) is False
-
-    def test_polling_interval_parsing(self) -> None:
-        from metixel.backend.sync.google_photos import _polling_interval_seconds
-
-        assert _polling_interval_seconds({"pollingConfig": {"pollInterval": "4s"}}) == 4
-        assert _polling_interval_seconds({"pollingConfig": {"pollInterval": "0.2s"}}) == 1
-        assert _polling_interval_seconds({}) == 5
-
-
-# ---------------------------------------------------------------------------
-# OAuth
-# ---------------------------------------------------------------------------
-
-
-class TestAccessToken:
-    def test_token_is_cached_between_calls(self, tmp_path: Path, fake_token) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        assert syncer._access_token() == "tok-123"
-        assert syncer._access_token() == "tok-123"
-        assert len(fake_token) == 1
-
-    def test_token_is_refetched_when_credentials_change(self, tmp_path: Path, fake_token) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        syncer._access_token()
-        syncer._state.update_config("sync", {"google_photos": {"refresh_token": "other"}})
-        syncer._reload_config()
-        syncer._access_token()
-        assert len(fake_token) == 2
-
-    def test_missing_credentials_raise(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway(), {"client_secret": ""})
-        with pytest.raises(RuntimeError, match="not connected"):
-            syncer._access_token()
-
-    def test_rejected_refresh_token_is_explained(self, tmp_path: Path, monkeypatch) -> None:
-        import metixel.backend.sync.google_photos as gp
-
-        monkeypatch.setattr(
-            gp,
-            "post_form",
-            lambda url, data: FakeResponse(
-                json_data={"error": "invalid_grant", "error_description": "Token expired"},
-                status_code=400,
-            ),
-        )
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        with pytest.raises(RuntimeError, match="google_photos_auth.py"):
-            syncer._access_token()
-
-
-class TestProbeCredentials:
-    def test_missing_credentials_reported_without_a_call(self) -> None:
-        from metixel.backend.sync.google_photos import probe_credentials
-
-        result = probe_credentials("", "", "")
-        assert result["ok"] is False
-        assert "required" in result["error"]
-
-    def test_successful_probe(self, monkeypatch) -> None:
-        from metixel.backend.sync.google_photos import probe_credentials
-
-        http = FakeHttpGateway()
-        http.route("POST", SESSIONS_URL, FakeResponse(json_data={"id": "probe"}))
-        # The probe deletes its throwaway session directly via requests.
-        import metixel.backend.sync.google_photos as gp
-
-        monkeypatch.setattr(gp.requests, "delete", lambda *a, **k: FakeResponse())
-
-        result = probe_credentials("cid", "secret", "refresh", http=http)
-        assert result["ok"] is True
-
-    def test_forbidden_probe_explains_the_scope(self) -> None:
-        from metixel.backend.sync.google_photos import probe_credentials
-
-        http = FakeHttpGateway()
-        http.route("POST", SESSIONS_URL, FakeResponse(status_code=403))
-        result = probe_credentials("cid", "secret", "refresh", http=http)
-        assert result["ok"] is False
-        assert "photospicker.mediaitems.readonly" in result["error"]
-
-
-# ---------------------------------------------------------------------------
-# Picking sessions
-# ---------------------------------------------------------------------------
-
-
-class TestSessions:
-    def test_create_session_persists_the_picker_uri(self, tmp_path: Path) -> None:
-        http = FakeHttpGateway()
-        http.route(
-            "POST",
-            SESSIONS_URL,
-            FakeResponse(
-                json_data={
-                    "id": "sess-1",
-                    "pickerUri": "https://photos.google.com/pick?x=1",
-                    "expireTime": "2999-01-01T00:00:00Z",
-                    "pollingConfig": {"pollInterval": "3s"},
-                }
-            ),
-        )
-        syncer = _make_syncer(tmp_path, http)
-
-        session = syncer.create_session()
-
-        assert session["id"] == "sess-1"
-        assert session["picker_uri"] == "https://photos.google.com/pick?x=1"
-        assert session["poll_interval_seconds"] == 3
-        assert syncer.read_session() == session
-
-    def test_create_session_error_raises(self, tmp_path: Path) -> None:
-        http = FakeHttpGateway()
-        http.route("POST", SESSIONS_URL, FakeResponse(status_code=500))
-        syncer = _make_syncer(tmp_path, http)
-        with pytest.raises(RuntimeError, match="picking session"):
-            syncer.create_session()
-
-    def test_refresh_session_picks_up_the_pick(self, tmp_path: Path) -> None:
-        http = FakeHttpGateway()
-        http.route(
-            "GET",
-            f"{SESSIONS_URL}/sess-1",
-            FakeResponse(
-                json_data={
-                    "id": "sess-1",
-                    "mediaItemsSet": True,
-                    "expireTime": "2999-01-01T00:00:00Z",
-                }
-            ),
-        )
-        syncer = _make_syncer(tmp_path, http)
-        syncer._write_session({"id": "sess-1", "media_items_set": False})
-
-        session = syncer.refresh_session()
-
-        assert session is not None
-        assert session["media_items_set"] is True
-        assert syncer.read_session()["media_items_set"] is True
-
-    def test_refresh_session_marks_a_forgotten_session_expired(self, tmp_path: Path) -> None:
-        http = FakeHttpGateway()
-        http.route("GET", f"{SESSIONS_URL}/sess-1", FakeResponse(status_code=404))
-        syncer = _make_syncer(tmp_path, http)
-        syncer._write_session({"id": "sess-1"})
-
-        session = syncer.refresh_session()
-
-        assert session is not None
-        assert session["expired"] is True
-
-    def test_refresh_session_without_one_returns_none(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        assert syncer.refresh_session() is None
-
-    def test_clear_session_removes_the_file(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        syncer._write_session({"id": "sess-1"})
-        assert syncer.clear_session(delete_remote=False) is True
-        assert syncer.read_session() is None
-        assert syncer.clear_session(delete_remote=False) is False
-
-    def test_pending_session_ignores_imported_and_expired(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-
-        syncer._write_session({"id": "s", "media_items_set": False})
-        assert syncer._pending_session() is None
-
-        syncer._write_session({"id": "s", "media_items_set": True, "imported_at": time.time()})
-        assert syncer._pending_session() is None
-
-        syncer._write_session(
-            {"id": "s", "media_items_set": True, "expire_time": "1970-01-01T00:00:00Z"}
-        )
-        assert syncer._pending_session() is None
-
-        syncer._write_session({"id": "s", "media_items_set": True})
-        assert syncer._pending_session() is not None
-
-    def test_pending_session_refresh_notices_a_pick_made_elsewhere(self, tmp_path: Path) -> None:
-        """The scheduled loop must spot a pick made with the dashboard closed."""
-        http = FakeHttpGateway()
-        http.route(
-            "GET",
-            f"{SESSIONS_URL}/sess-1",
-            FakeResponse(json_data={"id": "sess-1", "mediaItemsSet": True}),
-        )
-        syncer = _make_syncer(tmp_path, http)
-        syncer._write_session({"id": "sess-1", "media_items_set": False})
-
-        # Nothing local knows about the pick yet...
-        assert syncer._pending_session() is None
-        # ...until the session is re-read from Google.
-        assert syncer._pending_session(refresh=True) is not None
-
-    def test_pending_session_refresh_tolerates_a_failed_poll(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())  # no routes → raises
-        syncer._write_session({"id": "sess-1", "media_items_set": False})
-
-        assert syncer._pending_session(refresh=True) is None
-
-
-# ---------------------------------------------------------------------------
-# Listing picked items
-# ---------------------------------------------------------------------------
-
-
-class TestListPickedItems:
-    def test_pagination_is_followed(self, tmp_path: Path) -> None:
-        pages = [
-            FakeResponse(json_data={"mediaItems": [_item("1")], "nextPageToken": "p2"}),
-            FakeResponse(json_data={"mediaItems": [_item("2")]}),
-        ]
-        http = FakeHttpGateway()
-        http.route("GET", MEDIA_ITEMS_URL, lambda _params: pages.pop(0))
-        syncer = _make_syncer(tmp_path, http)
-
-        items = syncer._list_picked_items("sess-1")
-
-        assert [i["id"] for i in items] == ["1", "2"]
-        assert http.calls[0][2] == {"sessionId": "sess-1", "pageSize": 100}
-        assert http.calls[1][2]["pageToken"] == "p2"
-
-    def test_unfinished_pick_is_reported(self, tmp_path: Path) -> None:
-        http = FakeHttpGateway()
-        http.route("GET", MEDIA_ITEMS_URL, FakeResponse(status_code=400))
-        syncer = _make_syncer(tmp_path, http)
-        with pytest.raises(RuntimeError, match="waiting for photos"):
-            syncer._list_picked_items("sess-1")
-
-    def test_expired_session_is_reported(self, tmp_path: Path) -> None:
-        http = FakeHttpGateway()
-        http.route("GET", MEDIA_ITEMS_URL, FakeResponse(status_code=403))
-        syncer = _make_syncer(tmp_path, http)
-        with pytest.raises(RuntimeError, match="expired"):
-            syncer._list_picked_items("sess-1")
+        assert _extension_for("application/octet-stream", False) == ".jpg"
+        assert _extension_for("application/octet-stream", True) == ".mp4"
+        assert _extension_for("text/plain", False) == ".jpg"
 
 
 # ---------------------------------------------------------------------------
@@ -481,274 +304,8 @@ class TestListPickedItems:
 
 
 class TestSyncCycle:
-    @staticmethod
-    def _wire(tmp_path: Path, items: list[dict], cfg: dict | None = None):
-        http = FakeHttpGateway()
-        http.route("GET", MEDIA_ITEMS_URL, FakeResponse(json_data={"mediaItems": items}))
-        for item in items:
-            http.route(
-                "GET",
-                item["mediaFile"]["baseUrl"] + ("=dv" if item["type"] == "VIDEO" else "=d"),
-                FakeResponse(iter_chunks=(b"bytes-", item["id"].encode())),
-            )
-        syncer = _make_syncer(tmp_path, http, cfg)
-        syncer._write_session({"id": "sess-1", "media_items_set": True})
-        return syncer
-
-    def test_downloads_picked_items(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, [_item("a"), _item("b")])
-
-        result = syncer.sync_once()
-
-        assert result.success is True
-        assert result.total_remote == 2
-        assert result.downloaded == 2
-        files = sorted(p.name for p in syncer._sync_dir.iterdir())
-        assert len(files) == 2
-        assert all(f.startswith("gphoto_") for f in files)
-        assert (syncer._sync_dir / files[0]).read_bytes().startswith(b"bytes-")
-
-    def test_already_downloaded_items_are_skipped(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, [_item("a")])
-        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
-        (syncer._sync_dir / syncer._filename_for(_item("a"))).write_bytes(b"old")
-
-        result = syncer.sync_once()
-
-        assert result.downloaded == 0
-        assert result.skipped == 1
-        # The existing file is left exactly as it was.
-        assert (syncer._sync_dir / syncer._filename_for(_item("a"))).read_bytes() == b"old"
-
-    def test_completed_import_marks_the_session(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, [_item("a")])
-        syncer.sync_once()
-        assert syncer.read_session()["imported_at"] > 0
-        # Nothing left for the scheduled loop to do.
-        assert syncer._pending_session() is None
-
-    def test_result_is_persisted_for_the_dashboard(self, tmp_path: Path, runtime_dir: Path) -> None:
-        syncer = self._wire(tmp_path, [_item("a")])
-        syncer.sync_once()
-
-        status_file = runtime_dir / "google_photos_sync_status.json"
-        assert status_file.is_file()
-        saved = json.loads(status_file.read_text())
-        assert saved["downloaded"] == 1
-        assert saved["session_id"] == "sess-1"
-        # And it survives a fresh syncer instance.
-        reloaded = _make_syncer(tmp_path, FakeHttpGateway())
-        assert reloaded.get_last_result().downloaded == 1
-
-    def test_strict_sync_removes_unpicked_files(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, [_item("a")], {"strict_sync": True})
-        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
-        stray = syncer._sync_dir / "gphoto_stale.jpg"
-        stray.write_bytes(b"old")
-
-        result = syncer.sync_once()
-
-        assert result.deleted == 1
-        assert not stray.exists()
-
-    def test_pull_only_keeps_unpicked_files(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, [_item("a")])
-        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
-        stray = syncer._sync_dir / "gphoto_stale.jpg"
-        stray.write_bytes(b"old")
-
-        result = syncer.sync_once()
-
-        assert result.deleted == 0
-        assert stray.exists()
-
-    def test_sync_adds_the_folder_to_the_watch_paths(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, [_item("a")])
-        syncer.sync_once()
-
-        paths = [p["path"] for p in syncer._state.config.sync["local"]["watch_paths"]]
-        assert str(tmp_path / "gphotos") in paths
-
-    def test_download_failure_is_reported_and_session_stays_pending(self, tmp_path: Path) -> None:
-        item = _item("a")
-        http = FakeHttpGateway()
-        http.route("GET", MEDIA_ITEMS_URL, FakeResponse(json_data={"mediaItems": [item]}))
-        http.route("GET", item["mediaFile"]["baseUrl"] + "=d", FakeResponse(status_code=401))
-        syncer = _make_syncer(tmp_path, http)
-        syncer._write_session({"id": "sess-1", "media_items_set": True})
-
-        result = syncer.sync_once()
-
-        assert result.success is False
-        assert result.downloaded == 0
-        assert any("Download failed" in e for e in result.errors)
-        # Not marked imported, so the scheduled loop will retry.
-        assert syncer._pending_session() is not None
-
-    def test_no_session_is_a_clear_error(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-
-        result = syncer.sync_once()
-
-        assert result.success is False
-        assert "No picking session" in result.errors[0]
-
-    def test_expired_session_is_a_clear_error(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway())
-        syncer._write_session(
-            {"id": "s", "media_items_set": True, "expire_time": "1970-01-01T00:00:00Z"}
-        )
-
-        result = syncer.sync_once()
-
-        assert result.success is False
-        assert "expired" in result.errors[0]
-
-    def test_unconfigured_sync_does_not_call_google(self, tmp_path: Path) -> None:
-        http = FakeHttpGateway()  # every route raises if called
-        syncer = _make_syncer(tmp_path, http, {"refresh_token": ""})
-
-        result = syncer.sync_once()
-
-        assert result.success is False
-        assert "not connected" in result.errors[0]
-        assert http.calls == []
-
-    def test_cancellation_stops_the_download_loop(self, tmp_path: Path) -> None:
-        """A cancel mid-download finishes the current file, then stops."""
-        items = [_item("a"), _item("b")]
-        http = FakeHttpGateway()
-        http.route("GET", MEDIA_ITEMS_URL, FakeResponse(json_data={"mediaItems": items}))
-        syncer = _make_syncer(tmp_path, http)
-        syncer._write_session({"id": "sess-1", "media_items_set": True})
-
-        def _responder(_params):
-            syncer.cancel()
-            return FakeResponse(iter_chunks=(b"bytes",))
-
-        for item in items:
-            http.route("GET", item["mediaFile"]["baseUrl"] + "=d", _responder)
-
-        result = syncer.sync_once()
-
-        assert result.downloaded == 1
-        assert any("Cancelled" in e for e in result.errors)
-        # Not marked imported — the rest can still be fetched later.
-        assert not syncer.read_session().get("imported_at")
-
-    def test_video_items_use_the_video_download_suffix(self, tmp_path: Path) -> None:
-        video = _item("v", filename="clip.mp4", mime="video/mp4", type_="VIDEO")
-        syncer = self._wire(tmp_path, [video])
-
-        result = syncer.sync_once()
-
-        assert result.downloaded == 1
-        assert any(url.endswith("=dv") for _m, url, _p in syncer._http.calls)
-
-
-# ---------------------------------------------------------------------------
-# Shared-album mode
-# ---------------------------------------------------------------------------
-
-
-class TestSharedUrlMode:
-    """``mode="shared_url"`` reads a public album page instead of a picking
-    session — a live album, so every cycle re-reads it."""
-
-    ALBUM_URL = "https://photos.google.com/share/SHARE123?key=KEY456"
-
-    @staticmethod
-    def _album_items(count: int = 2) -> list[dict]:
-        return [
-            {
-                "id": f"AF1QipItem{i}".ljust(40, "0"),
-                "type": "PHOTO",
-                "mediaFile": {
-                    "baseUrl": f"https://lh3.googleusercontent.com/item{i}",
-                    "filename": "",
-                    "mimeType": "",
-                },
-            }
-            for i in range(count)
-        ]
-
-    def _wire(self, tmp_path: Path, items: list[dict], cfg: dict | None = None, **listing):
-        """A syncer in shared-URL mode whose album reader is stubbed out."""
-        import metixel.backend.sync.google_photos as gp
-
-        http = FakeHttpGateway()
-        for item in items:
-            http.route(
-                "GET",
-                item["mediaFile"]["baseUrl"] + "=d",
-                FakeResponse(iter_chunks=(b"bytes",), headers={"Content-Type": "image/jpeg"}),
-            )
-        overrides = {"mode": "shared_url", "shared_album_url": self.ALBUM_URL}
-        overrides.update(cfg or {})
-        syncer = _make_syncer(tmp_path, http, overrides)
-
-        payload = {
-            "url": self.ALBUM_URL,
-            "title": "Holiday",
-            "album_key": "AF1QipAlbum",
-            "pages": listing.get("pages", 1),
-            "truncated": listing.get("truncated", False),
-            # fetch_album returns raw items; as_media_items adapts them, so the
-            # stub returns already-adapted ones and the adapter is a no-op.
-            "items": items,
-        }
-
-        def _fetch_album(url, **kwargs):
-            assert url == self.ALBUM_URL
-            on_progress = kwargs.get("on_progress")
-            if on_progress:
-                on_progress(len(items), payload["pages"])
-            if listing.get("raise"):
-                raise listing["raise"]
-            return payload
-
-        monkey = pytest.MonkeyPatch()
-        monkey.setattr(gp.album, "fetch_album", _fetch_album)
-        monkey.setattr(gp.album, "as_media_items", lambda raw: list(raw))
-        self._monkey = monkey
-        return syncer
-
-    def teardown_method(self) -> None:
-        monkey = getattr(self, "_monkey", None)
-        if monkey is not None:
-            monkey.undo()
-
-    def test_configured_by_url_alone(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(
-            tmp_path,
-            FakeHttpGateway(),
-            {
-                "mode": "shared_url",
-                "shared_album_url": self.ALBUM_URL,
-                # No OAuth credentials at all.
-                "client_id": "",
-                "client_secret": "",
-                "refresh_token": "",
-            },
-        )
-        assert syncer.mode == "shared_url"
-        assert syncer.is_configured() is True
-
-    def test_bad_url_is_not_configured(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(
-            tmp_path,
-            FakeHttpGateway(),
-            {"mode": "shared_url", "shared_album_url": "https://example.com/x"},
-        )
-        assert syncer.is_configured() is False
-
-    def test_unknown_mode_falls_back_to_picker(self, tmp_path: Path) -> None:
-        syncer = _make_syncer(tmp_path, FakeHttpGateway(), {"mode": "telepathy"})
-        assert syncer.mode == "picker"
-
-    def test_downloads_the_album(self, tmp_path: Path) -> None:
-        items = self._album_items(2)
-        syncer = self._wire(tmp_path, items)
+    def test_downloads_the_album(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a"), _item("b")])
 
         result = syncer.sync_once()
 
@@ -756,62 +313,112 @@ class TestSharedUrlMode:
         assert result.total_remote == 2
         assert result.downloaded == 2
         assert result.album_title == "Holiday"
+        assert album_stub["calls"] == [ALBUM_URL]
         files = sorted(p.name for p in syncer._sync_dir.iterdir())
         assert len(files) == 2
-        # The extension came from the download's Content-Type.
-        assert all(f.endswith(".jpg") for f in files)
+        assert all(f.startswith("gphoto_") and f.endswith(".jpg") for f in files)
+        assert (syncer._sync_dir / files[0]).read_bytes().startswith(b"bytes-")
 
-    def test_no_oauth_token_is_requested(self, tmp_path: Path, fake_token) -> None:
-        """A public album needs no credentials, so none are minted."""
-        syncer = self._wire(
-            tmp_path,
-            self._album_items(1),
-            {"client_id": "", "client_secret": "", "refresh_token": ""},
-        )
+    def test_downloads_send_no_credentials(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")])
+        syncer.sync_once()
+        assert syncer._http.headers_seen
+        assert all("Authorization" not in h for h in syncer._http.headers_seen)
+
+    def test_second_run_downloads_nothing_new(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")])
+        syncer.sync_once()
 
         result = syncer.sync_once()
 
-        assert result.downloaded == 1
-        assert fake_token == []
+        assert result.downloaded == 0
+        assert result.skipped == 1
 
-    def test_second_run_downloads_nothing_new(self, tmp_path: Path) -> None:
-        items = self._album_items(2)
-        syncer = self._wire(tmp_path, items)
+    def test_new_album_photos_arrive_on_the_next_cycle(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")])
         syncer.sync_once()
 
-        again = syncer.sync_once()
-
-        assert again.downloaded == 0
-        assert again.skipped == 2
-
-    def test_new_album_photos_arrive_on_the_next_cycle(self, tmp_path: Path) -> None:
-        """The live-album behaviour the picker mode cannot offer."""
-        syncer = self._wire(tmp_path, self._album_items(1))
-        syncer.sync_once()
-        self.teardown_method()
-
-        grown = self._wire(tmp_path, self._album_items(3))
+        grown = _wire(tmp_path, album_stub, [_item("a"), _item("b"), _item("c")])
         result = grown.sync_once()
 
         assert result.downloaded == 2
         assert len(list(grown._sync_dir.iterdir())) == 3
 
-    def test_truncated_album_is_reported_but_still_downloaded(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, self._album_items(2), pages=200, truncated=True)
+    def test_videos_use_the_video_download_suffix(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("v", video=True)])
 
         result = syncer.sync_once()
 
-        assert result.downloaded == 2
-        assert result.album_pages == 200
-        assert any("could be read" in e for e in result.errors)
-        assert result.success is False
+        assert result.downloaded == 1
+        assert any(url.endswith("=dv") for _m, url, _p in syncer._http.calls)
+        assert [p.suffix for p in syncer._sync_dir.iterdir()] == [".mp4"]
 
-    def test_unreadable_album_fails_clearly(self, tmp_path: Path) -> None:
+    def test_result_is_persisted_for_the_dashboard(
+        self, tmp_path: Path, album_stub, runtime_dir: Path
+    ) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")])
+        syncer.sync_once()
+
+        status_file = runtime_dir / "google_photos_sync_status.json"
+        saved = json.loads(status_file.read_text())
+        assert saved["downloaded"] == 1
+        assert saved["album_title"] == "Holiday"
+        # And it survives a fresh syncer instance.
+        reloaded = _make_syncer(tmp_path, FakeHttpGateway())
+        assert reloaded.get_last_result().downloaded == 1
+
+    def test_sync_adds_the_folder_to_the_watch_paths(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")])
+        syncer.sync_once()
+
+        paths = [p["path"] for p in syncer._state.config.sync["local"]["watch_paths"]]
+        assert str(tmp_path / "gphotos") in paths
+
+    def test_download_failure_is_reported(self, tmp_path: Path, album_stub) -> None:
+        item = _item("a")
+        syncer = _wire(tmp_path, album_stub, [item])
+        syncer._http.route("GET", _media_url(item), FakeResponse(status_code=403))
+
+        result = syncer.sync_once()
+
+        assert result.success is False
+        assert result.downloaded == 0
+        assert any("link may have been turned off" in e for e in result.errors)
+
+    def test_html_response_is_refused(self, tmp_path: Path, album_stub) -> None:
+        """A sign-in page must never be written out as a photo."""
+        item = _item("a")
+        syncer = _wire(tmp_path, album_stub, [item])
+        syncer._http.route(
+            "GET",
+            _media_url(item),
+            FakeResponse(iter_chunks=(b"<html>",), headers={"Content-Type": "text/html"}),
+        )
+
+        result = syncer.sync_once()
+
+        assert result.downloaded == 0
+        assert any("instead of media" in e for e in result.errors)
+        assert list(syncer._sync_dir.iterdir()) == []
+
+    def test_unconfigured_sync_does_not_call_google(self, tmp_path: Path, album_stub) -> None:
+        http = FakeHttpGateway()  # every route raises if called
+        syncer = _make_syncer(tmp_path, http, {"shared_album_url": ""})
+
+        result = syncer.sync_once()
+
+        assert result.success is False
+        assert "No Google Photos shared album link" in result.errors[0]
+        assert http.calls == []
+        assert album_stub["calls"] == []
+
+    def test_unreadable_album_fails_clearly(self, tmp_path: Path, album_stub) -> None:
         from metixel.backend.sync.google_photos_album import SharedAlbumError
 
-        syncer = self._wire(
+        syncer = _wire(
             tmp_path,
-            self._album_items(1),
+            album_stub,
+            [_item("a")],
             **{"raise": SharedAlbumError("No photos found on the album page")},
         )
 
@@ -821,37 +428,144 @@ class TestSharedUrlMode:
         assert "No photos found" in result.errors[0]
         assert result.downloaded == 0
 
-    def test_strict_sync_mirrors_the_album(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, self._album_items(1), {"strict_sync": True})
+    def test_truncated_album_is_reported_but_still_downloaded(
+        self, tmp_path: Path, album_stub
+    ) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a"), _item("b")], pages=200, truncated=True)
+
+        result = syncer.sync_once()
+
+        assert result.downloaded == 2
+        assert result.album_pages == 200
+        assert any("could be read" in e for e in result.errors)
+        assert result.success is False
+
+    def test_cancellation_stops_the_download_loop(self, tmp_path: Path, album_stub) -> None:
+        """A cancel mid-download finishes the current file, then stops."""
+        items = [_item("a"), _item("b")]
+        syncer = _wire(tmp_path, album_stub, items)
+
+        def _responder(_params):
+            syncer.cancel()
+            return FakeResponse(iter_chunks=(b"bytes",), headers={"Content-Type": "image/jpeg"})
+
+        for item in items:
+            syncer._http.route("GET", _media_url(item), _responder)
+
+        result = syncer.sync_once()
+
+        assert result.downloaded == 1
+        assert any("Cancelled" in e for e in result.errors)
+        # The item the cancel left unattempted is not "already here".
+        assert result.skipped == 0
+
+    def test_skipped_counts_only_files_found_on_disk(self, tmp_path: Path, album_stub) -> None:
+        items = [_item("a"), _item("b"), _item("c")]
+        syncer = _wire(tmp_path, album_stub, items[:1])
+        syncer.sync_once()  # "a" is now on disk
+
+        syncer = _wire(tmp_path, album_stub, items)
+        syncer._http.route("GET", _media_url(items[2]), FakeResponse(status_code=500))
+        result = syncer.sync_once()
+
+        assert result.downloaded == 1  # b
+        assert result.skipped == 1  # a
+        assert len(result.errors) == 1  # c failed
+
+
+# ---------------------------------------------------------------------------
+# Strict (mirror) mode
+# ---------------------------------------------------------------------------
+
+
+class TestStrictSync:
+    def test_strict_sync_mirrors_the_album(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")], {"strict_sync": True})
         syncer._sync_dir.mkdir(parents=True, exist_ok=True)
-        stray = syncer._sync_dir / "gphoto_gone.jpg"
-        stray.write_bytes(b"old")
+        removed_from_album = syncer._sync_dir / "gphoto_gone.jpg"
+        removed_from_album.write_bytes(b"old")
 
         result = syncer.sync_once()
 
         assert result.deleted == 1
-        assert not stray.exists()
+        assert not removed_from_album.exists()
+        assert len(list(syncer._sync_dir.iterdir())) == 1
 
-    def test_no_picking_session_is_touched(self, tmp_path: Path) -> None:
-        syncer = self._wire(tmp_path, self._album_items(1))
-        syncer.sync_once()
-        assert syncer.read_session() is None
-
-    def test_html_response_is_refused(self, tmp_path: Path) -> None:
-        """A sign-in page must never be written out as a photo."""
-        items = self._album_items(1)
-        syncer = self._wire(tmp_path, items)
-        syncer._http.route(
-            "GET",
-            items[0]["mediaFile"]["baseUrl"] + "=d",
-            FakeResponse(iter_chunks=(b"<html>",), headers={"Content-Type": "text/html"}),
-        )
+    def test_strict_sync_leaves_files_it_did_not_write(self, tmp_path: Path, album_stub) -> None:
+        """The folder is user-configurable — their own uploads are never ours to delete."""
+        syncer = _wire(tmp_path, album_stub, [_item("a")], {"strict_sync": True})
+        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
+        own_upload = syncer._sync_dir / "IMG_4521.jpg"
+        own_upload.write_bytes(b"mine")
+        gone_from_album = syncer._sync_dir / "gphoto_gone.jpg"
+        gone_from_album.write_bytes(b"old")
 
         result = syncer.sync_once()
 
-        assert result.downloaded == 0
-        assert any("instead of media" in e for e in result.errors)
-        assert list(syncer._sync_dir.iterdir()) == []
+        assert own_upload.exists()
+        assert not gone_from_album.exists()
+        assert result.deleted == 1
+
+    def test_pull_only_keeps_files_removed_from_the_album(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")])
+        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
+        stray = syncer._sync_dir / "gphoto_stale.jpg"
+        stray.write_bytes(b"old")
+
+        result = syncer.sync_once()
+
+        assert result.deleted == 0
+        assert stray.exists()
+
+    def test_strict_sync_never_deletes_from_a_partial_listing(
+        self, tmp_path: Path, album_stub
+    ) -> None:
+        """A partly-read album must not look like the photos beyond it were removed."""
+        syncer = _wire(tmp_path, album_stub, [_item("a")], {"strict_sync": True}, complete=False)
+        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
+        beyond_page_one = syncer._sync_dir / "gphoto_on_a_later_page.jpg"
+        beyond_page_one.write_bytes(b"keep")
+
+        result = syncer.sync_once()
+
+        assert result.downloaded == 1
+        assert result.deleted == 0
+        assert beyond_page_one.exists()
+        assert any("Strict sync skipped" in e for e in result.errors)
+
+    def test_strict_sync_skips_a_truncated_album_too(self, tmp_path: Path, album_stub) -> None:
+        syncer = _wire(tmp_path, album_stub, [_item("a")], {"strict_sync": True}, truncated=True)
+        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
+        stray = syncer._sync_dir / "gphoto_later.jpg"
+        stray.write_bytes(b"keep")
+
+        result = syncer.sync_once()
+
+        assert result.deleted == 0
+        assert stray.exists()
+
+    def test_cancelled_sync_deletes_nothing(self, tmp_path: Path, album_stub) -> None:
+        item = _item("a")
+        syncer = _wire(tmp_path, album_stub, [item], {"strict_sync": True})
+        syncer._sync_dir.mkdir(parents=True, exist_ok=True)
+        stray = syncer._sync_dir / "gphoto_gone.jpg"
+        stray.write_bytes(b"old")
+
+        def _responder(_params):
+            syncer.cancel()
+            return FakeResponse(iter_chunks=(b"bytes",), headers={"Content-Type": "image/jpeg"})
+
+        syncer._http.route("GET", _media_url(item), _responder)
+
+        result = syncer.sync_once()
+
+        assert result.deleted == 0
+        assert stray.exists()
+
+
+# ---------------------------------------------------------------------------
+# Connection probe
+# ---------------------------------------------------------------------------
 
 
 class TestProbeSharedAlbum:

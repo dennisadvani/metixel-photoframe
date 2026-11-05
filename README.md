@@ -46,7 +46,7 @@ DIY hardware shouldn't require a computer science degree. Once installed, Metixe
 - **Web media upload** — upload photos and videos from any phone or browser via the Media Library (opens the phone gallery on iOS/Android; drag & drop on desktop)
 - **Smooth crossfade transitions** with hardware OpenGL ES rendering
 - **Native Immich v3 sync** — auto-pull albums and assets
-- **Google Photos sync** — either pick photos/albums in Google's own picker, or paste a shared-album link and let the frame follow that album as it grows (Google removed library-wide API access for apps in March 2025)
+- **Google Photos sync** — paste a shared album's link and the frame mirrors that whole album, keeping up as you add or remove photos (no Google account access needed)
 - **Runs locally** — no cloud dependency, your photos stay on your network
 - **Screen Off Hours** — turn off the screen at night to save power
 - **Over the Air Updates** — update via the web UI

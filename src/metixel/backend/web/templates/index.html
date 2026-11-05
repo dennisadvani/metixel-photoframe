@@ -619,67 +619,18 @@
 
                     <div class="mt-5 border-t border-border/60"></div>
 
-                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Source</div>
-                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Sync photos and videos from Google Photos. Google removed library-wide access for apps in March&nbsp;2025, so there are two ways to tell the frame what to fetch &mdash; pick one below.</p>
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Shared Album Link</div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">The frame shows one Google Photos album &mdash; all of it. Share the album by link and paste the link below; every sync re-reads the album, so photos you add to it appear on the frame (and, with Strict Sync on, photos you remove leave it). No Google account access is needed.</p>
+                    <p class="text-[0.76rem] leading-relaxed mb-4" style="border-left:3px solid #f0a030;padding:0.6rem 0.8rem;background:var(--bg);border-radius:4px;color:var(--text-secondary)"><strong style="color:#f0a030">Good to know.</strong> Google offers no API for shared albums, so the frame reads the album&rsquo;s public web page the way a browser does. That means: <strong>it can stop working without warning</strong> if Google changes that page (the sync then reports a clear error until Metixel is updated); the album must be <strong>shared by link, so anyone with the link can see the photos</strong>; <strong>videos may fail to download</strong>; and very large albums are paged in, up to 200 pages / 50,000 photos.</p>
                     <div class="setting-row">
                         <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Mode</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug"><strong>Picker</strong> is Google&rsquo;s supported interface: you pick photos and the frame downloads that selection. <strong>Shared album URL</strong> follows an album as it grows, like Immich &mdash; see the warning below.</span>
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Album URL</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">In Google Photos open the album &rarr; <em>Share</em> &rarr; <em>Create link</em>, then paste it here. Both <code>photos.app.goo.gl/&hellip;</code> and <code>photos.google.com/share/&hellip;</code> links work.</span>
                         </div>
                         <div class="setting-control">
-                            <select id="cfg-gphotos-mode" class="select-premium input-premium w-56">
-                                <option value="picker">Picker (recommended)</option>
-                                <option value="shared_url">Shared album URL</option>
-                            </select>
+                            <input type="url" id="cfg-gphotos-album-url" class="input-premium w-56" placeholder="https://photos.app.goo.gl/…">
                         </div>
                     </div>
-
-                    <div class="mt-5 border-t border-border/60"></div>
-
-                    <div id="gphotos-picker-block">
-                        <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Google Account Connection</div>
-                        <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">Run <code>python scripts/google_photos_auth.py --client-id &hellip; --client-secret &hellip;</code> once on a computer with a browser to get these three values.</p>
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Client ID</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">OAuth client (type &ldquo;Desktop app&rdquo;) from your own Google Cloud project.</span>
-                        </div>
-                        <div class="setting-control">
-                            <input type="text" id="cfg-gphotos-client-id" class="input-premium w-56" placeholder="1234-abc.apps.googleusercontent.com">
-                        </div>
-                    </div>
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Client Secret</span>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" id="cfg-gphotos-client-secret" class="input-premium w-56" placeholder="••••••••">
-                        </div>
-                    </div>
-                    <div class="setting-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Refresh Token</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">Printed by <code>google_photos_auth.py</code>. Stays valid until you revoke it.</span>
-                        </div>
-                        <div class="setting-control">
-                            <input type="password" id="cfg-gphotos-refresh-token" class="input-premium w-56" placeholder="••••••••">
-                        </div>
-                    </div>
-                    </div><!-- /gphotos-picker-block -->
-
-                    <div id="gphotos-url-block" class="hidden">
-                        <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Shared Album Link</div>
-                        <p class="text-[0.76rem] leading-relaxed mb-4" style="border-left:3px solid #f0a030;padding:0.6rem 0.8rem;background:var(--bg);border-radius:4px;color:var(--text-secondary)"><strong style="color:#f0a030">Read this first.</strong> Google offers no API for shared albums, so this mode reads the album&rsquo;s public web page the way a browser does. That means: <strong>it can stop working without warning</strong> if Google changes that page (switch back to Picker until Metixel is updated); the album must be <strong>shared by link, so anyone with the link can see the photos</strong>; <strong>videos may fail to download</strong>; and very large albums are paged in, up to 200 pages / 50,000 photos. Picker mode has none of these caveats &mdash; the trade is that only this mode keeps up with an album as you add to it.</p>
-                        <div class="setting-row">
-                            <div class="setting-label">
-                                <span class="text-[0.85rem] font-medium text-text-secondary">Album URL</span>
-                                <span class="text-[0.72rem] text-text-muted leading-snug">In Google Photos open the album &rarr; <em>Share</em> &rarr; <em>Create link</em>, then paste it here. Both <code>photos.app.goo.gl/&hellip;</code> and <code>photos.google.com/share/&hellip;</code> links work.</span>
-                            </div>
-                            <div class="setting-control">
-                                <input type="url" id="cfg-gphotos-album-url" class="input-premium w-56" placeholder="https://photos.app.goo.gl/…">
-                            </div>
-                        </div>
-                    </div><!-- /gphotos-url-block -->
                     <div class="flex items-center gap-3 mt-2">
                         <button id="btn-test-gphotos" class="btn--secondary btn--sm">Test Connection</button>
                         <span id="gphotos-test-result" class="text-[0.82rem] text-text-muted"></span>
@@ -688,24 +639,6 @@
                     <div class="mt-5 border-t border-border/60"></div>
 
                     <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Sync Settings</div>
-                    <div class="setting-row" id="gphotos-pick-row">
-                        <div class="setting-label">
-                            <span class="text-[0.85rem] font-medium text-text-secondary">Photos</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">Open the Google picker, select photos or whole albums, then sync. Your selection stays available for about an hour — pick again to add more.</span>
-                        </div>
-                        <div class="setting-control">
-                            <div class="flex flex-col gap-2">
-                                <div class="flex items-center gap-2">
-                                    <button id="btn-gphotos-pick" class="btn--sm btn--primary">Pick Photos</button>
-                                    <button id="btn-gphotos-clear-session" class="btn--sm btn--secondary hidden">Clear Selection</button>
-                                </div>
-                                <div id="gphotos-session" class="hidden text-[0.76rem]">
-                                    <a id="gphotos-picker-link" href="#" target="_blank" rel="noopener" class="hidden">Open Google Photos to pick →</a>
-                                    <div id="gphotos-session-state" class="text-text-muted mt-1"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                     <div class="setting-row">
                         <div class="setting-label">
                             <span class="text-[0.85rem] font-medium text-text-secondary">Sync Directory</span>
@@ -721,7 +654,7 @@
                     <div class="setting-row">
                         <div class="setting-label">
                             <span class="text-[0.85rem] font-medium text-text-secondary">Enable Scheduled Sync</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">Finishes importing a selection that was interrupted. New photos still need a fresh pick.</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Re-reads the album on the interval below and downloads anything new.</span>
                         </div>
                         <div class="setting-control">
                             <input type="checkbox" id="cfg-gphotos-enabled" class="checkbox-premium">
@@ -740,7 +673,7 @@
                     <div class="setting-row">
                         <div class="setting-label">
                             <span class="text-[0.85rem] font-medium text-text-secondary">Strict Sync</span>
-                            <span class="text-[0.72rem] text-text-muted leading-snug">When enabled, files in the sync folder that are not in your latest selection are deleted (mirror mode). When disabled, only new media is downloaded.</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">When enabled, files in the sync folder that are no longer in the album are deleted, so the frame shows exactly the album (mirror mode). Nothing is deleted after a sync that could only read part of the album. When disabled, only new media is downloaded.</span>
                         </div>
                         <div class="setting-control">
                             <input type="checkbox" id="cfg-gphotos-strict" class="checkbox-premium">

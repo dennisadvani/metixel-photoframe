@@ -579,13 +579,7 @@ import {
         }
 
         var s = data.last_sync;
-        var ago = "just now";
-        if (s.finished_at) {
-            var seconds = Math.max(0, Math.floor(Date.now() / 1000 - s.finished_at));
-            if (seconds < 60) ago = seconds + "s ago";
-            else if (seconds < 3600) ago = Math.floor(seconds / 60) + "m ago";
-            else ago = Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
-        }
+        var ago = timeAgo(s.finished_at) || "just now";
 
         if (s.success) {
             textEl.textContent = ago + " — Success";
@@ -629,13 +623,7 @@ import {
         }
 
         var s = data.last_sync;
-        var ago = "just now";
-        if (s.finished_at) {
-            var seconds = Math.max(0, Math.floor(Date.now() / 1000 - s.finished_at));
-            if (seconds < 60) ago = seconds + "s ago";
-            else if (seconds < 3600) ago = Math.floor(seconds / 60) + "m ago";
-            else ago = Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
-        }
+        var ago = timeAgo(s.finished_at) || "just now";
 
         if (s.success) {
             textEl.textContent = ago + " — Success";
@@ -647,7 +635,7 @@ import {
         }
 
         var gParts = [];
-        if (s.total_remote > 0) gParts.push(s.total_remote + " picked");
+        if (s.total_remote > 0) gParts.push(s.total_remote + " in album");
         if (s.downloaded > 0) gParts.push(s.downloaded + " downloaded");
         if (s.skipped > 0) gParts.push(s.skipped + " already here");
         if (s.deleted > 0) gParts.push(s.deleted + " deleted");

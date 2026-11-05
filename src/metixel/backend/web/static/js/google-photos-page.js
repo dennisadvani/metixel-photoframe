@@ -5,39 +5,40 @@
  * Google Photos sync module (Sources page).
  *
  * Mirrors the Immich card: connection test, sync settings, manual sync with
- * live progress and status.  Google removed library-wide access for apps in
- * March 2025, so there is no album list to browse and the card offers two
- * modes instead:
- *
- *   - "picker"     — the user selects media in Google's own picker (supported,
- *                    but a selection is a fixed snapshot).
- *   - "shared_url" — a public shared-album link, read from the share page
- *                    (undocumented, but follows the album as it grows).
+ * live progress and status.  The frame mirrors one public shared album — the
+ * user pastes the album's share link and every sync re-reads the whole album
+ * (with strict sync, removed photos leave the frame too).  No Google account
+ * access is involved.
  */
 
 import {
     apiGet,
+    apiLastError,
     apiPost,
     apiPut,
-    confirmDialog,
     escapeHtml,
     setButtonBusy,
     setChecked,
     setValue,
-    showToast
+    showToast,
+    timeAgo
 } from "./core.js";
 
 import { loadMedia } from "./media-page.js";
 
-    var MODE_PICKER = "picker";
-    var MODE_SHARED_URL = "shared_url";
-
     var _bound = false;
     var _syncPollTimer = null;
-    var _sessionPollTimer = null;
     var _syncWasActive = false;
     var _syncRestoreBtn = null;   // setButtonBusy restore fn for Sync Now
-    var _awaitingPick = false;    // true while the user is picking in Google
+    var _lastStatus = null;       // most recent /google-photos/status payload
+    // A manual sync is "running" from the click until either a poll has seen
+    // it in progress or last_sync advances past what it was at the click — the
+    // backend runs a network check before it writes its first progress file,
+    // so the first poll can land before there is anything to see.
+    var _syncSeen = false;
+    var _syncStartedAt = 0;        // Date.now() at the click
+    var _syncBaselineFinished = 0; // last_sync.finished_at at the click
+    var SYNC_START_GRACE_MS = 30000;
 
     // -- Polling --------------------------------------------------------------
 
@@ -63,46 +64,6 @@ import { loadMedia } from "./media-page.js";
         if (progressDiv) progressDiv.classList.add("hidden");
     }
 
-    /**
-     * Poll the picking session until the user has finished choosing media.
-     *
-     * @param {number} seconds Google's recommended poll interval.
-     */
-    function startSessionPolling(seconds) {
-        stopSessionPolling();
-        var delay = Math.max(2, seconds || 5) * 1000;
-        _sessionPollTimer = setTimeout(async function () {
-            _sessionPollTimer = null;
-            var data = await apiGet("/google-photos/session");
-            var session = (data && data.session) || null;
-            _renderSession(session);
-            if (!session || session.expired) {
-                _awaitingPick = false;
-                if (session && session.expired) {
-                    showToast("The Google Photos selection expired — pick again", "info", 6000);
-                }
-                return;
-            }
-            if (session.media_items_set) {
-                // Picking finished — import it straight away, which is what
-                // the user just asked for by picking.
-                if (_awaitingPick) {
-                    _awaitingPick = false;
-                    await _startSync({ silent: false });
-                }
-                return;
-            }
-            startSessionPolling(session.poll_interval_seconds);
-        }, delay);
-    }
-
-    function stopSessionPolling() {
-        if (_sessionPollTimer) {
-            clearTimeout(_sessionPollTimer);
-            _sessionPollTimer = null;
-        }
-    }
-
     // -- Rendering ------------------------------------------------------------
 
     function _toggleInterval(enabled) {
@@ -110,95 +71,12 @@ import { loadMedia } from "./media-page.js";
         if (el) el.style.display = enabled ? "" : "none";
     }
 
-    /** The mode the form is currently showing. */
-
-    function _selectedMode() {
-        var el = document.getElementById("cfg-gphotos-mode");
-        return el && el.value === MODE_SHARED_URL ? MODE_SHARED_URL : MODE_PICKER;
-    }
-
     function _albumUrl() {
         var el = document.getElementById("cfg-gphotos-album-url");
         return el ? el.value.trim() : "";
     }
 
-    /**
-     * Show only the fields the chosen mode uses.
-     *
-     * Picking is meaningless for a shared album, so that row goes away too —
-     * leaving it would offer a button the backend refuses.
-     */
-    function _applyMode(mode) {
-        var shared = mode === MODE_SHARED_URL;
-        var pickerBlock = document.getElementById("gphotos-picker-block");
-        var urlBlock = document.getElementById("gphotos-url-block");
-        var pickRow = document.getElementById("gphotos-pick-row");
-        if (pickerBlock) pickerBlock.classList.toggle("hidden", shared);
-        if (urlBlock) urlBlock.classList.toggle("hidden", !shared);
-        if (pickRow) pickRow.classList.toggle("hidden", shared);
-        if (shared) {
-            stopSessionPolling();
-            _awaitingPick = false;
-        }
-        var resultEl = document.getElementById("gphotos-test-result");
-        if (resultEl) { resultEl.textContent = ""; resultEl.style.color = ""; }
-    }
-
-    function _formatCountdown(seconds) {
-        if (seconds === null || seconds === undefined) return "";
-        var total = Math.max(0, Math.round(seconds));
-        if (total < 60) return total + "s";
-        var minutes = Math.floor(total / 60);
-        if (minutes < 60) return minutes + "m";
-        return Math.floor(minutes / 60) + "h " + (minutes % 60) + "m";
-    }
-
-    /** Show the picker link and what the session is currently doing. */
-
-    function _renderSession(session) {
-        var wrap = document.getElementById("gphotos-session");
-        var link = document.getElementById("gphotos-picker-link");
-        var stateEl = document.getElementById("gphotos-session-state");
-        var clearBtn = document.getElementById("btn-gphotos-clear-session");
-        if (!wrap || !link || !stateEl) return;
-
-        if (!session) {
-            wrap.classList.add("hidden");
-            link.classList.add("hidden");
-            link.removeAttribute("href");
-            stateEl.textContent = "";
-            if (clearBtn) clearBtn.classList.add("hidden");
-            return;
-        }
-
-        wrap.classList.remove("hidden");
-        if (clearBtn) clearBtn.classList.remove("hidden");
-
-        if (session.picker_uri && !session.expired) {
-            link.href = session.picker_uri;
-            link.classList.remove("hidden");
-        } else {
-            link.classList.add("hidden");
-            link.removeAttribute("href");
-        }
-
-        var left = _formatCountdown(session.expires_in_seconds);
-        if (session.expired) {
-            stateEl.innerHTML = "Selection expired — click Pick Photos to choose again.";
-        } else if (!session.media_items_set) {
-            stateEl.innerHTML = "Waiting for you to pick photos in Google Photos…"
-                + (left ? " <span style=\"color:var(--text-muted)\">(expires in " + escapeHtml(left) + ")</span>" : "");
-        } else {
-            var count = session.picked_count
-                ? session.picked_count + " item" + (session.picked_count === 1 ? "" : "s")
-                : "Selection";
-            stateEl.innerHTML = escapeHtml(count) + " picked"
-                + (session.imported_at ? " · imported" : " · ready to sync")
-                + (left ? " <span style=\"color:var(--text-muted)\">(expires in " + escapeHtml(left) + ")</span>" : "");
-        }
-    }
-
-    /** Refresh the status card (last sync + live progress). */
+    /** Refresh the status card (last sync + live progress); returns the payload. */
 
     async function refreshStatus() {
         var statusEl = document.getElementById("gphotos-sync-status");
@@ -210,20 +88,18 @@ import { loadMedia } from "./media-page.js";
         if (!statusEl || !textEl || !detailEl) return;
 
         var data = await apiGet("/google-photos/status");
-        if (!data) return;
-
-        // A shared album has no picking session to show.
-        _renderSession(data.mode === MODE_SHARED_URL ? null : data.session);
+        if (!data) return null;
+        _lastStatus = data;
 
         // ── Live progress ──────────────────────────────────────────
         var prog = data.progress;
         if (prog && prog.syncing) {
+            _syncSeen = true;
             if (progressDiv) progressDiv.classList.remove("hidden");
             if (cancelBtn) cancelBtn.classList.remove("hidden");
 
             var phaseText = {
                 "starting": "Starting…",
-                "fetching_items": "Reading your selection…",
                 "fetching_album": "Reading the shared album…",
                 "downloading": "Downloading",
                 "cleaning": "Cleaning up…",
@@ -252,7 +128,7 @@ import { loadMedia } from "./media-page.js";
             if (progressDiv) progressDiv.classList.add("hidden");
             if (cancelBtn) cancelBtn.classList.add("hidden");
 
-            if (_syncWasActive) {
+            if (_syncWasActive && _syncIsOver(data)) {
                 _syncWasActive = false;
                 stopSyncPolling();
                 if (_syncRestoreBtn) { _syncRestoreBtn(); _syncRestoreBtn = null; }
@@ -269,17 +145,11 @@ import { loadMedia } from "./media-page.js";
             textEl.style.color = "var(--text-muted)";
             detailEl.textContent = "";
             if (errorsEl) { errorsEl.classList.add("hidden"); errorsEl.innerHTML = ""; }
-            return;
+            return data;
         }
 
         var s = data.last_sync;
-        var ago = "just now";
-        if (s.finished_at) {
-            var seconds = Math.max(0, Math.floor(Date.now() / 1000 - s.finished_at));
-            if (seconds < 60) ago = seconds + "s ago";
-            else if (seconds < 3600) ago = Math.floor(seconds / 60) + "m ago";
-            else ago = Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
-        }
+        var ago = timeAgo(s.finished_at) || "just now";
 
         var hasCancel = s.errors && s.errors.some(function (e) { return e.indexOf("Cancelled") >= 0; });
 
@@ -296,9 +166,7 @@ import { loadMedia } from "./media-page.js";
 
         var parts = [];
         if (s.album_title) parts.push("“" + s.album_title + "”");
-        if (s.total_remote > 0) {
-            parts.push(s.total_remote + (data.mode === MODE_SHARED_URL ? " in album" : " picked"));
-        }
+        if (s.total_remote > 0) parts.push(s.total_remote + " in album");
         if (s.album_pages > 1) parts.push(s.album_pages + " pages read");
         if (s.downloaded > 0) parts.push(s.downloaded + " downloaded");
         if (s.skipped > 0) parts.push(s.skipped + " already here");
@@ -316,62 +184,34 @@ import { loadMedia } from "./media-page.js";
                 errorsEl.innerHTML = "";
             }
         }
+        return data;
+    }
+
+    /** True once a sync started by this page has demonstrably finished. */
+
+    function _syncIsOver(data) {
+        if (_syncSeen) return true;
+        var finished = (data && data.last_sync && data.last_sync.finished_at) || 0;
+        if (finished > _syncBaselineFinished) return true;
+        // Never saw it start and nothing new was recorded: give it a while,
+        // then assume the thread died before writing anything.
+        return Date.now() - _syncStartedAt > SYNC_START_GRACE_MS;
     }
 
     // -- Actions --------------------------------------------------------------
 
-    function _credentials() {
-        return {
-            client_id: document.getElementById("cfg-gphotos-client-id").value.trim(),
-            client_secret: document.getElementById("cfg-gphotos-client-secret").value.trim(),
-            refresh_token: document.getElementById("cfg-gphotos-refresh-token").value.trim(),
-        };
-    }
-
-    /** What the Test Connection probe needs for the chosen mode. */
-
-    function _probePayload() {
-        var mode = _selectedMode();
-        if (mode === MODE_SHARED_URL) {
-            return { mode: mode, shared_album_url: _albumUrl() };
-        }
-        var creds = _credentials();
-        creds.mode = mode;
-        return creds;
-    }
-
-    /** Kick off a background import of the current selection. */
+    /** Kick off a background sync of the shared album. */
 
     async function _startSync(opts) {
         var btn = document.getElementById("btn-gphotos-sync-now");
 
-        // The route refuses an import with nothing picked, but a non-2xx body
-        // never reaches us (apiPost returns null), so say it here instead of
-        // showing a useless "unknown error".
-        var status = await apiGet("/google-photos/status");
-        if (status && !status.configured) {
-            showToast(
-                status.mode === MODE_SHARED_URL
-                    ? "Paste a shared album link first — then test the connection"
-                    : "Connect Google Photos first — test the connection above",
-                "info",
-                6000
-            );
-            return false;
-        }
-        // A shared album is re-read on every sync, so nothing is picked.
-        if (status && status.mode !== MODE_SHARED_URL) {
-            if (!status.session) {
-                showToast("Pick photos in Google Photos first", "info", 5000);
-                return false;
-            }
-            if (status.session.expired) {
-                showToast("The selection expired — click Pick Photos again", "info", 6000);
-                return false;
-            }
-        }
-
+        // The route refuses an unconfigured sync with a 400 whose message
+        // apiLastError() carries, so no pre-flight status request is needed.
         _syncRestoreBtn = setButtonBusy(btn, "Syncing…");
+        _syncBaselineFinished =
+            (_lastStatus && _lastStatus.last_sync && _lastStatus.last_sync.finished_at) || 0;
+        _syncSeen = false;
+        _syncStartedAt = Date.now();
 
         var result = await apiPost("/google-photos/sync", {});
         if (result && result.status === "started") {
@@ -381,7 +221,8 @@ import { loadMedia } from "./media-page.js";
             return true;
         }
         showToast(
-            "Could not start sync: " + ((result && (result.error || result.message)) || "unknown error"),
+            "Could not start sync: " +
+                ((result && (result.error || result.message)) || apiLastError() || "unknown error"),
             "error",
             5000
         );
@@ -395,27 +236,17 @@ import { loadMedia } from "./media-page.js";
 
         var cfg = (config.sync && config.sync.google_photos) || {};
         setChecked("cfg-gphotos-enabled", cfg.enabled || false);
-        setValue("cfg-gphotos-mode", cfg.mode === MODE_SHARED_URL ? MODE_SHARED_URL : MODE_PICKER);
         setValue("cfg-gphotos-album-url", cfg.shared_album_url || "");
-        setValue("cfg-gphotos-client-id", cfg.client_id || "");
-        setValue("cfg-gphotos-client-secret", cfg.client_secret || "");
-        setValue("cfg-gphotos-refresh-token", cfg.refresh_token || "");
         setValue("cfg-gphotos-sync-dir", cfg.sync_dir || "media/sync/google_photos/");
         setValue("cfg-gphotos-interval", ((cfg.poll_interval_seconds || 3600) / 3600).toFixed(1));
         setChecked("cfg-gphotos-strict", cfg.strict_sync === true);
         _toggleInterval(cfg.enabled || false);
-        _applyMode(_selectedMode());
 
-        await refreshStatus();
-
-        // Resume polling if a sync is running, or if a pick is still open.
-        var statusData = await apiGet("/google-photos/status");
+        // Resume polling if a sync is already running.
+        var statusData = await refreshStatus();
         if (statusData && statusData.progress && statusData.progress.syncing) {
+            _syncWasActive = true;
             startSyncPolling();
-        }
-        if (statusData && statusData.mode !== MODE_SHARED_URL && statusData.session
-            && !statusData.session.media_items_set && !statusData.session.expired) {
-            startSessionPolling(statusData.session.poll_interval_seconds);
         }
 
         if (_bound) return;
@@ -425,32 +256,30 @@ import { loadMedia } from "./media-page.js";
             _toggleInterval(this.checked);
         });
 
-        // Swap which half of the card is shown when the mode changes.
-        document.getElementById("cfg-gphotos-mode")?.addEventListener("change", function () {
-            _applyMode(_selectedMode());
-        });
-
         // -- Test Connection --
         document.getElementById("btn-test-gphotos")?.addEventListener("click", async function () {
             var resultEl = document.getElementById("gphotos-test-result");
             var restore = setButtonBusy(this, "Testing…");
             if (resultEl) { resultEl.textContent = "Testing…"; resultEl.style.color = ""; }
 
-            var payload = _probePayload();
+            var payload = { shared_album_url: _albumUrl() };
             // The route always answers 200 once the body is valid: an upstream
-            // failure comes back as {ok:false, error} rather than a 401/502
-            // the API layer would mistake for OUR auth/backend state.
+            // failure comes back as {ok:false, error} rather than a 502 the
+            // API layer would mistake for OUR backend being down.
             var data = await apiPost("/google-photos/test-connection", payload);
             restore();
             if (!data) {
-                if (resultEl) { resultEl.textContent = "Request failed"; resultEl.style.color = "var(--danger)"; }
+                if (resultEl) {
+                    resultEl.textContent = apiLastError() || "Request failed";
+                    resultEl.style.color = "var(--danger)";
+                }
                 return;
             }
             if (data.ok) {
                 if (resultEl) { resultEl.textContent = data.message; resultEl.style.color = "var(--text)"; }
-                showToast("Connected to Google Photos!", "success");
-                // Persist what was just proven to work, so Pick Photos (or a
-                // shared-album sync) works without a separate save step.
+                showToast("Shared album found!", "success");
+                // Persist the link that was just proven to work, so Sync Now
+                // works without a separate save step.
                 await apiPut("/config/sync", { google_photos: payload });
             } else {
                 if (resultEl) { resultEl.textContent = data.error || "Unknown error"; resultEl.style.color = "var(--danger)"; }
@@ -458,58 +287,13 @@ import { loadMedia } from "./media-page.js";
             }
         });
 
-        // -- Pick Photos --
-        document.getElementById("btn-gphotos-pick")?.addEventListener("click", async function () {
-            var restore = setButtonBusy(this, "Opening…");
-            var data = await apiPost("/google-photos/session", {});
-            restore();
-            if (!data || data.status !== "ok" || !data.session) {
-                showToast(
-                    "Could not open the Google picker: " + ((data && data.error) || "unknown error"),
-                    "error",
-                    6000
-                );
-                return;
-            }
-            _renderSession(data.session);
-            _awaitingPick = true;
-            // A popup may be blocked — the link stays on the card either way.
-            if (data.session.picker_uri) {
-                window.open(data.session.picker_uri, "_blank", "noopener");
-            }
-            showToast("Pick your photos in Google Photos, then come back", "info", 6000);
-            startSessionPolling(data.session.poll_interval_seconds);
-        });
-
-        // -- Clear Selection --
-        document.getElementById("btn-gphotos-clear-session")?.addEventListener("click", async function () {
-            if (!(await confirmDialog(
-                "Forget the current Google Photos selection?\n\nAlready-downloaded media stays on the frame.",
-                { title: "Clear selection?", okText: "Clear" }
-            ))) return;
-            stopSessionPolling();
-            _awaitingPick = false;
-            var data = await apiPost("/google-photos/session/clear", {});
-            if (data && data.status === "ok") {
-                _renderSession(null);
-                showToast("Selection cleared", "success");
-            } else {
-                showToast("Could not clear the selection", "error");
-            }
-        });
-
         // -- Save Settings --
         document.getElementById("btn-save-gphotos")?.addEventListener("click", async function () {
             var restore = setButtonBusy(this, "Saving…");
-            var creds = _credentials();
             var result = await apiPut("/config/sync", {
                 google_photos: {
                     enabled: document.getElementById("cfg-gphotos-enabled").checked,
-                    mode: _selectedMode(),
                     shared_album_url: _albumUrl(),
-                    client_id: creds.client_id,
-                    client_secret: creds.client_secret,
-                    refresh_token: creds.refresh_token,
                     sync_dir: document.getElementById("cfg-gphotos-sync-dir").value,
                     strict_sync: document.getElementById("cfg-gphotos-strict").checked,
                     poll_interval_seconds:

@@ -261,8 +261,8 @@ can download photos automatically. See the full [Immich section](#5-immich-sync-
 
 ### Option D — Google Photos
 
-Either pick photos in Google's picker, or paste a shared-album link and let the
-frame follow that album as you add to it. See
+Paste a shared album's link and the frame shows that whole album, keeping up as
+you add photos to it. See
 [section 6](#6-google-photos-sync-detailed).
 
 ### Supported file types
@@ -454,91 +454,24 @@ photos were downloaded, skipped, or failed.
 
 ## 6. Google Photos Sync (detailed)
 
-Google Photos works a little differently from Immich, and the reason is worth
-knowing: in **March 2025 Google removed the API scopes** that let apps read a
-photo library. No app can list your albums through the API any more.
+The frame shows **one Google Photos album — all of it**. You share the album by
+link, paste the link into Metixel, and every sync re-reads the album: photos you
+add to it arrive by themselves, and with **Strict sync** on, photos you remove
+from it leave the frame too.
 
-Metixel therefore offers two modes, chosen at the top of the **Google Photos
-Sync** card. Pick whichever trade suits you:
+No Google account sign-in, OAuth client or token is involved — the frame never
+gets access to the rest of your library. That is also why it works the way it
+does: in **March 2025 Google removed the API scopes** that let apps read albums,
+so Metixel reads the album's public share page instead.
 
-| | **Picker** (default) | **Shared album URL** |
-|---|---|---|
-| How you choose photos | In Google's own picker | Paste the album's share link |
-| Keeps up as you add photos | **No** — pick again | **Yes**, every poll, like Immich |
-| Setup | Google Cloud project + a helper script, once | Paste a link |
-| Interface | Google's supported Picker API | Google's **web page** — undocumented |
-| Can break when Google changes things | No | **Yes** |
-| Album privacy | Album stays private | Album must be **shared by link** |
-| Videos | Supported | May fail |
+> **Good to know.** Google publishes no API for shared albums, so the frame
+> reads the album's web page the way a browser does. That means it **can stop
+> working without warning** if Google changes that page — the sync then reports
+> a clear error until Metixel is updated. The album must be **shared by link,
+> so anyone who gets the link can see the photos**. **Videos may fail to
+> download.** Very large albums are paged in, up to 200 pages (50,000 photos).
 
-**Which should you use?** If you want to set the frame up once and have new
-photos appear by themselves, use **Shared album URL** and accept that a Google
-redesign may one day stop it working (switch back to Picker if that happens).
-If you would rather have something that cannot break, use **Picker** and re-pick
-when you want to add photos.
-
-Both modes download into the same folder, so you can switch at any time without
-losing photos you have already synced.
-
-### Picker mode
-
-The flow is: **connect once → pick → the frame downloads**. Picking again adds
-more photos; nothing already downloaded is re-fetched or lost.
-
-#### Step 1 — Create a Google OAuth client (one-time)
-
-1. Go to the [Google Cloud console](https://console.cloud.google.com) and
-   create (or select) a project.
-2. **APIs & Services → Library** → search for **Photos Picker API** → *Enable*.
-3. **APIs & Services → OAuth consent screen** → **External**, then add your own
-   Google account under **Test users**. (Personal use needs no verification.)
-4. **APIs & Services → Credentials → Create credentials → OAuth client ID** →
-   application type **Desktop app**. Note the **client ID** and
-   **client secret**.
-
-#### Step 2 — Mint a refresh token
-
-Google only allows loopback redirects for desktop clients, and the frame has no
-browser of its own, so this step runs once on a computer that does:
-
-```bash
-python scripts/google_photos_auth.py --client-id <ID> --client-secret <SECRET>
-```
-
-Approve access in the browser window that opens; the script prints a **refresh
-token**. (Over SSH with no browser, add `--manual` and paste the redirected URL
-back.) Keep the refresh token private — it grants read access to the media you
-pick.
-
-#### Step 3 — Connect the frame
-
-In the dashboard, go to **Sources → Google Photos Sync**, leave **Mode** on
-*Picker*, paste the client ID, client secret and refresh token, then click
-**Test Connection**. On success the credentials are saved automatically.
-
-#### Step 4 — Pick your photos
-
-1. Click **Pick Photos**. A Google Photos link opens (if your browser blocks the
-   popup, the link stays on the card — tap it).
-2. Choose individual photos or whole albums, then confirm in Google Photos.
-3. The frame notices as soon as you finish and starts downloading into
-   `media/sync/google_photos/`. The slideshow picks them up automatically.
-
-Your selection stays valid for about an hour. After that, click **Pick Photos**
-again — already-downloaded media is untouched.
-
-### Shared album URL mode
-
-> **Before you switch to it.** Google publishes no API for shared albums, so
-> this mode reads the album's public web page the way a browser does. That
-> means it **can stop working without warning** if Google changes that page —
-> if it does, switch back to Picker mode until Metixel is updated. The album
-> must be **shared by link, so anyone who gets the link can see the photos**.
-> **Videos may fail to download.** Very large albums are paged in, up to 200
-> pages (50,000 photos). None of this applies to Picker mode — the trade is
-> that only this mode keeps up with an album as you add to it.
-
-#### Step 1 — Share the album by link
+### Step 1 — Share the album by link
 
 In Google Photos, open the album → **Share** → **Create link** → **Copy**. You
 do not need to share it with anyone; the link itself is what Metixel reads. A
@@ -549,50 +482,44 @@ link looks like `https://photos.app.goo.gl/XXXX` or
 > ever want to cut access off, use **Remove link** in Google Photos (Metixel
 > will then report that the album is no longer shared).
 
-#### Step 2 — Point the frame at it
+### Step 2 — Point the frame at it
 
-In the dashboard, go to **Sources → Google Photos Sync**, set **Mode** to
-*Shared album URL*, paste the link, and click **Test Connection**. Metixel reads
-the first page of the album and reports the album name and how many photos it
-found. On success the link is saved automatically.
+In the dashboard, go to **Sources → Google Photos Sync**, paste the link, and
+click **Test Connection**. Metixel reads the first page of the album and reports
+the album name and how many photos it found. On success the link is saved
+automatically.
 
-#### Step 3 — Sync
+### Step 3 — Sync
 
 Click **Sync Now** for the first run, and turn on **Enable scheduled sync** so
-the frame re-reads the album on the interval. Photos you add to the album in
-Google Photos afterwards arrive by themselves — no further clicks. Large albums
-are fetched page by page; progress shows the running count.
+the frame re-reads the album on the interval. Large albums are fetched page by
+page; progress shows the running count.
 
-No Google account, OAuth client or refresh token is involved in this mode, and
-no credentials are needed on the frame.
+To make the frame show **exactly** the album — nothing more — also turn on
+**Strict sync**.
 
 ### Settings
 
-- **Mode** — *Picker* or *Shared album URL* (see above). Switching modes keeps
-  everything already downloaded.
-- **Enable scheduled sync** — in *Shared album URL* mode this is what keeps the
-  album up to date, so turn it on. In *Picker* mode it only lets the frame
-  finish a selection whose download was interrupted (a reboot, a network drop):
-  because a selection is a fixed snapshot, new photos still need a fresh pick.
-- **Sync interval** — how often the album is re-read (or, in Picker mode, how
-  often the catch-up check runs). Default 1 hour.
-- **Strict sync** (optional) — when on, the sync folder mirrors the album (or
-  your latest selection) exactly: files that are no longer there are deleted.
-  Off by default, so nothing is ever removed.
-- **Sync Now** — import the current selection immediately.
+- **Enable scheduled sync** — re-reads the album on the interval and downloads
+  anything new. Turn it on to keep the frame up to date.
+- **Sync interval** — how often the album is re-read. Default 1 hour.
+- **Strict sync** (optional) — when on, the sync folder mirrors the album
+  exactly: files that are no longer in the album are deleted. As a safeguard,
+  nothing is deleted after a sync that could only read part of the album (the
+  status then says *Strict sync skipped this cycle*). Off by default, so nothing
+  is ever removed.
+- **Sync Now** — re-read the album immediately.
 
 ### Troubleshooting
 
 | Problem | What to check |
 |---------|---------------|
-| **"Google rejected the credentials"** | Is the **Photos Picker API** enabled for the project? Was the refresh token minted with the same client ID/secret? |
-| **No refresh token printed** | The account had already approved this client. Remove its access at [myaccount.google.com/permissions](https://myaccount.google.com/permissions) and re-run the script. |
-| **"The selection expired"** | Sessions last about an hour. Click **Pick Photos** again. |
 | **Nothing appears in the library** | Check that `media/sync/google_photos/` is in **Sources → Local Folders** (Metixel adds it after the first successful download). |
-| **New Google album photos don't arrive** | Expected in *Picker* mode — a selection is a snapshot, so pick again. Use *Shared album URL* mode if you want them to arrive by themselves. |
-| **"No photos found on the album page"** | The album is probably not shared by link — check the link opens in a private browser window. If it does, Google has changed the page format: switch to *Picker* mode and report it. |
+| **"No photos found on the album page"** | The album is probably not shared by link — check the link opens in a private browser window. If it does, Google has changed the page format and Metixel needs updating; please report it. |
 | **"Only the first N photos could be read"** | The album is bigger than the page limit, or Google stopped paging mid-album. The photos that were read are still downloaded; the next sync picks up where it can. |
-| **Videos missing in shared-album mode** | Known limitation of reading the share page. Use *Picker* mode for videos. |
+| **"Strict sync skipped this cycle"** | The album could only be partly read, so Metixel deleted nothing rather than risk removing photos it simply did not see. The next complete sync mirrors the album again. |
+| **"Google refused the download … link may have been turned off"** | The album's share link was removed in Google Photos. Create a new link and paste it in. |
+| **Videos missing** | Known limitation of reading the share page. |
 
 ---
 

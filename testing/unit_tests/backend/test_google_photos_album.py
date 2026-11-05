@@ -336,6 +336,75 @@ class TestFetchAlbum:
         assert len(listing["items"]) == 1
         assert listing["truncated"] is True
 
+    def test_later_block_without_a_token_keeps_the_real_one(self) -> None:
+        """A second item block (cover/highlights) with no token must not stop paging."""
+        album_block = json.dumps(_payload([_item("a"), _item("b")], "TOKEN-PAGE-2"))
+        extra_block = json.dumps(_payload([_item("cover")], None))
+        html = (
+            "<html><body>"
+            f"<script>AF_initDataCallback({{key: 'ds:0', hash: '1', "
+            f"data:{album_block}, sideChannel: {{}}}});</script>"
+            f"<script>AF_initDataCallback({{key: 'ds:1', hash: '2', "
+            f"data:{extra_block}, sideChannel: {{}}}});</script>"
+            "</body></html>"
+        )
+        get_text, post_form, calls = _fake_http([_batch_response([_item("c")], None)], html)
+
+        listing = album.fetch_album(ALBUM_URL, get_text=get_text, post_form=post_form)
+
+        assert len(calls["post"]) == 1
+        assert len(listing["items"]) == 4
+        assert listing["complete"] is True
+
+    def test_reaching_the_last_page_is_complete(self) -> None:
+        get_text, post_form, _ = _fake_http(
+            [_batch_response([_item("b")], None)], _page_html([_item("a")], "TOKEN-PAGE-2")
+        )
+
+        listing = album.fetch_album(ALBUM_URL, get_text=get_text, post_form=post_form)
+
+        assert listing["complete"] is True
+
+    def test_single_page_album_is_complete(self) -> None:
+        get_text, post_form, _ = _fake_http([], _page_html([_item("a")]))
+
+        assert album.fetch_album(ALBUM_URL, get_text=get_text, post_form=post_form)["complete"]
+
+    def test_stalled_pagination_is_incomplete_and_reported(self) -> None:
+        """A page with nothing new but a token means more may exist — not complete,
+        and flagged as truncated so the syncer reports the gap rather than 'Success'."""
+        same = _batch_response([_item("a")], "TOKEN-PAGE-2")
+        get_text, post_form, _ = _fake_http([same], _page_html([_item("a")], "TOKEN-PAGE-2"))
+
+        listing = album.fetch_album(ALBUM_URL, get_text=get_text, post_form=post_form)
+
+        assert listing["complete"] is False
+        assert listing["truncated"] is True
+
+    def test_failed_cancelled_or_capped_paging_is_incomplete(self) -> None:
+        html = _page_html([_item("a")], "TOKEN-PAGE-2")
+
+        failed = album.fetch_album(
+            ALBUM_URL,
+            get_text=lambda _u: (ALBUM_URL, 200, html),
+            post_form=lambda _u, _d: (500, ""),
+            sleep=lambda _s: None,
+        )
+        get_text, post_form, _ = _fake_http([], html)
+        cancelled = album.fetch_album(
+            ALBUM_URL, get_text=get_text, post_form=post_form, should_cancel=lambda: True
+        )
+        capped = album.fetch_album(
+            ALBUM_URL,
+            get_text=lambda _u: (ALBUM_URL, 200, html),
+            post_form=lambda _u, _d: (200, _batch_response([_item("b")], "TOKEN-PAGE-3")),
+            max_pages=2,
+        )
+
+        assert failed["complete"] is False
+        assert cancelled["complete"] is False
+        assert capped["complete"] is False
+
 
 # ── Failure modes ───────────────────────────────────────────────────────────
 
@@ -344,6 +413,17 @@ class TestFetchAlbumErrors:
     def test_not_an_album_url(self) -> None:
         with pytest.raises(album.SharedAlbumError, match="Not a Google Photos shared album"):
             album.fetch_album("https://example.com/x")
+
+    def test_short_link_that_does_not_redirect_is_not_called_invalid(self) -> None:
+        """Google served the interstitial at the short URL: blame sharing, not the link."""
+        get_text, post_form, _ = _fake_http([], "<html><body>interstitial</body></html>")
+        get_text = lambda _u: (SHORT_URL, 200, "<html><body>interstitial</body></html>")  # noqa: E731
+
+        with pytest.raises(album.SharedAlbumError) as exc:
+            album.fetch_album(SHORT_URL, get_text=get_text, post_form=post_form)
+
+        assert "No photos found" in str(exc.value)
+        assert "Not a Google Photos shared album URL" not in str(exc.value)
 
     def test_404_is_explained(self) -> None:
         with pytest.raises(album.SharedAlbumError, match="not found"):
@@ -393,18 +473,3 @@ class TestFetchAlbumErrors:
 
         assert len(attempts) == 3
         assert len(listing["items"]) == 1
-
-
-# ── Adapter ─────────────────────────────────────────────────────────────────
-
-
-class TestAsMediaItems:
-    def test_adapts_to_the_picker_item_shape(self) -> None:
-        parsed = album.parse_payload(_payload([_item("a"), _item("v", video=True)]))
-        adapted = album.as_media_items(parsed["items"])
-
-        assert {i["type"] for i in adapted} == {"PHOTO", "VIDEO"}
-        assert all(i["mediaFile"]["baseUrl"].startswith("https://") for i in adapted)
-        # No filename or MIME type is known from the page.
-        assert all(i["mediaFile"]["mimeType"] == "" for i in adapted)
-        assert all(i["id"].startswith("AF1Qip") for i in adapted)

@@ -100,23 +100,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "google_photos": {
             "enabled": False,
-            # "picker"     — Google's supported Photos Picker API: the user
-            #                picks media and the frame downloads that selection.
-            # "shared_url" — a public shared-album link, read from the share
-            #                page.  Follows the album as it grows (like Immich),
-            #                but uses undocumented endpoints that Google can
-            #                change without notice.
-            "mode": "picker",
+            # A public shared-album link (Google Photos → album → Share →
+            # Create link).  The frame mirrors that whole album, re-reading it
+            # every poll; it uses Google's undocumented share page, so a format
+            # change surfaces as a clear sync error.
             "shared_album_url": "",
-            # OAuth client (type "Desktop app") from the user's own Google
-            # Cloud project, plus the refresh token minted by
-            # scripts/google_photos_auth.py.  Google retired library-wide read
-            # access in March 2025, so there is no album list to configure:
-            # the user picks media in Google's own picker and the frame
-            # downloads what was picked.
-            "client_id": "",
-            "client_secret": "",
-            "refresh_token": "",
             "strict_sync": False,
             "sync_dir": "media/sync/google_photos/",
             "poll_interval_seconds": 3600,  # 60 minutes
@@ -586,6 +574,7 @@ class Config:
             # Merge loaded data over defaults so new keys are always present
             merged = deepcopy(DEFAULT_CONFIG)
             _deep_merge(merged, data)
+            retired = _drop_retired_keys(merged)
             logger.info("Config loaded from %s", path)
             config = cls(merged)
         else:
@@ -595,10 +584,11 @@ class Config:
             )
             config = cls()
             config._randomise_auto_update_schedule()
+            retired = False
 
         started_without_config = not path.exists()
         applied = config._apply_init_overlay(path)
-        if started_without_config or applied:
+        if started_without_config or applied or retired:
             config.save(path)
         return config
 
@@ -755,6 +745,29 @@ def _sanitise_display_schedule(values: dict[str, Any], current: dict[str, Any]) 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+#: Keys removed from the config schema, as ``(section, subsection) → keys``.
+#: They are dropped on load (and the file re-saved) so stale settings — here
+#: the retired Google Photos Picker mode's OAuth client secret and refresh
+#: token — do not linger on disk.
+_RETIRED_KEYS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("sync", "google_photos"): ("mode", "client_id", "client_secret", "refresh_token"),
+}
+
+
+def _drop_retired_keys(data: dict[str, Any]) -> bool:
+    """Remove :data:`_RETIRED_KEYS` from *data* in place; True if any were present."""
+    removed = False
+    for (section, subsection), keys in _RETIRED_KEYS.items():
+        target = (data.get(section) or {}).get(subsection)
+        if not isinstance(target, dict):
+            continue
+        for key in keys:
+            if key in target:
+                del target[key]
+                removed = True
+    return removed
 
 
 def _deep_merge(base: dict, overlay: dict) -> None:

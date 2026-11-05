@@ -29,7 +29,7 @@ import logging
 import random
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -409,8 +409,11 @@ def fetch_album(
         sleep: Injected for the retry backoff.
 
     Returns:
-        ``{"url", "title", "album_key", "pages", "truncated", "items"}`` with
-        items newest first.
+        ``{"url", "title", "album_key", "pages", "truncated", "complete",
+        "items"}`` with items newest first.  ``complete`` is True only when
+        pagination reached Google's last page — anything that stopped it early
+        (cancel, a cap, a failed or stalled page) leaves it False, so callers
+        must not treat the items as the whole album (e.g. for strict deletes).
 
     Raises:
         SharedAlbumError: bad URL, no access, or no items found (which usually
@@ -436,7 +439,15 @@ def fetch_album(
     if status != 200:
         raise SharedAlbumError(f"Album page returned HTTP {status}")
 
-    share_id, auth_key = parse_album_url(final_url if "/share/" in (final_url or "") else url)
+    if "/share/" in (final_url or ""):
+        share_id, auth_key = parse_album_url(final_url)
+    elif is_album_url(url) and urlparse(url.strip()).hostname != SHORT_LINK_HOST:
+        share_id, auth_key = parse_album_url(url)
+    else:
+        # A short link that served its interstitial instead of redirecting:
+        # the page has no album data, which the check below reports in terms
+        # of sharing rather than calling the user's valid link invalid.
+        share_id, auth_key = "", ""
 
     items: dict[str, dict[str, Any]] = {}
     album_key = ""
@@ -451,14 +462,18 @@ def fetch_album(
             items.setdefault(item["media_key"], item)
         album_key = album_key or (parsed["album_key"] or "")
         title = title or (parsed["title"] or "")
-        next_token = parsed["next_token"] or ""
+        # Only a block that carries a token may set it: a later block with
+        # items but no token (a cover or highlights strip) must not wipe the
+        # album's real continuation token and silently stop pagination.
+        if parsed["next_token"]:
+            next_token = parsed["next_token"]
 
     if not items:
         raise SharedAlbumError(
             "No photos found on the album page. Check that the album is shared by link "
             "(Google Photos → album → Share → Create link) and that the link opens in a "
             "private browser window. If it does, Google has changed the page format and "
-            "Metixel's reader needs updating — use the Picker mode in the meantime"
+            "Metixel's reader needs updating"
         )
 
     pages = 1
@@ -501,9 +516,18 @@ def fetch_album(
         if on_progress:
             on_progress(len(items), pages)
 
+        if not token:
+            next_token = ""  # Google says this was the last page
+            break
         # No progress, or a token that repeats, means the next request would
-        # loop forever on the same page.
+        # loop forever on the same page.  next_token stays set, so the listing
+        # reads as incomplete and strict sync will not delete from it.
         if len(items) == before or token == next_token:
+            truncated = True
+            logger.warning(
+                "Shared album pagination stalled after %d page(s) — album may be incomplete",
+                pages,
+            )
             break
         next_token = token
 
@@ -518,6 +542,7 @@ def fetch_album(
         "album_key": album_key,
         "pages": pages,
         "truncated": truncated,
+        "complete": not next_token,
         "items": ordered,
     }
 
@@ -586,26 +611,3 @@ def _album_page(
     if not payloads:
         raise SharedAlbumError("Album continuation returned no usable data")
     return payloads
-
-
-def as_media_items(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Adapt shared-album items to the Picker API's item shape.
-
-    Lets one download/dedupe path serve both modes.  Shared-album entries carry
-    no filename or MIME type, so those are left empty and the real type is taken
-    from the download response.
-    """
-    adapted = []
-    for item in items:
-        adapted.append(
-            {
-                "id": item.get("media_key", ""),
-                "type": "VIDEO" if item.get("is_video") else "PHOTO",
-                "mediaFile": {
-                    "baseUrl": item.get("base_url", ""),
-                    "filename": "",
-                    "mimeType": "",
-                },
-            }
-        )
-    return adapted

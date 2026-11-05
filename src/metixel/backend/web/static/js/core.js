@@ -620,13 +620,20 @@ export function escapeHtml(text) {
  * @param {string} isoStr
  * @returns {string}
  */
-export function timeAgo(isoStr) {
-    var then = Date.parse(isoStr);
-    if (isNaN(then)) return "";
+/**
+ * "Ns ago" / "Nm ago" / "Nh Mm ago" / "Nd ago" for an ISO-8601 string or an
+ * epoch timestamp in seconds (what the sync status files carry).  Returns ""
+ * when the value is missing or unparseable.
+ */
+export function timeAgo(when) {
+    var then = typeof when === "number" ? when * 1000 : Date.parse(when);
+    if (isNaN(then) || !then) return "";
     var seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
     if (seconds < 60) return seconds + "s ago";
     if (seconds < 3600) return Math.floor(seconds / 60) + "m ago";
-    if (seconds < 86400) return Math.floor(seconds / 3600) + "h ago";
+    if (seconds < 86400) {
+        return Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
+    }
     return Math.floor(seconds / 86400) + "d ago";
 }
 
@@ -636,6 +643,18 @@ export function timeAgo(isoStr) {
 var _apiConnected = true;
 var _apiErrorCount = 0;
 var _apiLastErrorTime = 0;
+// Message from the most recent non-2xx API response (the body's ``error``),
+// so a caller that got ``null`` back can still say *why* — see apiLastError().
+var _apiLastErrorMessage = "";
+
+/**
+ * The error message from the most recent failed API call, or "" if the last
+ * failure carried none (network error, auth redirect).  Read it straight
+ * after a call returns null; any later call may overwrite it.
+ */
+export function apiLastError() {
+    return _apiLastErrorMessage;
+}
 
 // Optional handler invoked when an API call returns 401/403 (auth required
 // or session expired).  main.js registers this to show the login gate.
@@ -687,6 +706,7 @@ async function _parseJsonOrNull(res) {
  * the right side effect: auth overlay, disconnect overlay, or just a log.
  */
 async function _handleApiFailure(method, path, res) {
+    _apiLastErrorMessage = "";
     if (res.status === 401 || res.status === 403) {
         _handleAuthFailure(path, res.status);
         return null;
@@ -699,6 +719,7 @@ async function _handleApiFailure(method, path, res) {
     }
     // Ordinary error (400/404/409/429/500, or a backend-reported upstream
     // failure).  The backend answered, so we are connected.
+    _apiLastErrorMessage = (body && (body.error || body.message)) || "";
     console.warn(
         "API %s %s returned %s: %s",
         method, path, res.status,
@@ -743,6 +764,7 @@ export async function apiGet(path) {
             console.warn("API unreachable (backend may be restarting):", err.message);
             _apiLastErrorTime = now;
         }
+        _apiLastErrorMessage = "";
         _apiUpdateConnectionStatus(false);
         return null;
     }
@@ -767,6 +789,7 @@ export async function apiPut(path, data) {
             console.warn("API unreachable (backend may be restarting):", err.message);
             _apiLastErrorTime = now;
         }
+        _apiLastErrorMessage = "";
         _apiUpdateConnectionStatus(false);
         return null;
     }
@@ -791,6 +814,7 @@ export async function apiPost(path, data) {
             console.warn("API unreachable (backend may be restarting):", err.message);
             _apiLastErrorTime = now;
         }
+        _apiLastErrorMessage = "";
         _apiUpdateConnectionStatus(false);
         return null;
     }

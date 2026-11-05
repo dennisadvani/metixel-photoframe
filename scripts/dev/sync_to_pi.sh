@@ -167,9 +167,18 @@ rsync -az --relative --human-readable \
 # Both privileged steps in ONE sudo so it is asked for at most once (and not
 # at all where pi has passwordless sudo).  `sudo -p` labels the prompt, since
 # an unexplained "[sudo] password" halfway through a script is confusing.
-REMOTE_CMD="sudo -p '[sudo on ${PI}] password for %u: ' bash -s"
+# The script travels as an argument (printf %q quotes it for the remote
+# shell) rather than on stdin: piping it would leave ssh -t without a terminal
+# to allocate, so sudo could not prompt and ssh would warn on every run.
+REMOTE_CMD="sudo -p '[sudo on ${PI}] password for %u: ' bash -c"
+# ${LIVE} is a symlink to the current release directory, owned by pi.  rsync
+# 3.5+ running as root refuses to follow a symlink owned by another user (it
+# reports it as "Too many levels of symbolic links"), so hand it the resolved
+# directory instead.  The \$ escapes keep the expansion on the Pi's side.
 REMOTE_SCRIPT="set -e
-rsync -a ${STAGE}/ ${LIVE}/
+LIVE_DIR=\$(readlink -f ${LIVE})
+[ -d \"\$LIVE_DIR\" ] || { echo \"${LIVE} does not resolve to a directory\" >&2; exit 1; }
+rsync -a ${STAGE}/ \"\$LIVE_DIR/\"
 rm -rf ${STAGE}"
 if [ "$RESTART" -eq 1 ]; then
     REMOTE_SCRIPT="${REMOTE_SCRIPT}
@@ -179,7 +188,7 @@ else
     echo "→ Copying into ${LIVE}…"
 fi
 
-printf '%s\n' "$REMOTE_SCRIPT" | ssh "${SSH_OPTS[@]}" -t "${PI_USER}@${PI}" "$REMOTE_CMD"
+ssh "${SSH_OPTS[@]}" -t "${PI_USER}@${PI}" "${REMOTE_CMD} $(printf '%q' "$REMOTE_SCRIPT")"
 
 _close_master
 
