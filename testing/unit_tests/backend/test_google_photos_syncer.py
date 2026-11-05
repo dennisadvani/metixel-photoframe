@@ -134,7 +134,7 @@ def _item(key: str, *, video: bool = False) -> dict[str, Any]:
 
 
 def _media_url(item: dict[str, Any]) -> str:
-    return item["base_url"] + ("=dv" if item["is_video"] else "=d")
+    return str(item["base_url"]) + ("=dv" if item["is_video"] else "=d")
 
 
 @pytest.fixture
@@ -415,12 +415,8 @@ class TestSyncCycle:
     def test_unreadable_album_fails_clearly(self, tmp_path: Path, album_stub) -> None:
         from metixel.backend.sync.google_photos_album import SharedAlbumError
 
-        syncer = _wire(
-            tmp_path,
-            album_stub,
-            [_item("a")],
-            **{"raise": SharedAlbumError("No photos found on the album page")},
-        )
+        syncer = _wire(tmp_path, album_stub, [_item("a")])
+        album_stub["raise"] = SharedAlbumError("No photos found on the album page")
 
         result = syncer.sync_once()
 

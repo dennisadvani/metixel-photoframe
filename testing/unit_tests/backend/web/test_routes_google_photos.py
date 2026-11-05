@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -185,11 +186,14 @@ class TestSyncerSharing:
         from metixel.backend.sync.google_photos import GooglePhotosSyncer
 
         daemon_syncer = mock.create_autospec(GooglePhotosSyncer, instance=True)
+        # Taken before the ``is`` assert below narrows ``daemon_syncer`` to the
+        # real class, where mypy would not know this method is a mock.
+        reload_config: Any = daemon_syncer._reload_config
         app.config["METIXEL_DAEMON"] = mock.Mock(google_photos_syncer=daemon_syncer)
 
         with app.app_context():
             assert _REAL_FACTORY(mock_state) is daemon_syncer
-        daemon_syncer._reload_config.assert_called_once()
+        reload_config.assert_called_once()
 
     def test_falls_back_to_a_private_syncer_without_a_daemon(
         self, app, mock_state, monkeypatch
