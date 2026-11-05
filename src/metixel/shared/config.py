@@ -98,12 +98,24 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "sync_dir": "media/sync/immich/",
             "poll_interval_seconds": 3600,  # 60 minutes
         },
+        "google_photos": {
+            "enabled": False,
+            # A public shared-album link (Google Photos → album → Share →
+            # Create link).  The frame mirrors that whole album, re-reading it
+            # every poll; it uses Google's undocumented share page, so a format
+            # change surfaces as a clear sync error.
+            "shared_album_url": "",
+            "strict_sync": False,
+            "sync_dir": "media/sync/google_photos/",
+            "poll_interval_seconds": 3600,  # 60 minutes
+        },
         "local": {
             "enabled": True,
             "watch_paths": [
                 {"path": "media/sample_media/landscape/", "enabled": True},
                 {"path": "media/sample_media/portrait/", "enabled": False},
                 {"path": "media/sync/immich/", "enabled": True},
+                {"path": "media/sync/google_photos/", "enabled": True},
                 {"path": "media/my_media/", "enabled": True},
             ],
             "poll_interval_seconds": 30,
@@ -562,6 +574,7 @@ class Config:
             # Merge loaded data over defaults so new keys are always present
             merged = deepcopy(DEFAULT_CONFIG)
             _deep_merge(merged, data)
+            retired = _drop_retired_keys(merged)
             logger.info("Config loaded from %s", path)
             config = cls(merged)
         else:
@@ -571,10 +584,11 @@ class Config:
             )
             config = cls()
             config._randomise_auto_update_schedule()
+            retired = False
 
         started_without_config = not path.exists()
         applied = config._apply_init_overlay(path)
-        if started_without_config or applied:
+        if started_without_config or applied or retired:
             config.save(path)
         return config
 
@@ -731,6 +745,29 @@ def _sanitise_display_schedule(values: dict[str, Any], current: dict[str, Any]) 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+#: Keys removed from the config schema, as ``(section, subsection) → keys``.
+#: They are dropped on load (and the file re-saved) so stale settings — here
+#: the retired Google Photos Picker mode's OAuth client secret and refresh
+#: token — do not linger on disk.
+_RETIRED_KEYS: dict[tuple[str, str], tuple[str, ...]] = {
+    ("sync", "google_photos"): ("mode", "client_id", "client_secret", "refresh_token"),
+}
+
+
+def _drop_retired_keys(data: dict[str, Any]) -> bool:
+    """Remove :data:`_RETIRED_KEYS` from *data* in place; True if any were present."""
+    removed = False
+    for (section, subsection), keys in _RETIRED_KEYS.items():
+        target = (data.get(section) or {}).get(subsection)
+        if not isinstance(target, dict):
+            continue
+        for key in keys:
+            if key in target:
+                del target[key]
+                removed = True
+    return removed
 
 
 def _deep_merge(base: dict, overlay: dict) -> None:

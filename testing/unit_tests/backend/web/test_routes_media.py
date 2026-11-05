@@ -397,8 +397,8 @@ class TestListMediaFilters:
 
 
 class TestListMediaSyncedFlag:
-    """Items under the Immich sync folder are flagged ``synced`` so the UI
-    can hide the per-item Delete menu for them."""
+    """Items under a syncer's folder are flagged ``synced`` so the UI can hide
+    the per-item Delete menu for them."""
 
     def test_synced_flag_reflects_immich_sync_dir(self, client, mock_state, tmp_path, monkeypatch):
         from PIL import Image
@@ -419,6 +419,47 @@ class TestListMediaSyncedFlag:
         by_name = {i["name"]: i for i in json.loads(resp.data)["items"]}
         assert by_name["mine.png"]["synced"] is False
         assert by_name["theirs.png"]["synced"] is True
+
+    def test_synced_flag_reflects_google_photos_sync_dir(
+        self, client, mock_state, tmp_path, monkeypatch
+    ):
+        from PIL import Image
+
+        import metixel.shared.config as config_mod
+
+        local = tmp_path / "my_media"
+        synced = tmp_path / "gphotos"
+        local.mkdir()
+        synced.mkdir()
+        Image.new("RGB", (2, 3)).save(local / "mine.png")
+        Image.new("RGB", (2, 3)).save(synced / "gphoto_abc.png")
+        mock_state.update_config("sync", {"google_photos": {"sync_dir": str(synced)}})
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [local, synced])
+
+        resp = client.get("/api/media/list")
+        assert resp.status_code == 200
+        by_name = {i["name"]: i for i in json.loads(resp.data)["items"]}
+        assert by_name["mine.png"]["synced"] is False
+        assert by_name["gphoto_abc.png"]["synced"] is True
+
+    def test_delete_refuses_a_google_photos_file(self, client, mock_state, tmp_path, monkeypatch):
+        from PIL import Image
+
+        import metixel.shared.config as config_mod
+
+        synced = tmp_path / "gphotos"
+        synced.mkdir()
+        target = synced / "gphoto_abc.png"
+        Image.new("RGB", (2, 3)).save(target)
+        mock_state.update_config("sync", {"google_photos": {"sync_dir": str(synced)}})
+        monkeypatch.setattr(config_mod, "resolve_watch_paths", lambda config: [synced])
+
+        resp = client.post(
+            "/api/media/delete", json={"folder": synced.name, "path": "gphoto_abc.png"}
+        )
+
+        assert resp.status_code == 403
+        assert target.exists()
 
 
 class TestDeleteLibraryMedia:

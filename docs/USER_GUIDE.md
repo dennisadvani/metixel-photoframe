@@ -9,11 +9,12 @@
 - [3. Adding Your Own Photos](#3-adding-your-own-photos)
 - [4. Using the Web Dashboard](#4-using-the-web-dashboard)
 - [5. Immich Sync (detailed)](#5-immich-sync-detailed)
-- [6. MQTT / Home Assistant (detailed)](#6-mqtt--home-assistant-detailed)
-- [7. Keyboard & Remote Control](#7-keyboard--remote-control)
-- [8. OTA Updates](#8-ota-updates)
-- [9. Everyday Use & Care](#9-everyday-use--care)
-- [10. Troubleshooting](#10-troubleshooting)
+- [6. Google Photos Sync (detailed)](#6-google-photos-sync-detailed)
+- [7. MQTT / Home Assistant (detailed)](#7-mqtt--home-assistant-detailed)
+- [8. Keyboard & Remote Control](#8-keyboard--remote-control)
+- [9. OTA Updates](#9-ota-updates)
+- [10. Everyday Use & Care](#10-everyday-use--care)
+- [11. Troubleshooting](#11-troubleshooting)
 
 ---
 
@@ -24,11 +25,12 @@ frame. It sits on your wall or shelf and cycles through your own photos and
 videos with smooth crossfade transitions. You manage everything from a web
 dashboard on your phone or computer — no coding, no command line needed.
 
-Your photos come from two places:
+Your photos come from three places:
 
 1. **Files you copy in** (upload from the browser, or drop them onto a shared
    network folder), and/or
-2. **Photos synced from an Immich server** (see [section 5](#5-immich-sync-detailed)).
+2. **Photos synced from an Immich server** (see [section 5](#5-immich-sync-detailed)), and/or
+3. **Photos picked from Google Photos** (see [section 6](#6-google-photos-sync-detailed)).
 
 The frame is designed to be left on and forgotten about:
 
@@ -257,6 +259,12 @@ them up.
 If you use [Immich](https://immich.app) to organise your photo library, Metixel
 can download photos automatically. See the full [Immich section](#5-immich-sync-detailed).
 
+### Option D — Google Photos
+
+Paste a shared album's link and the frame shows that whole album, keeping up as
+you add photos to it. See
+[section 6](#6-google-photos-sync-detailed).
+
 ### Supported file types
 
 | Type | Formats |
@@ -280,7 +288,7 @@ a phone) takes you between pages.
 | **Dashboard** | See system status, what's playing, playback controls, background processing, and sync status. |
 | **Media Library** | Browse, filter, upload, and delete your photos and videos. |
 | **Settings** | Configure slideshow, display, monitor control, video, image, local folders, timezone, and clock. |
-| **Image Sync** | Set up and monitor Immich sync. |
+| **Image Sync** | Set up and monitor Immich and Google Photos sync. |
 | **Network** | Check connectivity and the current IP, change Wi-Fi. |
 | **Advanced** | System info, keyboard/remote mapping, OTA updates, security, and MQTT. |
 
@@ -292,7 +300,7 @@ The dashboard gives you a live overview:
 - **Now Playing** — the current photo or video.
 - **Controls** — pause/resume and next/previous.
 - **Background Processing** — progress bars for *scanning folders*, *optimising images*, *scanning video*, and *transcoding video*. When a file can't be processed (e.g. a transcode failed), it appears in an **issues** list below the bars with **Retry** and **Delete** actions.
-- **Sync Status** — the last Immich sync result.
+- **Sync Status** — the last Immich and Google Photos sync results.
 
 ![Screenshot: dashboard page showing status, controls, and processing bars](images/dashboard-status.png)
 
@@ -341,9 +349,9 @@ networks, or forget a saved network.
 ### Advanced page
 
 - **System** — Pi model, OS, kernel, Python, GPU memory, and hostname.
-- **Updates** — check for and install updates (see [section 8](#8-ota-updates)).
-- **Keyboard / Remote Control** — map a remote (see [section 7](#7-keyboard--remote-control)).
-- **MQTT / Home Assistant** — connect the frame to your smart-home hub (see [section 6](#6-mqtt--home-assistant-detailed)).
+- **Updates** — check for and install updates (see [section 9](#9-ota-updates)).
+- **Keyboard / Remote Control** — map a remote (see [section 8](#8-keyboard--remote-control)).
+- **MQTT / Home Assistant** — connect the frame to your smart-home hub (see [section 7](#7-mqtt--home-assistant-detailed)).
 - **Reboot / Shutdown** — restart or power off the frame cleanly.
 
 ---
@@ -444,7 +452,78 @@ photos were downloaded, skipped, or failed.
 
 ---
 
-## 6. MQTT / Home Assistant (detailed)
+## 6. Google Photos Sync (detailed)
+
+The frame shows **one Google Photos album — all of it**. You share the album by
+link, paste the link into Metixel, and every sync re-reads the album: photos you
+add to it arrive by themselves, and with **Strict sync** on, photos you remove
+from it leave the frame too.
+
+No Google account sign-in, OAuth client or token is involved — the frame never
+gets access to the rest of your library. That is also why it works the way it
+does: in **March 2025 Google removed the API scopes** that let apps read albums,
+so Metixel reads the album's public share page instead.
+
+> **Good to know.** Google publishes no API for shared albums, so the frame
+> reads the album's web page the way a browser does. That means it **can stop
+> working without warning** if Google changes that page — the sync then reports
+> a clear error until Metixel is updated. The album must be **shared by link,
+> so anyone who gets the link can see the photos**. **Videos may fail to
+> download.** Very large albums are paged in, up to 200 pages (50,000 photos).
+
+### Step 1 — Share the album by link
+
+In Google Photos, open the album → **Share** → **Create link** → **Copy**. You
+do not need to share it with anyone; the link itself is what Metixel reads. A
+link looks like `https://photos.app.goo.gl/XXXX` or
+`https://photos.google.com/share/XXXX?key=YYYY` — both work.
+
+> Treat the link like a password: anyone who has it can view the album. If you
+> ever want to cut access off, use **Remove link** in Google Photos (Metixel
+> will then report that the album is no longer shared).
+
+### Step 2 — Point the frame at it
+
+In the dashboard, go to **Sources → Google Photos Sync**, paste the link, and
+click **Test Connection**. Metixel reads the first page of the album and reports
+the album name and how many photos it found. On success the link is saved
+automatically.
+
+### Step 3 — Sync
+
+Click **Sync Now** for the first run, and turn on **Enable scheduled sync** so
+the frame re-reads the album on the interval. Large albums are fetched page by
+page; progress shows the running count.
+
+To make the frame show **exactly** the album — nothing more — also turn on
+**Strict sync**.
+
+### Settings
+
+- **Enable scheduled sync** — re-reads the album on the interval and downloads
+  anything new. Turn it on to keep the frame up to date.
+- **Sync interval** — how often the album is re-read. Default 1 hour.
+- **Strict sync** (optional) — when on, the sync folder mirrors the album
+  exactly: files that are no longer in the album are deleted. As a safeguard,
+  nothing is deleted after a sync that could only read part of the album (the
+  status then says *Strict sync skipped this cycle*). Off by default, so nothing
+  is ever removed.
+- **Sync Now** — re-read the album immediately.
+
+### Troubleshooting
+
+| Problem | What to check |
+|---------|---------------|
+| **Nothing appears in the library** | Check that `media/sync/google_photos/` is in **Sources → Local Folders** (Metixel adds it after the first successful download). |
+| **"No photos found on the album page"** | The album is probably not shared by link — check the link opens in a private browser window. If it does, Google has changed the page format and Metixel needs updating; please report it. |
+| **"Only the first N photos could be read"** | The album is bigger than the page limit, or Google stopped paging mid-album. The photos that were read are still downloaded; the next sync picks up where it can. |
+| **"Strict sync skipped this cycle"** | The album could only be partly read, so Metixel deleted nothing rather than risk removing photos it simply did not see. The next complete sync mirrors the album again. |
+| **"Google refused the download … link may have been turned off"** | The album's share link was removed in Google Photos. Create a new link and paste it in. |
+| **Videos missing** | Known limitation of reading the share page. |
+
+---
+
+## 7. MQTT / Home Assistant (detailed)
 
 ### What MQTT is and what it does here
 
@@ -569,7 +648,7 @@ the frame shows **Connected**.
 
 ---
 
-## 7. Keyboard & Remote Control
+## 8. Keyboard & Remote Control
 
 You can map buttons on a **USB wireless remote** or a **keyboard** to frame
 controls (next, previous, pause, power, etc.).
@@ -590,7 +669,7 @@ does not exist on Trixie and is not used — see `docs/INSTALLATION.md`.)
 
 ---
 
-## 8. OTA Updates
+## 9. OTA Updates
 
 Metixel checks for updates automatically (default every 6 hours) and shows when
 a new version is available.
@@ -638,7 +717,7 @@ the frame's data lives in `/opt/metixel/data/`, so it moves with the card.
 
 ---
 
-## 9. Everyday Use & Care
+## 10. Everyday Use & Care
 
 - **Pause / resume:** use the pause/play button on the dashboard, the on-screen
   remote, or an MQTT command.
@@ -651,7 +730,7 @@ the frame's data lives in `/opt/metixel/data/`, so it moves with the card.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 Quick fixes for common issues. See also `docs/FAQ.md` for more.
 
@@ -672,6 +751,7 @@ Quick fixes for common issues. See also `docs/FAQ.md` for more.
 - **Photos you upload / drop in:** the watched local folders (see **Settings →
   Local Folders**).
 - **Immich downloads:** `/opt/metixel/data/media/sync/immich/album_<id>/` on the frame.
+- **Google Photos downloads:** `/opt/metixel/data/media/sync/google_photos/` on the frame.
 - **Optimised/thumbnail cache:** `/opt/metixel/data/cache/` — safe to clear if
   you ever need space (the frame regenerates it).
 

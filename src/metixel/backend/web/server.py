@@ -255,6 +255,7 @@ def create_app(
     from metixel.backend.web.routes.config import config_bp
     from metixel.backend.web.routes.control import control_bp
     from metixel.backend.web.routes.ddc import ddc_bp
+    from metixel.backend.web.routes.google_photos import google_photos_bp
     from metixel.backend.web.routes.health import health_bp
     from metixel.backend.web.routes.immich import immich_bp
     from metixel.backend.web.routes.input import input_bp
@@ -282,6 +283,7 @@ def create_app(
     app.register_blueprint(media_bp, url_prefix="/api/media")
     app.register_blueprint(logs_bp, url_prefix="/api/logs")
     app.register_blueprint(immich_bp, url_prefix="/api/immich")
+    app.register_blueprint(google_photos_bp, url_prefix="/api/google-photos")
     app.register_blueprint(messages_bp, url_prefix="/api")
     app.register_blueprint(network_bp, url_prefix="/api")
     app.register_blueprint(security_bp, url_prefix="/api")

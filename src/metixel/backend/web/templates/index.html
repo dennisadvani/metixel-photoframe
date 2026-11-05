@@ -277,8 +277,12 @@
                         <div id="dash-sync-file" class="text-[0.75rem] text-text-muted mt-1.5 break-all"></div>
                     </div>
                     <div id="dash-sync-status" class="text-[0.82rem] text-text-secondary mt-3 pt-3 border-t border-border/60">
-                        <strong class="text-text">Last Sync:</strong> <span id="dash-sync-text">—</span>
+                        <strong class="text-text">Immich:</strong> <span id="dash-sync-text">—</span>
                         <div id="dash-sync-detail" class="mt-1 text-text-muted"></div>
+                    </div>
+                    <div id="dash-gphotos-status" class="text-[0.82rem] text-text-secondary mt-2 hidden">
+                        <strong class="text-text">Google Photos:</strong> <span id="dash-gphotos-text">—</span>
+                        <div id="dash-gphotos-detail" class="mt-1 text-text-muted"></div>
                     </div>
                 </div>
 
@@ -604,6 +608,98 @@
                         <div id="sync-status-detail" class="mt-1 text-text-muted"></div>
                         <div id="sync-albums" class="mt-1"></div>
                         <ul id="sync-errors" class="m-1 ml-4 p-0 text-[0.78rem] text-danger hidden"></ul>
+                    </div>
+                </div>
+                <div id="card-google-photos-sync" class="bg-surface border border-border rounded-card p-6 mb-4 shadow transition-colors hover:border-border-light">
+                    <div class="flex items-center gap-2.5">
+                        <span class="w-1 h-[1.1em] bg-primary rounded-sm" aria-hidden="true"></span>
+                        <h2 class="text-[0.95rem] font-semibold tracking-tight text-white">Google Photos Sync</h2>
+                        <span class="text-[0.65rem] uppercase tracking-[0.14em] text-text-muted ml-auto">Sources</span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Shared Album Link</div>
+                    <p class="text-text-muted text-[0.76rem] leading-relaxed mb-4">The frame shows one Google Photos album &mdash; all of it. Share the album by link and paste the link below; every sync re-reads the album, so photos you add to it appear on the frame (and, with Strict Sync on, photos you remove leave it). No Google account access is needed.</p>
+                    <p class="text-[0.76rem] leading-relaxed mb-4" style="border-left:3px solid #f0a030;padding:0.6rem 0.8rem;background:var(--bg);border-radius:4px;color:var(--text-secondary)"><strong style="color:#f0a030">Good to know.</strong> Google offers no API for shared albums, so the frame reads the album&rsquo;s public web page the way a browser does. That means: <strong>it can stop working without warning</strong> if Google changes that page (the sync then reports a clear error until Metixel is updated); the album must be <strong>shared by link, so anyone with the link can see the photos</strong>; <strong>videos may fail to download</strong>; and very large albums are paged in, up to 200 pages / 50,000 photos.</p>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Album URL</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">In Google Photos open the album &rarr; <em>Share</em> &rarr; <em>Create link</em>, then paste it here. Both <code>photos.app.goo.gl/&hellip;</code> and <code>photos.google.com/share/&hellip;</code> links work.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="url" id="cfg-gphotos-album-url" class="input-premium w-56" placeholder="https://photos.app.goo.gl/…">
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 mt-2">
+                        <button id="btn-test-gphotos" class="btn--secondary btn--sm">Test Connection</button>
+                        <span id="gphotos-test-result" class="text-[0.82rem] text-text-muted"></span>
+                    </div>
+
+                    <div class="mt-5 border-t border-border/60"></div>
+
+                    <div class="text-[0.7rem] uppercase tracking-[0.14em] text-text-muted mb-3">Sync Settings</div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Sync Directory</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Where downloaded media is stored. Relative paths are under <code>/opt/metixel/</code>.</span>
+                        </div>
+                        <div class="setting-control">
+                            <div class="flex gap-2 items-center">
+                                <input type="text" id="cfg-gphotos-sync-dir" class="input-premium w-56" placeholder="media/sync/google_photos/">
+                                <button class="btn--sm btn--secondary btn-browse" data-target="cfg-gphotos-sync-dir" aria-label="Browse folders"><span class="material-symbols-outlined" style="font-size:1rem;vertical-align:middle">folder_open</span></button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Enable Scheduled Sync</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">Re-reads the album on the interval below and downloads anything new.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-gphotos-enabled" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div class="setting-row" id="gphotos-interval-group">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Poll Interval</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="number" id="cfg-gphotos-interval" min="0.5" max="24" step="0.5" value="1"
+                                   class="input-premium w-24 text-right">
+                            <span class="text-[0.72rem] text-text-muted">hours</span>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <span class="text-[0.85rem] font-medium text-text-secondary">Strict Sync</span>
+                            <span class="text-[0.72rem] text-text-muted leading-snug">When enabled, files in the sync folder that are no longer in the album are deleted, so the frame shows exactly the album (mirror mode). Nothing is deleted after a sync that could only read part of the album. When disabled, only new media is downloaded.</span>
+                        </div>
+                        <div class="setting-control">
+                            <input type="checkbox" id="cfg-gphotos-strict" class="checkbox-premium">
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 mt-4 justify-end">
+                        <button id="btn-gphotos-sync-now" class="btn--secondary">Sync Now</button>
+                        <button id="btn-gphotos-cancel-sync" class="btn--danger hidden">Cancel Sync</button>
+                        <button id="btn-save-gphotos" class="btn--primary">Save Google Photos Settings</button>
+                    </div>
+                    <!-- Live progress bar -->
+                    <div id="gphotos-progress" class="hidden mt-4">
+                        <div class="flex justify-between mb-1 text-[0.82rem]">
+                            <span id="gphotos-progress-phase">Syncing…</span>
+                            <span id="gphotos-progress-count"></span>
+                        </div>
+                        <div class="bg-border rounded h-1.5 overflow-hidden">
+                            <div id="gphotos-progress-bar" class="bg-primary h-full w-0 transition-[width] duration-300"></div>
+                        </div>
+                        <div id="gphotos-current-file" class="text-[0.75rem] text-text-muted mt-1 break-all"></div>
+                    </div>
+                    <!-- Sync status -->
+                    <div id="gphotos-sync-status" class="hidden mt-4 p-3 bg-bg rounded text-[0.82rem]">
+                        <strong>Last Sync:</strong> <span id="gphotos-status-text">—</span>
+                        <div id="gphotos-status-detail" class="mt-1 text-text-muted"></div>
+                        <ul id="gphotos-errors" class="m-1 ml-4 p-0 text-[0.78rem] text-danger hidden"></ul>
                     </div>
                 </div>
             </section>
@@ -1673,6 +1769,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/list.js@2.3.1/dist/list.min.js"></script>
-    <script type="module" src="/static/js/main.js?v=71"></script>
+    <script type="module" src="/static/js/main.js?v=74"></script>
 </body>
 </html>

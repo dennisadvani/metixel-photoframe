@@ -5,6 +5,32 @@ All notable changes to Metixel Photoframe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Google Photos sync** — a second sync source alongside Immich, on the
+  Sources page. Paste a Google Photos album's share link and the frame mirrors
+  that whole album into `media/sync/google_photos/`, re-reading it on the poll
+  interval like Immich, so photos added to the album arrive on their own. With
+  strict sync on, photos removed from the album leave the frame too — but never
+  after a sync that could only read part of the album.
+
+  No Google account access is involved. Google retired the Library API's read
+  scopes on 31 March 2025, so the album's public share page is read instead
+  (first page from the embedded data, the rest via Google's internal
+  continuation rpc): it is **undocumented and can break when Google changes its
+  web UI**, the album must be shared by link, and videos may fail. Every
+  pagination loop is capped (200 pages / 50,000 items / 10 MB per response) and
+  a partial read still downloads what it found, reporting the gap.
+
+  It comes with a connection test, live progress, cancellation and a scheduled
+  pass. Files are named from the item's media key — so an item already on the
+  frame is never fetched twice — with the extension taken from the download
+  itself. The sync folder is protected the same way the Immich one is: the
+  Media Library refuses to delete files inside it, and the folder browser
+  refuses to delete the folder itself.
+
 ## [1.2.6]
 
 ### Added

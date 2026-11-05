@@ -696,13 +696,15 @@ class TestResolveWatchPaths:
         assert Path("/legacy/path/") in paths
 
     def test_default_watch_paths(self) -> None:
-        """Default config has 3 enabled watch paths, resolved to the base dir."""
+        """Default config has 4 enabled watch paths, resolved to the base dir."""
         from metixel.shared.config import Config, resolve_watch_paths
 
         cfg = Config()
         base = Path("/opt/metixel")
         paths = resolve_watch_paths(cfg, base_dir=str(base))
-        assert len(paths) == 3
+        # landscape, immich sync, google photos sync, my_media
+        assert len(paths) == 4
+        assert base / "media/sync/google_photos" in paths
         # All default paths are relative → resolved under the base dir
         assert all(str(p).startswith(str(base)) for p in paths)
 
@@ -780,3 +782,53 @@ class TestScheduleTimeValidation:
         values = {"schedule_on_time": ""}
         Config().update("display", values)
         assert values == {"schedule_on_time": ""}
+
+
+class TestRetiredKeys:
+    """Settings dropped from the schema are removed from config files on load."""
+
+    def test_picker_credentials_are_stripped_and_saved(self, tmp_path: Path) -> None:
+        import json
+
+        from metixel.shared.config import Config
+
+        path = tmp_path / "config.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "sync": {
+                        "google_photos": {
+                            "enabled": True,
+                            "mode": "picker",
+                            "client_id": "id.apps.googleusercontent.com",
+                            "client_secret": "s3cret",
+                            "refresh_token": "1//token",
+                            "shared_album_url": "https://photos.app.goo.gl/abc",
+                        }
+                    }
+                }
+            )
+        )
+
+        config = Config.load(path)
+
+        gp = config.sync["google_photos"]
+        for key in ("mode", "client_id", "client_secret", "refresh_token"):
+            assert key not in gp
+        assert gp["shared_album_url"] == "https://photos.app.goo.gl/abc"
+        assert gp["enabled"] is True
+        # The secrets are gone from disk too, not just from memory.
+        on_disk = path.read_text()
+        assert "s3cret" not in on_disk
+        assert "1//token" not in on_disk
+
+    def test_clean_config_is_not_rewritten(self, tmp_path: Path) -> None:
+        from metixel.shared.config import Config
+
+        path = tmp_path / "config.json"
+        Config().save(path)
+        before = path.stat().st_mtime_ns
+
+        Config.load(path)
+
+        assert path.stat().st_mtime_ns == before

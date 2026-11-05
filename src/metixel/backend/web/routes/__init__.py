@@ -6,6 +6,7 @@ from metixel.backend.web.routes.browse import browse_bp
 from metixel.backend.web.routes.config import config_bp
 from metixel.backend.web.routes.control import control_bp
 from metixel.backend.web.routes.ddc import ddc_bp
+from metixel.backend.web.routes.google_photos import google_photos_bp
 from metixel.backend.web.routes.health import health_bp
 from metixel.backend.web.routes.immich import immich_bp
 from metixel.backend.web.routes.input import input_bp
@@ -22,6 +23,7 @@ __all__ = [
     "config_bp",
     "control_bp",
     "ddc_bp",
+    "google_photos_bp",
     "health_bp",
     "immich_bp",
     "input_bp",

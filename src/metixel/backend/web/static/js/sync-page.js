@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2024-2026 Metixel Photoframe Contributors
 
 /**
- * Immich sync page module. Album picker, synced-albums list, sync controls and live sync-status polling.
+ * Sources page module. Local watch folders, Immich album picker, synced-albums
+ * list, sync controls and live sync-status polling.  The Google Photos card on
+ * the same page lives in google-photos-page.js.
  */
 
 import {
@@ -15,11 +17,13 @@ import {
     setButtonBusy,
     setChecked,
     setValue,
-    showToast
+    showToast,
+    timeAgo
 } from "./core.js";
 
 import { loadMedia } from "./media-page.js";
 import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings-page.js";
+import { loadGooglePhotos } from "./google-photos-page.js";
 
     // -- Watch-folder creation ---------------------------------------------
 
@@ -241,6 +245,9 @@ import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings
         // Render the configured (synced) albums list
         await _loadSyncedAlbums();
 
+        // The Google Photos card shares this page — it owns its own state.
+        await loadGooglePhotos();
+
         // Refresh sync status
         await refreshSyncStatus();
 
@@ -459,13 +466,7 @@ import { renderWatchPaths, collectWatchPaths, addWatchPathRow } from "./settings
         }
 
         var s = data.last_sync;
-        var ago = "just now";
-        if (s.finished_at) {
-            var seconds = Math.max(0, Math.floor(Date.now() / 1000 - s.finished_at));
-            if (seconds < 60) ago = seconds + "s ago";
-            else if (seconds < 3600) ago = Math.floor(seconds / 60) + "m ago";
-            else ago = Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m ago";
-        }
+        var ago = timeAgo(s.finished_at) || "just now";
 
         var hasCancel = s.errors && s.errors.some(function (e) { return e.indexOf("Cancelled") >= 0; });
 

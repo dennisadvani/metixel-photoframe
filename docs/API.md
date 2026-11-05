@@ -260,6 +260,34 @@ saved_count, error_count}` with HTTP 201 when anything was saved, else 400.
   or `{"ok": false, "status": <upstream HTTP code | "connection_error" |
   "timeout" | "error">, "error": "..."}`.
 
+### Google Photos
+The frame mirrors one public shared album, set by
+`sync.google_photos.shared_album_url` (a `photos.app.goo.gl/…` or
+`photos.google.com/share/…` link).  There is no Google account access: Google's
+Library API can no longer read user albums (March 2025), so the album's public
+share page is read instead.  That page is **undocumented** and can change
+without notice; a format change shows up as a clear sync error.
+
+- `POST /api/google-photos/sync` — Re-read the album and download what is new
+  (runs in the background; poll `GET /api/google-photos/status`).  `400` when
+  no album link is set
+- `GET /api/google-photos/status` — `{"status", "configured", "last_sync",
+  "progress"}`.  `last_sync` is `null` if a sync has never run, and otherwise
+  carries `album_title`, `album_pages`, `total_remote`, `downloaded`,
+  `skipped`, `deleted` and `errors`
+- `POST /api/google-photos/cancel` — Cancel the running sync (finishes the
+  current download, then aborts)
+- `POST /api/google-photos/test-connection` — Read the album's first page.
+  Body (optional, the configured link is used when omitted):
+  `{"shared_album_url": "https://photos.app.goo.gl/..."}`.  Answers
+  `{"ok": true, "message": "...", "count": N, "title": "...",
+  "has_more_pages": bool}` or `{"ok": false, "error": "..."}` — always HTTP
+  `200` once the body is valid
+
+With `sync.google_photos.strict_sync` on, files no longer in the album are
+deleted so the sync folder is an exact mirror — but never after a sync that
+could only read part of the album.
+
 ### Messages
 - `GET /api/messages/persistent` — Current list of persistent on-screen messages
 - `POST /api/messages/dismiss` — Dismiss one (`{"id": "..."}`) or all
